@@ -1853,17 +1853,19 @@ const SLOPE_W = 0.5;
 // strata, and the lip and foot wander and crumble. Everything is a function of where a point is in the world,
 // so neighbouring cells (and chunks) agree at every point they share. CF holds, for each point of a chunk's
 // half-grid: s, how rough it is (1 on a cliff, 0 at the far side of the ground round one, so the roughness
-// dies out there); g, which way is uphill; and tp, 1 along a lip and 0 along a foot.
+// dies out there); g, which way is uphill; and tp, 1 along a lip and 0 along a foot. It reaches one point past
+// the chunk all round, so cells on the chunk's edge can see whether the cell over the border is cut finer.
 const CLIFF_SUB = 3;
 const CF = { w: 0, s: null, gx: null, gz: null, tp: null };
 function cliffField(c0, r0, GW) {
-  if (CF.w !== GW) { const n = GW * GW; Object.assign(CF, { w: GW, s: new Float32Array(n), gx: new Float32Array(n), gz: new Float32Array(n), tp: new Float32Array(n) }); }
+  const W = GW + 2;
+  if (CF.w !== W) { const n = W * W; Object.assign(CF, { w: W, s: new Float32Array(n), gx: new Float32Array(n), gz: new Float32Array(n), tp: new Float32Array(n) }); }
   const EH = GW + 4, eh = new Float32Array(EH * EH);
   for (let j = 0; j < EH; j++) for (let k = 0; k < EH; k++) eh[j * EH + k] = pointH(c0 * 2 + k - 2, r0 * 2 + j - 2);
   const H = (k, j) => eh[(j + 2) * EH + k + 2];
-  // which half-cells (-1 to GW - 1) are cliff slopes (banks under water stay smooth)
-  const CW = GW + 1, amp = new Float32Array(CW * CW);
-  for (let hz = -1; hz < GW; hz++) for (let hx = -1; hx < GW; hx++) {
+  // which half-cells (-2 to GW) are cliff slopes (banks under water stay smooth)
+  const CW = GW + 3, amp = new Float32Array(CW * CW);
+  for (let hz = -2; hz <= GW; hz++) for (let hx = -2; hx <= GW; hx++) {
     const X = c0 * 2 + hx, Z = r0 * 2 + hz;
     if (X < 0 || Z < 0 || X >= N * 2 || Z >= N * 2) continue;
     const c = X >> 1, r = Z >> 1, i = T(c, r);
@@ -1871,13 +1873,12 @@ function cliffField(c0, r0, GW) {
     let lifted = false;
     for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++)
       if (H(hx + a, hz + b) > tileSurf(c, r, (X + a) / 2 - c, (Z + b) / 2 - r) + 1e-4) lifted = true;
-    if (lifted) amp[(hz + 1) * CW + hx + 1] = 1;
+    if (lifted) amp[(hz + 2) * CW + hx + 2] = 1;
   }
-  for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) {
-    const q = j * GW + k, X = c0 * 2 + k, Z = r0 * 2 + j;
+  for (let j = -1; j <= GW; j++) for (let k = -1; k <= GW; k++) {
+    const q = (j + 1) * W + k + 1, X = c0 * 2 + k, Z = r0 * 2 + j, a = (j + 1) * CW + k + 1;
     // (the world's cut edge stays straight)
-    const s = X > 0 && Z > 0 && X < N * 2 && Z < N * 2
-      ? Math.max(amp[j * CW + k], amp[j * CW + k + 1], amp[(j + 1) * CW + k], amp[(j + 1) * CW + k + 1]) : 0;
+    const s = X > 0 && Z > 0 && X < N * 2 && Z < N * 2 ? Math.max(amp[a], amp[a + 1], amp[a + CW], amp[a + CW + 1]) : 0;
     CF.s[q] = s;
     if (!s) { CF.gx[q] = CF.gz[q] = 0; CF.tp[q] = 1; continue; }
     const h = H(k, j);
@@ -1887,6 +1888,29 @@ function cliffField(c0, r0, GW) {
     CF.tp[q] = hi ? (lo ? 0.5 : 0) : 1;
   }
 }
+// a plain half-cell drawn as a fan from its middle, with CLIFF_SUB points along each side marked in E
+// (left, bottom, right, top) so it meets the finer cells beside it point for point
+const FP = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], FK = [{ r: 0, g: 0, b: 0 }, { r: 0, g: 0, b: 0 }, { r: 0, g: 0, b: 0 }];
+function stitchCell(P, K, E, flip) {
+  const [m0, m1] = flip ? [1, 2] : [0, 3], f = FP[0], fk = FK[0];
+  for (let e = 0; e < 3; e++) f[e] = (P[m0][e] + P[m1][e]) / 2;
+  fk.r = (K[m0].r + K[m1].r) / 2; fk.g = (K[m0].g + K[m1].g) / 2; fk.b = (K[m0].b + K[m1].b) / 2;
+  // round the rim: 00, 01, 11, 10 (the winding the plain cells use). Each side's points are worked out from
+  // its low end (00-01, 01-11, 10-11, 00-10), as roughCell does, so they match the cell beside bit for bit.
+  const SIDES = [[0, 2, false], [2, 3, false], [1, 3, true], [0, 1, true]];
+  const at = (o, ko, A, B, KA, KB, t) => {
+    for (let e = 0; e < 3; e++) o[e] = A[e] * (1 - t) + B[e] * t;
+    ko.r = KA.r * (1 - t) + KB.r * t; ko.g = KA.g * (1 - t) + KB.g * t; ko.b = KA.b * (1 - t) + KB.b * t;
+  };
+  for (let s = 0; s < 4; s++) {
+    const [lo, hi, back] = SIDES[s], A = P[lo], B = P[hi], n = E[s] ? CLIFF_SUB : 1;
+    for (let k = 0; k < n; k++) {
+      at(FP[1], FK[1], A, B, K[lo], K[hi], back ? (n - k) / n : k / n);
+      at(FP[2], FK[2], A, B, K[lo], K[hi], back ? (n - k - 1) / n : (k + 1) / n);
+      tri(f, FP[1], FP[2], fk, FK[1], FK[2]);
+    }
+  }
+}
 const RP = [], RK = [];
 for (let i = 0; i < (CLIFF_SUB + 1) ** 2; i++) { RP.push([0, 0, 0]); RK.push({ r: 0, g: 0, b: 0 }); }
 // one half-cell, cut CLIFF_SUB × CLIFF_SUB: P its corner points (00, 10, 01, 11), K their colours, Q their places in CF
@@ -1894,8 +1918,14 @@ function roughCell(P, K, Q, flip, lifted) {
   const n = CLIFF_SUB, w = [0, 0, 0, 0], st = Math.min(1, STEP);
   for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
     const u = i / n, v = j / n;
-    // weights of the four corners, on whichever of the cell's two triangles holds the point
-    if (flip) { if (u + v <= 1) { w[0] = 1 - u - v; w[1] = u; w[2] = v; w[3] = 0; } else { w[0] = 0; w[1] = 1 - v; w[2] = 1 - u; w[3] = u + v - 1; } }
+    // weights of the four corners, on whichever of the cell's two triangles holds the point. Along the
+    // sides they're written out the same way stitchCell and the cell next door work them out, so the
+    // shared points come out bit for bit the same and no pinholes open between them.
+    if (i === 0) { w[0] = 1 - v; w[1] = 0; w[2] = v; w[3] = 0; }
+    else if (i === n) { w[0] = 0; w[1] = 1 - v; w[2] = 0; w[3] = v; }
+    else if (j === 0) { w[0] = 1 - u; w[1] = u; w[2] = 0; w[3] = 0; }
+    else if (j === n) { w[0] = 0; w[1] = 0; w[2] = 1 - u; w[3] = u; }
+    else if (flip) { if (u + v <= 1) { w[0] = 1 - u - v; w[1] = u; w[2] = v; w[3] = 0; } else { w[0] = 0; w[1] = 1 - v; w[2] = 1 - u; w[3] = u + v - 1; } }
     else if (u <= v) { w[0] = 1 - v; w[1] = 0; w[2] = v - u; w[3] = u; }
     else { w[0] = 1 - u; w[1] = u - v; w[2] = 0; w[3] = v; }
     let x = 0, y = 0, z = 0, s = 0, gx = 0, gz = 0, tp = 0, kr = 0, kg = 0, kb = 0;
@@ -1982,9 +2012,15 @@ function buildGround(cx, cz, ch) {
       // split through the odd corner out, so slope corners come out as clean hips and valleys
       const odd = lifted === 1 || lifted === 3;
       const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
-      const q = ((r - r0) * 2 + b) * GW + (c - c0) * 2 + a;
-      if (CF.s[q] || CF.s[q + 1] || CF.s[q + GW] || CF.s[q + GW + 1]) {
-        roughCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [q, q + 1, q + GW, q + GW + 1], flip, lifted);
+      const W = CF.w, S = CF.s, q = ((r - r0) * 2 + b + 1) * W + (c - c0) * 2 + a + 1;
+      if (S[q] || S[q + 1] || S[q + W] || S[q + W + 1]) {
+        roughCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [q, q + 1, q + W, q + W + 1], flip, lifted);
+        continue;
+      }
+      // beside a cell that is cut finer, take in its points along the shared side, or pinholes open along it
+      const sl = S[q - 1] || S[q + W - 1], sb = S[q + 2 * W] || S[q + 2 * W + 1], sr = S[q + 2] || S[q + W + 2], st = S[q - W] || S[q - W + 1];
+      if (sl || sb || sr || st) {
+        stitchCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [sl, sb, sr, st], flip);
         continue;
       }
       if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
