@@ -78,6 +78,26 @@ button:hover { border-color: var(--dim); }
 button:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #000; }
 button:focus-visible { outline: 3px solid var(--wisp); outline-offset: 2px; }
 button:disabled { opacity: 0.45; cursor: default; }
+/* Tuning panel (T), as in Dungeon Golf */
+.tune { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 7; width: min(300px, calc(100% - 32px)); max-height: calc(100% - 100px); min-height: 120px; overflow: auto; overscroll-behavior: contain; touch-action: pan-y; padding: 10px 12px; box-sizing: border-box; background: rgba(18, 14, 26, 0.94); border: 3px solid var(--panel-edge); box-shadow: 4px 4px 0 #000; font: 17px/1.1 var(--body); color: var(--bone); -webkit-user-select: text; user-select: text; }
+.tune .tune-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; position: sticky; top: -10px; padding: 4px 0; background: rgba(18, 14, 26, 0.98); z-index: 1; }
+.tune .title { font-family: var(--display); font-size: 11px; color: var(--gold); }
+.tune button { font-family: var(--body); font-size: 17px; letter-spacing: 0; padding: 2px 9px; border-width: 2px; box-shadow: 2px 2px 0 #000; }
+.tune .tune-close { margin-left: auto; line-height: 1; }
+.tune details { border-top: 2px solid var(--panel-edge); padding: 4px 0; }
+.tune summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 4px 0; user-select: none; }
+.tune summary::-webkit-details-marker { display: none; }
+.tune summary::before { content: ''; border-left: 5px solid var(--gold); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform 0.15s; flex: none; }
+.tune details[open] > summary::before { transform: rotate(90deg); }
+.tune h3 { margin: 0; font-family: var(--display); font-size: 9px; letter-spacing: 0.1em; color: var(--gold); }
+.tune .sec-copy { font-size: 15px; padding: 1px 8px; margin: 2px 0 8px; }
+.tune label { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; margin: 3px 0 8px; }
+.tune label .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+.tune input[type=range] { grid-column: 1 / 3; width: 100%; accent-color: var(--gold); }
+.tune input[type=color] { grid-column: 1 / 3; width: 100%; height: 22px; padding: 0; border: 2px solid var(--panel-edge); background: none; cursor: pointer; }
+.tune .tune-row { display: flex; gap: 8px; margin-top: 10px; }
+.tune textarea { width: 100%; height: 80px; margin-top: 8px; font: 12px ui-monospace, monospace; background: rgba(0, 0, 0, 0.35); color: var(--bone); border: 2px solid var(--panel-edge); box-sizing: border-box; }
+#tuneBtn { padding: 6px 8px; font-size: 9px; align-self: flex-end; }
 
 .modal { position: fixed; inset: 0; display: grid; place-items: center; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); background: rgba(5, 4, 9, 0.6); }
 .sheet { background: var(--panel); border: 4px solid var(--panel-edge); box-shadow: 8px 8px 0 #000; padding: 22px 22px 20px; width: min(520px, 100%); box-sizing: border-box;
@@ -133,7 +153,9 @@ button:disabled { opacity: 0.45; cursor: default; }
     <div class="plate tally" id="stonePlate" title="Stone"><span id="stoneIcon"></span><span id="stone">0</span></div>
   </div>
   <div class="plate tally" id="killPlate" title="Foes slain"><span id="skullIcon"></span><span id="kills">0</span></div>
+  <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
 </div>
+<div id="tuning" class="tune" hidden></div>
 <div id="bar"></div>
 <div id="modeTag" hidden>BUILD MODE</div>
 <div id="prompt" hidden></div>
@@ -203,11 +225,15 @@ const FL = new Uint8Array(N * N);   // built floor
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
 const WW = new Uint8Array(N * N);   // built piece on the tile's west edge
 const PATH = new Uint8Array(N * N); // road
-const RIM = new Uint8Array(N * N);  // bits 0-3: that side's neighbour is higher; bits 4-7: only the diagonal at that corner is
+const RIM = new Uint16Array(N * N); // bits 0-3: that side's neighbour is higher; 4-7: only the diagonal at that corner is; 8-11: that side drops away
 
 const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
 // which corners (nw, ne, se, sw) each shape lifts by one level
-const LIFT = [[0, 0, 0, 0], [1, 1, 0, 0], [0, 1, 1, 0], [0, 0, 1, 1], [1, 0, 0, 1]];
+// 1-4: a one-tile ramp rising north, east, south or west; 5-8 and 9-12: the lower and upper halves of a
+// two-tile ramp, each rising half a level
+const RAMP_UP = [[1, 1, 0, 0], [0, 1, 1, 0], [0, 0, 1, 1], [1, 0, 0, 1]];
+const LIFT = [[0, 0, 0, 0], ...RAMP_UP, ...RAMP_UP.map(l => l.map(v => v / 2)), ...RAMP_UP.map(l => l.map(v => 0.5 + v / 2))];
+const rampDir = s => (s - 1) & 3;
 // the corners along each side, and the neighbour's matching corners across it
 const EDGE_K = [[0, 1], [1, 2], [2, 3], [3, 0]], OPP_K = [[3, 2], [0, 3], [1, 0], [2, 1]];
 const CX = [0, 1, 1, 0], CZ = [0, 0, 1, 1];
@@ -346,7 +372,7 @@ async function generate(progress) {
     const d0 = Math.floor(hs(c, r, 11) * 4);
     for (let k = 0; k < 4; k++) {
       const d = (d0 + k) & 3;
-      if (canRamp(i, d, lock)) { setRamp(i, d, lock); break; }
+      if (canRamp(i, d, lock) === 2) { setRamp(i, d, lock, 2); break; }
     }
   }
 
@@ -451,7 +477,8 @@ function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
       const n = i + DI[d];
       if (roadDone[n] === run || !terrainOpen(i, n, d) || wallOn(c, r, d) || FL[n]) continue;
       let k = PATH[n] ? 0.45 : 1;
-      if (RIM[n]) k += 2.5;
+      if (RIM[n] & 255) k += 2.5;
+      else if (RIM[n]) k += 0.5;
       if (WT[n]) k += 1.5;
       if (TN[n]) { if (TN[n] === avoidTown) k += 8; else if (townCell(nc, nr) === 'yard') k += 8; }
       if (roadDir[i] >= 0 && roadDir[i] !== d) k += 0.4;
@@ -518,6 +545,7 @@ function computeRim() {
       if (nc < 0 || nr < 0 || nc >= N || nr >= N) continue;
       const n = i + DI[d], ek = EDGE_K[d], ok = OPP_K[d];
       if (cornerL(n, ok[0]) > cornerL(i, ek[0]) || cornerL(n, ok[1]) > cornerL(i, ek[1])) m |= 1 << d;
+      else if (cornerL(n, ok[0]) < cornerL(i, ek[0]) || cornerL(n, ok[1]) < cornerL(i, ek[1])) m |= 256 << d;
     }
     for (let k = 0; k < 4; k++) {
       if (m & (1 << k | 1 << ((k + 3) & 3))) continue;
@@ -607,12 +635,22 @@ function placeTowns(rand) {
   });
 }
 
+// How long a ramp up from tile i toward side d can be: 2 when the ground below has room for it, 1 when
+// only a single tile fits, 0 when none does. The tile i always sits against the top.
 function canRamp(i, d, lock) {
-  if (SH[i] || lock[i] || !LV[i] || TN[i]) return false;
+  if (SH[i] || lock[i] || !LV[i] || TN[i]) return 0;
   const top = i + DI[d], foot = i - DI[d], L = LV[i];
-  return LV[top] === L + 1 && !SH[top] && LV[foot] === L && !SH[foot] && !TN[top];
+  if (!(LV[top] === L + 1 && !SH[top] && LV[foot] === L && !SH[foot] && !TN[top])) return 0;
+  const c = i % N, r = (i - c) / N, fc = c - 2 * DC[d], fr = r - 2 * DR[d];
+  if (fc < 0 || fr < 0 || fc >= N || fr >= N) return 1;
+  const foot2 = foot - DI[d];
+  return !lock[foot] && !TN[foot] && LV[foot2] === L && !SH[foot2] ? 2 : 1;
 }
-function setRamp(i, d, lock) { SH[i] = d + 1; lock[i] = lock[i + DI[d]] = lock[i - DI[d]] = 1; }
+function setRamp(i, d, lock, len = 1) {
+  lock[i] = lock[i + DI[d]] = lock[i - DI[d]] = 1;
+  if (len < 2) { SH[i] = d + 1; return; }
+  SH[i] = 9 + d; SH[i - DI[d]] = 5 + d; lock[i - 2 * DI[d]] = 1;
+}
 
 async function connectAll(start, lock, rand, progress) {
   const reach = new Uint8Array(N * N), queue = new Int32Array(N * N);
@@ -669,8 +707,9 @@ async function connectAll(start, lock, rand, progress) {
     for (let k = 0; k < nComp; k++) {
       if (!cnt[k]) continue;
       const i = pick[k] >> 2, d = pick[k] & 3, top = i + DI[d];
-      if (!canRamp(i, d, lock) || reach[i] === reach[top]) continue;
-      setRamp(i, d, lock);
+      const len = canRamp(i, d, lock);
+      if (!len || reach[i] === reach[top]) continue;
+      setRamp(i, d, lock, len);
       const n = reach[i] ? top : i;
       if (!reach[n]) { reach[n] = 1; queue[qt++] = n; }
       if (!reach[i - DI[d]]) { reach[i - DI[d]] = 1; queue[qt++] = i - DI[d]; }
@@ -717,7 +756,7 @@ def(O.LAMP, { solid: 0.1 });
 
 // where on its tile an object stands (round ones wander a little off centre)
 function objPos(c, r, o) {
-  if (OBJ[o].tile || o === O.LAMP || RIM[T(c, r)]) return [c + 0.5, r + 0.5];
+  if (OBJ[o].tile || o === O.LAMP || RIM[T(c, r)] & 255) return [c + 0.5, r + 0.5];
   return [c + 0.5 + (hs(c, r, 3) - 0.5) * 0.3, r + 0.5 + (hs(c, r, 4) - 0.5) * 0.3];
 }
 
@@ -814,6 +853,54 @@ const scene = new THREE.Scene();
 // no scene.background: it would force a clear before the hero's second pass
 renderer.setClearColor('#0b0912', 1);
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
+
+// ---------- Outlines (T > Outline) ----------
+// As Crafting and Conquest's toon strokes: wherever the ground a few pixels away lies more than `distance`
+// tiles further back than this pixel (an edge with something behind it), this pixel is stroked. It runs on
+// the low-res buffer, so the stroke is whole mosaic pixels, `thickness` of them wide.
+const OUTLINE = { on: 0, distance: 0.6, thickness: 1, strength: 1, color: '#000000' };
+const outlineRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
+outlineRT.depthTexture = new THREE.DepthTexture(1, 1);
+outlineRT.depthTexture.type = THREE.UnsignedIntType;
+const outlineMat = new THREE.ShaderMaterial({
+  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, res: { value: new THREE.Vector2(1, 1) },
+    span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tColor, tDepth; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
+    varying vec2 vUv;
+    // orthographic depth is linear: back from the near plane in world units (empty sky reads as far)
+    float depthAt(vec2 px) { return texture2D(tDepth, (clamp(px, vec2(0.0), res - 1.0) + 0.5) / res).x * span; }
+    void main() {
+      vec2 px = floor(vUv * res);
+      vec4 c = texture2D(tColor, (px + 0.5) / res);
+      float t = depthAt(px), e = 0.0, r2 = (thick + 0.5) * (thick + 0.5);
+      for (int dy = -6; dy <= 6; dy++) for (int dx = -6; dx <= 6; dx++) {
+        vec2 o = vec2(float(dx), float(dy));
+        if (abs(o.x) > thick || abs(o.y) > thick || dot(o, o) > r2) continue;
+        if (depthAt(px + o) - t > dist) e = 1.0;
+      }
+      gl_FragColor = vec4(mix(c.rgb, color, e * strength), 1.0);
+    }`,
+  depthTest: false, depthWrite: false,
+});
+const outlineScene = new THREE.Scene(), outlineCam = new THREE.Camera();
+outlineScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), outlineMat));
+function renderWorld() {
+  const on = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
+  renderer.setRenderTarget(on ? outlineRT : null);
+  renderer.clear();
+  camera.layers.set(0); renderer.render(scene, camera);
+  camera.layers.set(1); renderer.render(scene, camera);
+  if (!on) return;
+  const u = outlineMat.uniforms;
+  u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
+  u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
+  renderer.setRenderTarget(null);
+  renderer.clear();
+  renderer.render(outlineScene, outlineCam);
+}
+
 const hemi = new THREE.HemisphereLight('#b4bce8', '#3a2a44', 0.72);
 const sun = new THREE.DirectionalLight('#ffe6c4', 0.95);
 scene.add(hemi, sun, sun.target);
@@ -984,7 +1071,7 @@ function buildGround(cx, cz, ch) {
         if (!L) cc = shade(BED, 0.85 + hs(c, r, 1) * 0.25);
         else if (s) {
           // ramps: stripes across the slope so the incline reads at a glance
-          const along = (s === 1 || s === 3) ? b : a;
+          const along = rampDir(s) & 1 ? a : b;
           cc = PATH[i] ? shade(along % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, a + b * 2) * 0.1)
             : shade(pal.a, (along % 2 ? 0.86 : 0.98) + hs(c, r, a + b * 2) * 0.06);
         } else cc = groundColor(c, r, a, b);
@@ -1204,6 +1291,15 @@ function cliffRocks(c, r, i) {
       const x = d === 1 ? c + 1 - depth : d === 3 ? c + depth : c + t, z = d === 0 ? r + depth : d === 2 ? r + 1 - depth : r + t;
       slopeRock(x, z, hs(c, r, 130 + d * 4 + k), b);
     }
+    if (water) continue;
+    // one along the lip above, and one at the foot below
+    const along = (o, k) => {
+      const t = 0.15 + hs(c, r, 150 + d * 2 + o) * 0.7;
+      return d === 1 ? [c + 1 - k, r + t] : d === 3 ? [c + k, r + t] : d === 0 ? [c + t, r + k] : [c + t, r + 1 - k];
+    };
+    const kt = hs(c, r, 160 + d), kb = hs(c, r, 164 + d);
+    if (kt < 0.7) { const [x, z] = along(0, -0.04 - kt * 0.1); slopeRock(x, z, kt * 0.6, b); }
+    if (kb < 0.75 && !SH[i]) { const [x, z] = along(1, 0.42 + kb * 0.06); slopeRock(x, z, kb * 0.5, b); }
   }
   if (!water) for (let k = 0; k < 4; k++) if (m & 16 << k) slopeRock(c + (CX[k] ? 0.84 : 0.16), r + (CZ[k] ? 0.84 : 0.16), hs(c, r, 140 + k), b);
 }
@@ -1226,7 +1322,7 @@ function buildObjects(cx, cz, ch) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
     if (o && !detached.has(i)) drawObject(o, c, r);
-    if (RIM[i]) cliffRocks(c, r, i);
+    if (RIM[i] & 255) cliffRocks(c, r, i);
   }
   ch.obj = bufObj.mesh(groundMat);
   ch.glow = bufGlow.mesh(glowMat);
@@ -1714,12 +1810,14 @@ function collide(p, rad, foe) {
   for (let it = 0; it < 2; it++) {
     const c = Math.floor(p.x), r = Math.floor(p.z), u = p.x - c, v = p.z - r;
     const rim = RIM[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))];
-    const r0 = rim & 1 ? sr : rad, r1 = rim & 2 ? sr : rad, r2 = rim & 4 ? sr : rad, r3 = rim & 8 ? sr : rad;
+    // and a little short of a cliff top, where rocks line the edge
+    const lip = rad + 0.1, side = b => rim & 1 << b ? sr : rim & 256 << b ? lip : rad;
+    const r0 = side(0), r1 = side(1), r2 = side(2), r3 = side(3);
     if (v < r0 && !stepOpen(c, r, 0, foe)) p.z = r + r0;
     if (1 - v < r2 && !stepOpen(c, r, 2, foe)) p.z = r + 1 - r2;
     if (u < r3 && !stepOpen(c, r, 3, foe)) p.x = c + r3;
     if (1 - u < r1 && !stepOpen(c, r, 1, foe)) p.x = c + 1 - r1;
-    if (rim > 15) for (let k = 0; k < 4; k++) {
+    if (rim & 0xf0) for (let k = 0; k < 4; k++) {
       if (!(rim & 16 << k)) continue;
       const px = c + CX[k], pz = r + CZ[k], ex = p.x - px, ez = p.z - pz, dd = ex * ex + ez * ez, m = sr + 0.05;
       if (dd >= m * m) continue;
@@ -2145,6 +2243,8 @@ const keys = new Set();
 const mouse = { x: innerWidth / 2, y: innerHeight / 2, down: false, right: false, mid: false, lastX: 0, downX: 0, turned: false, mask: 0 };
 let started = false, mapOpen = false;
 addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('.tune') && e.code !== 'KeyT') return;   // sliders keep their own keys
+  if (e.code === 'KeyT' && !e.repeat) { tuning.toggle(); return; }
   if (!started) { if ((e.code === 'Space' || e.code === 'Enter') && !$('start').disabled && !$('intro').hidden) { e.preventDefault(); begin(); } return; }
   if (!$('dead').hidden) { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); respawn(); } return; }
   if (e.code === 'KeyM' || (e.code === 'Escape' && mapOpen)) { toggleMap(); e.preventDefault(); return; }
@@ -2353,7 +2453,7 @@ function buildSpot() {
   if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
   if (buildKind === 'floor') {
     const i = T(c, r);
-    const ok = LV[i] > 0 && !SH[i] && !RIM[i] && !WT[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
+    const ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
     return { kind: 'floor', c, r, ok, why: FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.', x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
   }
   // walls and doors snap to the tile side nearest the cursor
@@ -2777,16 +2877,22 @@ let yaw = Math.PI / 4, yawGoal = yaw, zoom = 1;
 const camTarget = new THREE.Vector3();
 let texel = 0.03, pxScale = 3;
 const MOBILE = matchMedia('(pointer: coarse)').matches;
-const PIXEL_BASE = 4;
+// Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 to size it from the screen
+const PIXEL = { size: 4, autoDiv: 260 };
+const pixelBase = () => PIXEL.size >= 1 ? Math.round(PIXEL.size) : Math.max(2, Math.round(Math.min(innerWidth, innerHeight) / PIXEL.autoDiv));
+// the mosaic follows the zoom: full size at standard zoom and closer, smaller (down to 2) zoomed out;
+// phones get half the desktop mosaic
 const pixelSize = () => {
-  if (MOBILE) { const m = 2; return zoom <= 1 ? Math.max(1, Math.round(m * zoom)) : Math.min(m + 1, Math.round(m + (zoom - 1))); }
-  return Math.max(2, Math.min(PIXEL_BASE, Math.round(PIXEL_BASE * zoom)));
+  const b = pixelBase();
+  if (MOBILE) { const m = Math.max(1, Math.round(b / 2)); return zoom <= 1 ? Math.max(1, Math.round(m * zoom)) : Math.min(m + 1, Math.round(m + (zoom - 1))); }
+  return Math.max(Math.min(2, b), Math.min(b, Math.round(b * zoom)));
 };
 function resize() {
   const w = innerWidth, h = innerHeight;
   const px = pxScale = pixelSize();
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   renderer.setSize(rw, rh, false);
+  outlineRT.setSize(rw, rh); outlineMat.uniforms.res.value.set(rw, rh);
   cv.style.width = rw * px + 'px'; cv.style.height = rh * px + 'px';
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
@@ -2949,6 +3055,114 @@ renderBar(); renderStats(); renderHp();
 resize();
 let last = performance.now();
 let fpsAcc = 0, fpsN = 0, fps = 0;
+// ---------- Tuning panel (T) ----------
+// Ported from Dungeon Golf (itself from crafting-and-conquest's tuning.js): a collapsible section per group
+// with a slider per value. "Copy" puts the values on the clipboard (or in a text box when that's blocked)
+// as "Section: key value, ..." lines, to paste back to Claude as new defaults.
+// spec: [[title, [[object, key, label, min, max, step], ...]]]; [object, key, label, 'color'] is a colour picker.
+const TUNING = [
+  ['Pixels', [
+    [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto; shrinks to 2 zoomed out)', 0, 10, 1],
+    [PIXEL, 'autoDiv', 'Auto: screen px per mosaic px', 120, 520, 10],
+  ]],
+  ['Outline', [
+    [OUTLINE, 'on', 'Edge outline (0 off, 1 on)', 0, 1, 1],
+    [OUTLINE, 'distance', 'Outline where the ground behind an edge is this far back (tiles)', 0.05, 6, 0.05],
+    [OUTLINE, 'thickness', 'Thickness (mosaic pixels)', 1, 6, 1],
+    [OUTLINE, 'strength', 'Strength', 0, 1, 0.01],
+    [OUTLINE, 'color', 'Outline colour', 'color'],
+  ]],
+];
+const TUNE_CLOSED_KEY = 'emberwild.tuneClosed';
+const tuneClosed = (() => { try { return new Set(JSON.parse(localStorage.getItem(TUNE_CLOSED_KEY) || '[]')); } catch (err) { return new Set(); } })();
+const saveTuneClosed = () => { try { localStorage.setItem(TUNE_CLOSED_KEY, JSON.stringify([...tuneClosed])); } catch (err) { /* storage blocked */ } };
+const tuneDecimals = step => Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+const tuneShow = (v, step) => (typeof v === 'string' ? v : v.toFixed(tuneDecimals(step)));
+const tuneLine = ([title, items]) => `${title}: ` + items.map(([o, k, , , , st]) => `${k} ${tuneShow(o[k], st)}`).join(', ');
+const tuneButton = (text, className = '') => Object.assign(document.createElement('button'), { type: 'button', textContent: text, className });
+function tuneCopy(text, btn, out, label) {
+  const fallback = () => { out.value = text; out.hidden = false; out.select(); out.scrollIntoView({ block: 'nearest' }); };
+  try {
+    navigator.clipboard.writeText(text).then(() => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = label; }, 1200); }, fallback);
+  } catch (err) { fallback(); }
+}
+function createTuningPanel(el, spec, heading = 'Tuning') {
+  const sliders = [];
+  const defaults = spec.flatMap(([, items]) => items.map(([o, k]) => [o, k, o[k]]));
+  function build() {
+    el.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'tune-head';
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = heading;
+    const close = tuneButton('✕', 'tune-close');
+    close.title = 'Close (T)';
+    close.setAttribute('aria-label', 'Close');
+    close.addEventListener('click', () => { el.hidden = true; });
+    head.append(title, close);
+    el.append(head);
+    const out = document.createElement('textarea');
+    out.readOnly = true;
+    out.hidden = true;
+    sliders.length = 0;
+    for (const g of spec) {
+      const [name, items] = g;
+      const sec = document.createElement('details');
+      sec.open = !tuneClosed.has(name);
+      sec.addEventListener('toggle', () => { if (sec.open) tuneClosed.delete(name); else tuneClosed.add(name); saveTuneClosed(); });
+      const sum = document.createElement('summary');
+      const h = document.createElement('h3');
+      h.textContent = name;
+      sum.append(h);
+      const sc = tuneButton('Copy this section', 'sec-copy');
+      sc.addEventListener('click', () => tuneCopy(tuneLine(g), sc, out, 'Copy this section'));
+      sec.append(sum, sc);
+      for (const [obj, key, label, min, max, step] of items) {
+        const row = document.createElement('label');
+        const text = document.createElement('span');
+        text.textContent = label;
+        const val = document.createElement('span');
+        val.className = 'v';
+        if (min === 'color') {
+          val.textContent = obj[key];
+          const pick = Object.assign(document.createElement('input'), { type: 'color', value: obj[key] });
+          pick.addEventListener('input', () => { obj[key] = pick.value; val.textContent = pick.value; });
+          pick.addEventListener('change', () => pick.blur());
+          row.append(text, val, pick);
+          sec.append(row);
+          continue;
+        }
+        val.textContent = obj[key].toFixed(tuneDecimals(step));
+        const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step, value: obj[key] });
+        input.addEventListener('input', () => {
+          obj[key] = parseFloat(input.value);
+          val.textContent = obj[key].toFixed(tuneDecimals(step));
+        });
+        // hand the keyboard back to the game once the mouse lets go, so the arrow keys aim again
+        input.addEventListener('change', () => { if (!input.matches(':focus-visible')) input.blur(); });
+        sliders.push({ obj, key, input, val, step });
+        row.append(text, val, input);
+        sec.append(row);
+      }
+      el.append(sec);
+    }
+    const buttons = document.createElement('div');
+    buttons.className = 'tune-row';
+    const all = tuneButton('Copy all values');
+    const reset = tuneButton('Reset');
+    all.addEventListener('click', () => tuneCopy(spec.map(tuneLine).join('\n'), all, out, 'Copy all values'));
+    reset.addEventListener('click', () => { for (const [o, k, v] of defaults) o[k] = v; build(); });
+    buttons.append(all, reset);
+    el.append(buttons, out);
+  }
+  return {
+    toggle() { el.hidden = !el.hidden; if (!el.hidden) build(); },
+  };
+}
+const tuning = createTuningPanel($('tuning'), TUNING, 'Tuning');
+$('tuneBtn').addEventListener('click', e => { tuning.toggle(); e.currentTarget.blur(); });
+
 function frame(now) {
   const real = (now - last) / 1000, dt = Math.min(0.05, real); last = now;
   fpsAcc += real; fpsN++; if (fpsAcc > 1) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
@@ -2957,9 +3171,8 @@ function frame(now) {
   updateCamera(dt);
   streamChunks(6);
   drawMini(dt);
-  renderer.clear();
-  camera.layers.set(0); renderer.render(scene, camera);
-  camera.layers.set(1); renderer.render(scene, camera);
+  if (pixelSize() !== pxScale) resize();
+  renderWorld();
   requestAnimationFrame(frame);
 }
 const genStart = performance.now();
@@ -2983,7 +3196,7 @@ let genMs = 0;
 window.GAME = {
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name]), reached: connectStats.reached }),
   stats: () => {
-    const lv = new Array(MAXL + 1).fill(0), bi = new Array(7).fill(0), sh = [0, 0, 0, 0, 0], ob = {};
+    const lv = new Array(MAXL + 1).fill(0), bi = new Array(7).fill(0), sh = new Array(13).fill(0), ob = {};
     for (let i = 0; i < N * N; i++) { lv[LV[i]]++; if (LV[i]) bi[BI[i]]++; sh[SH[i]]++; if (OB[i]) ob[OB[i]] = (ob[OB[i]] || 0) + 1; }
     return { lv, bi, sh, ob };
   },
@@ -3022,6 +3235,15 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
+  tune: { PIXEL, OUTLINE },
+  // draw a frame and count near-black pixels in it (to check the outline without looking)
+  darkPixels: () => {
+    renderWorld();
+    const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, d = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, d);
+    let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < 6) n++;
+    return [n, w * h];
+  },
   mouseState: () => ({ down: mouse.down, right: mouse.right, turned: mouse.turned }),
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   nearestObj: (id, rad = 60) => {
@@ -3038,8 +3260,9 @@ window.GAME = {
       if (Math.max(Math.abs(dx), Math.abs(dz)) !== rad) continue;
       const i = T(c0 + dx, r0 + dz), s = SH[i];
       if (!s) continue;
-      const d = s - 1, foot = i - DI[d] * 2, top = i + DI[d] * 2;
-      if (OB[i - DI[d]] || OB[foot] || OB[i + DI[d]] || OB[top] || SH[foot] || SH[top] || LV[foot] !== LV[i] || LV[top] !== LV[i] + 1) continue;
+      if (s > 4 && s < 9) continue;
+      const d = rampDir(s), back = s > 8 ? 3 : 2, foot = i - DI[d] * back, top = i + DI[d] * 2;
+      if (OB[foot + DI[d]] || OB[foot] || OB[i + DI[d]] || OB[top] || SH[foot] || SH[top] || LV[foot] !== LV[i] || LV[top] !== LV[i] + 1) continue;
       return { c: c0 + dx, r: r0 + dz, d, lv: LV[i] };
     }
     return null;
