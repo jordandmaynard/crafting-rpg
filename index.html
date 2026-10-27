@@ -1848,6 +1848,94 @@ function surfH(x, z) {
 // how far into a tile its side slopes reach, for collision
 const SLOPE_W = 0.5;
 
+// Cliff faces are drawn as rough rock, not smooth ramps: each slope half-cell, and each half-cell of ground
+// touching one, is cut finer and pushed about by noise, cut by gullies, stepped into ledges and banded with
+// strata, and the lip and foot wander and crumble. Everything is a function of where a point is in the world,
+// so neighbouring cells (and chunks) agree at every point they share. CF holds, for each point of a chunk's
+// half-grid: s, how rough it is (1 on a cliff, 0 at the far side of the ground round one, so the roughness
+// dies out there); g, which way is uphill; and tp, 1 along a lip and 0 along a foot.
+const CLIFF_SUB = 3;
+const CF = { w: 0, s: null, gx: null, gz: null, tp: null };
+function cliffField(c0, r0, GW) {
+  if (CF.w !== GW) { const n = GW * GW; Object.assign(CF, { w: GW, s: new Float32Array(n), gx: new Float32Array(n), gz: new Float32Array(n), tp: new Float32Array(n) }); }
+  const EH = GW + 4, eh = new Float32Array(EH * EH);
+  for (let j = 0; j < EH; j++) for (let k = 0; k < EH; k++) eh[j * EH + k] = pointH(c0 * 2 + k - 2, r0 * 2 + j - 2);
+  const H = (k, j) => eh[(j + 2) * EH + k + 2];
+  // which half-cells (-1 to GW - 1) are cliff slopes (banks under water stay smooth)
+  const CW = GW + 1, amp = new Float32Array(CW * CW);
+  for (let hz = -1; hz < GW; hz++) for (let hx = -1; hx < GW; hx++) {
+    const X = c0 * 2 + hx, Z = r0 * 2 + hz;
+    if (X < 0 || Z < 0 || X >= N * 2 || Z >= N * 2) continue;
+    const c = X >> 1, r = Z >> 1, i = T(c, r);
+    if (!((LV[i] && !BR[i]) || CY[i])) continue;
+    let lifted = false;
+    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++)
+      if (H(hx + a, hz + b) > tileSurf(c, r, (X + a) / 2 - c, (Z + b) / 2 - r) + 1e-4) lifted = true;
+    if (lifted) amp[(hz + 1) * CW + hx + 1] = 1;
+  }
+  for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) {
+    const q = j * GW + k, X = c0 * 2 + k, Z = r0 * 2 + j;
+    // (the world's cut edge stays straight)
+    const s = X > 0 && Z > 0 && X < N * 2 && Z < N * 2
+      ? Math.max(amp[j * CW + k], amp[j * CW + k + 1], amp[(j + 1) * CW + k], amp[(j + 1) * CW + k + 1]) : 0;
+    CF.s[q] = s;
+    if (!s) { CF.gx[q] = CF.gz[q] = 0; CF.tp[q] = 1; continue; }
+    const h = H(k, j);
+    CF.gx[q] = H(k + 1, j) - H(k - 1, j); CF.gz[q] = H(k, j + 1) - H(k, j - 1);
+    let hi = false, lo = false;
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const d = H(k + a, j + b) - h; if (d > 1e-3) hi = true; else if (d < -1e-3) lo = true; }
+    CF.tp[q] = hi ? (lo ? 0.5 : 0) : 1;
+  }
+}
+const RP = [], RK = [];
+for (let i = 0; i < (CLIFF_SUB + 1) ** 2; i++) { RP.push([0, 0, 0]); RK.push({ r: 0, g: 0, b: 0 }); }
+// one half-cell, cut CLIFF_SUB × CLIFF_SUB: P its corner points (00, 10, 01, 11), K their colours, Q their places in CF
+function roughCell(P, K, Q, flip, lifted, rockTop, rockLow) {
+  const n = CLIFF_SUB, w = [0, 0, 0, 0], st = Math.min(1, STEP);
+  // ground beside a cliff is either its top (rock breaking through the turf) or its foot (scree)
+  const top = Math.min(CF.tp[Q[0]], CF.tp[Q[1]], CF.tp[Q[2]], CF.tp[Q[3]]) > 0.5, rock = top ? rockTop : rockLow;
+  for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
+    const u = i / n, v = j / n;
+    // weights of the four corners, on whichever of the cell's two triangles holds the point
+    if (flip) { if (u + v <= 1) { w[0] = 1 - u - v; w[1] = u; w[2] = v; w[3] = 0; } else { w[0] = 0; w[1] = 1 - v; w[2] = 1 - u; w[3] = u + v - 1; } }
+    else if (u <= v) { w[0] = 1 - v; w[1] = 0; w[2] = v - u; w[3] = u; }
+    else { w[0] = 1 - u; w[1] = u - v; w[2] = 0; w[3] = v; }
+    let x = 0, y = 0, z = 0, s = 0, gx = 0, gz = 0, tp = 0, kr = 0, kg = 0, kb = 0;
+    for (let m = 0; m < 4; m++) {
+      const f = w[m];
+      if (!f) continue;
+      const p = P[m], q = Q[m], k = K[m];
+      x += p[0] * f; y += p[1] * f; z += p[2] * f;
+      s += CF.s[q] * f; gx += CF.gx[q] * f; gz += CF.gz[q] * f; tp += CF.tp[q] * f;
+      kr += k.r * f; kg += k.g * f; kb += k.b * f;
+    }
+    const o = RP[j * (n + 1) + i], col = RK[j * (n + 1) + i];
+    o[0] = x; o[1] = y; o[2] = z; col.r = kr; col.g = kg; col.b = kb;
+    if (s <= 0) continue;
+    // broad buttresses, narrow gullies (where the noise crosses zero) and ledges
+    const bul = nX(x * 0.9 + 31.7, z * 0.9 - 12.3);
+    const gr = Math.abs(nX(x * 1.7 + y * 0.18, z * 1.7 - y * 0.18)), gul = gr < 0.3 ? Math.sqrt(gr / 0.3) : 1;
+    let ld = y / STEP * 2.6 + nX(x * 0.6 + 7.1, z * 0.6) * 0.9; ld -= Math.floor(ld);
+    const gl = Math.hypot(gx, gz);
+    if (gl > 1e-4) {
+      const push = (0.07 * bul + 0.1 * (gul - 0.65) + 0.05 * (ld - 0.5)) * Math.min(1, gl / (0.5 * STEP)) * s / gl;
+      o[0] -= gx * push; o[2] -= gz * push;
+    }
+    // the lip crumbles away, scree heaps at the foot
+    const cr = nX(x * 2 + 3.3, z * 2 + 17.1);
+    o[1] += s * st * ((1 - tp) * 0.07 * Math.max(0, cr) - tp * 0.06 * Math.max(0, -cr));
+    const sh = 1 + ((0.88 + 0.12 * Math.sin(y / STEP * 9.4 + bul * 3)) * (0.6 + 0.4 * gul) * (0.93 + 0.14 * ld) - 1) * Math.min(1, s);
+    if (lifted) { col.r = kr * sh; col.g = kg * sh; col.b = kb * sh; continue; }
+    const rp = clamp(s * 1.5 - 0.55 + nX(x * 2.6 + 3.1, z * 2.6 - 5.3) * 0.7, 0, 1), rs = sh * (top ? 1 : 1.08);
+    col.r = kr + (rock.r * rs - kr) * rp; col.g = kg + (rock.g * rs - kg) * rp; col.b = kb + (rock.b * rs - kb) * rp;
+  }
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const a = j * (n + 1) + i, b = a + 1, c = a + n + 1, d = c + 1;
+    if (flip) { tri(RP[a], RP[c], RP[b], RK[a], RK[c], RK[b]); tri(RP[b], RP[c], RP[d], RK[b], RK[c], RK[d]); }
+    else { tri(RP[a], RP[c], RP[d], RK[a], RK[c], RK[d]); tri(RP[a], RP[d], RP[b], RK[a], RK[d], RK[b]); }
+  }
+}
+
 function buildGround(cx, cz, ch) {
   OUT = bufGround; bufGround.n = 0;
   const water = bufWater; water.n = 0;
@@ -1855,6 +1943,7 @@ function buildGround(cx, cz, ch) {
   const grid = new Float32Array(GW * GW);
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) grid[j * GW + k] = pointH(c0 * 2 + k, r0 * 2 + j);
   const P = [], own = [], up = [];
+  cliffField(c0, r0, GW);
   let wet = false;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), s = SH[i], pal = PAL[BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
@@ -1895,6 +1984,11 @@ function buildGround(cx, cz, ch) {
       // split through the odd corner out, so slope corners come out as clean hips and valleys
       const odd = lifted === 1 || lifted === 3;
       const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
+      const q = ((r - r0) * 2 + b) * GW + (c - c0) * 2 + a;
+      if (CF.s[q] || CF.s[q + 1] || CF.s[q + GW] || CF.s[q + GW + 1]) {
+        roughCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [q, q + 1, q + GW, q + GW + 1], flip, lifted, rockTop, rockLow);
+        continue;
+      }
       if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
       else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
     }
@@ -2398,7 +2492,7 @@ function drawObject(o, c, r) {
     }
   }
 }
-// rocks strewn down every slope so the drops read as rough cliffs, not walkable banks
+// a few rocks fallen from the cliffs (the faces themselves are rough: see roughCell)
 const CLIFF_ROCK = [];
 CLIFF_ROCK[MEADOW] = ['#8a8478', null]; CLIFF_ROCK[FOREST] = ['#6e6a62', '#4a7038']; CLIFF_ROCK[SWAMP] = ['#5a5446', '#4e5e30'];
 CLIFF_ROCK[GRAVE] = ['#4e4a58', null]; CLIFF_ROCK[SNOW] = ['#7e889c', '#eef4fa']; CLIFF_ROCK[DESERT] = ['#b07a4a', null]; CLIFF_ROCK[TOWN] = ['#8a8478', null];
@@ -2418,7 +2512,7 @@ function cliffRocks(c, r, i) {
   const m = RIM[i], b = BI[i], water = !LV[i], cy = CY[i];
   for (let d = 0; d < 4; d++) {
     if (!(m & 1 << d) || BR[i + DI[d]]) continue;
-    const n = cy ? 2 + (hs(c, r, 100 + d) > 0.5 ? 1 : 0) : water ? (hs(c, r, 100 + d) < 0.3 ? 1 : 0) : 2 + (hs(c, r, 100 + d) > 0.45 ? 1 : 0);
+    const n = cy ? 1 + (hs(c, r, 100 + d) > 0.6 ? 1 : 0) : hs(c, r, 100 + d) < (water ? 0.2 : 0.3) ? 1 : 0;
     // a wall built along the top clears the rocks off the edge and the top of the slope under it
     const walled = !water && wallOn(c, r, d);
     for (let k = 0; k < n; k++) {
@@ -2430,14 +2524,18 @@ function cliffRocks(c, r, i) {
     if (water) continue;
     // one along the lip above, and one at the foot below
     const along = (o, k) => {
-      const t = 0.15 + hs(c, r, 150 + d * 2 + o) * 0.7;
+      const t = 0.15 + hs(c, r, 150 + d * 3 + o) * 0.7;
       return d === 1 ? [c + 1 - k, r + t] : d === 3 ? [c + k, r + t] : d === 0 ? [c + t, r + k] : [c + t, r + 1 - k];
     };
     const kt = hs(c, r, 160 + d), kb = hs(c, r, 164 + d);
-    if (kt < 0.7 && !walled) { const [x, z] = along(0, -0.04 - kt * 0.1); slopeRock(x, z, kt * 0.6, b); }
-    if (kb < 0.75 && !SH[i]) { const [x, z] = along(1, 0.42 + kb * 0.06); slopeRock(x, z, kb * 0.5, b); }
+    if (kt < 0.1 && !walled) { const [x, z] = along(0, -0.04 - kt * 0.6); slopeRock(x, z, kt * 4, b); }
+    // boulders come to rest at the foot, now and then with a smaller one beside
+    if (kb < 0.3 && !SH[i]) {
+      const [x, z] = along(1, 0.42 + kb * 0.2); slopeRock(x, z, 0.3 + kb * 2, b);
+      if (kb < 0.12) { const [x2, z2] = along(2, 0.5 + kb); slopeRock(x2, z2, kb * 2, b); }
+    }
   }
-  if (!water) for (let k = 0; k < 4; k++) if (m & 16 << k) slopeRock(c + (CX[k] ? 0.84 : 0.16), r + (CZ[k] ? 0.84 : 0.16), hs(c, r, 140 + k), b);
+  if (!water) for (let k = 0; k < 4; k++) if (m & 16 << k && hs(c, r, 144 + k) < 0.25) slopeRock(c + (CX[k] ? 0.84 : 0.16), r + (CZ[k] ? 0.84 : 0.16), hs(c, r, 140 + k), b);
 }
 // a plank bridge, a tile at a time: boards across two stringers, a rail each side, and over a river,
 // piles down to the bed (over a canyon it hangs from rope rails instead)
@@ -5464,6 +5562,8 @@ window.GAME = {
   // the ground the cursor would pick at a screen point
   pickAt: (sx, sy) => { const m = [mouse.x, mouse.y]; mouse.x = sx; mouse.y = sy; const p = pickGround(false); mouse.x = m[0]; mouse.y = m[1]; return p && [p.x, p.z]; },
   swing: () => H.swing,
+  // a chunk's ground triangles, built afresh, and how long that took (for checking the cliff faces meet up)
+  groundMesh: (cx, cz) => { const ch = {}, t0 = performance.now(); buildGround(cx, cz, ch); const ms = performance.now() - t0; return { ms, p: Array.from(ch.ground.geometry.attributes.position.array) }; },
   shadowInfo: () => ({ cast: sun.castShadow, amt: CLOUD_U.shadowAmt.value, fog: [Math.round(scene.fog.near), Math.round(scene.fog.far), scene.fog.color.getHexString()], meshesCasting: (() => { let n = 0; scene.traverse(o => { if (o.castShadow) n++; }); return n; })() }),
   heroFace: () => Math.atan2(Math.sin(H.face), Math.cos(H.face)),
   gait: () => [H.stepF, H.stepS, hero.legL.rotation.x, hero.legL.rotation.z],
