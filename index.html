@@ -2143,7 +2143,13 @@ const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true });
 // cycle apart, so the stretch never builds up), streaked with foam, and white where they fall a level.
 // It's drawn in two passes over what's below: one multiplies it by what the water lets through, the next
 // adds the water's own light.
-const WATER = { clarity: 0.4, turbidity: 1.6, waves: 1, waveSpeed: 1, flow: 1, glitter: 1, roughness: 0.03, foam: 1, shoreFoam: 0.45 };
+// From the fixed camera, high above, Fresnel shows little sky and the sun's glitter is mostly off screen, so
+// it also has things that read from up here: slow swells that lift the surface itself, drawn faceted and
+// lapping up and down the banks; a sheen on their crests and sparkles that twinkle on them; caustics playing
+// over the bed in the shallows; turquoise shallows; and a crisp line of foam at the shore with ripples
+// running out from it.
+const WATER = { clarity: 0.4, turbidity: 1.6, waves: 1, waveSpeed: 1, rippleSize: 1, flow: 1, glitter: 1, roughness: 0.03, foam: 1, shoreFoam: 0.45,
+  swell: 0.06, swellSize: 1, facets: 1, crests: 1, sparkle: 1, caustics: 1, shallows: 1, shoreLine: 1, shoreRipples: 1 };
 const waveTex = (() => {
   // tileable value noise (lattices whose periods divide the texture): rg its slope, b the height, a foam lace
   const S = 256, rnd = mulberry32(7717), H = new Float32Array(S * S), F = new Float32Array(S * S);
@@ -2160,7 +2166,7 @@ const waveTex = (() => {
       out[y * S + x] = v / tot;
     }
   };
-  layer(H, [8, 16, 32, 64], 0.55);
+  layer(H, [4, 8, 16, 32], 0.55);
   layer(F, [16, 32, 64, 128], 0.6);
   const gx = new Float32Array(S * S), gy = new Float32Array(S * S);
   let m = 1e-6;
@@ -2189,33 +2195,53 @@ const WATER_U = Object.assign({
   skyCol: { value: new THREE.Color() }, viewDir: { value: new THREE.Vector3(0, -1, 0) }, waterCol: { value: new THREE.Vector3() },
   absorb: { value: new THREE.Vector3() }, lampPos: { value: new THREE.Vector3() }, lampCol: { value: new THREE.Color() }, lampRange: { value: 9 },
   fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
+  swellAmp: { value: 0.06 }, swellLen: { value: 1 }, rippleLen: { value: 1 }, facets: { value: 1 }, crests: { value: 1 }, sparkle: { value: 1 },
+  caustics: { value: 1 }, shallows: { value: 1 }, shoreLine: { value: 1 }, shoreRipples: { value: 1 },
 }, CLOUD_U);
 const WATER_VS = `
 attribute float wDepth, wFall; attribute vec2 wFlow;
-varying vec3 vPos; varying float vDepth, vFall, vFogZ; varying vec2 vFlow, vCloudXZ;
+uniform float time, swellAmp, swellLen;
+varying vec3 vPos; varying float vDepth, vFall, vFogZ, vSwell; varying vec2 vFlow, vCloudXZ;
+// three long swells crossing (tiles per wave: 6, 3.9, 2.7), summing to -1 .. 1
+float swell(vec2 p) {
+  const float TAU = 6.2832;
+  return 0.5 * sin(dot(p, vec2(0.83, 0.56)) * TAU / (6.0 * swellLen) + time * 0.9)
+    + 0.3 * sin(dot(p, vec2(-0.45, 0.89)) * TAU / (3.9 * swellLen) + time * 1.15 + 1.7)
+    + 0.2 * sin(dot(p, vec2(0.98, -0.2)) * TAU / (2.7 * swellLen) + time * 1.4 + 4.1);
+}
 void main() {
-  vec4 w = modelMatrix * vec4(position, 1.0), v = viewMatrix * w;
-  vPos = w.xyz; vDepth = wDepth; vFall = wFall; vFlow = wFlow; vCloudXZ = w.xz; vFogZ = -v.z;
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  // running water and falls don't swell
+  vSwell = swell(w.xz);
+  float h = swellAmp * vSwell * (1.0 - clamp(length(wFlow) * 1.4, 0.0, 0.85)) * (1.0 - clamp(wFall, 0.0, 1.0));
+  w.y += h;
+  vec4 v = viewMatrix * w;
+  vPos = w.xyz; vDepth = wDepth + h; vFall = wFall; vFlow = wFlow; vCloudXZ = w.xz; vFogZ = -v.z;
   gl_Position = projectionMatrix * v;
 }`;
 const WATER_FS = CLOUD_GLSL + `
 uniform sampler2D tWave; uniform float time, waveAmp, flowSpeed, glitter, rough, foamAmt, shoreFoam, lampRange, passAdd, fogNear, fogFar;
-varying float vFogZ;
+uniform float rippleLen, facets, crests, sparkle, caustics, shallows, shoreLine, shoreRipples;
+varying float vFogZ, vSwell;
 uniform vec3 sunDir, sunCol, skyCol, viewDir, waterCol, absorb, lampPos, lampCol;
 varying vec3 vPos; varying float vDepth, vFall; varying vec2 vFlow;
 vec2 slopeAt(vec2 uv) { return texture2D(tWave, uv).rg * 2.0 - 1.0; }
+float heightAt(vec2 uv) { return texture2D(tWave, uv).b; }
 float fresnelWater(float c) { float x = 1.0 - clamp(c, 0.0, 1.0), x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
 void main() {
   vec2 xz = vPos.xz;
   float d = max(vDepth, 0.0), spd = length(vFlow);
   // wind waves: two layers of slope noise crossing
-  vec2 s = slopeAt(xz / 7.0 + vec2(0.021, 0.013) * time) * 0.6 + slopeAt(mat2(0.8, -0.6, 0.6, 0.8) * xz / 3.1 - vec2(0.017, -0.029) * time) * 0.4;
+  vec2 s = slopeAt(xz / (9.0 * rippleLen) + vec2(0.021, 0.013) * time) * 0.6 + slopeAt(mat2(0.8, -0.6, 0.6, 0.8) * xz / (4.5 * rippleLen) - vec2(0.017, -0.029) * time) * 0.4;
   // rivers: the flow map's two phases
   float ph0 = fract(time * 0.3), ph1 = fract(time * 0.3 + 0.5), wb = abs(ph0 * 2.0 - 1.0);
   vec2 fl = vFlow * flowSpeed * 1.6;
-  vec2 fs = mix(slopeAt(xz / 2.6 - fl * ph0), slopeAt(xz / 2.6 - fl * ph1 + 0.37), wb);
+  vec2 fs = mix(slopeAt(xz / (4.0 * rippleLen) - fl * ph0), slopeAt(xz / (4.0 * rippleLen) - fl * ph1 + 0.37), wb);
   s = mix(s, fs, clamp(spd * 1.4, 0.0, 0.85)) * waveAmp * (0.22 + spd * 0.3 + vFall * 0.5);
-  vec3 N = normalize(vec3(-s.x, 1.0, -s.y)), V = -viewDir, L = normalize(sunDir);
+  // the swells' own facets, flat-shaded like the ground
+  vec3 Nf = normalize(cross(dFdx(vPos), dFdy(vPos)));
+  if (Nf.y < 0.0) Nf = -Nf;
+  vec3 N = normalize(Nf + vec3(-s.x, 0.0, -s.y)), V = -viewDir, L = normalize(sunDir);
   vec3 sunE = sunCol * cloudShade();
   // the sky in it, Fresnel from a partly smoothed normal
   vec3 R = reflect(-V, N);
@@ -2233,13 +2259,33 @@ void main() {
   spec += lampCol * lampK * pow(max(dot(N, normalize(V + toLamp / max(ld, 1e-3))), 0.0), 120.0) * 0.6;
   // what's under: through the water above it, slanting down the view (a 30 degree view: twice the depth)
   vec3 Tr = exp(-absorb * d * 3.0);
+  // turquoise shallows: light off a pale bed, coloured by the little water over it
+  float shK = smoothstep(0.0, 0.12, d) * (1.0 - smoothstep(0.25, 1.4, d)) * shallows;
+  body += vec3(0.05, 0.3, 0.26) * shK * (skyCol + sunE * max(L.y, 0.0));
+  // caustics on the bed: bright threads where two drifting patterns meet, fading as the water deepens
+  vec2 cz = xz + s * 0.6;
+  float c1 = heightAt(cz / 3.2 + vec2(0.013, 0.021) * time), c2 = heightAt(mat2(0.6, -0.8, 0.8, 0.6) * cz / 2.6 - vec2(0.019, -0.011) * time);
+  float caus = (1.0 - smoothstep(0.0, 0.035, abs(c1 - c2))) * (1.0 - smoothstep(0.1, 1.1, d)) * smoothstep(0.0, 0.05, d) * caustics;
+  // crests: a sheen where the swells stand highest, and sparkles that twinkle mostly on them
+  float crest = smoothstep(0.35, 0.95, vSwell) * crests;
+  float sp = heightAt(xz / 7.0 + vec2(0.031, -0.017) * time) + heightAt(mat2(0.8, 0.6, -0.6, 0.8) * xz / 5.0 - vec2(0.012, 0.027) * time);
+  float spark = smoothstep(0.71, 0.75, sp * 0.5 + vSwell * 0.04) * sparkle;
   // foam: the lace along the shore, streaks on running water, white where it falls
   float fp = mix(texture2D(tWave, xz / 1.9 - fl * ph0 * 0.8).a, texture2D(tWave, xz / 1.9 - fl * ph1 * 0.8 + 0.5).a, wb);
   float wash = 0.5 + 0.5 * sin(d * 14.0 - time * 1.6 + fp * 4.0);
   float cover = max((1.0 - smoothstep(0.0, 0.02 + 0.07 * wash, d)) * shoreFoam, spd * 0.12 + vFall * 0.7) * foamAmt;
   float fm = smoothstep(1.0 - cover - 0.07, 1.0 - cover + 0.07, fp) * smoothstep(0.0, 0.25, cover);
+  // a crisp line of foam right at the waterline, and thin ripples running out from it, broken up and fading
+  float line = (1.0 - smoothstep(0.012, 0.018, d)) * shoreLine;
+  float rp = fract(d * 7.0 - time * 0.32 + fp * 0.6);
+  float ring = step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05, 0.3, d)) * smoothstep(0.02, 0.04, d) * shoreRipples * 0.8;
+  fm = clamp(max(fm, max(line, ring)), 0.0, 1.0);
   vec3 foamLit = vec3(0.82, 0.87, 0.92) * (sunE * max(dot(N, L), 0.0) * 0.9 + skyCol * 0.9 + lampCol * lampK);
   vec3 add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr + spec) * (1.0 - fm) + foamLit * fm;
+  float sunK = max(L.y, 0.0);
+  add += (sunE * sunK * 0.5 * caus * Tr + (skyCol * 0.5 + sunE * sunK * 0.35) * 0.3 * crest + (sunE * 1.4 + skyCol * 0.4) * spark) * (1.0 - fm);
+  // and each facet a touch lighter or darker as it turns toward the sun or away
+  add *= clamp(1.0 + (dot(Nf, L) - L.y) * 6.0 * facets, 0.55, 1.6);
   vec3 mul = Tr * (1.0 - Fr) * (1.0 - fm);
   // the waterline: fade in over the first few hundredths so the shore isn't a hard edge
   // and into the haze: the ground under it is already hazed, so the water just fades out over it
@@ -2248,7 +2294,7 @@ void main() {
 }`;
 const makeWaterMat = add => new THREE.ShaderMaterial({
   uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), vertexShader: WATER_VS, fragmentShader: WATER_FS,
-  transparent: true, depthWrite: add, side: THREE.DoubleSide, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  transparent: true, depthWrite: add, side: THREE.DoubleSide, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, extensions: { derivatives: true },
   blendSrc: add ? THREE.OneFactor : THREE.ZeroFactor, blendDst: add ? THREE.OneFactor : THREE.SrcColorFactor,
 });
 const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
@@ -2258,6 +2304,8 @@ function updateWater(dt) {
   U.time.value = (U.time.value + dt * WATER.waveSpeed) % 4000;
   U.waveAmp.value = WATER.waves; U.flowSpeed.value = WATER.flow; U.glitter.value = WATER.glitter; U.rough.value = Math.max(0.004, WATER.roughness);
   U.foamAmt.value = WATER.foam; U.shoreFoam.value = WATER.shoreFoam;
+  U.swellAmp.value = WATER.swell; U.swellLen.value = Math.max(0.2, WATER.swellSize); U.rippleLen.value = Math.max(0.2, WATER.rippleSize);
+  for (const k of ['facets', 'crests', 'sparkle', 'caustics', 'shallows', 'shoreLine', 'shoreRipples']) U[k].value = WATER[k];
   U.sunDir.value.copy(sun.position).sub(sun.target.position).normalize();
   U.sunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
   U.skyCol.value.copy(hemi.color).multiplyScalar(hemi.intensity);
@@ -5397,6 +5445,16 @@ const TUNING = [
     [WATER, 'turbidity', 'Body brightness (silt and plankton)', 0, 5, 0.01],
     [WATER, 'waves', 'Wave height', 0, 3, 0.01],
     [WATER, 'waveSpeed', 'Wave speed', 0, 4, 0.05],
+    [WATER, 'rippleSize', 'Ripple size', 0.3, 4, 0.05],
+    [WATER, 'swell', 'Swell height (tiles)', 0, 0.3, 0.005],
+    [WATER, 'swellSize', 'Swell length', 0.3, 4, 0.05],
+    [WATER, 'facets', 'Swell facet shading', 0, 3, 0.05],
+    [WATER, 'crests', 'Crest sheen', 0, 3, 0.05],
+    [WATER, 'sparkle', 'Sparkles', 0, 3, 0.05],
+    [WATER, 'caustics', 'Caustics in the shallows', 0, 3, 0.05],
+    [WATER, 'shallows', 'Turquoise shallows', 0, 3, 0.05],
+    [WATER, 'shoreLine', 'Foam line at the shore', 0, 1, 0.05],
+    [WATER, 'shoreRipples', 'Ripples off the shore', 0, 2, 0.05],
     [WATER, 'flow', 'River flow speed', 0, 4, 0.05],
     [WATER, 'glitter', 'Sun glitter', 0, 4, 0.05],
     [WATER, 'roughness', 'Glitter spread', 0.004, 0.2, 0.001],
