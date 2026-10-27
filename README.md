@@ -31,7 +31,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 ## Building
 
-Floors need flat ground that no slope reaches into. Floors cost 2 wood, timber walls 2 wood and 2 stone, log palisade walls 4 wood, stone walls 4 stone, doors 5 wood. Close in a room with walls and doors (any shape, up to about 200 tiles) and a hipped roof goes up over it. The roof hides while you stand inside, and every roof hides in build mode. Inside, every wall of the building you're in (your room and any rooms joined to it) that is both lower on the screen than you and between you and the camera drops to waist height so you can see in. Doors always stand full height. You heal faster under a roof, and monsters can't get through walls or closed doors.
+Floors need flat ground that no slope reaches into. Floors cost 2 wood, timber walls 2 wood and 2 stone, log palisade walls 4 wood, stone walls 4 stone, doors 5 wood. Close in a room with walls and doors (any shape, up to about 200 tiles) and a hipped roof goes up over it. The roof hides while you stand inside, and every roof hides in build mode. Inside, every wall of the building you're in (your room and any rooms joined to it) that is both lower on the screen than you and between you and the camera, and every outer wall whose inside faces away from the camera, drops to waist height so you can see in. Doors always stand full height. You heal faster under a roof, and monsters can't get through walls or closed doors.
 
 ## How it renders
 

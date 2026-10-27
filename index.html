@@ -1575,8 +1575,9 @@ function roofMesh(rm) {
   return m;
 }
 // Standing in a building (the room you're in and any rooms joined to it through walls and doors), each of
-// its walls that is both lower on the screen than you and between you and the camera drops to waist
-// height. Doors always stand full height. The set is checked each frame and only chunks whose walls
+// its walls drops to waist height when it's both lower on the screen than you and between you and the
+// camera, or when it's an outer wall whose inside faces away from the camera (so all you'd see is its
+// back). Doors always stand full height. The set is checked each frame and only chunks whose walls
 // changed are rebuilt.
 const wantCut = new Set();
 let bldKey = '', bldWalls = [];
@@ -1584,30 +1585,39 @@ function buildingWalls(inside) {
   const key = inside + ':' + roomSeq;
   if (key === bldKey) return bldWalls;
   bldKey = key; bldWalls = [];
-  const seenRooms = new Set([inside]), q = [inside], seenEdges = new Set();
+  const seenRooms = new Set([inside]), q = [inside], found = [];
   while (q.length) {
     const rm = rooms.get(q.pop());
     if (!rm) continue;
     for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
-      const v = wallOn(c, r, d);
-      if (!v) continue;
-      const [ec, er, w] = edgeOf(c, r, d), key = edgeKey(ec, er, w);
-      if (!seenEdges.has(key)) { seenEdges.add(key); bldWalls.push([ec, er, w, v]); }
+      if (!wallOn(c, r, d)) continue;
+      found.push([c, r, d]);
       const other = roomOf.get(T(c + DC[d], r + DR[d]));
       if (other && !seenRooms.has(other)) { seenRooms.add(other); q.push(other); }
     }
   }
+  // each wall once, with the way out of the building across it (none for a wall between two of its rooms)
+  const inB = (c, r) => seenRooms.has(roomOf.get(T(c, r))), byEdge = new Map();
+  for (const [c, r, d] of found) {
+    const [ec, er, w] = edgeOf(c, r, d), key = edgeKey(ec, er, w);
+    if (byEdge.has(key)) continue;
+    const outer = !inB(c + DC[d], r + DR[d]);
+    byEdge.set(key, [ec, er, w, wallOn(c, r, d), outer ? DC[d] : 0, outer ? DR[d] : 0]);
+  }
+  bldWalls = [...byEdge.values()];
   return bldWalls;
 }
 function updateCutaway(inside) {
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
   wantCut.clear();
-  if (inside && rooms.has(inside)) for (const [ec, er, w, v] of buildingWalls(inside)) {
+  if (inside && rooms.has(inside)) for (const [ec, er, w, v, ox, oz] of buildingWalls(inside)) {
     if (v === 2) continue;
     const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
     // toward the camera is lower on the screen; the wall's plane must lie between you and the camera
     const lower = (mx - H.x) * sy + (mz - H.z) * cy > 1e-3, between = (w ? (ec - H.x) * sy : (er - H.z) * cy) > 1e-3;
-    if (lower && between) wantCut.add(edgeKey(ec, er, w));
+    // an outer wall whose outside faces the camera shows only its back to you
+    const backOn = ox * sy + oz * cy > 1e-3;
+    if ((lower && between) || backOn) wantCut.add(edgeKey(ec, er, w));
   }
   if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
   const touched = new Set();
@@ -3400,6 +3410,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   camYaw: () => yaw,
   tune: { PIXEL, OUTLINE, SOBEL },
+  cutCount: () => cutEdges.size,
   // draw a frame and count near-black pixels in it (to check the outline without looking)
   darkPixels: () => {
     renderWorld();
