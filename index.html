@@ -212,7 +212,11 @@ const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t
 // ---------- The world grid ----------
 // A strict square grid, as in Dungeon Golf: every tile is a whole height level plus a shape,
 // flat or a ramp that rises one level toward one side. Level 0 is open water.
-const N = 1024, CH = 32, NC = N / CH, STEP = 0.5, MAXL = 8;
+// How high one level stands (the tuning panel's World section; changing it rebuilds the same world). 1 is the
+// first height the game had, 0.5 the half height it went to; slopes and ramps keep their widths either way.
+const STEP_KEY = 'emberwild.tileHeight';
+const WORLD = { tileHeight: (() => { try { const v = parseFloat(localStorage.getItem(STEP_KEY)); return v >= 0.25 && v <= 1.5 ? v : 1; } catch (err) { return 1; } })() };
+const N = 1024, CH = 32, NC = N / CH, STEP = WORLD.tileHeight, MAXL = 8;
 const T = (c, r) => r * N + c;
 const params = new URLSearchParams(location.search);
 const hashSeed = /^#seed-(\d+)$/.exec(location.hash);
@@ -326,9 +330,9 @@ async function generate(progress) {
       const edge = Math.max(Math.abs(ex), Math.abs(ez)) + fbm(nC, c / 70, r / 70, 3) * 0.07;
       const land = 1 - smooth(0.84, 0.97, edge);
       const base = fbm(nH, c / 230, r / 230, 5);
-      const mreg = smooth(-0.1, 0.4, fbm(nM, c / 420 + 7.3, r / 420 - 3.1, 2));
+      const mreg = smooth(0.12, 0.42, fbm(nM, c / 420 + 7.3, r / 420 - 3.1, 2));
       const rg = 1 - Math.abs(fbm(nR, c / 140, r / 140, 4));
-      let h = 0.44 + base * 0.62 + mreg * rg * rg * 0.5;
+      let h = 0.44 + base * 0.28 + mreg * rg * rg * 0.5;
       HF[T(c, r)] = h * land - (1 - land) * 0.6;
     }
     if (r % 32 === 31) { progress(0.32 * r / N, 'RAISING THE LAND'); await nextFrame(); }
@@ -367,7 +371,7 @@ async function generate(progress) {
     const temp = lerpG(TMP, c, r), wet = lerpG(WET, c, r), curse = lerpG(CUR, c, r);
     const meadow = sat((-0.04 - wet) / 0.06) * sat((0.14 - temp) / 0.1) * sat((0.4 - curse) / 0.08) * sat((temp + 0.45) / 0.1);
     const cold = Math.max(sat((-0.4 - temp) / 0.15), sat((h - 0.72) / 0.1));
-    const k = 1 - 0.8 * meadow + 0.45 * cold;
+    const k = 0.25 - 0.1 * meadow + 0.9 * cold;
     HF[i] = Math.max(0.2, HB[i] + (h - HB[i]) * k);
   }
   for (let i = 0; i < N * N; i++) { const h = HF[i]; LV[i] = h < 0.2 ? 0 : Math.min(MAXL, 1 + Math.floor((h - 0.2) / 0.1)); }
@@ -377,6 +381,8 @@ async function generate(progress) {
   smoothLevels(2);
   slopeLimit();
   pruneLevels();
+  foldKnolls(KNOLL_MIN);
+  slopeLimit();
   terraceLimit();
 
   // 2b. Lakes in the hollows, and rivers down from the heights
@@ -707,16 +713,17 @@ function deepenSea() {
 
 // ---------- Plots ----------
 // As in V Rising, the wilds outside town are marked out into plots you can claim. Seeds on a jittered grid
-// grow over the ground you can walk (a shortest-walk flood, ramps costing extra), so each plot follows the
-// terraces and stops at cliffs, water, roads and towns, and none reaches more than PLOT_R from its seed:
-// irregular plots some 30 to 50 tiles across. Nothing is built on a plot until a hearth claims it.
+// grow over the ground you can walk (a shortest-walk flood), each over its own terrace only, so a plot is
+// flat ground bounded by cliffs, water, roads and towns, and none reaches more than PLOT_R from its seed:
+// irregular plots some 35 to 50 tiles across. A plot may take in a knoll or dip beside it too small to be
+// a plot itself. Nothing is built on a plot until a hearth claims it.
 const PLOT = new Uint16Array(N * N);
 const plots = [null];   // id -> { id, n, c, r, x0, z0, x1, z1, edge, claimed, hearth }
-const PLOT_GRID = 42, PLOT_R = 25, PLOT_MIN = 320;
+const PLOT_GRID = 42, PLOT_R = 25, PLOT_MIN = 600, OFF_LEVEL = 4;
 const plotGround = i => LV[i] > 0 && !BR[i] && !PATH[i] && BI[i] !== TOWN && OB[i] !== O.SHRINE;
 function layPlots(rand) {
   const dist = new Float32Array(N * N).fill(1e9), own = new Int32Array(N * N), seeds = [null];
-  const hk = new Float32Array(1 << 20), hv = new Int32Array(1 << 20);
+  const hk = new Float32Array(1 << 21), hv = new Int32Array(1 << 21);
   let hn = 0;
   const push = (k, v) => { let i = hn++; while (i) { const q = (i - 1) >> 1; if (hk[q] <= k) break; hk[i] = hk[q]; hv[i] = hv[q]; i = q; } hk[i] = k; hv[i] = v; };
   const pop = () => {
@@ -726,34 +733,78 @@ function layPlots(rand) {
     hk[i] = k; hv[i] = vv;
     return v;
   };
+  const seed = at => { const id = seeds.length; seeds.push({ c: at % N, r: Math.floor(at / N), L: LV[at] }); own[at] = id; dist[at] = 0; push(0, at); };
+  // spare: leftover patches too small for a plot of their own, which a plot next door may take in
+  const spare = new Uint8Array(N * N);
+  const grow = soft => {
+    while (hn) {
+      const i = pop(), c = i % N, r = (i - c) / N, id = own[i], sd = seeds[id];
+      for (let d = 0; d < 4; d++) {
+        const nc = c + DC[d], nr = r + DR[d];
+        if (nc < 2 || nr < 2 || nc >= N - 2 || nr >= N - 2) continue;
+        const n = i + DI[d];
+        if (!plotGround(n) || !terrainOpen(i, n, d) || (soft ? !spare[n] : LV[n] !== sd.L)) continue;
+        if ((nc - sd.c) * (nc - sd.c) + (nr - sd.r) * (nr - sd.r) > PLOT_R * PLOT_R) continue;
+        const nd = dist[i] + 1 + (SH[n] ? 3 : 0) + (LV[n] !== sd.L ? OFF_LEVEL : 0);
+        if (nd >= dist[n] || hn >= hk.length) continue;
+        dist[n] = nd; own[n] = id; push(nd, n);
+      }
+    }
+  };
+  // 1. seeds on a jittered grid, each on the level most of the ground round about stands at, growing over
+  // its own terrace only
   for (let gz = 0; gz * PLOT_GRID < N; gz++) for (let gx = 0; gx * PLOT_GRID < N; gx++) {
     const c0 = Math.floor(gx * PLOT_GRID + PLOT_GRID / 2 + (rand() - 0.5) * 18), r0 = Math.floor(gz * PLOT_GRID + PLOT_GRID / 2 + (rand() - 0.5) * 18);
-    // the seed goes on the nearest flat, open ground
+    const tally = new Int32Array(MAXL + 1);
+    for (let dz = -16; dz <= 16; dz += 2) for (let dx = -16; dx <= 16; dx += 2) {
+      const c = c0 + dx, r = r0 + dz;
+      if (c >= 4 && r >= 4 && c < N - 4 && r < N - 4 && plotGround(T(c, r))) tally[LV[T(c, r)]]++;
+    }
+    let want = 0;
+    for (let l = 1; l <= MAXL; l++) if (tally[l] > tally[want]) want = l;
     let at = -1;
-    for (let rad = 0; rad < 8 && at < 0; rad++) for (let dz = -rad; dz <= rad && at < 0; dz++) for (let dx = -rad; dx <= rad; dx++) {
+    for (let rad = 0; rad < 12 && at < 0 && want; rad++) for (let dz = -rad; dz <= rad && at < 0; dz++) for (let dx = -rad; dx <= rad; dx++) {
       const c = c0 + dx, r = r0 + dz;
       if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) continue;
       const i = T(c, r);
-      if (plotGround(i) && !SH[i] && !own[i]) { at = i; break; }
+      if (plotGround(i) && !SH[i] && !own[i] && LV[i] === want) { at = i; break; }
     }
-    if (at < 0) continue;
-    const id = seeds.length;
-    seeds.push({ c: at % N, r: Math.floor(at / N) });
-    own[at] = id; dist[at] = 0; push(0, at);
+    if (at >= 0) seed(at);
   }
-  while (hn) {
-    const i = pop(), c = i % N, r = (i - c) / N, id = own[i], sd = seeds[id];
-    for (let d = 0; d < 4; d++) {
-      const nc = c + DC[d], nr = r + DR[d];
-      if (nc < 2 || nr < 2 || nc >= N - 2 || nr >= N - 2) continue;
-      const n = i + DI[d];
-      if (!plotGround(n) || !terrainOpen(i, n, d)) continue;
-      if ((nc - sd.c) * (nc - sd.c) + (nr - sd.r) * (nr - sd.r) > PLOT_R * PLOT_R) continue;
-      const nd = dist[i] + 1 + (SH[n] ? 3 : 0);
-      if (nd >= dist[n] || hn >= hk.length) continue;
-      dist[n] = nd; own[n] = id; push(nd, n);
+  grow(false);
+  // 2. terraces no seed reached get seeds of their own
+  for (let pass = 0; pass < 2; pass++) {
+    const g = pass ? 18 : 28;
+    for (let r = 4 + pass * 6; r < N - 4; r += g) for (let c = 4 + pass * 6; c < N - 4; c += g) {
+      const i = T(c, r);
+      if (!own[i] && plotGround(i) && !SH[i]) seed(i);
     }
+    grow(false);
   }
+  // 3. plots too small to build on are given up; patches of leftover ground too small for a plot (a knoll,
+  // a step) go to the plot beside them, so a plot may take in the odd rise or dip
+  const count0 = new Int32Array(seeds.length);
+  for (let i = 0; i < N * N; i++) if (own[i]) count0[own[i]]++;
+  for (let i = 0; i < N * N; i++) if (own[i] && count0[own[i]] < PLOT_MIN) { own[i] = 0; dist[i] = 1e9; }
+  const q = new Int32Array(N * N), mark = new Uint8Array(N * N);
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (own[s0] || mark[s0] || !plotGround(s0)) continue;
+    let qn = 0; mark[s0] = 1; q[qn++] = s0;
+    for (let h = 0; h < qn; h++) {
+      const i = q[h], c = i % N;
+      for (let d = 0; d < 4; d++) {
+        if ((d === 1 && c === N - 1) || (d === 3 && c === 0)) continue;
+        const n = i + DI[d];
+        if (n < 0 || n >= N * N || mark[n] || own[n] || !plotGround(n) || LV[n] !== LV[s0]) continue;
+        mark[n] = 1; q[qn++] = n;
+      }
+    }
+    if (qn < PLOT_MIN) for (let k = 0; k < qn; k++) spare[q[k]] = 1;
+  }
+  for (let i = 0; i < N * N; i++) if (own[i] && count0[own[i]] >= PLOT_MIN) {
+    for (let d = 0; d < 4; d++) { const n = i + DI[d]; if (n >= 0 && n < N * N && spare[n] && !own[n]) { push(dist[i], i); break; } }
+  }
+  grow(true);
   // keep the plots big enough to build on, numbered from 1
   const count = new Int32Array(seeds.length), remap = new Int32Array(seeds.length);
   for (let i = 0; i < N * N; i++) if (own[i]) count[own[i]]++;
@@ -1071,6 +1122,33 @@ function terraceLimit() {
       if (LV[i] > m + 1) { LV[i] = Math.max(1, m + 1); changed++; }
     }
     if (!changed) break;
+  }
+}
+// Small knolls and hollows (a patch of one level with only lower, or only higher, ground all round it) are
+// folded into the ground round them, so the land comes out as broad flats with the odd sizeable rise
+const KNOLL_MIN = 260;
+function foldKnolls(min) {
+  const seen = new Int32Array(N * N), q = new Int32Array(N * N);
+  let run = 0;
+  for (let s = 0; s < N * N; s++) {
+    if (!LV[s] || seen[s]) continue;
+    const L = LV[s];
+    let qn = 0, lo = 0, hi = 0;
+    seen[s] = ++run; q[qn++] = s;
+    for (let h = 0; h < qn && qn <= min; h++) {
+      const i = q[h], c = i % N;
+      for (let d = 0; d < 4; d++) {
+        if ((d === 1 && c === N - 1) || (d === 3 && c === 0)) continue;
+        const n = i + DI[d];
+        if (n < 0 || n >= N * N) continue;
+        if (LV[n] === L) { if (seen[n] !== run) { seen[n] = run; q[qn++] = n; } }
+        else if (LV[n] < L) lo++; else hi++;
+      }
+    }
+    if (qn > min || (lo && hi)) continue;
+    // a knoll drops a level, a hollow rises one (the sea's edge stays)
+    if (lo && !hi && L > 1) for (let k = 0; k < qn; k++) LV[q[k]] = L - 1;
+    else if (hi && !lo) for (let k = 0; k < qn; k++) LV[q[k]] = L + 1;
   }
 }
 // one-tile spires, pits and knife ridges read badly as terraces: fold them into their neighbours
@@ -4430,6 +4508,13 @@ $('newWorld').onclick = () => {
   if (location.hash) history.replaceState(null, '', location.pathname);
   location.reload();
 };
+// a new tile height: the same world (pinned by its seed), built again from scratch
+function rebuildWorld(v) {
+  if (v === STEP) return;
+  try { localStorage.setItem(STEP_KEY, String(v)); } catch (err) { toast('Your browser is blocking storage, so the new height can\'t be kept.'); return; }
+  if (!params.has('seed')) history.replaceState(null, '', location.pathname + '#seed-' + SEED);
+  location.reload();
+}
 $('respawn').onclick = respawn;
 $('plotsBtn').onclick = togglePlots;
 
@@ -4451,8 +4536,12 @@ let fpsAcc = 0, fpsN = 0, fps = 0;
 // Ported from Dungeon Golf (itself from crafting-and-conquest's tuning.js): a collapsible section per group
 // with a slider per value. "Copy" puts the values on the clipboard (or in a text box when that's blocked)
 // as "Section: key value, ..." lines, to paste back to Claude as new defaults.
-// spec: [[title, [[object, key, label, min, max, step], ...]]]; [object, key, label, 'color'] is a colour picker.
+// spec: [[title, [[object, key, label, min, max, step, apply?], ...]]]; [object, key, label, 'color'] is a colour
+// picker. apply, if given, runs once the slider is let go.
 const TUNING = [
+  ['World', [
+    [WORLD, 'tileHeight', 'Tile height per level (1 old, 0.5 half). Letting go rebuilds this world from scratch', 0.5, 1, 0.25, rebuildWorld],
+  ]],
   ['Pixels', [
     [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto; shrinks to 2 zoomed out)', 0, 10, 1],
     [PIXEL, 'autoDiv', 'Auto: screen px per mosaic px', 120, 520, 10],
@@ -4565,7 +4654,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
       const sc = tuneButton('Copy this section', 'sec-copy');
       sc.addEventListener('click', () => tuneCopy(tuneLine(g), sc, out, 'Copy this section'));
       sec.append(sum, sc);
-      for (const [obj, key, label, min, max, step] of items) {
+      for (const [obj, key, label, min, max, step, apply] of items) {
         const row = document.createElement('label');
         const text = document.createElement('span');
         text.textContent = label;
@@ -4587,7 +4676,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
           val.textContent = obj[key].toFixed(tuneDecimals(step));
         });
         // hand the keyboard back to the game once the mouse lets go, so the arrow keys aim again
-        input.addEventListener('change', () => { if (!input.matches(':focus-visible')) input.blur(); });
+        input.addEventListener('change', () => { if (!input.matches(':focus-visible')) input.blur(); if (apply) apply(obj[key]); });
         sliders.push({ obj, key, input, val, step });
         row.append(text, val, input);
         sec.append(row);
