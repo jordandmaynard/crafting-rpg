@@ -150,7 +150,7 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li>Close a room with walls and doors and a roof goes up. It hides while you are inside, and you heal faster under it.</li>
       <li>Towns are safe. The wilds grow bolder at night.</li>
-      <li><span><kbd>M</kbd> map, wheel to zoom, hold the middle mouse button (or <kbd>Z</kbd> / <kbd>C</kbd>) to turn the camera.</span></li>
+      <li><span><kbd>M</kbd> map, wheel to zoom, hold the right mouse button and drag (or <kbd>Z</kbd> / <kbd>C</kbd>) to turn the camera.</span></li>
     </ul>
     <div class="loading"><span id="loadText">SHAPING THE WORLD</span><span id="seedText"></span></div>
     <div class="loadbar"><i id="loadFill"></i></div>
@@ -185,7 +185,7 @@ const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t
 // ---------- The world grid ----------
 // A strict square grid, as in Dungeon Golf: every tile is a whole height level plus a shape,
 // flat or a ramp that rises one level toward one side. Level 0 is open water.
-const N = 1024, CH = 32, NC = N / CH, STEP = 1, MAXL = 8;
+const N = 1024, CH = 32, NC = N / CH, STEP = 0.5, MAXL = 8;
 const T = (c, r) => r * N + c;
 const params = new URLSearchParams(location.search);
 const hashSeed = /^#seed-(\d+)$/.exec(location.hash);
@@ -202,6 +202,7 @@ const TN = new Uint8Array(N * N);   // town number + 1
 const FL = new Uint8Array(N * N);   // built floor
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
 const WW = new Uint8Array(N * N);   // built piece on the tile's west edge
+const RIM = new Uint8Array(N * N);  // bits 0-3: that side's neighbour is higher; bits 4-7: only the diagonal at that corner is
 
 const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
 // which corners (nw, ne, se, sw) each shape lifts by one level
@@ -354,6 +355,7 @@ async function generate(progress) {
 
   // 7. Bog water and scenery
   progress(0.84, 'GROWING THE WILDS'); await nextFrame();
+  computeRim();
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
     const i = T(c, r);
     if (BI[i] === SWAMP && LV[i] && !SH[i] && fbm(nX, c / 11 - 70, r / 11, 2) > 0.08) WT[i] = 1;
@@ -367,6 +369,27 @@ async function generate(progress) {
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   progress(0.95, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
+}
+
+// where higher ground's slope spills half a tile into a lower tile
+function computeRim() {
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r);
+    let m = 0;
+    for (let d = 0; d < 4; d++) {
+      const nc = c + DC[d], nr = r + DR[d];
+      if (nc < 0 || nr < 0 || nc >= N || nr >= N) continue;
+      const n = i + DI[d], ek = EDGE_K[d], ok = OPP_K[d];
+      if (cornerL(n, ok[0]) > cornerL(i, ek[0]) || cornerL(n, ok[1]) > cornerL(i, ek[1])) m |= 1 << d;
+    }
+    for (let k = 0; k < 4; k++) {
+      if (m & (1 << k | 1 << ((k + 3) & 3))) continue;
+      const dc = CX[k] ? c + 1 : c - 1, dr = CZ[k] ? r + 1 : r - 1;
+      if (dc < 0 || dr < 0 || dc >= N || dr >= N) continue;
+      if (cornerL(T(dc, dr), (k + 2) & 3) > cornerL(i, k)) m |= 16 << k;
+    }
+    RIM[i] = m;
+  }
 }
 
 function smoothLevels(passes) {
@@ -554,7 +577,7 @@ def(O.LAMP, { solid: 0.1 });
 
 // where on its tile an object stands (round ones wander a little off centre)
 function objPos(c, r, o) {
-  if (OBJ[o].tile || o === O.LAMP) return [c + 0.5, r + 0.5];
+  if (OBJ[o].tile || o === O.LAMP || RIM[T(c, r)]) return [c + 0.5, r + 0.5];
   return [c + 0.5 + (hs(c, r, 3) - 0.5) * 0.3, r + 0.5 + (hs(c, r, 4) - 0.5) * 0.3];
 }
 
@@ -740,7 +763,7 @@ PAL[SNOW].lip = C('#f4f8ff'); PAL[SNOW].rim = C('#a8b6ca');
 const PLAZA = C('#a09480'), PLAZA_B = C('#948872');
 const FLOWER = [C('#e8d24a'), C('#e86a8a'), C('#f0f0f0'), C('#8a7af0')];
 const BED = C('#3a4a50'), DEEP = C('#2f6a8e'), BOGW = C('#56744a');
-const VOID_Y = -3, WATER_Y = 0.72;
+const VOID_Y = -3, WATER_Y = 0.34;
 
 // ---------- Ground chunks ----------
 function groundColor(c, r, i, j) {
@@ -763,65 +786,87 @@ function groundColor(c, r, i, j) {
   return shade(base, (0.9 + hs(c, r, i * 2 + j) * 0.18) * (0.93 + LV[t] * 0.014));
 }
 
+// Drops between levels are slopes half a tile wide, not sheer walls. The ground is drawn on a
+// half-tile grid: every point on a tile's border takes the highest of the tiles that meet there,
+// so the lower tile's outer half rises to meet its higher neighbour, and corners fill in by themselves.
+const tileSurf = (c, r, u, v) => {
+  const i = T(c, r), l = LIFT[SH[i]];
+  return (LV[i] + (l[0] * (1 - u) + l[1] * u) * (1 - v) + (l[3] * (1 - u) + l[2] * u) * v) * STEP;
+};
+// height of the drawn ground at a half-grid point (x2, z2 are twice the world coordinates)
+function pointH(x2, z2) {
+  const ca = x2 & 1 ? x2 >> 1 : (x2 >> 1) - 1, cb = x2 >> 1, ra = z2 & 1 ? z2 >> 1 : (z2 >> 1) - 1, rb = z2 >> 1;
+  let h = -1e9;
+  for (let r = ra; r <= rb; r++) for (let c = ca; c <= cb; c++) {
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const y = tileSurf(c, r, x2 / 2 - c, z2 / 2 - r);
+    if (y > h) h = y;
+  }
+  return h;
+}
+// the drawn ground at any point, slopes included (for the cursor)
+function surfH(x, z) {
+  const x2 = Math.floor(x * 2), z2 = Math.floor(z * 2), u = x * 2 - x2, v = z * 2 - z2;
+  return (pointH(x2, z2) * (1 - u) + pointH(x2 + 1, z2) * u) * (1 - v) + (pointH(x2, z2 + 1) * (1 - u) + pointH(x2 + 1, z2 + 1) * u) * v;
+}
+// how far into a tile its side slopes reach, for collision
+const SLOPE_W = 0.5;
+
 function buildGround(cx, cz, ch) {
   OUT = bufGround; bufGround.n = 0;
   const water = bufWater; water.n = 0;
-  const c0 = cx * CH, r0 = cz * CH;
+  const c0 = cx * CH, r0 = cz * CH, GW = CH * 2 + 1;
+  const grid = new Float32Array(GW * GW);
+  for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) grid[j * GW + k] = pointH(c0 * 2 + k, r0 * 2 + j);
+  const P = [], own = [], up = [];
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
-    const i = T(c, r), L = LV[i], s = SH[i], pal = PAL[BI[i]], l = LIFT[s];
-    const h0 = (L + l[0]) * STEP, h1 = (L + l[1]) * STEP, h2 = (L + l[2]) * STEP, h3 = (L + l[3]) * STEP;
-    const V = (u, v) => [c + u, (h0 * (1 - u) + h1 * u) * (1 - v) + (h3 * (1 - u) + h2 * u) * v, r + v];
-    if (!L) {
-      quad(V(0, 0), V(0, 1), V(1, 1), V(1, 0), shade(BED, 0.85 + hs(c, r, 1) * 0.25));
+    const i = T(c, r), L = LV[i], s = SH[i], pal = PAL[BI[i]];
+    // the tile's 3 x 3 points, and which of them its higher neighbours lift
+    for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) {
+      const n = j * 3 + k, y = grid[((r - r0) * 2 + j) * GW + (c - c0) * 2 + k];
+      P[n] = [c + k / 2, y, r + j / 2];
+      own[n] = tileSurf(c, r, k / 2, j / 2);
+      up[n] = y > own[n] + 1e-4;
+    }
+    const strata = 0.9 + hs(c, r, 20) * 0.2;
+    const rockTop = shade(L ? pal.cliffA : pal.road, strata), rockLow = shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
+    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+      const n00 = b * 3 + a, n10 = n00 + 1, n01 = n00 + 3, n11 = n00 + 4;
+      const lifted = up[n00] + up[n10] + up[n01] + up[n11];
+      let k00, k10, k01, k11;
+      if (lifted) {
+        // a slope: light rock at the top, darker where it meets the ground
+        [k00, k10, k01, k11] = [n00, n10, n01, n11].map(n => up[n] ? rockTop : rockLow);
+      } else {
+        let cc;
+        if (!L) cc = shade(BED, 0.85 + hs(c, r, 1) * 0.25);
+        else if (s) {
+          // ramps: stripes across the slope so the incline reads at a glance
+          const along = (s === 1 || s === 3) ? b : a;
+          cc = shade(along % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, a + b * 2) * 0.1);
+        } else cc = groundColor(c, r, a, b);
+        k00 = k10 = k01 = k11 = cc;
+      }
+      // split through the odd corner out, so slope corners come out as clean hips and valleys
+      const odd = lifted === 1 || lifted === 3;
+      const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
+      if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
+      else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
+    }
+    if (!L || WT[i]) {
       OUT = water;
-      const k = shade(DEEP, 0.92 + hs(c, r, 5) * 0.12), y = WATER_Y;
+      const y = L ? L * STEP + 0.04 : WATER_Y, k = L ? shade(BOGW, 0.9 + hs(c, r, 5) * 0.15) : shade(DEEP, 0.92 + hs(c, r, 5) * 0.12);
       quad([c, y, r], [c, y, r + 1], [c + 1, y, r + 1], [c + 1, y, r], k);
       OUT = bufGround;
-    } else if (s) {
-      // ramps: stripes across the slope so the incline reads at a glance
-      const along = (s === 1 || s === 3) ? 'v' : 'u';
-      for (let k = 0; k < 4; k++) {
-        const a = k / 4, b = (k + 1) / 4, cc = shade(k % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, k) * 0.1);
-        if (along === 'v') quad(V(0, a), V(0, b), V(1, b), V(1, a), cc);
-        else quad(V(a, 0), V(a, 1), V(b, 1), V(b, 0), cc);
-      }
-    } else {
-      for (let a = 0; a < 2; a++) for (let b = 0; b < 2; b++) {
-        const cc = groundColor(c, r, a, b);
-        quad(V(a / 2, b / 2), V(a / 2, (b + 1) / 2), V((a + 1) / 2, (b + 1) / 2), V((a + 1) / 2, b / 2), cc);
-      }
-      if (WT[i]) {
-        OUT = water;
-        const y = L * STEP + 0.05, k = shade(BOGW, 0.9 + hs(c, r, 5) * 0.15);
-        quad([c, y, r], [c, y, r + 1], [c + 1, y, r + 1], [c + 1, y, r], k);
-        OUT = bufGround;
-      }
     }
-    // cliff faces wherever this tile stands above its neighbour (and the cut edge of the world)
-    const hh = [h0, h1, h2, h3];
+    // the cut edge of the world
     for (let d = 0; d < 4; d++) {
-      const nc = c + DC[d], nr = r + DR[d], ka = EDGE_K[d][0], kb = EDGE_K[d][1];
-      const ha = hh[ka], hb = hh[kb];
-      let na, nb;
-      if (nc < 0 || nr < 0 || nc >= N || nr >= N) { na = nb = VOID_Y; }
-      else { const n = T(nc, nr); na = cornerL(n, OPP_K[d][0]) * STEP; nb = cornerL(n, OPP_K[d][1]) * STEP; }
-      if (ha <= na + 1e-6 && hb <= nb + 1e-6) continue;
-      // tucked a hair inside the tile, so a face turned away from the camera never z-fights the top's edge
-      const ix = -DC[d] * 0.004, iz = -DR[d] * 0.004;
-      const ax = c + CX[ka] + ix, az = r + CZ[ka] + iz, bx = c + CX[kb] + ix, bz = r + CZ[kb] + iz;
-      const fa = Math.min(ha, na), fb = Math.min(hb, nb);
-      const la = Math.max(fa, ha - 0.12), lb = Math.max(fb, hb - 0.12);
-      const lip = L ? pal.lip : BED;
-      quad([ax, ha, az], [ax, la, az], [bx, lb, bz], [bx, hb, bz], lip);
-      // rock darkens with depth below the lip, so ramp sides stay light and tall drops go dark
-      const strata = 0.9 + hs(c, r, d + 20) * 0.2;
-      const rockAt = (top, y) => pal.cliffA.clone().lerp(pal.cliffB, clamp((top - y) / (STEP * 1.2), 0, 1)).multiplyScalar(strata);
-      quad([ax, la, az], [ax, fa, az], [bx, fb, bz], [bx, lb, bz], rockAt(ha, la), rockAt(ha, fa), rockAt(hb, fb), rockAt(hb, lb));
-      // a dark rim along the top of a drop, so terraces stepping away from the camera still read
-      if (L && !s && na < ha - 1e-6 && nb < hb - 1e-6) {
-        const y = ha + 0.004, w = 0.07, ox = -DC[d] * w, oz = -DR[d] * w;
-        const Ax = c + CX[ka], Az = r + CZ[ka], Bx = c + CX[kb], Bz = r + CZ[kb];
-        quad([Ax, y, Az], [Bx, y, Bz], [Bx + ox, y, Bz + oz], [Ax + ox, y, Az + oz], pal.rim);
+      const nc = c + DC[d], nr = r + DR[d];
+      if (nc >= 0 && nr >= 0 && nc < N && nr < N) continue;
+      const e = [[0, 1, 2], [2, 5, 8], [8, 7, 6], [6, 3, 0]][d];
+      for (let k = 0; k < 2; k++) {
+        const A = P[e[k]], B = P[e[k + 1]];
+        quad(A, [A[0], VOID_Y, A[2]], [B[0], VOID_Y, B[2]], B, pal.cliffA, pal.cliffB, pal.cliffB, pal.cliffA);
       }
     }
   }
@@ -1449,12 +1494,23 @@ function stepOpen(c, r, d, foe) {
 const CORNER = [[0, 0, 3, 0, -1, -1], [1, 0, 1, 0, 1, -1], [1, 1, 1, 2, 1, 1], [0, 1, 3, 2, -1, 1]];
 // push a circle out of every blocked edge, corner post and solid prop around it
 function collide(p, rad, foe) {
+  // stop at the foot of a slope spilling in from higher ground, not at the tile edge
+  const sr = Math.max(rad, Math.min(rad + SLOPE_W - 0.25, 0.48));
   for (let it = 0; it < 2; it++) {
     const c = Math.floor(p.x), r = Math.floor(p.z), u = p.x - c, v = p.z - r;
-    if (v < rad && !stepOpen(c, r, 0, foe)) p.z = r + rad;
-    if (1 - v < rad && !stepOpen(c, r, 2, foe)) p.z = r + 1 - rad;
-    if (u < rad && !stepOpen(c, r, 3, foe)) p.x = c + rad;
-    if (1 - u < rad && !stepOpen(c, r, 1, foe)) p.x = c + 1 - rad;
+    const rim = RIM[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))];
+    const r0 = rim & 1 ? sr : rad, r1 = rim & 2 ? sr : rad, r2 = rim & 4 ? sr : rad, r3 = rim & 8 ? sr : rad;
+    if (v < r0 && !stepOpen(c, r, 0, foe)) p.z = r + r0;
+    if (1 - v < r2 && !stepOpen(c, r, 2, foe)) p.z = r + 1 - r2;
+    if (u < r3 && !stepOpen(c, r, 3, foe)) p.x = c + r3;
+    if (1 - u < r1 && !stepOpen(c, r, 1, foe)) p.x = c + 1 - r1;
+    if (rim > 15) for (let k = 0; k < 4; k++) {
+      if (!(rim & 16 << k)) continue;
+      const px = c + CX[k], pz = r + CZ[k], ex = p.x - px, ez = p.z - pz, dd = ex * ex + ez * ez, m = sr + 0.05;
+      if (dd >= m * m) continue;
+      const l = Math.sqrt(dd) || 1e-4;
+      p.x = px + ex / l * m; p.z = pz + ez / l * m;
+    }
     for (const [cu, cvv, dH, dV, dx, dz] of CORNER) {
       const px = c + cu, pz = r + cvv, ex = p.x - px, ez = p.z - pz, dd = ex * ex + ez * ez;
       if (dd >= rad * rad) continue;
@@ -1871,7 +1927,7 @@ const titleCase = s => s.toLowerCase().replace(/\b\w/g, m => m.toUpperCase()).re
 
 // ---------- Input ----------
 const keys = new Set();
-const mouse = { x: innerWidth / 2, y: innerHeight / 2, down: false, right: false, mid: false, lastX: 0 };
+const mouse = { x: innerWidth / 2, y: innerHeight / 2, down: false, right: false, mid: false, lastX: 0, downX: 0, turned: false, mask: 0 };
 let started = false, mapOpen = false;
 addEventListener('keydown', e => {
   if (!started) { if ((e.code === 'Space' || e.code === 'Enter') && !$('start').disabled && !$('intro').hidden) { e.preventDefault(); begin(); } return; }
@@ -1898,28 +1954,38 @@ addEventListener('keydown', e => {
   if (e.key === '-') setZoom(zoom / 1.15);
 });
 addEventListener('keyup', e => keys.delete(e.code));
-addEventListener('blur', () => { keys.clear(); mouse.down = mouse.right = mouse.mid = false; });
+addEventListener('blur', () => { keys.clear(); mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
+// buttons are read from the pressed-buttons mask, because a second button pressed while one is
+// held arrives as a move, not a pointerdown (attacking while turning the camera)
+function syncButtons(e) {
+  const was = mouse.mask, m = mouse.mask = e.buttons, on = m & ~was, off = was & ~m;
+  if (on & 1) { mouse.down = true; if (mode === 'build') placePiece(); }
+  if (on & 2) { mouse.right = true; mouse.turned = false; mouse.downX = mouse.lastX = e.clientX; }
+  if (on & 4) { mouse.mid = true; mouse.lastX = e.clientX; }
+  if (off & 1) mouse.down = false;
+  // a right click that didn't turn the camera removes a piece in build mode
+  if (off & 2) { mouse.right = false; if (!mouse.turned && mode === 'build') removePiece(); }
+  if (off & 4) mouse.mid = false;
+}
 cv.addEventListener('pointerdown', e => {
   if (!started) return;
   audioOn();
   mouse.x = e.clientX; mouse.y = e.clientY;
-  if (e.button === 0) { mouse.down = true; if (mode === 'build') placePiece(); }
-  if (e.button === 2) { mouse.right = true; if (mode === 'build') removePiece(); }
-  if (e.button === 1) { mouse.mid = true; mouse.lastX = e.clientX; e.preventDefault(); }
+  if (e.button === 1) e.preventDefault();
+  syncButtons(e);
   cv.setPointerCapture(e.pointerId);
 });
 cv.addEventListener('pointermove', e => {
   mouse.x = e.clientX; mouse.y = e.clientY;
-  if (mouse.mid) { yawGoal -= (e.clientX - mouse.lastX) * 0.008; yaw = yawGoal; mouse.lastX = e.clientX; }
+  if (started) syncButtons(e);
+  // hold the right (or middle) button and drag to turn the camera freely; the tilt stays at 30°
+  if (mouse.right && Math.abs(e.clientX - mouse.downX) > 4) mouse.turned = true;
+  if ((mouse.right && mouse.turned) || mouse.mid) { yawGoal -= (e.clientX - mouse.lastX) * 0.008; yaw = yawGoal; }
+  mouse.lastX = e.clientX;
 });
-const endPointer = e => {
-  if (e.button === 0) mouse.down = false;
-  if (e.button === 2) mouse.right = false;
-  if (e.button === 1 && mouse.mid) { mouse.mid = false; yawGoal = Math.round((yawGoal - Math.PI / 4) / (Math.PI / 2)) * (Math.PI / 2) + Math.PI / 4; }
-};
-cv.addEventListener('pointerup', endPointer);
-cv.addEventListener('pointercancel', e => { mouse.down = mouse.right = mouse.mid = false; });
+cv.addEventListener('pointerup', e => { if (started) syncButtons(e); });
+cv.addEventListener('pointercancel', e => { mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; });
 cv.addEventListener('auxclick', e => e.preventDefault());
 cv.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * (e.deltaY > 0 ? 0.9 : 1.1)); }, { passive: false });
 $('mini').addEventListener('click', () => toggleMap());
@@ -1943,9 +2009,9 @@ function pickGround(withWalls) {
       const w = wallUnder(x, y, z);
       if (w) return { x, y, z, wall: w };
     }
-    if (y <= heightAt(x, z)) {
+    if (y <= surfH(x, z)) {
       let lo = prev, hi = t;
-      for (let b = 0; b < 8; b++) { const m = (lo + hi) / 2, p = at(m); if (p[1] <= heightAt(p[0], p[2])) hi = m; else lo = m; }
+      for (let b = 0; b < 8; b++) { const m = (lo + hi) / 2, p = at(m); if (p[1] <= surfH(p[0], p[2])) hi = m; else lo = m; }
       const p = at(hi);
       return { x: p[0], y: p[1], z: p[2], wall: null };
     }
@@ -2072,7 +2138,7 @@ function buildSpot() {
   if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
   if (buildKind === 'floor') {
     const i = T(c, r);
-    const ok = LV[i] > 0 && !SH[i] && !WT[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
+    const ok = LV[i] > 0 && !SH[i] && !RIM[i] && !WT[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
     return { kind: 'floor', c, r, ok, why: FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.', x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
   }
   // walls and doors snap to the tile side nearest the cursor
@@ -2716,7 +2782,7 @@ window.GAME = {
     forcedPick = null;
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
-  tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], room: roomOf.get(i) || 0 }; },
+  tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], room: roomOf.get(i) || 0 }; },
   findFlat: (c, r, w, h) => {
     // nearest spot where a w × h block of flat, clear, same-level land fits, outside town
     for (let rad = 0; rad < 200; rad++) for (let dz = -rad; dz <= rad; dz++) for (let dx = -rad; dx <= rad; dx++) {
@@ -2735,6 +2801,8 @@ window.GAME = {
   screenOf: (x, y, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, y, z).project(camera); return [rect.left + (v3.x + 1) / 2 * rect.width, rect.top + (1 - v3.y) / 2 * rect.height]; },
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
+  camYaw: () => yaw,
+  mouseState: () => ({ down: mouse.down, right: mouse.right, turned: mouse.turned }),
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   nearestObj: (id, rad = 60) => {
     const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
