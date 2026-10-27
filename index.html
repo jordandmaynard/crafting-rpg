@@ -66,6 +66,9 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .slot.on { border-color: var(--gold); }
 .slot.poor .cost { color: var(--blood); }
 .slot.wide { width: 76px; }
+#sub { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); transform: translateX(-50%); display: flex; gap: 8px; pointer-events: none; }
+.slot.cat::after { content: ''; position: absolute; top: 3px; right: 4px; border: 4px solid transparent; border-bottom-color: var(--dim); border-top: 0; }
+#modeTag.up { bottom: calc(env(safe-area-inset-bottom, 0px) + 170px); }
 #modeTag { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); transform: translateX(-50%); font-family: var(--display); font-size: 10px; color: var(--void); background: var(--gold); border: 3px solid #ffe08a; box-shadow: 3px 3px 0 #000; padding: 6px 10px; pointer-events: none; }
 #prompt { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); transform: translateX(-50%); font-family: var(--display); font-size: 10px; color: var(--bone); pointer-events: none; }
 #prompt b { color: var(--void); background: var(--bone); padding: 3px 6px; margin-right: 8px; font-weight: normal; }
@@ -157,6 +160,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
 </div>
 <div id="tuning" class="tune" hidden></div>
+<div id="sub" hidden></div>
 <div id="bar"></div>
 <div id="modeTag" hidden>BUILD MODE</div>
 <div id="prompt" hidden></div>
@@ -415,6 +419,8 @@ async function generate(progress) {
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   deepenSea();
+  progress(0.93, 'MARKING OUT PLOTS'); await nextFrame();
+  layPlots(rand);
   progress(0.95, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
 }
@@ -646,6 +652,124 @@ function deepenSea() {
       if (ok) GL[i] = g - 1;
     }
   }
+}
+
+// ---------- Plots ----------
+// As in V Rising, the wilds outside town are marked out into plots you can claim. Seeds on a jittered grid
+// grow over the ground you can walk (a shortest-walk flood, ramps costing extra), so each plot follows the
+// terraces and stops at cliffs, water, roads and towns, and none reaches more than PLOT_R from its seed:
+// irregular plots some 30 to 50 tiles across. Nothing is built on a plot until a hearth claims it.
+const PLOT = new Uint16Array(N * N);
+const plots = [null];   // id -> { id, n, c, r, x0, z0, x1, z1, edge, claimed, hearth }
+const PLOT_GRID = 42, PLOT_R = 25, PLOT_MIN = 320;
+const plotGround = i => LV[i] > 0 && !BR[i] && !PATH[i] && BI[i] !== TOWN && OB[i] !== O.SHRINE;
+function layPlots(rand) {
+  const dist = new Float32Array(N * N).fill(1e9), own = new Int32Array(N * N), seeds = [null];
+  const hk = new Float32Array(1 << 20), hv = new Int32Array(1 << 20);
+  let hn = 0;
+  const push = (k, v) => { let i = hn++; while (i) { const q = (i - 1) >> 1; if (hk[q] <= k) break; hk[i] = hk[q]; hv[i] = hv[q]; i = q; } hk[i] = k; hv[i] = v; };
+  const pop = () => {
+    const v = hv[0], k = hk[--hn], vv = hv[hn];
+    let i = 0;
+    for (;;) { let m = 2 * i + 1; if (m >= hn) break; if (m + 1 < hn && hk[m + 1] < hk[m]) m++; if (hk[m] >= k) break; hk[i] = hk[m]; hv[i] = hv[m]; i = m; }
+    hk[i] = k; hv[i] = vv;
+    return v;
+  };
+  for (let gz = 0; gz * PLOT_GRID < N; gz++) for (let gx = 0; gx * PLOT_GRID < N; gx++) {
+    const c0 = Math.floor(gx * PLOT_GRID + PLOT_GRID / 2 + (rand() - 0.5) * 18), r0 = Math.floor(gz * PLOT_GRID + PLOT_GRID / 2 + (rand() - 0.5) * 18);
+    // the seed goes on the nearest flat, open ground
+    let at = -1;
+    for (let rad = 0; rad < 8 && at < 0; rad++) for (let dz = -rad; dz <= rad && at < 0; dz++) for (let dx = -rad; dx <= rad; dx++) {
+      const c = c0 + dx, r = r0 + dz;
+      if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) continue;
+      const i = T(c, r);
+      if (plotGround(i) && !SH[i] && !own[i]) { at = i; break; }
+    }
+    if (at < 0) continue;
+    const id = seeds.length;
+    seeds.push({ c: at % N, r: Math.floor(at / N) });
+    own[at] = id; dist[at] = 0; push(0, at);
+  }
+  while (hn) {
+    const i = pop(), c = i % N, r = (i - c) / N, id = own[i], sd = seeds[id];
+    for (let d = 0; d < 4; d++) {
+      const nc = c + DC[d], nr = r + DR[d];
+      if (nc < 2 || nr < 2 || nc >= N - 2 || nr >= N - 2) continue;
+      const n = i + DI[d];
+      if (!plotGround(n) || !terrainOpen(i, n, d)) continue;
+      if ((nc - sd.c) * (nc - sd.c) + (nr - sd.r) * (nr - sd.r) > PLOT_R * PLOT_R) continue;
+      const nd = dist[i] + 1 + (SH[n] ? 3 : 0);
+      if (nd >= dist[n] || hn >= hk.length) continue;
+      dist[n] = nd; own[n] = id; push(nd, n);
+    }
+  }
+  // keep the plots big enough to build on, numbered from 1
+  const count = new Int32Array(seeds.length), remap = new Int32Array(seeds.length);
+  for (let i = 0; i < N * N; i++) if (own[i]) count[own[i]]++;
+  for (let k = 1; k < seeds.length; k++) if (count[k] >= PLOT_MIN) {
+    remap[k] = plots.length;
+    plots.push({ id: plots.length, n: count[k], c: seeds[k].c, r: seeds[k].r, x0: N, z0: N, x1: 0, z1: 0, edge: null, claimed: false, hearth: null });
+  }
+  const edge = plots.map(() => []);
+  for (let i = 0; i < N * N; i++) PLOT[i] = own[i] ? remap[own[i]] : 0;
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+    const i = T(c, r), id = PLOT[i];
+    if (!id) continue;
+    const pl = plots[id];
+    pl.x0 = Math.min(pl.x0, c); pl.z0 = Math.min(pl.z0, r); pl.x1 = Math.max(pl.x1, c); pl.z1 = Math.max(pl.z1, r);
+    if (PLOT[i - 1] !== id || PLOT[i + 1] !== id || PLOT[i - N] !== id || PLOT[i + N] !== id) edge[id].push(i);
+  }
+  for (const pl of plots) if (pl) pl.edge = Int32Array.from(edge[pl.id]);
+  paintPlots();
+}
+const plotAt = (x, z) => { const c = Math.floor(x), r = Math.floor(z); return c < 0 || r < 0 || c >= N || r >= N ? 0 : PLOT[T(c, r)]; };
+const claimedAt = i => PLOT[i] > 0 && plots[PLOT[i]].claimed;
+// plot borders over the map: white, or blue once claimed
+const PLOT_WHITE = '#f4f0e6', PLOT_BLUE = '#4aa8ff';
+const plotCv = document.createElement('canvas'); plotCv.width = plotCv.height = N;
+const plotCtx = plotCv.getContext('2d');
+function paintPlot(pl) {
+  plotCtx.fillStyle = pl.claimed ? PLOT_BLUE : PLOT_WHITE;
+  for (const i of pl.edge) plotCtx.fillRect(i % N, Math.floor(i / N), 1, 1);
+  pl.fill = null;
+}
+function paintPlots() { plotCtx.clearRect(0, 0, N, N); for (const pl of plots) if (pl) paintPlot(pl); }
+// the whole plot as a translucent wash, for the map's hover
+function plotFill(pl) {
+  if (pl.fill) return pl.fill;
+  const w = pl.x1 - pl.x0 + 1, h = pl.z1 - pl.z0 + 1, cv2 = document.createElement('canvas');
+  cv2.width = w; cv2.height = h;
+  const g = cv2.getContext('2d'), img = g.createImageData(w, h), d = img.data, col = pl.claimed ? [74, 168, 255] : [255, 255, 255];
+  for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) {
+    if (PLOT[T(pl.x0 + x, pl.z0 + z)] !== pl.id) continue;
+    const k = (z * w + x) * 4; d[k] = col[0]; d[k + 1] = col[1]; d[k + 2] = col[2]; d[k + 3] = 110;
+  }
+  g.putImageData(img, 0, 0);
+  return (pl.fill = cv2);
+}
+// and in the world, under the cursor in build mode: the plot's ground washed white (blue once claimed)
+const plotHoverMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+let plotHover = { id: 0, claimed: false, mesh: null };
+function showPlotHover(id) {
+  const claimed = id ? plots[id].claimed : false;
+  if (plotHover.id === id && plotHover.claimed === claimed) return;
+  if (plotHover.mesh) { scene.remove(plotHover.mesh); plotHover.mesh.geometry.dispose(); }
+  plotHover = { id, claimed, mesh: null };
+  if (!id) return;
+  const pl = plots[id], pos = [];
+  for (let r = pl.z0; r <= pl.z1; r++) for (let c = pl.x0; c <= pl.x1; c++) {
+    if (PLOT[T(c, r)] !== id) continue;
+    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+      const x2 = c * 2 + a, z2 = r * 2 + b, p = (x, z) => pos.push(x / 2, pointH(x, z) + 0.05, z / 2);
+      p(x2, z2); p(x2, z2 + 1); p(x2 + 1, z2 + 1); p(x2, z2); p(x2 + 1, z2 + 1); p(x2 + 1, z2);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  plotHoverMat.color.set(claimed ? PLOT_BLUE : '#ffffff');
+  plotHover.mesh = new THREE.Mesh(g, plotHoverMat);
+  plotHover.mesh.renderOrder = 5;
+  scene.add(plotHover.mesh);
 }
 
 // Town houses are built from the same walls, doors and floors as the player's, four to a town:
@@ -1014,7 +1138,7 @@ const O = {
   ROCK: 10, ICEROCK: 11, SANDROCK: 12,
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -1034,11 +1158,12 @@ def(O.WELL, { tile: true });
 def(O.CRYPT, { tile: true });
 def(O.SHRINE, { tile: true });
 def(O.LAMP, { solid: 0.1 });
+def(O.HEARTH, { solid: 0.44 });
 [O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG].forEach(id => def(id, {}));
 
 // where on its tile an object stands (round ones wander a little off centre)
 function objPos(c, r, o) {
-  if (OBJ[o].tile || o === O.LAMP || RIM[T(c, r)] & 255) return [c + 0.5, r + 0.5];
+  if (OBJ[o].tile || o === O.LAMP || o === O.HEARTH || RIM[T(c, r)] & 255) return [c + 0.5, r + 0.5];
   return [c + 0.5 + (hs(c, r, 3) - 0.5) * 0.3, r + 0.5 + (hs(c, r, 4) - 0.5) * 0.3];
 }
 
@@ -1843,6 +1968,7 @@ function drawObject(o, c, r) {
     case O.WELL: return well(x, z);
     case O.CRYPT: return crypt(x, z, Math.floor(k * 4) * Math.PI / 2);
     case O.SHRINE: return shrine(x, z, k * 6);
+    case O.HEARTH: return hearth(x, z, c, r);
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -1911,6 +2037,37 @@ function bridgeDeck(c, r, i) {
     if (h > 0.05) for (const w of [0.14, 0.86]) put(G.cyl6, '#4a3020', 0.5, w, bed + h / 2, 0.13, 0.13, h);
   }
 }
+// A hearth: a round stone firepit under a stone hood on four short pillars, and a chimney stack that
+// rises clear of any roof built over it (the fire itself is animated apart, see the fires)
+const HEARTH_REACH = 3.5;
+function hearthTop(c, r) {
+  const i = T(c, r), y = LV[i] * STEP, rm = rooms.get(roomOf.get(i));
+  if (!rm || !rm.roofY) return y + 2.4;
+  let top = 0;
+  for (const [dx, dz] of [[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]]) top = Math.max(top, rm.roofY(c + dx, r + dz));
+  return Math.max(y + 2.4, top + 0.45);
+}
+function hearth(x, z, c, r) {
+  const y = surfaceY(x, z), top = hearthTop(c, r), st = '#8a8694', dk = '#4e4a56';
+  part(G.cyl8, dk, x, y + 0.04, z, { sx: 0.98, sy: 0.08, sz: 0.98 });
+  for (let a = 0; a < 10; a++) {
+    const ang = a / 10 * Math.PI * 2, k = hash(c + a, r, 31);
+    part(G.box, shade(CC(st), 0.82 + k * 0.3), x + Math.sin(ang) * 0.4, y + 0.15, z + Math.cos(ang) * 0.4, { sx: 0.24, sy: 0.24 + k * 0.05, sz: 0.16, ry: ang });
+  }
+  part(G.cyl8, '#2a2226', x, y + 0.1, z, { sx: 0.62, sy: 0.06, sz: 0.62 });
+  // the hood on its pillars, and the stack
+  for (let a = 0; a < 4; a++) {
+    const ang = a / 4 * Math.PI * 2 + Math.PI / 4;
+    part(G.box, shade(CC(st), 0.9), x + Math.sin(ang) * 0.38, y + 0.55, z + Math.cos(ang) * 0.38, { sx: 0.14, sy: 0.6, sz: 0.14, ry: ang });
+  }
+  part(G.cyl8, shade(CC(st), 0.95), x, y + 0.9, z, { sx: 1.0, sy: 0.12, sz: 1.0 });
+  part(G.cone6, shade(CC(st), 0.85), x, y + 1.18, z, { sx: 0.9, sy: 0.46, sz: 0.9 });
+  const h = top - (y + 1.25);
+  part(G.box, shade(CC(st), 0.8), x, y + 1.25 + h / 2, z, { sx: 0.34, sy: h, sz: 0.34 });
+  for (let k = 0; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), x, y + 1.4 + k * 0.3, z, { sx: 0.36, sy: 0.03, sz: 0.36 });
+  part(G.box, dk, x, top + 0.04, z, { sx: 0.44, sy: 0.1, sz: 0.44 });
+  part(G.box, '#ffb050', x, y + 0.14, z, { sx: 0.3, sy: 0.04, sz: 0.3, into: 'glow' });
+}
 // a waystone where a road ends: a ring of standing stones round a rune that glows
 function shrine(x, z, k) {
   const y = groundAt(x, z), stone = '#8a8696';
@@ -1939,7 +2096,13 @@ function buildObjects(cx, cz, ch) {
 
 // ---------- Building pieces ----------
 const WALL_H = 1.6;
-const COST = { floor: { wood: 2 }, wall: { wood: 2, stone: 2 }, door: { wood: 5 }, logwall: { wood: 4 }, stonewall: { stone: 4 } };
+const COST = { floor: { wood: 2 }, stonefloor: { stone: 2 }, wall: { wood: 2, stone: 2 }, door: { wood: 5 }, logwall: { wood: 4 }, stonewall: { stone: 4 }, hearth: { wood: 2, stone: 4 } };
+// what's on a tile's floor: 1 planks, 2 flagstones
+const FLOOR_KIND = [null, 'floor', 'stonefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
+// the build menu's groups, each opening its own row of kinds
+const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall'], doors: ['door'] };
+const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
+const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall';
 // what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall
 const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall'], KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4 };
 // an edge is named by the tile whose north (w = 0) or west (w = 1) side it is
@@ -1957,6 +2120,20 @@ function plankFloor(c, r) {
   for (let k = 0; k < 4; k++) {
     const col = shade(CC(k % 2 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(c, r, k + 40) * 0.14);
     part(G.box, col, c + 0.125 + k * 0.25, y + 0.03, r + 0.5, { sx: 0.24, sy: 0.06, sz: 1 });
+  }
+}
+// flagstones: four slabs a tile, offset row to row, over a dark mortar bed
+function stoneFloor(c, r) {
+  const y = LV[T(c, r)] * STEP;
+  part(G.box, '#3e3a44', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+  for (let j = 0; j < 2; j++) {
+    const off = (r * 2 + j) % 2 ? 0.25 : 0;
+    for (let k = -1; k < 2; k++) {
+      const x0 = Math.max(0, k * 0.5 + off), x1 = Math.min(1, (k + 1) * 0.5 + off);
+      if (x1 - x0 < 0.05) continue;
+      const col = shade(CC('#8c8894'), 0.84 + hs(c, r, 44 + j * 3 + k) * 0.26);
+      part(G.box, col, c + (x0 + x1) / 2, y + 0.035, r + 0.25 + j * 0.5, { sx: x1 - x0 - 0.04, sy: 0.05, sz: 0.46 });
+    }
   }
 }
 // walls in front of you while you're indoors, drawn only to waist height (see updateCutaway)
@@ -2019,7 +2196,8 @@ function buildPieces(cx, cz, ch) {
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
-    if (FL[i]) plankFloor(c, r);
+    if (FL[i] === 2) stoneFloor(c, r);
+    else if (FL[i]) plankFloor(c, r);
     if (WN[i]) wallPiece(c, r, 0, WN[i]);
     if (WW[i]) wallPiece(c, r, 1, WW[i]);
   }
@@ -2110,6 +2288,7 @@ function roofMesh(rm) {
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
   const tileA = CC(rm.color), tileB = shade(tileA, 0.87), ridge = shade(tileA, 0.68);
   const Y = (x, z) => base + Math.min(2.6, f(x, z)) * ROOF_SLOPE;
+  rm.roofY = Y;
   const colAt = h => { const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
   for (const [c, r] of rm.tiles) {
     const pts = [];
@@ -2197,6 +2376,8 @@ function refreshRooms(c, r, w) {
     const tiles = findRoom(tc, tr);
     if (tiles) makeRoom(tiles);
   }
+  // a roof going up or coming down round a hearth: its chimney grows or shrinks to suit
+  for (const h of hearths.values()) if (Math.abs(h.c - c) < 24 && Math.abs(h.r - r) < 24) rebuildObjects(h.c, h.r);
 }
 
 // ---------- Chunk streaming ----------
@@ -2621,6 +2802,8 @@ const ICON = {
   door: pixelSvg(['dddddddd', 'd.wwww.d', 'd.wwww.d', 'd.kkkk.d', 'd.wwyw.d', 'd.wwww.d', 'd.kkkk.d', 'd.wwww.d'], { d: '#4a3020', w: '#6a4428', k: '#2a2630', y: '#f2c14e' }),
   logwall: pixelSvg(['.l.l.l.l', 'lLlLlLlL', 'lLlLlLlL', 'bbbbbbbb', 'lLlLlLlL', 'lLlLlLlL', 'lLlLlLlL'], { l: '#5a3a22', L: '#8a5a32', b: '#3a2416' }),
   stonewall: pixelSvg(['GG.GG.GG', 'GGGGGGGG', 'gGgggGgg', 'GGGGGGGG', 'ggGgggGg', 'GGGGGGGG', 'gGgggGgg'], { G: '#5a5664', g: '#8c8a96' }),
+  stonefloor: pixelSvg(['GGGgGGGG', 'GGGgGGGG', 'gggggggg', 'GgGGGGgG', 'GgGGGGgG', 'gggggggg'], { G: '#8c8894', g: '#3e3a44' }),
+  hearth: pixelSvg(['...GG...', '...GG...', '..GGGG..', '.GGGGGG.', '.G.yy.G.', '.GyrryG.', 'GGGGGGGG'], { G: '#8a8694', y: '#f2c14e', r: '#e8642a' }),
   remove: pixelSvg(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
 };
 $('woodIcon').innerHTML = ICON.wood;
@@ -2638,32 +2821,52 @@ const SLOTS = {
     { id: 'map', key: 'M', name: 'MAP', icon: 'map' },
   ],
   build: [
-    { id: 'floor', key: '1', name: 'FLOOR', icon: 'floor', cost: 'floor' },
-    { id: 'wall', key: '2', name: 'WALL', icon: 'wall', cost: 'wall' },
-    { id: 'door', key: '3', name: 'DOOR', icon: 'door', cost: 'door' },
-    { id: 'logwall', key: '4', name: 'LOG WALL', icon: 'logwall', cost: 'logwall' },
-    { id: 'stonewall', key: '5', name: 'STONE WALL', icon: 'stonewall', cost: 'stonewall' },
+    { id: 'cat:floors', key: '1', name: 'FLOORS', cat: 'floors' },
+    { id: 'cat:walls', key: '2', name: 'WALLS', cat: 'walls' },
+    { id: 'cat:doors', key: '3', name: 'DOORS', cat: 'doors' },
+    { id: 'hearth', key: '4', name: 'HEARTH', icon: 'hearth', cost: 'hearth' },
     { id: 'remove', key: 'RMB', name: 'REMOVE', icon: 'remove' },
     { id: 'exit', key: 'B', name: 'DONE', icon: 'hammer' },
   ],
 };
+// each group's kinds, as its row opens over the bar
+const KIND_SLOT = {
+  floor: { name: 'WOOD FLOOR', icon: 'floor' }, stonefloor: { name: 'STONE FLOOR', icon: 'stonefloor' },
+  wall: { name: 'TIMBER WALL', icon: 'wall' }, logwall: { name: 'LOG WALL', icon: 'logwall' }, stonewall: { name: 'STONE WALL', icon: 'stonewall' },
+  door: { name: 'WOODEN DOOR', icon: 'door' },
+};
+const catPick = { floors: 'floor', walls: 'wall', doors: 'door' };
+let subOpen = null;
 const costText = k => Object.entries(COST[k]).map(([r, n]) => n + (r === 'wood' ? 'W' : 'S')).join(' ');
 const canAfford = k => Object.entries(COST[k]).every(([r, n]) => H[r] >= n);
 let slotEls = [];
+function slotEl(s, parent) {
+  // a group's slot shows the kind last picked from it
+  const k = s.cat ? catPick[s.cat] : null, icon = k ? KIND_SLOT[k].icon : s.icon, cost = k || s.cost;
+  const el = document.createElement('div');
+  el.className = 'plate slot' + (cost ? ' wide' : '') + (s.cat ? ' cat' : '');
+  el.innerHTML = `<span class="key">${s.key}</span>${ICON[icon]}<span class="${cost ? 'cost' : 'name'}">${cost ? costText(cost) : s.name}</span>` + (s.cd ? '<div class="cd"></div><div class="cdn"></div>' : '');
+  el.title = s.cat ? s.name + ' (' + KIND_SLOT[k].name.toLowerCase() + ')' : cost ? s.name + ' · ' + costText(cost) : s.name;
+  el.addEventListener('click', () => { if (started) slotAction(s.id); });
+  parent.appendChild(el);
+  return { s, el, cost, cd: el.querySelector('.cd'), cdn: el.querySelector('.cdn') };
+}
 function renderBar() {
-  const bar = $('bar');
-  bar.innerHTML = '';
-  slotEls = SLOTS[mode].map(s => {
-    const el = document.createElement('div');
-    el.className = 'plate slot' + (s.cost ? ' wide' : '');
-    el.innerHTML = `<span class="key">${s.key}</span>${ICON[s.icon]}<span class="${s.cost ? 'cost' : 'name'}">${s.cost ? costText(s.cost) : s.name}</span>` + (s.cd ? '<div class="cd"></div><div class="cdn"></div>' : '');
-    el.title = s.cost ? s.name + ' · ' + costText(s.cost) : s.name;
-    el.addEventListener('click', () => { if (started) slotAction(s.id); });
-    bar.appendChild(el);
-    return { s, el, cd: el.querySelector('.cd'), cdn: el.querySelector('.cdn') };
-  });
+  const bar = $('bar'), sub = $('sub');
+  bar.innerHTML = ''; sub.innerHTML = '';
+  if (mode !== 'build') subOpen = null;
+  slotEls = SLOTS[mode].map(s => slotEl(s, bar));
+  if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), name: KIND_SLOT[k].name, icon: KIND_SLOT[k].icon, cost: k }, sub)));
+  sub.hidden = !subOpen;
   $('modeTag').hidden = mode !== 'build';
+  $('modeTag').classList.toggle('up', !!subOpen);
   updateBar();
+}
+// open a group's row (or close it if it's open) and take up the kind last picked from it
+function openCat(cat) {
+  subOpen = subOpen === cat ? null : cat;
+  setBuildKind(catPick[cat]);
+  renderBar();
 }
 // what clicking a slot on the bar does (the same as its key)
 function slotAction(id) {
@@ -2675,17 +2878,19 @@ function slotAction(id) {
   else if (id === 'build') setMode('build');
   else if (id === 'exit') setMode('play');
   else if (id === 'map') toggleMap();
-  else setBuildKind(id);   // floor, walls, door, remove
+  else if (id.startsWith('cat:')) openCat(id.slice(4));
+  else { setBuildKind(id); if (subOpen) { subOpen = null; renderBar(); } }   // a kind, the hearth, remove
 }
 function updateBar() {
-  for (const { s, el, cd, cdn } of slotEls) {
+  for (const slot of slotEls) {
+    const { s, el, cd, cdn } = slot;
     if (s.cd) {
       const f = clamp(s.cd(), 0, 1);
       cd.style.height = (f * 100) + '%';
       cdn.textContent = f > 0 ? Math.ceil(s.left()) : '';
     }
-    if (s.cost) el.classList.toggle('poor', !canAfford(s.cost));
-    if (mode === 'build') el.classList.toggle('on', buildKind === s.id);
+    if (slot.cost) el.classList.toggle('poor', !canAfford(slot.cost));
+    if (mode === 'build') el.classList.toggle('on', s.cat ? catOf(buildKind) === s.cat : buildKind === s.id);
   }
 }
 function renderStats() {
@@ -2962,13 +3167,13 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyB') setMode(mode === 'build' ? 'play' : 'build');
-  if (e.code === 'Escape' && mode === 'build') setMode('play');
-  if (mode === 'build') {
-    if (e.code === 'Digit1') setBuildKind('floor');
-    if (e.code === 'Digit2') setBuildKind('wall');
-    if (e.code === 'Digit3') setBuildKind('door');
-    if (e.code === 'Digit4') setBuildKind('logwall');
-    if (e.code === 'Digit5') setBuildKind('stonewall');
+  if (e.code === 'Escape' && mode === 'build') { if (subOpen) { subOpen = null; renderBar(); } else setMode('play'); }
+  else if (mode === 'build' && /^Digit[1-9]$/.test(e.code)) {
+    const n = +e.code.slice(5);
+    // with a group's row open, the numbers pick from it; otherwise they open the groups
+    if (subOpen) { const k = BUILD_CATS[subOpen][n - 1]; if (k) slotAction(k); }
+    else if (n <= 3) openCat(['floors', 'walls', 'doors'][n - 1]);
+    else if (n === 4) slotAction('hearth');
   }
   if (e.code === 'KeyQ') castWhirl();
   if (e.code === 'KeyE') castLunge();
@@ -2980,16 +3185,16 @@ addEventListener('keydown', e => {
   if (e.key === '-') setZoom(zoom / 1.15);
 });
 addEventListener('keyup', e => keys.delete(e.code));
-addEventListener('blur', () => { keys.clear(); mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; });
+addEventListener('blur', () => { keys.clear(); mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; drag = null; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 // buttons are read from the pressed-buttons mask, because a second button pressed while one is
 // held arrives as a move, not a pointerdown (attacking while turning the camera)
 function syncButtons(e) {
   const was = mouse.mask, m = mouse.mask = e.buttons, on = m & ~was, off = was & ~m;
-  if (on & 1) { mouse.down = true; if (mode === 'build') placePiece(); }
+  if (on & 1) { mouse.down = true; if (mode === 'build') pressBuild(); }
   if (on & 2) { mouse.right = true; mouse.turned = false; mouse.downX = mouse.lastX = e.clientX; }
   if (on & 4) { mouse.mid = true; mouse.lastX = e.clientX; }
-  if (off & 1) mouse.down = false;
+  if (off & 1) { mouse.down = false; if (drag) releaseBuild(); }
   // a right click that didn't turn the camera removes a piece in build mode
   if (off & 2) { mouse.right = false; if (!mouse.turned && mode === 'build') removePiece(); }
   if (off & 4) mouse.mid = false;
@@ -3011,7 +3216,7 @@ cv.addEventListener('pointermove', e => {
   mouse.lastX = e.clientX;
 });
 cv.addEventListener('pointerup', e => { if (started) syncButtons(e); });
-cv.addEventListener('pointercancel', e => { mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; });
+cv.addEventListener('pointercancel', e => { mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; drag = null; });
 cv.addEventListener('auxclick', e => e.preventDefault());
 cv.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * (e.deltaY > 0 ? 0.9 : 1.1)); }, { passive: false });
 $('mini').addEventListener('click', () => toggleMap());
@@ -3141,94 +3346,248 @@ function useDoor() {
 }
 
 // ---------- Build mode ----------
-let ghost = null, ghostOk = false, ghostSpot = null;
+// Pieces only go up on a plot you've claimed, and a plot is claimed by building its hearth. Floors drag out
+// into a rectangle and walls into a straight run along whichever way you drag; each piece in it is checked
+// on its own, and as many are built as you can pay for.
+let ghostOk = false, ghostSpot = null, drag = null, lastPick = null;
 const ghostMat = new THREE.MeshBasicMaterial({ color: '#7aff9a', transparent: true, opacity: 0.4, depthWrite: false });
+const ghostBad = new THREE.MeshBasicMaterial({ color: '#ff6a5a', transparent: true, opacity: 0.4, depthWrite: false });
 const ghostGeo = { floor: new THREE.BoxGeometry(1, 0.08, 1), wall: new THREE.BoxGeometry(1, WALL_H, 0.22), door: new THREE.BoxGeometry(1, WALL_H, 0.12) };
-ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new THREE.BoxGeometry(1, WALL_H, 0.32);
-ghost = new THREE.Mesh(ghostGeo.wall, ghostMat);
-ghost.visible = false; ghost.renderOrder = 4;
-scene.add(ghost);
+ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new THREE.BoxGeometry(1, WALL_H, 0.32);
+ghostGeo.hearth = new THREE.CylinderGeometry(0.5, 0.5, 0.7, 8);
+const ghosts = [];
+function showGhosts(spots) {
+  while (ghosts.length < spots.length) { const g = new THREE.Mesh(ghostGeo.wall, ghostMat); g.renderOrder = 4; scene.add(g); ghosts.push(g); }
+  ghostMat.opacity = ghostBad.opacity = 0.32 + Math.sin(time * 6) * 0.08;
+  ghosts.forEach((g, k) => {
+    const s = spots[k];
+    g.visible = !!s;
+    if (!s) return;
+    g.geometry = ghostGeo[s.kind]; g.material = s.go ? ghostMat : ghostBad;
+    g.position.set(s.x, s.y, s.z); g.rotation.y = s.ry || 0;
+  });
+}
 function setMode(m) {
   mode = m;
-  H.swing = -1;
+  H.swing = -1; drag = null;
   renderBar();
-  ghost.visible = false;
-  if (m === 'build') toast('Build mode. 1 floor, 2 wall, 3 door. Left click places, right click removes.', 'calm');
+  showGhosts([]); showPlotHover(0);
+  if (m === 'build') toast('Build mode. Claim a plot with a hearth (4), then build on it: 1 floors, 2 walls, 3 doors. Drag to lay rows.', 'calm');
 }
-function setBuildKind(k) { buildKind = k; if (ghostGeo[k]) ghost.geometry = ghostGeo[k]; updateBar(); }
+function setBuildKind(k) { buildKind = k; const cat = catOf(k); if (cat) catPick[cat] = k; updateBar(); }
 const BUILD_RANGE = 12;
-// where the current piece would go under the cursor, and whether it may
-function buildSpot() {
-  const p = pickGround(false);
-  if (!p) return null;
-  const c = Math.floor(p.x), r = Math.floor(p.z);
-  if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
-  if (buildKind === 'floor') {
-    const i = T(c, r);
-    const ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
-    return { kind: 'floor', c, r, ok, why: FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.', x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
-  }
-  // walls and doors snap to the tile side nearest the cursor
-  const u = p.x - c, v = p.z - r;
-  const dist = [v, 1 - u, 1 - v, u];
-  let d = 0; for (let k = 1; k < 4; k++) if (dist[k] < dist[d]) d = k;
-  const [ec, er, w] = edgeOf(c, r, d), a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1);
+const plotWhy = i => PLOT[i] ? 'Claim this plot with a hearth before you build on it.' : 'You can only build on a plot you have claimed.';
+const standingIn = (x, z, r) => [H, ...foes].some(e => Math.hypot(e.x - x, e.z - z) < r);
+function floorSpot(c, r, kind) {
+  const i = T(c, r);
+  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
+  let why = FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.';
+  if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
+  return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
+}
+// a wall or door on the edge named by (ec, er, w)
+function edgeSpot(ec, er, w, kind) {
+  const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1);
   const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && !OBJ[OB[i]].tile && !OBJ[OB[i]].solid;
   // along a cliff top only the high side needs to be clear and flat: the wall stands on its edge and may
   // overhang the slope below a little (no doors there, they'd open onto the drop)
   const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
-  const ground = cliff ? buildKind !== 'door' && flat(hi) && LV[hi] - LV[lo] === 1 && !OBJ[OB[lo]].tile : flat(a) && flat(b);
+  const ground = cliff ? kind !== 'door' && flat(hi) && LV[hi] - LV[lo] === 1 && !OBJ[OB[lo]].tile : flat(a) && flat(b);
   let ok = ground && !(w ? WW : WN)[a] && BI[a] !== TOWN && BI[b] !== TOWN;
   let why = (w ? WW : WN)[a] ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.'
-    : cliff && buildKind === 'door' ? 'A door here would open onto the drop.' : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
+    : cliff && kind === 'door' ? 'A door here would open onto the drop.' : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
+  if (ok) for (const t of cliff ? [hi] : [a, b]) if (!claimedAt(t)) { ok = false; why = plotWhy(t); break; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   // keep anyone from being walled inside the wall itself
   if (ok) for (const e of [H, ...foes]) {
     const ex = w ? Math.abs(e.x - ec) : Math.max(0, Math.abs(e.x - mx) - 0.5), ez = w ? Math.max(0, Math.abs(e.z - mz) - 0.5) : Math.abs(e.z - er);
     if (Math.hypot(ex, ez) < 0.36) { ok = false; why = 'Something is standing in the way.'; }
   }
-  return { kind: buildKind, c: ec, r: er, w, ok, why, x: mx, z: mz, y: Math.max(LV[a], LV[b]) * STEP + WALL_H / 2, ry: w ? Math.PI / 2 : 0 };
+  return { kind, c: ec, r: er, w, ok, why, x: mx, z: mz, y: Math.max(LV[a], LV[b]) * STEP + WALL_H / 2, ry: w ? Math.PI / 2 : 0 };
+}
+// a hearth claims the unclaimed plot it stands on
+function hearthSpot(c, r) {
+  const i = T(c, r), pl = PLOT[i] ? plots[PLOT[i]] : null;
+  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile;
+  let why = 'A hearth needs clear, flat, dry ground.';
+  if (!pl) { ok = false; why = 'A hearth has to stand on a plot: the white outlines on the map.'; }
+  else if (pl.claimed) { ok = false; why = 'This plot is already claimed; it has its hearth.'; }
+  else if (ok && standingIn(c + 0.5, r + 0.5, 0.75)) { ok = false; why = 'Something is standing in the way.'; }
+  return { kind: 'hearth', c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.35 };
+}
+// where the current piece would go under the cursor, and whether it may
+function buildSpot() {
+  const p = lastPick = pickGround(false);
+  if (!p) return null;
+  const c = Math.floor(p.x), r = Math.floor(p.z);
+  if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
+  if (isFloor(buildKind)) return floorSpot(c, r, buildKind);
+  if (buildKind === 'hearth') return hearthSpot(c, r);
+  // walls and doors snap to the tile side nearest the cursor
+  const u = p.x - c, v = p.z - r;
+  const dist = [v, 1 - u, 1 - v, u];
+  let d = 0; for (let k = 1; k < 4; k++) if (dist[k] < dist[d]) d = k;
+  const [ec, er, w] = edgeOf(c, r, d);
+  return edgeSpot(ec, er, w, buildKind);
+}
+// the pieces of a drag so far: a rectangle of floor, or a straight run of wall along the way it's dragged
+const MAX_AREA = 24, MAX_RUN = 40;
+function dragSpots() {
+  const p = lastPick = pickGround(false);
+  if (!p) return drag.spots || [];
+  const out = [];
+  if (isFloor(drag.kind)) {
+    const c0 = Math.floor(drag.x), r0 = Math.floor(drag.z);
+    const c1 = clamp(Math.floor(p.x), c0 - MAX_AREA + 1, c0 + MAX_AREA - 1), r1 = clamp(Math.floor(p.z), r0 - MAX_AREA + 1, r0 + MAX_AREA - 1);
+    for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++) for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++)
+      if (c >= 1 && r >= 1 && c < N - 1 && r < N - 1) out.push(floorSpot(c, r, drag.kind));
+    return out;
+  }
+  const dx = p.x - drag.x, dz = p.z - drag.z;
+  if (Math.max(Math.abs(dx), Math.abs(dz)) < 0.5) return drag.spot ? [drag.spot] : [];
+  if (Math.abs(dx) >= Math.abs(dz)) {
+    // east-west: the north sides of a row of tiles, on the grid line nearest where the drag began
+    const er = Math.round(drag.z), a = Math.floor(Math.min(drag.x, p.x)), b = Math.min(Math.floor(Math.max(drag.x, p.x)), a + MAX_RUN - 1);
+    for (let c = a; c <= b; c++) if (c >= 1 && c < N - 1 && er >= 1 && er < N - 1) out.push(edgeSpot(c, er, 0, drag.kind));
+  } else {
+    const ec = Math.round(drag.x), a = Math.floor(Math.min(drag.z, p.z)), b = Math.min(Math.floor(Math.max(drag.z, p.z)), a + MAX_RUN - 1);
+    for (let r = a; r <= b; r++) if (r >= 1 && r < N - 1 && ec >= 1 && ec < N - 1) out.push(edgeSpot(ec, r, 1, drag.kind));
+  }
+  return out;
+}
+// which of them will actually go up: in reach, allowed, and paid for in turn
+function settle(spots) {
+  let wood = H.wood, stone = H.stone;
+  for (const s of spots) {
+    const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE;
+    const afford = (cost.wood || 0) <= wood && (cost.stone || 0) <= stone;
+    s.go = s.ok && !far && afford;
+    if (s.ok && far) s.why = 'Too far away to build.';
+    else if (s.ok && !afford) s.why = 'Not enough materials: ' + costText(s.kind) + '.';
+    if (s.go) { wood -= cost.wood || 0; stone -= cost.stone || 0; }
+  }
+  return spots;
 }
 function updateGhost() {
-  if (mode !== 'build' || !H.alive || buildKind === 'remove') { ghost.visible = false; ghostSpot = null; return; }
-  const s = ghostSpot = buildSpot();
-  if (!s) { ghost.visible = false; return; }
-  const far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE;
-  ghostOk = s.ok && !far && canAfford(s.kind);
-  if (far && s.ok) s.why = 'Too far away to build.';
-  else if (s.ok && !canAfford(s.kind)) s.why = 'Not enough materials: ' + costText(s.kind) + '.';
-  ghost.visible = true;
-  ghost.position.set(s.x, s.y, s.z);
-  ghost.rotation.y = s.ry || 0;
-  ghostMat.color.set(ghostOk ? '#7aff9a' : '#ff6a5a');
-  ghostMat.opacity = 0.32 + Math.sin(time * 6) * 0.08;
+  if (mode !== 'build' || !H.alive || buildKind === 'remove') { showGhosts([]); ghostSpot = null; drag = null; showPlotHover(0); return; }
+  let spots;
+  if (drag) spots = drag.spots = settle(dragSpots());
+  else { const s = ghostSpot = buildSpot(); spots = s ? settle([s]) : []; }
+  ghostOk = !!(ghostSpot && ghostSpot.go);
+  showGhosts(spots);
+  showPlotHover(lastPick ? plotAt(lastPick.x, lastPick.z) : 0);
 }
 function pay(kind, sign) { for (const [r, n] of Object.entries(COST[kind])) H[r] -= n * sign; renderStats(); }
-function placePiece() {
-  if (buildKind === 'remove') { removePiece(); return; }
-  const s = ghostSpot;
-  if (!s) return;
-  if (!ghostOk) { sfx.nope(); toast(s.why); return; }
+// chunks to rebuild once a whole drag is down
+const dirtyObj = new Set(), dirtyPieces = new Set();
+const markObj = (c, r) => dirtyObj.add(Math.floor(r / CH) * NC + Math.floor(c / CH));
+const markPieces = (c, r) => dirtyPieces.add(Math.floor(r / CH) * NC + Math.floor(c / CH));
+function flushDirty() {
+  for (const k of dirtyObj) rebuildObjects((k % NC) * CH, Math.floor(k / NC) * CH);
+  for (const k of dirtyPieces) rebuildPieces((k % NC) * CH, Math.floor(k / NC) * CH);
+  dirtyObj.clear(); dirtyPieces.clear();
+}
+function placeSpot(s) {
   pay(s.kind, 1);
   const ch = Math.floor(s.r / CH) * NC + Math.floor(s.c / CH);
   buildCount[ch]++;
-  if (s.kind === 'floor') {
+  if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
-    FL[i] = 1; OB[i] = 0; rebuildObjects(s.c, s.r);
-  } else {
+    FL[i] = FLOOR_VAL[s.kind]; OB[i] = 0; markObj(s.c, s.r);
+  } else if (s.kind === 'hearth') lightHearth(s.c, s.r);
+  else {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
     // clear the grass and flowers either side
-    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i]) { OB[i] = 0; const c = i % N, r = (i - c) / N; rebuildObjects(c, r); }
+    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i]) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
     if (s.kind === 'door') makeDoor(s.c, s.r, s.w);
-    rebuildObjects(s.c, s.r); if (s.w) rebuildObjects(s.c - 1, s.r); else rebuildObjects(s.c, s.r - 1);
+    markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
     const before = rooms.size;
     refreshRooms(s.c, s.r, s.w);
     if (rooms.size > before) { sfx.roof(); toast('The room is closed in. A roof goes up.', 'good'); }
   }
   paintMapTile(s.c, s.r);
-  rebuildPieces(s.c, s.r);
+  markPieces(s.c, s.r);
+}
+function placeMany(spots) {
+  const go = spots.filter(s => s.go), miss = spots.find(s => !s.go);
+  if (!go.length) { sfx.nope(); if (miss) toast(miss.why); return; }
+  for (const s of go) placeSpot(s);
+  flushDirty();
   sfx.place();
-  puff(s.x, s.y - (s.kind === 'floor' ? 0 : WALL_H / 2), s.z, '#c8bca0', 5, 0.7);
+  const mid = go[Math.floor(go.length / 2)];
+  puff(mid.x, mid.y - (isFloor(mid.kind) || mid.kind === 'hearth' ? 0 : WALL_H / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
+  if (miss && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
+}
+function placePiece() {
+  if (buildKind === 'remove') { removePiece(); return; }
+  if (ghostSpot) placeMany([ghostSpot]);
+}
+// the left button: floors and walls start a drag, the rest go straight down
+function pressBuild() {
+  if (isFloor(buildKind) || isWall(buildKind)) {
+    updateGhost();
+    if (!lastPick) return;
+    drag = { kind: buildKind, x: lastPick.x, z: lastPick.z, spot: ghostSpot, spots: ghostSpot ? [ghostSpot] : [] };
+  } else placePiece();
+}
+function releaseBuild() {
+  const d = drag;
+  drag = null;
+  if (d && d.spots) placeMany(d.spots);
+}
+// ---------- Hearths ----------
+const hearths = new Map();   // tile -> { c, r, plot, fire }
+const fireMats = ['#ff7a2a', '#ffb43a', '#ffe68a'].map(c => new THREE.MeshBasicMaterial({ color: c }));
+const flameGeo = new THREE.ConeGeometry(0.1, 0.34, 5);
+function lightHearth(c, r) {
+  const i = T(c, r), pl = plots[PLOT[i]];
+  OB[i] = 0;
+  OB[i] = O.HEARTH; markObj(c, r);
+  const fire = new THREE.Group();
+  for (let k = 0; k < 5; k++) {
+    const m = new THREE.Mesh(flameGeo, fireMats[k % 3]);
+    const a = k / 5 * Math.PI * 2;
+    m.position.set(k ? Math.sin(a) * 0.12 : 0, 0.17, k ? Math.cos(a) * 0.12 : 0);
+    m.userData.k = k;
+    fire.add(m);
+  }
+  fire.position.set(c + 0.5, surfaceY(c + 0.5, r + 0.5), r + 0.5);
+  scene.add(fire);
+  hearths.set(i, { c, r, plot: pl.id, fire, smoke: 0 });
+  pl.claimed = true; pl.hearth = i;
+  paintPlot(pl);
+  toast('The hearth is lit. This plot is yours to build on.', 'good');
+}
+function putOutHearth(i) {
+  const h = hearths.get(i), pl = plots[h.plot];
+  scene.remove(h.fire);
+  hearths.delete(i);
+  OB[i] = 0; markObj(h.c, h.r);
+  pl.claimed = false; pl.hearth = null;
+  paintPlot(pl);
+  toast('The hearth goes out. The plot is no longer yours.');
+}
+// flames that flicker, smoke from the chimney, a crackle close by, and warmth that heals
+let crackleT = 0;
+function updateHearths(dt) {
+  let near = 1e9;
+  for (const h of hearths.values()) {
+    const d = Math.hypot(h.c + 0.5 - H.x, h.r + 0.5 - H.z);
+    near = Math.min(near, d);
+    h.fire.visible = d < 60;
+    if (!h.fire.visible) continue;
+    for (const m of h.fire.children) {
+      const k = m.userData.k, f = 0.75 + 0.25 * Math.sin(time * (11 + k * 3) + k * 1.7) + 0.12 * Math.sin(time * 23 + k);
+      m.scale.set(1, f * (k ? 0.8 : 1.25), 1); m.position.y = 0.12 + f * 0.06 * (k ? 0.8 : 1.25);
+    }
+    h.smoke -= dt;
+    if (h.smoke < 0 && d < 30) { h.smoke = 0.45 + Math.random() * 0.3; puff(h.c + 0.5, hearthTop(h.c, h.r) + 0.05, h.r + 0.5, '#9a96a0', 1, 0.12); }
+  }
+  if (near < HEARTH_REACH && H.alive) {
+    if (H.hp < MAX_HP) { H.hp = Math.min(MAX_HP, H.hp + dt * 10); renderHp(); }
+    crackleT -= dt;
+    if (crackleT < 0) { crackleT = 0.08 + Math.random() * 0.3; beep(900 + Math.random() * 1800, 0.018, { type: 'sawtooth', vol: 0.012 * (1 - near / HEARTH_REACH) + 0.004 }); }
+  }
 }
 function removePiece() {
   let target = null;
@@ -3236,30 +3595,34 @@ function removePiece() {
   if (!hit) return;
   if (hit.wall) target = { kind: WALL_KIND[hit.wall.kind], c: hit.wall.c, r: hit.wall.r, w: hit.wall.w };
   else {
-    const c = Math.floor(hit.x), r = Math.floor(hit.z), u = hit.x - c, v = hit.z - r;
-    // close to a tile side with a wall on it? take the wall, else the floor
+    const c = Math.floor(hit.x), r = Math.floor(hit.z), u = hit.x - c, v = hit.z - r, i = T(c, r);
+    // close to a tile side with a wall on it? take the wall, else a hearth, else the floor
     const dist = [v, 1 - u, 1 - v, u];
     for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[wallOn(c, r, d)], c: ec, r: er, w }; }
-    if (!target && FL[T(c, r)]) target = { kind: 'floor', c, r };
+    if (!target && OB[i] === O.HEARTH) target = { kind: 'hearth', c, r };
+    if (!target && FL[i]) target = { kind: FLOOR_KIND[FL[i]], c, r };
   }
   if (!target) { sfx.nope(); return; }
   if (BI[T(target.c, target.r)] === TOWN) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
-  const mx = target.kind === 'floor' ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = target.kind === 'floor' ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
+  const flatPiece = isFloor(target.kind) || target.kind === 'hearth';
+  const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
   buildCount[ch] = Math.max(0, buildCount[ch] - 1);
-  if (target.kind === 'floor') FL[T(target.c, target.r)] = 0;
+  if (isFloor(target.kind)) FL[T(target.c, target.r)] = 0;
+  else if (target.kind === 'hearth') putOutHearth(T(target.c, target.r));
   else {
     (target.w ? WW : WN)[T(target.c, target.r)] = 0;
     const key = edgeKey(target.c, target.r, target.w);
     const d = doors.get(key);
     if (d) { scene.remove(d.pivot); doors.delete(key); openDoors.delete(key); }
-    rebuildObjects(target.c, target.r); if (target.w) rebuildObjects(target.c - 1, target.r); else rebuildObjects(target.c, target.r - 1);
+    markObj(target.c, target.r); if (target.w) markObj(target.c - 1, target.r); else markObj(target.c, target.r - 1);
     refreshRooms(target.c, target.r, target.w);
   }
   pay(target.kind, -1);
   paintMapTile(target.c, target.r);
-  rebuildPieces(target.c, target.r);
+  markPieces(target.c, target.r);
+  flushDirty();
   sfx.remove();
   floatText('+' + costText(target.kind), mx, LV[T(target.c, target.r)] * STEP + 1.2, mz, '#e0b070');
 }
@@ -3358,13 +3721,15 @@ function updateSky() {
 function updateLamps() {
   const near = [];
   for (const t of towns) if (Math.hypot(t.c - H.x, t.r - H.z) < 40) near.push(...t.lamps);
+  for (const h of hearths.values()) if (Math.hypot(h.c - H.x, h.r - H.z) < 40) near.push([h.c + 0.5, h.r + 0.5, 1]);
   near.sort((a, b) => Math.hypot(a[0] - H.x, a[1] - H.z) - Math.hypot(b[0] - H.x, b[1] - H.z));
   const night = 1 - daylight();
   lampLights.forEach((l, k) => {
     const p = near[k];
     if (!p) { l.intensity = 0; return; }
-    l.position.set(p[0], heightAt(p[0], p[1]) + 1.2, p[1]);
-    l.intensity = (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + k) * 0.06);
+    // a hearth's fire burns low in its pit, brighter and with more flicker than a lamp
+    l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : 1.2), p[1]);
+    l.intensity = p[2] ? (0.7 + night * 1.5) * (0.85 + Math.sin(time * 13 + k) * 0.08 + Math.sin(time * 31) * 0.05) : (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + k) * 0.06);
   });
 }
 
@@ -3762,6 +4127,22 @@ function revealFog() {
 }
 const mini = $('mini'), miniCtx = mini.getContext('2d');
 let miniT = 0;
+// the plot under the cursor on the minimap (it turns with the camera) and on the big map
+let miniHover = 0, bigHover = 0;
+$('mini').addEventListener('pointermove', e => {
+  const rect = mini.getBoundingClientRect(), k = mini.width / rect.width;
+  const x = (e.clientX - rect.left) * k - mini.width / 2, y = (e.clientY - rect.top) * k - mini.width / 2;
+  const cs = Math.cos(-yaw), sn = Math.sin(-yaw);
+  miniHover = plotAt(H.x + (x * cs - y * sn) / 2, H.z + (x * sn + y * cs) / 2);
+  miniT = 0;
+});
+$('mini').addEventListener('pointerleave', () => { miniHover = 0; miniT = 0; });
+$('bigmap').addEventListener('pointermove', e => {
+  const big = $('bigmap'), rect = big.getBoundingClientRect();
+  const id = plotAt((e.clientX - rect.left) / rect.width * N, (e.clientY - rect.top) / rect.height * N);
+  if (id !== bigHover) { bigHover = id; drawBigMap(); }
+});
+$('bigmap').addEventListener('pointerleave', () => { if (bigHover) { bigHover = 0; drawBigMap(); } });
 function drawMini(dt) {
   miniT -= dt;
   if (miniT > 0) return;
@@ -3775,6 +4156,8 @@ function drawMini(dt) {
   // turn the map so screen-up on the minimap is screen-up in the world
   ctx.rotate(yaw);
   ctx.drawImage(mapCv, H.x - span, H.z - span, span * 2, span * 2, -span * S, -span * S, span * 2 * S, span * 2 * S);
+  ctx.drawImage(plotCv, H.x - span, H.z - span, span * 2, span * 2, -span * S, -span * S, span * 2 * S, span * 2 * S);
+  if (miniHover) { const pl = plots[miniHover]; ctx.drawImage(plotFill(pl), (pl.x0 - H.x) * S, (pl.z0 - H.z) * S, (pl.x1 - pl.x0 + 1) * S, (pl.z1 - pl.z0 + 1) * S); }
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(fogCv, (H.x - span) / 8, (H.z - span) / 8, span / 4, span / 4, -span * S, -span * S, span * 2 * S, span * 2 * S);
   // foes close by
@@ -3800,8 +4183,10 @@ function drawBigMap() {
   const ctx = big.getContext('2d');
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(mapCv, 0, 0);
+  ctx.drawImage(plotCv, 0, 0);
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(fogCv, 0, 0, N, N);
+  if (bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
   ctx.font = '14px "Press Start 2P", monospace'; ctx.textAlign = 'center';
   for (const t of towns) {
     const seen = fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] < 128;
@@ -4010,6 +4395,7 @@ function frame(now) {
   updateCamera(dt);
   updateClouds(dt);
   updateWater(dt);
+  updateHearths(dt);
   streamChunks(6);
   drawMini(dt);
   if (pixelSize() !== pxScale) resize();
@@ -4051,8 +4437,9 @@ window.GAME = {
   // place a piece directly, through the same checks the cursor uses
   build: (kind, c, r, side) => {
     setBuildKind(kind);
-    const cx = kind === 'floor' ? c + 0.5 : side === 0 ? c + 0.5 : side === 1 ? c + 0.97 : side === 2 ? c + 0.5 : c + 0.03;
-    const cz = kind === 'floor' ? r + 0.5 : side === 0 ? r + 0.03 : side === 1 ? r + 0.5 : side === 2 ? r + 0.97 : r + 0.5;
+    const flatK = isFloor(kind) || kind === 'hearth';
+    const cx = flatK ? c + 0.5 : side === 0 ? c + 0.5 : side === 1 ? c + 0.97 : side === 2 ? c + 0.5 : c + 0.03;
+    const cz = flatK ? r + 0.5 : side === 0 ? r + 0.03 : side === 1 ? r + 0.5 : side === 2 ? r + 0.97 : r + 0.5;
     forcedPick = { x: cx, y: LV[T(c, r)] * STEP, z: cz, wall: null };
     updateGhost(); placePiece();
     forcedPick = null;
@@ -4060,6 +4447,20 @@ window.GAME = {
   },
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
+  plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
+  plotAt: (c, r) => PLOT[T(c, r)],
+  // tests: claim the plot under a tile without a hearth
+  claimPlot: (c, r) => { const pl = plots[PLOT[T(c, r)]]; if (!pl) return false; pl.claimed = true; paintPlot(pl); return true; },
+  // drag a floor area or a wall run from one ground point to another, through the same checks the cursor uses
+  dragBuild: (kind, x0, z0, x1, z1) => {
+    setBuildKind(kind);
+    forcedPick = { x: x0, y: 0, z: z0, wall: null }; pressBuild();
+    forcedPick = { x: x1, y: 0, z: z1, wall: null }; updateGhost();
+    const spots = (drag && drag.spots) || [], go = spots.filter(s => s.go).length;
+    releaseBuild(); forcedPick = null;
+    return { n: spots.length, go, why: (spots.find(s => !s.go) || {}).why };
+  },
+  hp: v => { H.hp = v; renderHp(); },
   bridges: () => bridges.map(b => ({ c: b.from % N, r: Math.floor(b.from / N), d: b.d, span: b.span, canyon: !!CY[b.from + DI[b.d]] })),
   findFlat: (c, r, w, h) => {
     // nearest spot where a w × h block of flat, clear, same-level land fits, outside town
@@ -4067,7 +4468,7 @@ window.GAME = {
       if (Math.max(Math.abs(dx), Math.abs(dz)) !== rad) continue;
       const c0 = c + dx, r0 = r + dz, L = LV[T(c0, r0)];
       let ok = L > 0;
-      for (let a = -1; a <= h && ok; a++) for (let b = -1; b <= w && ok; b++) { const i = T(c0 + b, r0 + a); if (LV[i] !== L || SH[i] || OB[i] || BI[i] === TOWN || WT[i]) ok = false; }
+      for (let a = -1; a <= h && ok; a++) for (let b = -1; b <= w && ok; b++) { const i = T(c0 + b, r0 + a); if (LV[i] !== L || SH[i] || OB[i] || BI[i] === TOWN || WT[i] || !PLOT[i] || PLOT[i] !== PLOT[T(c0, r0)]) ok = false; }
       if (ok) return [c0, r0];
     }
     return null;
