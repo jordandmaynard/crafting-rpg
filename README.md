@@ -22,14 +22,15 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 ## The world
 
-- **Terrain:** eight height levels over open water. Each level is half a tile high. No step between neighbours is more than one level, and the side of every terrace is a slope that reaches half a tile into the lower ground, so you can't walk up it. Ramps join the terraces. After the ramps are carved, a flood fill from the first town adds more ramps until every stretch of land you could walk to is reachable.
+- **Terrain:** eight height levels over open water. Each level is half a tile high. No step between neighbours is more than one level, and the side of every terrace is a slope that reaches half a tile into the lower ground, so you can't walk up it. Rocks of the local kind (mossy stone, sandstone ledges, snow-capped boulders) are strewn down every slope. Ramps join the terraces. After the ramps are carved, a flood fill from the first town adds more ramps until every stretch of land you could walk to is reachable.
 - **Biomes:** Bone Road's four (the Whispering Wood, Mirefen Bog, the Hollow Graves, and towns like Emberbrook), plus Goldenreach Meadows, the Sunscorch Waste desert, and the Frostspine snow on the high ground.
-- **Towns:** seven per world, each with a plaza, a well, streets and houses. Monsters keep out of town, and you wake by the well in Emberbrook if you fall.
+- **Roads:** roads join the towns and three waystones in every biome. They only change level by ramps, every street out of a town carries on as a road, and every road ends at a town or a waystone.
+- **Towns:** seven per world, each with a plaza, a well, streets and four houses built from the same walls, doors, floors and roofs you build with. Monsters keep out of town, and you wake by the well in Emberbrook if you fall.
 - **Foes:** goblins and wolves in the wood, slimes and zombies in the bog, ghosts, zombies and skeletons in the graves, boars and goblins in the meadows, frost wolves and ice wraiths in the snow, scorpions and skeletons in the desert. More come out at night, and they hunt farther.
 
 ## Building
 
-Floors need flat ground that no slope reaches into. Floors cost 2 wood, walls 2 wood and 2 stone, doors 5 wood. Close in a room with walls and doors (any shape, up to about 200 tiles) and a hipped roof goes up over it. The roof hides while you stand inside, and every roof hides in build mode. You heal faster under a roof, and monsters can't get through walls or closed doors.
+Floors need flat ground that no slope reaches into. Floors cost 2 wood, walls 2 wood and 2 stone, doors 5 wood. Close in a room with walls and doors (any shape, up to about 200 tiles) and a hipped roof goes up over it. The roof hides while you stand inside, and every roof hides in build mode. Inside, the walls between you and the camera drop to their stone footing so you can see in. You heal faster under a roof, and monsters can't get through walls or closed doors.
 
 ## How it renders
 

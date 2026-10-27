@@ -202,6 +202,7 @@ const TN = new Uint8Array(N * N);   // town number + 1
 const FL = new Uint8Array(N * N);   // built floor
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
 const WW = new Uint8Array(N * N);   // built piece on the tile's west edge
+const PATH = new Uint8Array(N * N); // road
 const RIM = new Uint8Array(N * N);  // bits 0-3: that side's neighbour is higher; bits 4-7: only the diagonal at that corner is
 
 const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
@@ -353,22 +354,158 @@ async function generate(progress) {
   progress(0.62, 'JOINING THE TERRACES'); await nextFrame();
   await connectAll(T(spawnT.c, spawnT.r + 2), lock, rand, progress);
 
-  // 7. Bog water and scenery
-  progress(0.84, 'GROWING THE WILDS'); await nextFrame();
+  // 7. Houses, bog water, roads and scenery
+  progress(0.8, 'RAISING HOUSES'); await nextFrame();
   computeRim();
+  towns.forEach(raiseHouses);
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
     const i = T(c, r);
     if (BI[i] === SWAMP && LV[i] && !SH[i] && fbm(nX, c / 11 - 70, r / 11, 2) > 0.08) WT[i] = 1;
   }
+  progress(0.82, 'LAYING ROADS'); await nextFrame();
+  await layRoads(rand, progress);
+  progress(0.88, 'GROWING THE WILDS'); await nextFrame();
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) placeScenery(c, r);
-    if (r % 128 === 127) { progress(0.84 + 0.1 * r / N, 'GROWING THE WILDS'); await nextFrame(); }
+    if (r % 128 === 127) { progress(0.88 + 0.06 * r / N, 'GROWING THE WILDS'); await nextFrame(); }
   }
+  for (const w of waystones) OB[T(w.c, w.r)] = O.SHRINE;
   // clear the ground right around the spawn
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   progress(0.95, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
+}
+
+// Town houses are built from the same walls, doors and floors as the player's, four to a town:
+// one in each quarter, set beside a street with its door facing it.
+const ROOF_COLORS = ['#9a4434', '#3e5c8c', '#6a4a86', '#7a5634', '#3e6a4a'];
+function raiseHouses(t, n) {
+  t.houses = [];
+  [[1, -1], [1, 1], [-1, 1], [-1, -1]].forEach(([sx, sz], q) => {
+    let w = 3 + Math.floor(hs(t.c, t.r, 70 + q) * 3), h = 3 + Math.floor(hs(t.c, t.r, 80 + q) * 2);
+    const swap = hs(t.c, t.r, 90 + q) > 0.5;
+    // a runs away from the street the door faces, b along it away from the plaza
+    const at = (a, b) => [t.c + (swap ? sx * b : sx * a), t.r + (swap ? sz * a : sz * b)];
+    const fits = () => { for (let a = 2; a <= 1 + w; a++) for (let b = 4; b <= 3 + h; b++) { const [c, r] = at(a, b); if (TN[T(c, r)] !== n + 1) return false; } return true; };
+    while (!fits() && (w > 3 || h > 3)) { if (w >= h) w--; else h--; }
+    if (!fits()) return;
+    const tiles = [], set = new Set();
+    for (let a = 2; a <= 1 + w; a++) for (let b = 4; b <= 3 + h; b++) { const [c, r] = at(a, b); tiles.push([c, r]); set.add(T(c, r)); }
+    const doorD = swap ? (sz > 0 ? 0 : 2) : (sx > 0 ? 3 : 1), [dc, dr] = at(2, 4 + ((h - 1) >> 1));
+    const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+    for (const [c, r] of tiles) {
+      const i = T(c, r);
+      FL[i] = 1; OB[i] = 0; piece(c, r);
+      for (let d = 0; d < 4; d++) {
+        if (set.has(T(c + DC[d], r + DR[d]))) continue;
+        const [ec, er, ew] = edgeOf(c, r, d), door = c === dc && r === dr && d === doorD;
+        (ew ? WW : WN)[T(ec, er)] = door ? 2 : 1;
+        piece(ec, er);
+        if (door) t.houses.push({ tiles, door: [ec, er, ew], color: ROOF_COLORS[Math.floor(hs(t.c + q, t.r, 95) * ROOF_COLORS.length)] });
+      }
+    }
+  });
+}
+// once the scene exists, the town houses get their doors and roofs
+function finishTowns() {
+  for (const t of towns) for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
+}
+
+// Roads join the towns and a few waystones in every biome. They follow the walkable ground, so
+// they only change level by ramps, and every street out of a town carries on as a road.
+const waystones = [];
+const roadG = new Float32Array(N * N), roadFrom = new Int32Array(N * N), roadDir = new Int8Array(N * N);
+const roadSeen = new Uint32Array(N * N), roadDone = new Uint32Array(N * N);
+let roadRun = 0, heapK = new Float64Array(1 << 16), heapV = new Int32Array(1 << 16);
+function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
+  const run = ++roadRun, gc = g % N, gr = (g - gc) / N;
+  let hn = 0;
+  const push = (k, v) => {
+    if (hn === heapK.length) { const k2 = new Float64Array(hn * 2), v2 = new Int32Array(hn * 2); k2.set(heapK); v2.set(heapV); heapK = k2; heapV = v2; }
+    let i = hn++;
+    while (i) { const p = (i - 1) >> 1; if (heapK[p] <= k) break; heapK[i] = heapK[p]; heapV[i] = heapV[p]; i = p; }
+    heapK[i] = k; heapV[i] = v;
+  };
+  const pop = () => {
+    const v = heapV[0], k = heapK[--hn], vv = heapV[hn];
+    let i = 0;
+    for (;;) { let m = 2 * i + 1; if (m >= hn) break; if (m + 1 < hn && heapK[m + 1] < heapK[m]) m++; if (heapK[m] >= k) break; heapK[i] = heapK[m]; heapV[i] = heapV[m]; i = m; }
+    heapK[i] = k; heapV[i] = vv;
+    return v;
+  };
+  roadSeen[s] = run; roadG[s] = 0; roadFrom[s] = -1; roadDir[s] = -1;
+  push(0, s);
+  for (let exp = 0; hn && exp < maxExp; exp++) {
+    const i = pop();
+    if (roadDone[i] === run) continue;
+    roadDone[i] = run;
+    if (i === g) {
+      for (let j = g; j >= 0; j = roadFrom[j]) PATH[j] = 1;
+      return true;
+    }
+    const c = i % N, r = (i - c) / N;
+    for (let d = 0; d < 4; d++) {
+      const nc = c + DC[d], nr = r + DR[d];
+      if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) continue;
+      const n = i + DI[d];
+      if (roadDone[n] === run || !terrainOpen(i, n, d) || wallOn(c, r, d) || FL[n]) continue;
+      let k = PATH[n] ? 0.45 : 1;
+      if (RIM[n]) k += 2.5;
+      if (WT[n]) k += 1.5;
+      if (TN[n]) { if (TN[n] === avoidTown) k += 8; else if (townCell(nc, nr) === 'yard') k += 8; }
+      if (roadDir[i] >= 0 && roadDir[i] !== d) k += 0.4;
+      const ng = roadG[i] + k;
+      if (roadSeen[n] === run && ng >= roadG[n]) continue;
+      roadSeen[n] = run; roadG[n] = ng; roadFrom[n] = i; roadDir[n] = d;
+      push(ng + (Math.abs(nc - gc) + Math.abs(nr - gr)) * 1.1, n);
+    }
+  }
+  return false;
+}
+async function layRoads(rand, progress) {
+  const nodes = towns.map(t => ({ c: t.c, r: t.r, town: t }));
+  for (const b of [MEADOW, FOREST, SWAMP, GRAVE, SNOW, DESERT]) {
+    let got = 0;
+    for (let k = 0; k < 6000 && got < 3; k++) {
+      const c = 48 + Math.floor(rand() * (N - 96)), r = 48 + Math.floor(rand() * (N - 96)), i = T(c, r);
+      if (BI[i] !== b || !REACH || !REACH[i] || SH[i] || WT[i] || RIM[i] || TN[i]) continue;
+      if (nodes.some(n => Math.hypot(n.c - c, n.r - r) < 120)) continue;
+      const w = { c, r };
+      nodes.push(w); waystones.push(w); got++;
+    }
+  }
+  // a spanning tree over every node, shortest links first
+  const inTree = [0], out = nodes.map((_, k) => k).slice(1), links = [];
+  while (out.length) {
+    let best = null, bd = 1e9;
+    for (const a of inTree) for (const b of out) { const d = Math.hypot(nodes[a].c - nodes[b].c, nodes[a].r - nodes[b].r); if (d < bd) { bd = d; best = [a, b]; } }
+    links.push(best); inTree.push(best[1]); out.splice(out.indexOf(best[1]), 1);
+  }
+  let done = 0;
+  for (const [a, b] of links) {
+    roadRoute(T(nodes[a].c, nodes[a].r), T(nodes[b].c, nodes[b].r));
+    if (++done % 4 === 0) { progress(0.82 + 0.05 * done / links.length, 'LAYING ROADS'); await nextFrame(); }
+  }
+  // every street that reaches the edge of town carries on to the nearest place in its direction
+  towns.forEach((t, n) => {
+    for (let d = 0; d < 4; d++) {
+      let c = t.c, r = t.r;
+      while (TN[T(c + DC[d], r + DR[d])] === n + 1) { c += DC[d]; r += DR[d]; }
+      if (PATH[T(c + DC[d], r + DR[d])]) continue;
+      let best = null, bd = 1e9;
+      for (const o of nodes) {
+        if (o.town === t) continue;
+        const dx = o.c - t.c, dz = o.r - t.r, l = Math.hypot(dx, dz), along = (dx * DC[d] + dz * DR[d]) / l;
+        const score = l * (2 - along);
+        // nothing that way (a town near the edge of the world): head for the nearest place at all
+        if ((along > 0.3 ? score : l * 4) < bd) { bd = along > 0.3 ? score : l * 4; best = o; }
+      }
+      if (best) roadRoute(T(c, r), T(best.c, best.r), n + 1, 400000);
+    }
+  });
+  // roads run dry through the bog
+  for (let i = 0; i < N * N; i++) if (PATH[i]) WT[i] = 0;
 }
 
 // where higher ground's slope spills half a tile into a lower tile
@@ -544,7 +681,9 @@ async function connectAll(start, lock, rand, progress) {
     if (round % 4 === 3) { progress(0.62 + Math.min(0.2, round * 0.006), 'JOINING THE TERRACES'); await nextFrame(); }
   }
   connectStats.reached = qt;
+  REACH = reach;
 }
+let REACH = null;
 const connectStats = { reached: 0 };
 
 // ---------- Scenery catalogue ----------
@@ -554,7 +693,7 @@ const O = {
   ROCK: 10, ICEROCK: 11, SANDROCK: 12,
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -572,6 +711,7 @@ def(O.TOMB, { name: 'gravestone', solid: 0.2, hp: 3, give: 'stone' });
 def(O.HOUSE, { tile: true });
 def(O.WELL, { tile: true });
 def(O.CRYPT, { tile: true });
+def(O.SHRINE, { tile: true });
 def(O.LAMP, { solid: 0.1 });
 [O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG].forEach(id => def(id, {}));
 
@@ -593,8 +733,9 @@ function townCell(c, r) {
 
 function placeScenery(c, r) {
   const i = T(c, r);
-  if (!LV[i] || SH[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;
+  if (!LV[i] || SH[i] || FL[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;
   const k = hs(c, r, 2), k2 = hs(c, r, 6), b = BI[i];
+  if (PATH[i] && b !== TOWN) return;
   // keep the foot and the top of every ramp clear
   for (let d = 0; d < 4; d++) if (SH[i + DI[d]]) return;
   switch (b) {
@@ -602,13 +743,10 @@ function placeScenery(c, r) {
       const t = towns[TN[i] - 1], dx = c - t.c, dz = r - t.r, cell = townCell(c, r);
       if (dx === 0 && dz === 0) { OB[i] = O.WELL; return; }
       if (Math.abs(dx) === 3 && Math.abs(dz) === 3) { OB[i] = O.LAMP; t.lamps.push([c + 0.5, r + 0.5]); return; }
-      if (cell !== 'yard') return;
+      if (cell !== 'yard' || PATH[i]) return;
       const d = Math.hypot(dx, dz);
-      if (d > 3.5 && d < TOWN_R - 1.5 && Math.abs(dx) > 1 && Math.abs(dz) > 1 && k > 0.42) {
-        let near = false;
-        for (let a = -1; a <= 1 && !near; a++) for (let e = -1; e <= 1; e++) if (OB[T(c + a, r + e)] === O.HOUSE) { near = true; break; }
-        if (!near) { OB[i] = O.HOUSE; return; }
-      }
+      // keep the step outside each door clear
+      for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2) return;
       if (d >= TOWN_R - 2 && k2 > 0.7) OB[i] = O.OAK;
       else if (k2 > 0.86) OB[i] = O.FLOWERS;
       else if (k2 < 0.05) OB[i] = O.BUSH;
@@ -756,8 +894,8 @@ PAL[MEADOW] = P('#86a84e', '#7c9e48', '#9a8a62', '#8e7e58', '#7a6a54', '#3a3028'
 PAL[FOREST] = P('#4c7a3a', '#456f36', '#7a5a3a', '#6e5034', '#62544a', '#2a2220', '#6a8a44');
 PAL[SWAMP] = P('#4f5a36', '#475232', '#7a5e3c', '#6a5034', '#4e4838', '#22201a', '#6a7a3a');
 PAL[GRAVE] = P('#4c5446', '#444b40', '#6c6672', '#605a66', '#56525e', '#22202a', '#5a6450');
-PAL[SNOW] = P('#e6eef6', '#d8e2ee', '#aab6c6', '#9ca8ba', '#7a8496', '#363e50', '#ffffff');
-PAL[DESERT] = P('#d8b878', '#ccac6c', '#b89458', '#ac884e', '#b0784a', '#5a3a24', '#e8d098');
+PAL[SNOW] = P('#e6eef6', '#d8e2ee', '#98a4b8', '#8c98ac', '#7a8496', '#363e50', '#ffffff');
+PAL[DESERT] = P('#d8b878', '#ccac6c', '#a47c4a', '#987244', '#b0784a', '#5a3a24', '#e8d098');
 PAL[TOWN] = P('#6f9446', '#668a42', '#968b78', '#8a806e', '#7a6a58', '#3a3028', '#6a8a44');
 PAL[SNOW].lip = C('#f4f8ff'); PAL[SNOW].rim = C('#a8b6ca');
 const PLAZA = C('#a09480'), PLAZA_B = C('#948872');
@@ -780,7 +918,11 @@ function groundColor(c, r, i, j) {
   if (BI[t] === TOWN) {
     const cell = townCell(c, r);
     if (cell === 'plaza') base = (i + j + c + r) % 2 ? PLAZA : PLAZA_B;
-    else if (cell === 'street') base = (i + j) % 2 ? p.road : p.roadB;
+    else if (cell === 'street' || PATH[t]) base = (i + j) % 2 ? p.road : p.roadB;
+  } else if (PATH[t]) {
+    const q = PAL[BI[t]];
+    base = (i + j + c + r) % 2 ? q.road : q.roadB;
+    return shade(base, 0.92 + hs(c, r, i * 2 + j) * 0.12);
   }
   if (base === p.a || base === p.b) { if (hs(c, r, i * 2 + j + 9) > 0.94) base = p.speck; }
   return shade(base, (0.9 + hs(c, r, i * 2 + j) * 0.18) * (0.93 + LV[t] * 0.014));
@@ -843,7 +985,8 @@ function buildGround(cx, cz, ch) {
         else if (s) {
           // ramps: stripes across the slope so the incline reads at a glance
           const along = (s === 1 || s === 3) ? b : a;
-          cc = shade(along % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, a + b * 2) * 0.1);
+          cc = PATH[i] ? shade(along % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, a + b * 2) * 0.1)
+            : shade(pal.a, (along % 2 ? 0.86 : 0.98) + hs(c, r, a + b * 2) * 0.06);
         } else cc = groundColor(c, r, a, b);
         k00 = k10 = k01 = k11 = cc;
       }
@@ -1027,6 +1170,7 @@ function drawObject(o, c, r) {
     case O.LAMP: return lamp(x, z);
     case O.WELL: return well(x, z);
     case O.CRYPT: return crypt(x, z, Math.floor(k * 4) * Math.PI / 2);
+    case O.SHRINE: return shrine(x, z, k * 6);
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -1034,6 +1178,45 @@ function drawObject(o, c, r) {
       return house(x, z, k2, ry);
     }
   }
+}
+// rocks strewn down every slope so the drops read as rough cliffs, not walkable banks
+const CLIFF_ROCK = [];
+CLIFF_ROCK[MEADOW] = ['#8a8478', null]; CLIFF_ROCK[FOREST] = ['#6e6a62', '#4a7038']; CLIFF_ROCK[SWAMP] = ['#5a5446', '#4e5e30'];
+CLIFF_ROCK[GRAVE] = ['#4e4a58', null]; CLIFF_ROCK[SNOW] = ['#7e889c', '#eef4fa']; CLIFF_ROCK[DESERT] = ['#b07a4a', null]; CLIFF_ROCK[TOWN] = ['#8a8478', null];
+function slopeRock(x, z, k, b) {
+  const [col, cap] = CLIFF_ROCK[b], y = surfH(x, z), s = 0.26 + k * 0.2;
+  if (b === DESERT) {
+    // sandstone breaks into ledges
+    part(G.box, shade(CC(col), 0.8 + k * 0.35), x, y + s * 0.2, z, { sx: s * 1.1, sy: s * 0.7, sz: s * 0.9, ry: k * 7, rz: (k - 0.5) * 0.5 });
+    part(G.box, shade(CC(col), 0.95), x, y + s * 0.55, z, { sx: s * 0.7, sy: s * 0.4, sz: s * 0.6, ry: k * 3 });
+    return;
+  }
+  part(G.dodec, shade(CC(col), 0.78 + k * 0.4), x, y + s * 0.18, z, { sx: s, sy: s * (0.8 + k * 0.6), sz: s * 0.9, ry: k * 9, rx: (k - 0.5) * 0.6 });
+  if (cap) part(G.dodec, shade(CC(cap), 0.92 + k * 0.1), x, y + s * (0.45 + k * 0.3), z, { sx: s * 0.78, sy: s * 0.28, sz: s * 0.72, ry: k * 5 });
+}
+function cliffRocks(c, r, i) {
+  const m = RIM[i], b = BI[i], water = !LV[i];
+  for (let d = 0; d < 4; d++) {
+    if (!(m & 1 << d)) continue;
+    const n = water ? (hs(c, r, 100 + d) < 0.3 ? 1 : 0) : 2 + (hs(c, r, 100 + d) > 0.45 ? 1 : 0);
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.2 + hs(c, r, 110 + d * 4 + k) * 0.6) / n, depth = 0.05 + hs(c, r, 120 + d * 4 + k) * 0.18;
+      const x = d === 1 ? c + 1 - depth : d === 3 ? c + depth : c + t, z = d === 0 ? r + depth : d === 2 ? r + 1 - depth : r + t;
+      slopeRock(x, z, hs(c, r, 130 + d * 4 + k), b);
+    }
+  }
+  if (!water) for (let k = 0; k < 4; k++) if (m & 16 << k) slopeRock(c + (CX[k] ? 0.84 : 0.16), r + (CZ[k] ? 0.84 : 0.16), hs(c, r, 140 + k), b);
+}
+// a waystone where a road ends: a ring of standing stones round a rune that glows
+function shrine(x, z, k) {
+  const y = groundAt(x, z), stone = '#8a8696';
+  part(G.cyl8, '#6a6676', x, y + 0.04, z, { sx: 0.9, sy: 0.08, sz: 0.9 });
+  for (let a = 0; a < 5; a++) {
+    const ang = a / 5 * Math.PI * 2 + k, h = 0.6 + hash(x + a, z, 7) * 0.4;
+    part(G.box, shade(CC(stone), 0.85 + hash(x, z + a, 8) * 0.25), x + Math.sin(ang) * 0.36, y + h / 2, z + Math.cos(ang) * 0.36, { sx: 0.13, sy: h, sz: 0.1, ry: ang });
+  }
+  part(G.box, '#6e6a7a', x, y + 0.18, z, { sx: 0.24, sy: 0.3, sz: 0.24, ry: k });
+  part(G.box, '#8ad0f0', x, y + 0.36, z, { sx: 0.1, sy: 0.06, sz: 0.1, ry: k, into: 'glow' });
 }
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
@@ -1043,6 +1226,7 @@ function buildObjects(cx, cz, ch) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
     if (o && !detached.has(i)) drawObject(o, c, r);
+    if (RIM[i]) cliffRocks(c, r, i);
   }
   ch.obj = bufObj.mesh(groundMat);
   ch.glow = bufGlow.mesh(glowMat);
@@ -1068,6 +1252,9 @@ function plankFloor(c, r) {
     part(G.box, col, c + 0.125 + k * 0.25, y + 0.03, r + 0.5, { sx: 0.24, sy: 0.06, sz: 1 });
   }
 }
+// walls of the room you stand in whose outside faces the camera, drawn only up to the stone footing
+const cutEdges = new Set();
+let cutKey = '';
 // a wall or doorframe along an edge: stone footing, plaster panel, timber posts and beams
 function wallPiece(c, r, w, door) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1);
@@ -1075,6 +1262,12 @@ function wallPiece(c, r, w, door) {
   const ry = w ? Math.PI / 2 : 0;
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
+  if (cutEdges.has(edgeKey(c, r, w))) {
+    let p = at(0.5, y + (door ? 0.02 : 0.25));
+    part(G.box, shade(CC(door ? '#6a6474' : '#7a7484'), k), p[0], p[1], p[2], { sx: 1, sy: door ? 0.04 : 0.5, sz: door ? 0.26 : 0.24, ry });
+    for (const a of [0, 1]) { p = at(a, y + 0.26); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 0.16, sy: 0.52, sz: 0.26, ry }); }
+    return;
+  }
   if (!door) {
     let p = at(0.5, y + 0.25); part(G.box, shade(CC('#7a7484'), k), p[0], p[1], p[2], { sx: 1, sy: 0.5, sz: 0.24, ry });
     p = at(0.5, y + 0.5 + (WALL_H - 0.6) / 2); part(G.box, shade(CC('#cdb894'), k), p[0], p[1], p[2], { sx: 0.98, sy: WALL_H - 0.6, sz: 0.18, ry });
@@ -1151,9 +1344,9 @@ function dropRoom(id) {
   if (rm.mesh) { scene.remove(rm.mesh); rm.mesh.geometry.dispose(); }
   rooms.delete(id);
 }
-function makeRoom(tiles) {
+function makeRoom(tiles, color = '#9a4434') {
   const id = roomSeq++, set = new Set(tiles.map(([c, r]) => T(c, r)));
-  const rm = { id, tiles, set, mesh: null };
+  const rm = { id, tiles, set, mesh: null, color };
   rooms.set(id, rm);
   tiles.forEach(([c, r]) => roomOf.set(T(c, r), id));
   rm.mesh = roofMesh(rm);
@@ -1182,7 +1375,7 @@ function roofMesh(rm) {
     return m;
   };
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const tileA = CC('#9a4434'), tileB = CC('#86392c'), ridge = CC('#6a2a22');
+  const tileA = CC(rm.color), tileB = shade(tileA, 0.87), ridge = shade(tileA, 0.68);
   const Y = (x, z) => base + Math.min(2.6, f(x, z)) * ROOF_SLOPE;
   const colAt = h => { const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
   for (const [c, r] of rm.tiles) {
@@ -1190,11 +1383,12 @@ function roofMesh(rm) {
     for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) { const x = c + i / 2, z = r + j / 2; pts.push([x, Y(x, z), z]); }
     for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
       const a = pts[j * 3 + i], b = pts[j * 3 + i + 1], cc = pts[(j + 1) * 3 + i + 1], d = pts[(j + 1) * 3 + i];
-      const k = colAt((a[1] + b[1] + cc[1] + d[1]) / 4);
-      const sh = 0.94 + hs(c, r, 60 + j * 2 + i) * 0.1;
-      // split along the diagonal that follows the hips
-      if ((i + j) % 2) { tri(a, b, cc, shade(k, sh)); tri(a, cc, d, shade(k, sh)); }
-      else { tri(a, b, d, shade(k, sh)); tri(b, cc, d, shade(k, sh)); }
+      const k = shade(colAt((a[1] + b[1] + cc[1] + d[1]) / 4), 0.97 + hs(c, r, 60 + j * 2 + i) * 0.05);
+      // split along whichever diagonal matches the roof at the cell's centre, so every hip and
+      // valley runs as one straight crease and each corner gets its full triangle
+      const ym = Y(c + i / 2 + 0.25, r + j / 2 + 0.25);
+      if (Math.abs((a[1] + cc[1]) / 2 - ym) <= Math.abs((b[1] + d[1]) / 2 - ym)) { tri(a, b, cc, k); tri(a, cc, d, k); }
+      else { tri(a, b, d, k); tri(b, cc, d, k); }
     }
     // eaves: a dark fascia over every wall of the room
     for (let d = 0; d < 4; d++) {
@@ -1206,6 +1400,26 @@ function roofMesh(rm) {
   const m = bufTmp.mesh(roofMat);
   OUT = save;
   return m;
+}
+// Standing in a room, the walls between you and the camera drop to their stone footing. Which ones
+// those are only changes when the room does or the camera swings past a side, so chunks rebuild rarely.
+function updateCutaway(inside) {
+  const sy = Math.sin(yaw), cy = Math.cos(yaw);
+  const key = inside ? inside + ':' + (sy > 0) + (sy < 0) + (cy > 0) + (cy < 0) + ':' + roomSeq : '';
+  if (key === cutKey) return;
+  cutKey = key;
+  const touched = new Set();
+  const mark = e => { const t = e >> 1, c = t % N; touched.add(Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH)); };
+  cutEdges.forEach(mark);
+  cutEdges.clear();
+  const rm = inside && rooms.get(inside);
+  if (rm) for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
+    if (!wallOn(c, r, d) || rm.set.has(T(c + DC[d], r + DR[d]))) continue;
+    if (DC[d] * sy + DR[d] * cy > 1e-3) { const [ec, er, w] = edgeOf(c, r, d); cutEdges.add(edgeKey(ec, er, w)); }
+  }
+  cutEdges.forEach(mark);
+  for (const d of doors.values()) d.pivot.visible = !cutEdges.has(edgeKey(d.c, d.r, d.w));
+  touched.forEach(k => { const ch = chunks.get(k); if (ch) { const tmp = {}; buildPieces(ch.cx, ch.cz, tmp); swapMesh(ch, 'build', tmp.build); } });
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
 function refreshRooms(c, r, w) {
@@ -1249,6 +1463,7 @@ function rebuildObjects(c, r) {
   swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow);
 }
 function rebuildPieces(c, r) {
+  cutKey = '';
   const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
   if (!ch) return;
   const tmp = {};
@@ -2209,6 +2424,7 @@ function removePiece() {
     if (!target && FL[T(c, r)]) target = { kind: 'floor', c, r };
   }
   if (!target) { sfx.nope(); return; }
+  if (BI[T(target.c, target.r)] === TOWN) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
   const mx = target.kind === 'floor' ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = target.kind === 'floor' ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
@@ -2447,6 +2663,7 @@ function update(dt) {
   // ----- roofs: hidden over the room you stand in, and all of them while building -----
   const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z)));
   for (const rm of rooms.values()) rm.mesh.visible = mode !== 'build' && rm.id !== inside;
+  updateCutaway(inside);
 
   updateGhost();
   updateSky();
@@ -2620,10 +2837,12 @@ function tileRGB(i) {
   let [R, Gc, B] = MAP_RGB[BI[i]];
   if (BI[i] === TOWN) { const cell = townCell(c, r); if (cell === 'plaza' || cell === 'street') [R, Gc, B] = [160, 148, 128]; }
   if (WT[i]) { R = R * 0.5 + 22; Gc = Gc * 0.5 + 37; B = B * 0.5 + 32; }
+  if (PATH[i] && BI[i] !== TOWN) [R, Gc, B] = [196, 170, 120];
   let f = 0.72 + L * 0.05;
   const o = OB[i];
   if (OBJ[o].tree) f *= 0.78;
   if (o === O.HOUSE) { R = 168; Gc = 72; B = 58; f = 1; }
+  if (o === O.SHRINE) { R = 230; Gc = 220; B = 160; f = 1; }
   if (SH[i]) f *= 1.08;
   // cliff edges a shade darker so the terraces read
   if (c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) f *= 0.72;
@@ -2745,6 +2964,7 @@ function frame(now) {
 }
 const genStart = performance.now();
 generate((f, label) => { $('loadFill').style.width = (f * 100).toFixed(1) + '%'; $('loadText').textContent = label; }).then(() => {
+  finishTowns();
   H.x = spawn.x; H.z = spawn.z; H.y = surfaceY(H.x, H.z); H.face = Math.PI;
   camTarget.set(H.x, H.y, H.z);
   updateCamera(0);
@@ -2782,7 +3002,7 @@ window.GAME = {
     forcedPick = null;
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
-  tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], room: roomOf.get(i) || 0 }; },
+  tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0 }; },
   findFlat: (c, r, w, h) => {
     // nearest spot where a w × h block of flat, clear, same-level land fits, outside town
     for (let rad = 0; rad < 200; rad++) for (let dz = -rad; dz <= rad; dz++) for (let dx = -rad; dx <= rad; dx++) {
