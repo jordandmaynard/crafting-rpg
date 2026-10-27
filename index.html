@@ -860,43 +860,82 @@ const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
 // tiles further back than this pixel (an edge with something behind it), this pixel is stroked. It runs on
 // the low-res buffer, so the stroke is whole mosaic pixels, `thickness` of them wide.
 const OUTLINE = { on: 1, distance: 0.4, thickness: 1, strength: 0.73, color: '#000000' };
+// The second outline (T > Crease outline), Crafting and Conquest's Sobel strokes on normals: a stroke
+// wherever the surface turns by more than `angle` degrees across a 3 × 3 kernel of mosaic pixels.
+const SOBEL = { on: 0, angle: 40, thickness: 1, strength: 0.5, color: '#000000' };
+const normRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+const normalMat = new THREE.MeshNormalMaterial({ flatShading: true, side: THREE.DoubleSide });
 const outlineRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
 outlineRT.depthTexture = new THREE.DepthTexture(1, 1);
 outlineRT.depthTexture.type = THREE.UnsignedIntType;
 const outlineMat = new THREE.ShaderMaterial({
-  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, res: { value: new THREE.Vector2(1, 1) },
+  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new THREE.Vector2(1, 1) },
+    useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new THREE.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
-    uniform sampler2D tColor, tDepth; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
+    uniform sampler2D tColor, tDepth, tNormal; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
+    uniform float useDepth, useSobel, sStep, sTh, sStrength; uniform vec3 sColor;
     varying vec2 vUv;
     // orthographic depth is linear: back from the near plane in world units (empty sky reads as far)
     float depthAt(vec2 px) { return texture2D(tDepth, (clamp(px, vec2(0.0), res - 1.0) + 0.5) / res).x * span; }
+    // the view-space normal there (empty sky counts as the centre's, so it never strokes)
+    vec3 normalAt(vec2 px, vec3 n0) { vec4 g = texture2D(tNormal, (clamp(px, vec2(0.0), res - 1.0) + 0.5) / res); return g.a < 0.5 ? n0 : g.rgb * 2.0 - 1.0; }
     void main() {
       vec2 px = floor(vUv * res);
-      vec4 c = texture2D(tColor, (px + 0.5) / res);
-      float t = depthAt(px), e = 0.0, r2 = (thick + 0.5) * (thick + 0.5);
-      for (int dy = -6; dy <= 6; dy++) for (int dx = -6; dx <= 6; dx++) {
-        vec2 o = vec2(float(dx), float(dy));
-        if (abs(o.x) > thick || abs(o.y) > thick || dot(o, o) > r2) continue;
-        if (depthAt(px + o) - t > dist) e = 1.0;
+      vec3 col = texture2D(tColor, (px + 0.5) / res).rgb;
+      if (useSobel > 0.5) {
+        vec4 g0 = texture2D(tNormal, (px + 0.5) / res);
+        if (g0.a > 0.5) {
+          vec3 n0 = g0.rgb * 2.0 - 1.0; float s = sStep;
+          vec3 a = normalAt(px + vec2(-s, -s), n0), b = normalAt(px + vec2(0.0, -s), n0), c = normalAt(px + vec2(s, -s), n0);
+          vec3 d = normalAt(px + vec2(-s, 0.0), n0), f = normalAt(px + vec2(s, 0.0), n0);
+          vec3 g = normalAt(px + vec2(-s, s), n0), h = normalAt(px + vec2(0.0, s), n0), k = normalAt(px + vec2(s, s), n0);
+          vec3 nx = (c + 2.0 * f + k) - (a + 2.0 * d + g), ny = (g + 2.0 * h + k) - (a + 2.0 * b + c);
+          float e2 = smoothstep(sTh, sTh * 1.3, sqrt(dot(nx, nx) + dot(ny, ny)) * 0.25);
+          col = mix(col, sColor, e2 * sStrength);
+        }
       }
-      gl_FragColor = vec4(mix(c.rgb, color, e * strength), 1.0);
+      if (useDepth > 0.5) {
+        float t = depthAt(px), e = 0.0, r2 = (thick + 0.5) * (thick + 0.5);
+        for (int dy = -6; dy <= 6; dy++) for (int dx = -6; dx <= 6; dx++) {
+          vec2 o = vec2(float(dx), float(dy));
+          if (abs(o.x) > thick || abs(o.y) > thick || dot(o, o) > r2) continue;
+          if (depthAt(px + o) - t > dist) e = 1.0;
+        }
+        col = mix(col, color, e * strength);
+      }
+      gl_FragColor = vec4(col, 1.0);
     }`,
   depthTest: false, depthWrite: false,
 });
 const outlineScene = new THREE.Scene(), outlineCam = new THREE.Camera();
 outlineScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), outlineMat));
 function renderWorld() {
-  const on = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
+  const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0, on = depthOn || sobelOn;
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   camera.layers.set(0); renderer.render(scene, camera);
   camera.layers.set(1); renderer.render(scene, camera);
   if (!on) return;
+  if (sobelOn) {
+    // the same view again with every surface drawn as its normal, sky left clear
+    renderer.setRenderTarget(normRT);
+    renderer.setClearColor(0x000000, 0); renderer.clear();
+    scene.overrideMaterial = normalMat;
+    camera.layers.set(0); renderer.render(scene, camera);
+    camera.layers.set(1); renderer.render(scene, camera);
+    scene.overrideMaterial = null;
+    renderer.setClearColor('#0b0912', 1);
+  }
   const u = outlineMat.uniforms;
+  u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
+  // the kernel's spacing: the stroke falls on both sides of a crease, so half the thickness
+  u.sStep.value = Math.max(1, Math.round(SOBEL.thickness / 2));
+  u.sTh.value = 2 * Math.sin(SOBEL.angle * Math.PI / 360);   // how far apart two unit normals that far apart are
+  u.sStrength.value = SOBEL.strength; u.sColor.value.set(SOBEL.color);
   renderer.setRenderTarget(null);
   renderer.clear();
   renderer.render(outlineScene, outlineCam);
@@ -3001,7 +3040,7 @@ function resize() {
   const px = pxScale = pixelSize();
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   renderer.setSize(rw, rh, false);
-  outlineRT.setSize(rw, rh); outlineMat.uniforms.res.value.set(rw, rh);
+  outlineRT.setSize(rw, rh); normRT.setSize(rw, rh); outlineMat.uniforms.res.value.set(rw, rh);
   cv.style.width = rw * px + 'px'; cv.style.height = rh * px + 'px';
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
@@ -3190,6 +3229,13 @@ const TUNING = [
     [OUTLINE, 'strength', 'Strength', 0, 1, 0.01],
     [OUTLINE, 'color', 'Outline colour', 'color'],
   ]],
+  ['Crease outline', [
+    [SOBEL, 'on', 'Sobel crease outline (0 off, 1 on)', 0, 1, 1],
+    [SOBEL, 'angle', 'Stroke where the surface turns more than (degrees)', 1, 120, 1],
+    [SOBEL, 'thickness', 'Thickness (mosaic pixels)', 1, 8, 1],
+    [SOBEL, 'strength', 'Strength', 0, 1, 0.01],
+    [SOBEL, 'color', 'Crease colour', 'color'],
+  ]],
 ];
 const TUNE_CLOSED_KEY = 'emberwild.tuneClosed';
 const tuneClosed = (() => { try { return new Set(JSON.parse(localStorage.getItem(TUNE_CLOSED_KEY) || '[]')); } catch (err) { return new Set(); } })();
@@ -3353,7 +3399,7 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE },
+  tune: { PIXEL, OUTLINE, SOBEL },
   // draw a frame and count near-black pixels in it (to check the outline without looking)
   darkPixels: () => {
     renderWorld();

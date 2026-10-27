@@ -19,7 +19,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 - **Camera:** hold the right mouse button and drag to turn it freely (the middle button works too). The tilt always stays at 30°. **Z** / **C** turn it a quarter at a time, and the mouse wheel zooms.
 - **B** build mode: **1** floor, **2** timber wall, **3** door, **4** log wall, **5** stone wall. Left click places, and a right click (without dragging) removes a piece for a full refund. Walls and doors snap to the tile side nearest the cursor. Every button on the bar at the bottom can be clicked too.
 - **M** map.
-- **T** tuning panel: the mosaic pixel size, the hero's light (strength by night and day, reach, colour, and how far toward the camera and how high it hangs, so the side you see stays lit), and the black edge outline (how far back the ground behind an edge must be, and how many mosaic pixels thick).
+- **T** tuning panel: the mosaic pixel size, the hero's light (strength by night and day, reach, colour, and how far toward the camera and how high it hangs, so the side you see stays lit), the black edge outline, and a second Sobel crease outline (its own colour, strength, angle and thickness) (how far back the ground behind an edge must be, and how many mosaic pixels thick).
 
 ## The world
 
