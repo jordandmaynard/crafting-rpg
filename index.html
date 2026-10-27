@@ -2842,6 +2842,9 @@ function wallPiece(c, r, w, type) {
   }
   if (type === 4) {
     const top = cut ? CUT_H : WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
+    // a mortar core the full length and height, so the joints between blocks never show through
+    const m = at(0.5, y + top / 2);
+    part(G.box, '#4a4652', m[0], m[1], m[2], { sx: 1, sy: top, sz: 0.27, ry });
     for (let row = 0; row < rows; row++) {
       const off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, n, a) => a.indexOf(v) === n && v <= 1);
       for (let n = 0; n + 1 < edges.length; n++) {
@@ -3477,6 +3480,103 @@ function collide(p, rad, foe) {
 }
 const mv = { x: 0, z: 0 };
 // move in small steps so nothing tunnels through a wall; returns how far it actually got
+// can a foe go straight from one point to another? Every tile side the line crosses has to be open, and
+// where it passes a corner exactly, both ways round it. (Also whether a foe can reach you to strike.)
+function walkLine(x0, z0, x1, z1) {
+  let c = Math.floor(x0), r = Math.floor(z0);
+  const c1 = Math.floor(x1), r1 = Math.floor(z1), dx = x1 - x0, dz = z1 - z0;
+  const sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1, dH = dx > 0 ? 1 : 3, dV = dz > 0 ? 2 : 0;
+  const tdx = Math.abs(1 / dx), tdz = Math.abs(1 / dz);
+  let tx = dx ? (dx > 0 ? c + 1 - x0 : x0 - c) * tdx : Infinity, tz = dz ? (dz > 0 ? r + 1 - z0 : z0 - r) * tdz : Infinity;
+  for (let n = 0; n < 256 && (c !== c1 || r !== r1); n++) {
+    if (Math.abs(tx - tz) < 1e-9) {
+      if (!(stepOpen(c, r, dH, true) && stepOpen(c + sx, r, dV, true) && stepOpen(c, r, dV, true) && stepOpen(c, r + sz, dH, true))) return false;
+      c += sx; r += sz; tx += tdx; tz += tdz;
+    } else if (tx < tz) { if (!stepOpen(c, r, dH, true)) return false; c += sx; tx += tdx; }
+    else { if (!stepOpen(c, r, dV, true)) return false; r += sz; tz += tdz; }
+  }
+  return true;
+}
+// A* over the tiles for a foe, eight ways (a diagonal only where both ways round its corner are open), inside
+// a box round where it starts. Gives the tiles to walk through, the goal last, or null if there's no way there
+// (the box is a little bigger than the farthest a foe keeps chasing, and the search gives up after PF_MAX tiles).
+const PF_R = 40, PF_W = PF_R * 2 + 1, PF_MAX = 3000;
+const pfG = new Float32Array(PF_W * PF_W), pfFrom = new Int32Array(PF_W * PF_W), pfSeen = new Uint32Array(PF_W * PF_W), pfShut = new Uint32Array(PF_W * PF_W);
+let pfStamp = 0;
+const pfHeap = [];
+function findPath(sc, sr, gc, gr) {
+  if (Math.abs(gc - sc) > PF_R || Math.abs(gr - sr) > PF_R) return null;
+  const ox = sc - PF_R, oz = sr - PF_R, goal = (gr - oz) * PF_W + gc - ox;
+  const est = (c, r) => { const ax = Math.abs(c - gc), az = Math.abs(r - gr); return Math.max(ax, az) + 0.414 * Math.min(ax, az); };
+  pfStamp++; pfHeap.length = 0;
+  const push = (k, f) => {
+    // a binary heap of [f, k], lowest f on top
+    const h = pfHeap; let i = h.length; h.push([f, k]);
+    while (i > 0) { const p = (i - 1) >> 1; if (h[p][0] <= h[i][0]) break; [h[p], h[i]] = [h[i], h[p]]; i = p; }
+  };
+  const pop = () => {
+    const h = pfHeap, top = h[0], last = h.pop();
+    if (h.length) {
+      h[0] = last; let i = 0;
+      for (;;) { const a = i * 2 + 1, b = a + 1; let m = i; if (a < h.length && h[a][0] < h[m][0]) m = a; if (b < h.length && h[b][0] < h[m][0]) m = b; if (m === i) break; [h[m], h[i]] = [h[i], h[m]]; i = m; }
+    }
+    return top;
+  };
+  const start = PF_R * PF_W + PF_R;
+  pfSeen[start] = pfStamp; pfG[start] = 0; pfFrom[start] = -1;
+  push(start, est(sc, sr));
+  let n = 0;
+  while (pfHeap.length && n < PF_MAX) {
+    const [, k] = pop();
+    if (pfShut[k] === pfStamp) continue;
+    pfShut[k] = pfStamp; n++;
+    if (k === goal) {
+      const out = [];
+      for (let q = k; q !== start; q = pfFrom[q]) out.push([q % PF_W + ox, Math.floor(q / PF_W) + oz]);
+      return out.reverse();
+    }
+    const c = k % PF_W + ox, r = Math.floor(k / PF_W) + oz;
+    const open = [0, 1, 2, 3].map(d => stepOpen(c, r, d, true));
+    const tryStep = (nc, nr, cost) => {
+      const lx = nc - ox, lz = nr - oz;
+      if (lx < 0 || lz < 0 || lx >= PF_W || lz >= PF_W) return;
+      const q = lz * PF_W + lx, g = pfG[k] + cost;
+      if (pfShut[q] === pfStamp || (pfSeen[q] === pfStamp && pfG[q] <= g)) return;
+      pfSeen[q] = pfStamp; pfG[q] = g; pfFrom[q] = k;
+      push(q, g + est(nc, nr));
+    };
+    for (let d = 0; d < 4; d++) if (open[d]) tryStep(c + DC[d], r + DR[d], 1);
+    for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+      const dH = dx > 0 ? 1 : 3, dV = dz > 0 ? 2 : 0;
+      if (open[dH] && open[dV] && stepOpen(c + dx, r, dV, true) && stepOpen(c, r + dz, dH, true)) tryStep(c + dx, r + dz, 1.414);
+    }
+  }
+  return null;
+}
+// where a foe should head next on its way to tile (gc, gr): the farthest of the next few tiles on its path that
+// it can walk straight to. null when there's no way there.
+function pathTarget(f, gc, gr, dt) {
+  const goal = T(gc, gr), fc = Math.floor(f.x), fr = Math.floor(f.z);
+  f.pathT -= dt;
+  // knocked off its path: plan again
+  if (f.path && f.path.length && Math.max(Math.abs(f.path[0][0] - fc), Math.abs(f.path[0][1] - fr)) > 1) f.path = null;
+  if (!f.path || (f.goal !== goal && f.pathT <= 0)) {
+    f.pathT = 0.5 + Math.random() * 0.4; f.goal = goal;
+    f.path = findPath(fc, fr, gc, gr);
+    if (!f.path) return null;
+  }
+  const p = f.path;
+  let k = 0;
+  for (let j = 0; j < Math.min(p.length, 4); j++) if (p[j][0] === fc && p[j][1] === fr) k = j + 1;
+  if (k) p.splice(0, k);
+  if (!p.length) return [gc + 0.5, gr + 0.5];
+  for (let j = Math.min(p.length, 4) - 1; j > 0; j--) if (walkLine(f.x, f.z, p[j][0] + 0.5, p[j][1] + 0.5)) return [p[j][0] + 0.5, p[j][1] + 0.5];
+  return [p[0][0] + 0.5, p[0][1] + 0.5];
+}
+// no way to you: it gives up, heads home, and won't take notice of you again for a while (unless you hit it)
+function loseInterest(f) {
+  f.aggro = false; f.path = null; f.calm = 8; f.homing = true; f.wander = null;
+}
 function moveEntity(e, dx, dz, rad, foe) {
   const dist = Math.hypot(dx, dz);
   if (dist < 1e-6) return 0;
@@ -3557,7 +3657,7 @@ function spawnFoe(kind, x, z) {
   scene.add(shadowy(f.g));
   const sh = new THREE.Mesh(shadowGeo, shadowMat); scene.add(sh);
   const foe = Object.assign(f, { kind, def: d, x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
-    home: [x, z], wander: null, wanderT: Math.random() * 3, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
+    home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
   foes.push(foe);
   return foe;
 }
@@ -3880,7 +3980,7 @@ function propsNear(reach, fn) {
 const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
 function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
   if (f.hp <= 0) return;
-  f.hp -= dmg; f.hitT = 0; f.squish = 1; f.aggro = true;
+  f.hp -= dmg; f.hitT = 0; f.squish = 1; f.aggro = true; f.calm = 0; f.homing = false;
   const dx = f.x - fromX, dz = f.z - fromZ, l = Math.hypot(dx, dz) || 1;
   f.kx = dx / l * knock; f.kz = dz / l * knock;
   floatText(String(dmg), f.x, f.y + 1.1, f.z, '#ffffff');
@@ -4977,8 +5077,11 @@ function updateFoe(f, dt, night) {
   f.cd -= dt; f.hitT += dt;
   const aggroR = d.aggro * (night ? 1.35 : 1);
   const safe = heroInTown();
-  if (H.alive && !safe && !f.aggro && dist < aggroR && Math.abs(H.y - f.y) < 2.2) f.aggro = true;
-  if (f.aggro && (dist > aggroR * 2.4 || !H.alive || safe)) f.aggro = false;
+  f.calm -= dt;
+  if (H.alive && !safe && !f.aggro && f.calm <= 0 && dist < aggroR && Math.abs(H.y - f.y) < 2.2) { f.aggro = true; f.homing = false; f.path = null; }
+  if (f.aggro && (dist > aggroR * 2.4 || !H.alive || safe)) { f.aggro = false; f.path = null; }
+  // it can only strike you with nothing in between: no wall, closed door or cliff
+  const see = dist < 40 && walkLine(f.x, f.z, H.x, H.z);
   let vx = 0, vz = 0, want = 0;
   if (f.atk >= 0) {
     // wind up, lunge, recover
@@ -4986,18 +5089,36 @@ function updateFoe(f, dt, night) {
     f.face += angDiff(Math.atan2(dx, dz), f.face) * Math.min(1, dt * 6);
     if (f.atk > 0.45 && !f.struck) {
       f.struck = true;
-      if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z); }
+      if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2 && see) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z); }
     }
     if (f.atk > 0.85) { f.atk = -1; f.cd = 0.9 + Math.random() * 0.5; }
   } else if (f.aggro) {
-    if (dist < d.reach && f.cd <= 0 && H.alive) { f.atk = 0; f.struck = false; }
+    if (dist < d.reach && f.cd <= 0 && H.alive && see) { f.atk = 0; f.struck = false; }
     else if (d.rooted) f.face += angDiff(Math.atan2(dx, dz), f.face) * Math.min(1, dt * 4);
-    else if (dist > d.reach * 0.75) {
-      let mx = dx / dist, mz = dz / dist;
+    else if (dist > d.reach * 0.75 || !see) {
+      // straight at you when nothing's in the way, otherwise along a path round whatever is
+      let tx = H.x, tz = H.z;
+      if (see) f.path = null;
+      else {
+        const t = pathTarget(f, Math.floor(H.x), Math.floor(H.z), dt);
+        if (t) [tx, tz] = t; else loseInterest(f);
+      }
+      const ex = tx - f.x, ez = tz - f.z, el = Math.hypot(ex, ez) || 1;
+      let mx = ex / el, mz = ez / el;
       // stuck on a wall or cliff: slide off sideways for a moment
       if (f.sideT > 0) { f.sideT -= dt; const s = f.side; const ox = -mz * s, oz = mx * s; mx = mx * 0.3 + ox; mz = mz * 0.3 + oz; const l = Math.hypot(mx, mz); mx /= l; mz /= l; }
       vx = mx * d.speed; vz = mz * d.speed; want = d.speed * dt;
       f.face += angDiff(Math.atan2(mx, mz), f.face) * Math.min(1, dt * 8);
+    }
+  } else if (f.homing && !d.rooted) {
+    // back to where it came from, round anything in the way
+    const hx = f.home[0] - f.x, hz = f.home[1] - f.z;
+    const t = Math.hypot(hx, hz) < 1.5 ? null : walkLine(f.x, f.z, f.home[0], f.home[1]) ? f.home : pathTarget(f, Math.floor(f.home[0]), Math.floor(f.home[1]), dt);
+    if (!t) { f.homing = false; f.path = null; }
+    else {
+      const ex = t[0] - f.x, ez = t[1] - f.z, el = Math.hypot(ex, ez) || 1, sp = d.speed * 0.55;
+      vx = ex / el * sp; vz = ez / el * sp; want = sp * dt;
+      f.face += angDiff(Math.atan2(ex, ez), f.face) * Math.min(1, dt * 6);
     }
   } else if (!d.rooted) {
     f.wanderT -= dt;
@@ -5678,7 +5799,10 @@ window.GAME = {
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
   fenceCount: () => { const n = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
-  foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp })),
+  foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp, homing: f.homing, calm: +f.calm.toFixed(1), path: f.path ? f.path.length : -1 })),
+  // run the foes on their own for a while, 30 steps a second, with nothing drawn
+  simFoes: (sec, night = false) => { for (let t = 0; t < sec; t += 1 / 30) for (const f of foes.slice()) updateFoe(f, 1 / 30, night); return GAME.foeList(); },
+  findPath: (c0, r0, c1, r1) => { const p = findPath(c0, r0, c1, r1); return p && p.length; },
   clearFoes: () => foes.slice().forEach(removeFoe),
   face: a => { H.face = a; },
   aimAt: (x, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, surfaceY(x, z) + 0.5, z).project(camera); mouse.x = rect.left + (v3.x + 1) / 2 * rect.width; mouse.y = rect.top + (1 - v3.y) / 2 * rect.height; },
