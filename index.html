@@ -333,6 +333,43 @@ async function generate(progress) {
     }
     if (r % 32 === 31) { progress(0.32 * r / N, 'RAISING THE LAND'); await nextFrame(); }
   }
+
+  // 1b. The climate (on a coarse grid) is known before the land is cut, so meadows can roll gently and
+  // the cold heights stand sheer: squash or stretch the land about its local average
+  const G = 129, S = N / (G - 1), TMP = new Float32Array(G * G), WET = new Float32Array(G * G), CUR = new Float32Array(G * G);
+  for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
+    TMP[y * G + x] = fbm(nT, x * S / 380, y * S / 380, 3) + (y / G - 0.5) * 0.35;
+    WET[y * G + x] = fbm(nW, x * S / 300 + 11, y * S / 300, 3);
+    CUR[y * G + x] = fbm(nG, x * S / 160 - 5, y * S / 160 + 9, 2);
+  }
+  const lerpG = (A, c, r) => {
+    const fx = c / S, fy = r / S, x = Math.min(G - 2, Math.floor(fx)), y = Math.min(G - 2, Math.floor(fy)), u = fx - x, v = fy - y;
+    return (A[y * G + x] * (1 - u) + A[y * G + x + 1] * u) * (1 - v) + (A[(y + 1) * G + x] * (1 - u) + A[(y + 1) * G + x + 1] * u) * v;
+  };
+  const sat = x => Math.max(0, Math.min(1, x));
+  const HB = new Float32Array(N * N), row = new Float32Array(N), BR_ = 40;
+  for (let pass = 0; pass < 2; pass++) {
+    const src = pass ? HB : HF, st = pass ? N : 1, ln = pass ? 1 : N;
+    for (let a = 0; a < N; a++) {
+      let sum = 0, cnt = 0;
+      for (let k = 0; k < BR_; k++) { sum += src[a * ln + k * st]; cnt++; }
+      for (let k = 0; k < N; k++) {
+        if (k + BR_ < N) { sum += src[a * ln + (k + BR_) * st]; cnt++; }
+        if (k - BR_ - 1 >= 0) { sum -= src[a * ln + (k - BR_ - 1) * st]; cnt--; }
+        row[k] = sum / cnt;
+      }
+      for (let k = 0; k < N; k++) HB[a * ln + k * st] = row[k];
+    }
+  }
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r), h = HF[i];
+    if (h < 0.2) continue;
+    const temp = lerpG(TMP, c, r), wet = lerpG(WET, c, r), curse = lerpG(CUR, c, r);
+    const meadow = sat((-0.04 - wet) / 0.06) * sat((0.14 - temp) / 0.1) * sat((0.4 - curse) / 0.08) * sat((temp + 0.45) / 0.1);
+    const cold = Math.max(sat((-0.4 - temp) / 0.15), sat((h - 0.72) / 0.1));
+    const k = 1 - 0.8 * meadow + 0.45 * cold;
+    HF[i] = Math.max(0.2, HB[i] + (h - HB[i]) * k);
+  }
   for (let i = 0; i < N * N; i++) { const h = HF[i]; LV[i] = h < 0.2 ? 0 : Math.min(MAXL, 1 + Math.floor((h - 0.2) / 0.1)); }
 
   // 2. Terraces: drop lone pillars and pits, then no step between neighbours bigger than one level
@@ -346,18 +383,8 @@ async function generate(progress) {
   progress(0.37, 'FILLING THE LAKES'); await nextFrame();
   await carveWaters(progress);
 
-  // 3. Climate on a coarse grid, then biomes tile by tile
+  // 3. Biomes tile by tile from the climate
   progress(0.42, 'SETTLING THE CLIMATE'); await nextFrame();
-  const G = 129, S = N / (G - 1), TMP = new Float32Array(G * G), WET = new Float32Array(G * G), CUR = new Float32Array(G * G);
-  for (let y = 0; y < G; y++) for (let x = 0; x < G; x++) {
-    TMP[y * G + x] = fbm(nT, x * S / 380, y * S / 380, 3) + (y / G - 0.5) * 0.35;
-    WET[y * G + x] = fbm(nW, x * S / 300 + 11, y * S / 300, 3);
-    CUR[y * G + x] = fbm(nG, x * S / 160 - 5, y * S / 160 + 9, 2);
-  }
-  const lerpG = (A, c, r) => {
-    const fx = c / S, fy = r / S, x = Math.min(G - 2, Math.floor(fx)), y = Math.min(G - 2, Math.floor(fy)), u = fx - x, v = fy - y;
-    return (A[y * G + x] * (1 - u) + A[y * G + x + 1] * u) * (1 - v) + (A[(y + 1) * G + x] * (1 - u) + A[(y + 1) * G + x + 1] * u) * v;
-  };
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
     const i = T(c, r), L = Math.max(1, LV[i]);
     const temp = lerpG(TMP, c, r) - Math.max(0, L - 4) * 0.06, wet = lerpG(WET, c, r), curse = lerpG(CUR, c, r);
@@ -387,11 +414,13 @@ async function generate(progress) {
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
     const i = T(c, r);
     if (SH[i] || lock[i] || !LV[i] || TN[i]) continue;
-    if (fbm(nX, c / 26 + 31, r / 26, 2) < 0.22) continue;
+    // meadows ramp most of their rises, the snow hardly any
+    const b = BI[i], meadow = b === MEADOW;
+    if (fbm(nX, c / 26 + 31, r / 26, 2) < (meadow ? -0.35 : b === SNOW ? 0.5 : 0.22)) continue;
     const d0 = Math.floor(hs(c, r, 11) * 4);
     for (let k = 0; k < 4; k++) {
-      const d = (d0 + k) & 3;
-      if (canRamp(i, d, lock) === 2) { setRamp(i, d, lock, 2); break; }
+      const d = (d0 + k) & 3, can = canRamp(i, d, lock);
+      if (can === 2 || (meadow && can === 1)) { setRamp(i, d, lock, can); break; }
     }
   }
 
@@ -799,6 +828,8 @@ function showPlotHover(id) {
 const ROOF_COLORS = ['#9a4434', '#3e5c8c', '#6a4a86', '#7a5634', '#3e6a4a'];
 function raiseHouses(t, n) {
   t.houses = [];
+  // how far down each street (N, E, S, W) the last door on it sits
+  t.doorArm = [2, 2, 2, 2];
   [[1, -1], [1, 1], [-1, 1], [-1, -1]].forEach(([sx, sz], q) => {
     let w = 3 + Math.floor(hs(t.c, t.r, 70 + q) * 3), h = 3 + Math.floor(hs(t.c, t.r, 80 + q) * 2);
     const swap = hs(t.c, t.r, 90 + q) > 0.5;
@@ -810,6 +841,8 @@ function raiseHouses(t, n) {
     const tiles = [], set = new Set();
     for (let a = 2; a <= 1 + w; a++) for (let b = 4; b <= 3 + h; b++) { const [c, r] = at(a, b); tiles.push([c, r]); set.add(T(c, r)); }
     const doorD = swap ? (sz > 0 ? 0 : 2) : (sx > 0 ? 3 : 1), [dc, dr] = at(2, 4 + ((h - 1) >> 1));
+    const arm = swap ? (sx > 0 ? 1 : 3) : (sz > 0 ? 2 : 0);
+    t.doorArm[arm] = Math.max(t.doorArm[arm], 4 + ((h - 1) >> 1));
     const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
     for (const [c, r] of tiles) {
       const i = T(c, r);
@@ -871,7 +904,7 @@ function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
       if (RIM[n] & 255) k += 2.5;
       else if (RIM[n]) k += 0.5;
       if (WT[n]) k += 1.5;
-      if (TN[n]) { if (TN[n] === avoidTown) k += 8; else if (townCell(nc, nr) === 'yard') k += 8; }
+      if (TN[n]) { if (TN[n] === avoidTown) continue; if (townCell(nc, nr) === 'yard') k += 8; }
       if (roadDir[i] >= 0 && roadDir[i] !== d) k += 0.4;
       const ng = roadG[i] + k;
       if (roadSeen[n] === run && ng >= roadG[n]) continue;
@@ -936,12 +969,15 @@ async function layRoads(rand, progress) {
     roadRoute(T(nodes[a].c, nodes[a].r), T(nodes[b].c, nodes[b].r));
     if (++done % 4 === 0) { progress(0.82 + 0.05 * done / links.length, 'LAYING ROADS'); await nextFrame(); }
   }
-  // every street that reaches the edge of town carries on to the nearest place in its direction
+  // every street that reaches the edge of town carries on to the nearest place in its direction; one that
+  // can't get out (cliffs, water) stops at the last door on it instead
   towns.forEach((t, n) => {
+    const arm = [];
     for (let d = 0; d < 4; d++) {
       let c = t.c, r = t.r;
       while (TN[T(c + DC[d], r + DR[d])] === n + 1) { c += DC[d]; r += DR[d]; }
-      if (PATH[T(c + DC[d], r + DR[d])]) continue;
+      arm[d] = t.doorArm[d];
+      if (PATH[T(c + DC[d], r + DR[d])]) { arm[d] = Infinity; continue; }
       let best = null, bd = 1e9;
       for (const o of nodes) {
         if (o.town === t) continue;
@@ -950,8 +986,9 @@ async function layRoads(rand, progress) {
         // nothing that way (a town near the edge of the world): head for the nearest place at all
         if ((along > 0.3 ? score : l * 4) < bd) { bd = along > 0.3 ? score : l * 4; best = o; }
       }
-      if (best) roadRoute(T(c, r), T(best.c, best.r), n + 1, 400000);
+      if (best && roadRoute(T(c, r), T(best.c, best.r), n + 1, 400000)) arm[d] = Infinity;
     }
+    t.arm = arm;
   });
   // roads run dry through the bog
   for (let i = 0; i < N * N; i++) if (PATH[i] && WT[i] === 1) WT[i] = 0;
@@ -1223,7 +1260,11 @@ function townCell(c, r) {
   if (!t) return null;
   const dx = c - t.c, dz = r - t.r;
   if (Math.abs(dx) <= 2 && Math.abs(dz) <= 2) return 'plaza';
-  if (dx === 0 || dz === 0) return 'street';
+  if (dx === 0 || dz === 0) {
+    // until the roads are laid every street runs to the edge
+    const d = dz < 0 ? 0 : dx > 0 ? 1 : dz > 0 ? 2 : 3;
+    if (!t.arm || Math.abs(dx + dz) <= t.arm[d]) return 'street';
+  }
   return 'yard';
 }
 
@@ -4546,7 +4587,7 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
-  get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name]), reached: connectStats.reached }),
+  get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(7).fill(0), sh = new Array(13).fill(0), ob = {};
     for (let i = 0; i < N * N; i++) { lv[LV[i]]++; if (LV[i]) bi[BI[i]]++; sh[SH[i]]++; if (OB[i]) ob[OB[i]] = (ob[OB[i]] || 0) + 1; }
@@ -4570,7 +4611,7 @@ window.GAME = {
     forcedPick = null;
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
-  tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
+  tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
   plotAt: (c, r) => PLOT[T(c, r)],
