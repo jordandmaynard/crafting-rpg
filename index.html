@@ -953,6 +953,54 @@ const CC = h => { let k = colorCache.get(h); if (!k) { k = C(h); colorCache.set(
 const shade = (c, f) => c.clone().multiplyScalar(f);
 const flatMat = opts => new THREE.MeshStandardMaterial(Object.assign({ flatShading: true, roughness: 1, metalness: 0 }, opts));
 
+// ---------- Cloud shadows (T > Cloud shadows) ----------
+// A tiling noise texture laid over the world by position and slowly scrolled; where it's dense, the sun's
+// (or moon's) light is dimmed in every lit material's shader. Lamps, the torch and the sky's light are left
+// alone, so shadows only show where the sun falls and fade out with it.
+const CLOUDS = { strength: 0.4, cover: 0.45, softness: 0.16, scale: 56, speed: 0.7, direction: 35 };
+const cloudTex = (() => {
+  // tileable value noise: lattices whose periods divide the texture, four octaves
+  const S = 256, data = new Uint8Array(S * S * 4), rnd = mulberry32(9137);
+  const octs = [8, 16, 32, 64].map(p => ({ p, g: Float32Array.from({ length: p * p }, rnd) }));
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    let v = 0, amp = 0.53, tot = 0;
+    for (const { p, g } of octs) {
+      const fx = x / S * p, fy = y / S * p, x0 = Math.floor(fx), y0 = Math.floor(fy), u = fx - x0, w = fy - y0;
+      const su = u * u * (3 - 2 * u), sw = w * w * (3 - 2 * w), at = (a, b) => g[((b % p) * p) + (a % p)];
+      v += amp * ((at(x0, y0) * (1 - su) + at(x0 + 1, y0) * su) * (1 - sw) + (at(x0, y0 + 1) * (1 - su) + at(x0 + 1, y0 + 1) * su) * sw);
+      tot += amp; amp *= 0.5;
+    }
+    const k = (y * S + x) * 4, b = Math.round(v / tot * 255);
+    data[k] = data[k + 1] = data[k + 2] = b; data[k + 3] = 255;
+  }
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = t.minFilter = THREE.LinearFilter; t.needsUpdate = true;
+  return t;
+})();
+const CLOUD_U = { tCloud: { value: cloudTex }, cloudOff: { value: new THREE.Vector2() }, cloudScale: { value: 56 },
+  cloudAmt: { value: 0.4 }, cloudCover: { value: 0.45 }, cloudSoft: { value: 0.16 } };
+const CLOUD_GLSL = `uniform sampler2D tCloud; uniform vec2 cloudOff; uniform float cloudScale, cloudAmt, cloudCover, cloudSoft;
+varying vec2 vCloudXZ;
+float cloudShade() {
+  float n = texture2D(tCloud, (vCloudXZ + cloudOff) / cloudScale).r;
+  return 1.0 - cloudAmt * smoothstep(1.0 - cloudCover - cloudSoft, 1.0 - cloudCover + cloudSoft, n);
+}
+`;
+THREE.MeshStandardMaterial.prototype.onBeforeCompile = function (shader) {
+  Object.assign(shader.uniforms, CLOUD_U);
+  shader.vertexShader = 'varying vec2 vCloudXZ;\n' + shader.vertexShader.replace('#include <project_vertex>',
+    '#include <project_vertex>\n  vCloudXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
+  shader.fragmentShader = CLOUD_GLSL + shader.fragmentShader.replace('#include <lights_fragment_begin>',
+    THREE.ShaderChunk.lights_fragment_begin.replace('getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );',
+      'getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );\n\t\tdirectLight.color *= cloudShade();'));
+};
+function updateClouds(dt) {
+  const a = CLOUDS.direction * Math.PI / 180, o = CLOUD_U.cloudOff.value, S = CLOUDS.scale;
+  o.x = (o.x - Math.cos(a) * CLOUDS.speed * dt) % (S * 64); o.y = (o.y - Math.sin(a) * CLOUDS.speed * dt) % (S * 64);
+  CLOUD_U.cloudScale.value = S; CLOUD_U.cloudAmt.value = CLOUDS.strength;
+  CLOUD_U.cloudCover.value = CLOUDS.cover; CLOUD_U.cloudSoft.value = Math.max(0.01, CLOUDS.softness);
+}
+
 // Growable vertex buffers: every chunk writes its triangles here, then copies them into a mesh.
 class Buf {
   constructor() { this.p = new Float32Array(1 << 16); this.c = new Float32Array(1 << 16); this.n = 0; }
@@ -1189,16 +1237,30 @@ function cactus(x, z, k) {
   if (k > 0.7) part(G.box, '#e86a8a', x, y + h + 0.02, z, { s: 0.08 });
 }
 function bush(x, z, k, c = '#3f7a34') { const y = groundAt(x, z); part(G.ico, shade(CC(c), 0.85 + k * 0.3), x, y + 0.14, z, { sx: 0.5 + k * 0.15, sy: 0.36, sz: 0.46, ry: k * 4 }); }
-// a stone node to mine, after V Rising's: a tall standing boulder with a leaning shard, set into a broad
-// sunken footing with half-buried chunks round it, so it can't be mistaken for the low rocks strewn down
-// the cliffs and plainly grows out of the ground
+// a stone node to mine, after V Rising's: a tall standing boulder with a leaning shard, set into a sunken
+// footing whose foot takes the colour of the ground round it, with half-buried chunks and the biome's small
+// plants at its base, so it plainly grows out of the ground and can't be mistaken for the cliffs' rocks
+const ROCK_PLANTS = {
+  [MEADOW]: ['#5e8a3a', '#e8d24a'], [FOREST]: ['#3a6a2e', '#4f7a3a'], [SWAMP]: ['#6a7a3a', '#4a5a30'], [GRAVE]: ['#5a6450', '#7a7a6a'],
+  [SNOW]: ['#dde8f2', '#a8b8c8'], [DESERT]: ['#8a7a4a', '#a89058'], [TOWN]: ['#5e8a3a', '#e86a8a'],
+};
 function rock(x, z, k, c = '#7a7684') {
   const y = groundAt(x, z), base = CC(c), h = 0.95 + k * 0.35, lean = (k - 0.5) * 0.25;
-  part(G.cyl8, shade(base, 0.55), x, y + 0.02, z, { sx: 1.0, sy: 0.06, sz: 0.94, ry: k * 3 });                     // disturbed earth
-  part(G.dodec, shade(base, 0.72 + k * 0.15), x, y + 0.06, z, { sx: 0.86, sy: 0.42, sz: 0.8, ry: k * 5 });          // footing, half sunk
+  const b = BI[T(Math.floor(x), Math.floor(z))], ground = PAL[b].a, foot = base.clone().lerp(ground, 0.55);
+  part(G.dodec, shade(foot, 0.85), x, y - 0.04, z, { sx: 0.74, sy: 0.22, sz: 0.7, ry: k * 3 });                    // the foot, ground-coloured
+  part(G.dodec, shade(base, 0.72 + k * 0.15), x, y + 0.08, z, { sx: 0.64, sy: 0.34, sz: 0.6, ry: k * 5 });          // footing, half sunk
   part(G.dodec, shade(base, 0.82 + k * 0.25), x, y + h * 0.45, z, { sx: 0.56, sy: h, sz: 0.5, ry: k * 6, rz: lean });
   part(G.dodec, shade(base, 0.7 + k * 0.2), x + 0.2, y + h * 0.3, z + 0.1, { sx: 0.34, sy: h * 0.64, sz: 0.32, ry: k * 4, rz: -0.35 });
-  for (let n = 0; n < 4; n++) { const a = k * 9 + n * 1.6; part(G.dodec, shade(base, 0.78 + n * 0.05), x + Math.sin(a) * 0.4, y + 0.02, z + Math.cos(a) * 0.38, { sx: 0.24, sy: 0.18, sz: 0.22, ry: a }); }
+  for (let n = 0; n < 3; n++) { const a = k * 9 + n * 2.1; part(G.dodec, shade(foot, 0.85 + n * 0.06), x + Math.sin(a) * 0.36, y + 0.01, z + Math.cos(a) * 0.34, { sx: 0.2, sy: 0.14, sz: 0.18, ry: a }); }
+  // small plants round the base
+  const [pa, pb] = ROCK_PLANTS[b] || ROCK_PLANTS[MEADOW];
+  for (let n = 0; n < 6; n++) {
+    const a = k * 5 + n * 1.05 + hash(x, z, n) * 0.5, d = 0.36 + hash(x, z, n + 7) * 0.12, px = x + Math.sin(a) * d, pz = z + Math.cos(a) * d;
+    if (b === SNOW) { part(G.dodec, shade(CC(pa), 0.95), px, y + 0.02, pz, { sx: 0.16, sy: 0.08, sz: 0.14, ry: a }); continue; }
+    const hgt = (b === SWAMP ? 0.26 : 0.12) + hash(x, z, n + 3) * 0.1;
+    part(G.box, shade(CC(n % 3 ? pa : pb), 0.85 + hash(x, z, n + 5) * 0.25), px, y + hgt / 2, pz, { sx: 0.04, sy: hgt, sz: 0.04, rz: (hash(x, z, n + 9) - 0.5) * 0.6, rx: (hash(x, z, n + 11) - 0.5) * 0.4 });
+    if (b === MEADOW || b === TOWN) { if (n % 3 === 0) part(G.box, pb, px, y + hgt, pz, { s: 0.06 }); }
+  }
 }
 // Ore streaks, kept for the ore rocks to come (not drawn yet): two pale bars across the boulder's face,
 // tilted with its lean. Call after rock() with the same x, z, k and the ore's colour.
@@ -2705,23 +2767,81 @@ function removePiece() {
   floatText('+' + costText(target.kind), mx, LV[T(target.c, target.r)] * STEP + 1.2, mz, '#e0b070');
 }
 
-// ---------- Day and night ----------
-const DAY_LEN = 360;   // seconds for a whole day
-let clock = 0.3, dayNum = 1, wasNight = false;
-const SKY_DAY = C('#b4bce8'), SKY_NIGHT = C('#2a3468'), GND_DAY = C('#6a5a52'), GND_NIGHT = C('#120e22');
-const SUN_DAY = C('#ffe6c4'), SUN_NIGHT = C('#7a8ac8'), SUN_DUSK = C('#ff9a5a');
-function daylight() { return smooth(0.2, 0.3, clock) * (1 - smooth(0.72, 0.82, clock)); }
+// ---------- Day and night (after Crafting and Conquest's sky) ----------
+// The sun is placed by the hour, latitude, season and which way north is; its light is reddened by the air
+// it crosses (Rayleigh and haze extinction over the air mass, standing in for the transmittance LUT); the
+// sky's light shades from night through dusk to day; when the sun is down the moon, opposite it, takes
+// over; and an auto exposure opens up as the light fails, as an eye adapts. No sky or clouds are drawn.
+const SKY = {
+  timeOfDay: 8,          // hours, 0-24
+  timeSpeed: 4,          // game hours that pass per real minute (0 = the clock stands still)
+  latitude: 40,          // degrees north: how high the sun climbs
+  season: 12,            // the sun's declination in degrees: +23 midsummer, 0 equinox, -23 midwinter
+  north: 0,              // which way north is on the map, degrees (0: up the map, so the noon sun is to the south)
+  sunColor: '#ffffff', sunStrength: 0.45,
+  skyColor: '#ffffff', skyStrength: 1,
+  moonColor: '#a8bcff', moonStrength: 1.08,
+  nightLight: 0.15,      // the glow of the night sky, so the map can still be seen
+  haze: 11,              // aerosols: hazier makes redder, dimmer low sun
+  exposure: 1,
+  autoExposure: 1,       // how much the exposure opens up as the light fails at dusk and night (0 = not at all)
+  bgDay: '#9cc3e4', bgDusk: '#e9a27c', bgNight: '#18203a',   // the sky's light by day, at dusk and by night
+};
+const D2R = Math.PI / 180;
+// the direction toward the sun for the hour, latitude, season and north (+x east, +z south)
+function sunDirection(T = SKY) {
+  const h = (T.timeOfDay - 12) * 15 * D2R, lat = T.latitude * D2R, dec = T.season * D2R, n = T.north * D2R;
+  const up = Math.sin(dec) * Math.sin(lat) + Math.cos(dec) * Math.cos(h) * Math.cos(lat);
+  const east = -Math.cos(dec) * Math.sin(h);
+  const north = Math.sin(dec) * Math.cos(lat) - Math.cos(dec) * Math.cos(h) * Math.sin(lat);
+  return [east * Math.cos(n) + north * Math.sin(n), up, east * Math.sin(n) - north * Math.cos(n)];
+}
+// what's left of sunlight after the air: web-ocean's extinction per km over the 8 km Rayleigh and 1.2 km haze
+// scale heights, times the air mass (Kasten and Young) for a sun this high
+const RAY_S = [5.802e-3, 13.558e-3, 33.1e-3], MIE_E = 4.40e-3;
+function sunTransmittance(y) {
+  const alt = Math.max(0, y), deg = Math.asin(Math.min(1, alt)) / D2R;
+  const mass = 1 / (alt + 0.50572 * Math.pow(deg + 6.07995, -1.6364));
+  return RAY_S.map(b => Math.exp(-(b * 8 + MIE_E * 1.2 * SKY.haze) * mass));
+}
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const tmpC = new THREE.Color(), tmpC2 = new THREE.Color();
+const normC = c => { const m = Math.max(c.r, c.g, c.b, 1e-4); return c.multiplyScalar(1 / m); };
+let sunDir = sunDirection(), clock = SKY.timeOfDay / 24, dayNum = 1, wasNight = false, exposure = 1;
+const daylight = () => smoothstep(-0.1, 0.15, sunDir[1]);
+function advanceClock(dt) {
+  SKY.timeOfDay += dt * SKY.timeSpeed / 60;
+  if (SKY.timeOfDay >= 24) { SKY.timeOfDay -= 24; dayNum++; }
+  if (SKY.timeOfDay < 0) SKY.timeOfDay += 24;
+  clock = SKY.timeOfDay / 24;
+}
 function updateSky() {
-  const d = daylight(), dusk = Math.max(0, 1 - Math.abs(clock - 0.25) / 0.06) + Math.max(0, 1 - Math.abs(clock - 0.77) / 0.06);
-  hemi.color.copy(SKY_NIGHT).lerp(SKY_DAY, d);
-  hemi.groundColor.copy(GND_NIGHT).lerp(GND_DAY, d);
-  hemi.intensity = 0.42 + d * 0.32;
-  sun.color.copy(SUN_NIGHT).lerp(SUN_DAY, d).lerp(SUN_DUSK, Math.min(1, dusk) * 0.6);
-  sun.intensity = 0.32 + d * 0.66;
-  // the sun crosses the southern sky from east to west, so faces toward the camera catch it
-  const a = clamp((clock - 0.25) / 0.5, -0.2, 1.2) * Math.PI;
-  sun.position.set(H.x + Math.cos(a) * 7, H.y + 6 + Math.sin(Math.max(0, a)) * 6, H.z + 8);
+  sunDir = sunDirection();
+  const y = sunDir[1], dayF = smoothstep(-0.12, 0.35, y);
+  // auto exposure: up to 3.5× brighter as the sun goes down
+  const lightLevel = 0.25 + 0.75 * smoothstep(-0.1, 0.5, y);
+  exposure = SKY.exposure * Math.pow(Math.min(3.5, 1 / lightLevel), SKY.autoExposure);
+  // the light that falls from one direction: the sun, or the moon opposite it once the sun is down
+  if (y >= 0) {
+    const t = sunTransmittance(y), risen = smoothstep(-0.009, 0.05, y);
+    tmpC.setRGB(t[0], t[1], t[2]).multiply(tmpC2.set(SKY.sunColor));
+    const mag = Math.max(tmpC.r, tmpC.g, tmpC.b);
+    sun.color.copy(normC(tmpC));
+    sun.intensity = mag * SKY.sunStrength * 2.5 * risen * exposure;
+    sun.position.set(H.x + sunDir[0] * 20, H.y + y * 20, H.z + sunDir[2] * 20);
+  } else {
+    sun.color.set(SKY.moonColor);
+    sun.intensity = 0.45 * SKY.moonStrength * 0.2 * smoothstep(0, 0.15, -y) * exposure;
+    sun.position.set(H.x - sunDir[0] * 20, H.y - y * 20, H.z - sunDir[2] * 20);
+  }
   sun.target.position.set(H.x, H.y, H.z);
+  // the sky's light: night, through dusk round the horizon, to day
+  const a = smoothstep(-0.2, -0.02, y), b = smoothstep(0.02, 0.3, y);
+  tmpC.set(SKY.bgNight).lerp(tmpC2.set(SKY.bgDusk), a).lerp(tmpC2.set(SKY.bgDay), b);
+  hemi.color.copy(normC(tmpC)).multiply(tmpC2.set(SKY.skyColor));
+  hemi.groundColor.setRGB(0.26, 0.24, 0.17).multiplyScalar(1 / 0.26 * (0.18 + 0.4 * dayF)).lerp(tmpC2.set('#120e22'), 1 - dayF);
+  hemi.intensity = (SKY.skyStrength * 0.62 * dayF + SKY.nightLight * 0.8) * exposure;
+  const d = daylight();
   // on the line from the hero to the camera, a little toward it and raised, so the side you see is lit
   heroLight.intensity = HERO_LIGHT.day + (HERO_LIGHT.night - HERO_LIGHT.day) * (1 - d);
   heroLight.distance = HERO_LIGHT.range; heroLight.decay = HERO_LIGHT.decay; heroLight.color.set(HERO_LIGHT.color);
@@ -2785,8 +2905,7 @@ let time = 0, regionName = '', regionT = 0;
 function heroSpeed() { return (mode === 'build' ? 4.4 : 4.6) * (WT[T(Math.floor(H.x), Math.floor(H.z))] ? 0.62 : 1); }
 function update(dt) {
   time += dt;
-  clock += dt / DAY_LEN;
-  if (clock >= 1) { clock -= 1; dayNum++; }
+  advanceClock(dt);
   H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt);
   H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt;
   updateAim();
@@ -3240,6 +3359,34 @@ const TUNING = [
     [HERO_LIGHT, 'height', 'Height above that (tiles)', -1, 6, 0.05],
     [HERO_LIGHT, 'color', 'Colour', 'color'],
   ]],
+  ['Day & night', [
+    [SKY, 'timeOfDay', 'Time of day (hours)', 0, 24, 0.1],
+    [SKY, 'timeSpeed', 'Game hours per real minute (0 stops the clock)', 0, 60, 0.5],
+    [SKY, 'latitude', 'Latitude: how high the sun climbs (degrees)', -80, 80, 1],
+    [SKY, 'season', 'Season: the sun\'s declination (+23 midsummer, -23 midwinter)', -23.5, 23.5, 0.5],
+    [SKY, 'north', 'Which way north is (degrees)', -180, 180, 1],
+    [SKY, 'sunStrength', 'Sunlight strength', 0, 2, 0.01],
+    [SKY, 'sunColor', 'Sunlight tint', 'color'],
+    [SKY, 'haze', 'Haze: redder, dimmer low sun', 0, 40, 0.5],
+    [SKY, 'skyStrength', 'Skylight strength', 0, 3, 0.01],
+    [SKY, 'skyColor', 'Skylight tint', 'color'],
+    [SKY, 'bgDay', 'Sky light by day', 'color'],
+    [SKY, 'bgDusk', 'Sky light at dusk', 'color'],
+    [SKY, 'bgNight', 'Sky light by night', 'color'],
+    [SKY, 'moonStrength', 'Moonlight strength', 0, 4, 0.01],
+    [SKY, 'moonColor', 'Moonlight tint', 'color'],
+    [SKY, 'nightLight', 'Night sky glow', 0, 1, 0.01],
+    [SKY, 'exposure', 'Exposure', 0.2, 3, 0.01],
+    [SKY, 'autoExposure', 'Auto exposure: opens up at dusk and night (0 off)', 0, 1, 0.01],
+  ]],
+  ['Cloud shadows', [
+    [CLOUDS, 'strength', 'How much a cloud dims the sun (0 none)', 0, 1, 0.01],
+    [CLOUDS, 'cover', 'Cloud cover', 0, 1, 0.01],
+    [CLOUDS, 'softness', 'Edge softness', 0.01, 0.5, 0.01],
+    [CLOUDS, 'scale', 'Size (tiles per repeat of the pattern)', 8, 200, 1],
+    [CLOUDS, 'speed', 'Drift speed (tiles a second)', 0, 6, 0.05],
+    [CLOUDS, 'direction', 'Drift direction (degrees)', -180, 180, 1],
+  ]],
   ['Outline', [
     [OUTLINE, 'on', 'Edge outline (0 off, 1 on)', 0, 1, 1],
     [OUTLINE, 'distance', 'Outline where the ground behind an edge is this far back (tiles)', 0.05, 6, 0.05],
@@ -3351,6 +3498,7 @@ function frame(now) {
   if (started && !mapOpen) update(dt);
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
   updateCamera(dt);
+  updateClouds(dt);
   streamChunks(6);
   drawMini(dt);
   if (pixelSize() !== pxScale) resize();
@@ -3385,7 +3533,7 @@ window.GAME = {
   begin,
   teleport: (x, z) => { H.x = x; H.z = z; H.y = surfaceY(x, z); camTarget.set(H.x, H.y, H.z); },
   give: (w, s) => { H.wood += w; H.stone += s; renderStats(); },
-  setClock: c => { clock = c; },
+  setClock: c => { SKY.timeOfDay = c * 24; advanceClock(0); },
   setMode, setBuildKind,
   // place a piece directly, through the same checks the cursor uses
   build: (kind, c, r, side) => {
@@ -3417,8 +3565,9 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS },
   cutCount: () => cutEdges.size,
+  light: () => ({ hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
   // draw a frame and count near-black pixels in it (to check the outline without looking)
   darkPixels: () => {
     renderWorld();
