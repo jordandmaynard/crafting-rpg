@@ -478,6 +478,7 @@ async function generate(progress) {
   }
   progress(0.82, 'LAYING ROADS'); await nextFrame();
   await layRoads(rand, progress);
+  fenceTowns();
   progress(0.88, 'GROWING THE WILDS'); await nextFrame();
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) placeScenery(c, r);
@@ -942,9 +943,36 @@ function raiseHouses(t, n) {
     }
   });
 }
-// once the scene exists, the town houses get their doors and roofs
+// Every town is fenced round wherever its edge can be walked across (in wood, or in dry stone), with a gate
+// where each street runs out into a road. A town no road reaches still gets a gate at a street's end.
+function fenceTowns() {
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  towns.forEach((t, k) => {
+    const kind = hs(t.c, t.r, 97) > 0.5 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [];
+    t.gates = [];
+    for (let r = t.r - TOWN_R - 2; r <= t.r + TOWN_R + 2; r++) for (let c = t.c - TOWN_R - 2; c <= t.c + TOWN_R + 2; c++) {
+      const i = T(c, r);
+      if (BI[i] !== TOWN || TN[i] !== k + 1) continue;
+      for (let d = 0; d < 4; d++) {
+        const n = i + DI[d];
+        if (BI[n] === TOWN || WT[n] || !terrainOpen(i, n, d)) continue;
+        const [ec, er, w] = edgeOf(c, r, d), arr = w ? WW : WN, e = T(ec, er);
+        if (arr[e]) continue;
+        const gate = PATH[i] && PATH[n];
+        arr[e] = gate ? KIND_VAL.gate : kind; piece(ec, er);
+        if (gate) t.gates.push([ec, er, w]);
+        else if (c === t.c || r === t.r) ends.push([ec, er, w]);
+      }
+    }
+    if (!t.gates.length && ends.length) { const [ec, er, w] = ends[0]; (w ? WW : WN)[T(ec, er)] = KIND_VAL.gate; t.gates.push(ends[0]); }
+  });
+}
+// once the scene exists, the town houses get their doors and roofs, and the town gates stand open
 function finishTowns() {
-  for (const t of towns) for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
+  for (const t of towns) {
+    for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
+    for (const g of t.gates || []) { const d = makeDoor(...g, true); d.open = true; openDoors.add(edgeKey(...g)); }
+  }
   settleBuildings();
 }
 
@@ -2479,15 +2507,22 @@ function buildObjects(cx, cz, ch) {
 
 // ---------- Building pieces ----------
 const WALL_H = 1.6;
-const COST = { floor: { wood: 2 }, stonefloor: { stone: 2 }, wall: { wood: 2, stone: 2 }, door: { wood: 5 }, logwall: { wood: 4 }, stonewall: { stone: 4 }, hearth: { wood: 2, stone: 4 } };
+const COST = { floor: { wood: 2 }, stonefloor: { stone: 2 }, wall: { wood: 2, stone: 2 }, door: { wood: 5 }, logwall: { wood: 4 }, stonewall: { stone: 4 }, hearth: { wood: 2, stone: 4 },
+  fence: { wood: 1 }, stonefence: { stone: 2 }, gate: { wood: 3 } };
+// fences and gates stand half height and never close in a room
+const FENCE_H = 0.8;
 // what's on a tile's floor: 1 planks, 2 flagstones
 const FLOOR_KIND = [null, 'floor', 'stonefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
 // the build menu's groups, each opening its own row of kinds
-const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall'], doors: ['door'] };
+const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence'], doors: ['door', 'gate'] };
 const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
-const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall';
-// what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall
-const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall'], KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4 };
+const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence';
+const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate', isDoorKind = k => k === 'door' || k === 'gate';
+// what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall, 5 wooden fence,
+// 6 dry-stone wall, 7 gate
+const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate'];
+const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7 };
+const isFenceVal = v => v >= 5, isDoorVal = v => v === 2 || v === 7;
 // an edge is named by the tile whose north (w = 0) or west (w = 1) side it is
 const edgeOf = (c, r, d) => d === 0 ? [c, r, 0] : d === 2 ? [c, r + 1, 0] : d === 3 ? [c, r, 1] : [c + 1, r, 1];
 const edgeKey = (c, r, w) => T(c, r) * 2 + w;
@@ -2497,6 +2532,8 @@ function wallOn(c, r, d) {
   if (ec < 0 || er < 0 || ec >= N || er >= N) return 0;
   return (w ? WW : WN)[T(ec, er)];
 }
+// the walls and doors that close in rooms: fences and gates don't
+function roomWall(c, r, d) { const v = wallOn(c, r, d); return isFenceVal(v) ? 0 : v; }
 const buildCount = new Uint16Array(NC * NC);
 function plankFloor(c, r) {
   const y = LV[T(c, r)] * STEP;
@@ -2533,6 +2570,36 @@ function wallPiece(c, r, w, type) {
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
   const door = type === 2, cut = !door && cutEdges.has(edgeKey(c, r, w));
+  if (type === 5) {
+    // a post-and-rail fence: posts at the ends and the middle, two rails
+    for (const a of [0, 0.5, 1]) {
+      const hh = FENCE_H + (a === 0.5 ? -0.08 : 0.04), p = at(a, y + hh / 2);
+      part(G.box, shade(CC('#6a4a2c'), k), p[0], p[1], p[2], { sx: 0.11, sy: hh, sz: 0.11, ry });
+    }
+    for (const yy of [0.32, FENCE_H - 0.16]) { const p = at(0.5, y + yy); part(G.box, shade(CC('#8a6440'), k), p[0], p[1], p[2], { sx: 1, sy: 0.07, sz: 0.05, ry }); }
+    return;
+  }
+  if (type === 6) {
+    // a dry-stone wall: rough fieldstones in two courses, flat stones laid across the top
+    for (let row = 0; row < 2; row++) for (let n = 0; n < (row ? 4 : 3); n++) {
+      const kk = hs(c * 3 + n, r * 5 + row, 56 + w), a = row ? n / 3 : (n + 0.5) / 3, moss = kk > 0.8;
+      const p = at(a, y + (row ? 0.45 : 0.17));
+      part(G.dodec, shade(CC(moss ? '#6e7a5a' : '#8e8a80'), 0.78 + kk * 0.32), p[0], p[1], p[2], { sx: 0.36 + kk * 0.08, sy: row ? 0.28 : 0.36, sz: 0.4 - kk * 0.06, ry: ry + kk * 0.6 });
+    }
+    for (let n = 0; n < 3; n++) {
+      const kk = hs(c * 5 + n, r * 3, 58 + w), p = at((n + 0.5) / 3, y + 0.64);
+      part(G.box, shade(CC('#9a968c'), 0.8 + kk * 0.3), p[0], p[1], p[2], { sx: 0.34, sy: 0.1, sz: 0.42, ry, rz: (kk - 0.5) * 0.2 });
+    }
+    return;
+  }
+  if (type === 7) {
+    // a gate's posts; the gate itself swings on its own mesh
+    for (const a of [0, 1]) {
+      let p = at(a, y + (FENCE_H + 0.16) / 2); part(G.box, shade(CC('#5a3c24'), k), p[0], p[1], p[2], { sx: 0.15, sy: FENCE_H + 0.16, sz: 0.15, ry });
+      p = at(a, y + FENCE_H + 0.2); part(G.box, '#3e2a1a', p[0], p[1], p[2], { sx: 0.19, sy: 0.07, sz: 0.19, ry });
+    }
+    return;
+  }
   if (type === 3) {
     for (let n = 0; n < 5; n++) {
       const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.12 + kk * 0.16, col = shade(CC(n % 2 ? '#6a4a2c' : '#7a5634'), 0.88 + kk * 0.2);
@@ -2592,16 +2659,24 @@ function buildPieces(cx, cz, ch) {
 // door leaves swing on their own meshes
 const doors = new Map();   // edge key -> { pivot, open, t, side }
 const doorWood = flatMat({ color: '#6a4428' }), doorIron = flatMat({ color: '#2a2630', roughness: 0.5, metalness: 0.5 });
-function makeDoor(c, r, w) {
+const gatePicket = new THREE.BoxGeometry(0.13, FENCE_H - 0.16, 0.05), gateRail = new THREE.BoxGeometry(0.84, 0.07, 0.04), gateBrace = new THREE.BoxGeometry(0.84, 0.06, 0.035);
+function makeDoor(c, r, w, gate = false) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP;
   const pivot = new THREE.Group();
   pivot.position.set(w ? c : c + 0.08, y, w ? r + 0.08 : r);
   pivot.rotation.y = w ? -Math.PI / 2 : 0;
   const leaf = new THREE.Group();
-  const plank = new THREE.Mesh(new THREE.BoxGeometry(0.84, WALL_H - 0.42, 0.08), doorWood);
-  plank.position.set(0.42, (WALL_H - 0.42) / 2, 0); leaf.add(plank);
-  for (const yy of [0.25, 0.85]) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
-  const ring = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
+  if (gate) {
+    // a picket gate: boards on two rails, braced corner to corner
+    for (let k = 0; k < 5; k++) { const b = new THREE.Mesh(gatePicket, doorWood); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
+    for (const yy of [0.22, FENCE_H - 0.22]) { const b = new THREE.Mesh(gateRail, doorWood); b.position.set(0.42, yy, 0.045); leaf.add(b); }
+    const brace = new THREE.Mesh(gateBrace, doorWood); brace.position.set(0.42, FENCE_H / 2, 0.05); brace.rotation.z = Math.atan2(FENCE_H - 0.44, 0.8); leaf.add(brace);
+  } else {
+    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.84, WALL_H - 0.42, 0.08), doorWood);
+    plank.position.set(0.42, (WALL_H - 0.42) / 2, 0); leaf.add(plank);
+    for (const yy of [0.25, 0.85]) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
+    const ring = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
+  }
   pivot.add(leaf);
   scene.add(shadowy(pivot));
   const d = { pivot, open: false, t: 0, side: 1, c, r, w };
@@ -2626,7 +2701,7 @@ function findRoom(c0, r0) {
   for (let h = 0; h < q.length; h++) {
     const [c, r] = q[h];
     for (let d = 0; d < 4; d++) {
-      if (wallOn(c, r, d)) continue;
+      if (roomWall(c, r, d)) continue;
       const nc = c + DC[d], nr = r + DR[d];
       if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) return null;
       const n = T(nc, nr);
@@ -2670,7 +2745,7 @@ function settleBuildings() {
     while (q.length) {
       const rm = rooms.get(q.pop());
       for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
-        if (!wallOn(c, r, d)) continue;
+        if (!roomWall(c, r, d)) continue;
         const other = roomOf.get(T(c + DC[d], r + DR[d]));
         if (other && !ids.has(other)) { ids.add(other); q.push(other); }
       }
@@ -2751,7 +2826,7 @@ function buildingWalls(inside) {
     const rm = rooms.get(q.pop());
     if (!rm) continue;
     for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
-      if (!wallOn(c, r, d)) continue;
+      if (!roomWall(c, r, d)) continue;
       found.push([c, r, d]);
       const other = roomOf.get(T(c + DC[d], r + DR[d]));
       if (other && !seenRooms.has(other)) { seenRooms.add(other); q.push(other); }
@@ -2763,7 +2838,7 @@ function buildingWalls(inside) {
     const [ec, er, w] = edgeOf(c, r, d), key = edgeKey(ec, er, w);
     if (byEdge.has(key)) continue;
     const outer = !inB(c + DC[d], r + DR[d]);
-    byEdge.set(key, [ec, er, w, wallOn(c, r, d), outer ? DC[d] : 0, outer ? DR[d] : 0]);
+    byEdge.set(key, [ec, er, w, roomWall(c, r, d), outer ? DC[d] : 0, outer ? DR[d] : 0]);
   }
   bldWalls = [...byEdge.values()];
   return bldWalls;
@@ -3126,7 +3201,7 @@ function stepOpen(c, r, d, foe) {
   if (!terrainOpen(i, n, d) || OBJ[OB[n]].tile) return false;
   if (foe && BI[n] === TOWN && BI[i] !== TOWN) return false;
   const w = wallOn(c, r, d);
-  if (w && !(w === 2 && openDoors.has(edgeKey(...edgeOf(c, r, d))))) return false;
+  if (w && !(isDoorVal(w) && openDoors.has(edgeKey(...edgeOf(c, r, d))))) return false;
   return true;
 }
 const CORNER = [[0, 0, 3, 0, -1, -1], [1, 0, 1, 0, 1, -1], [1, 1, 1, 2, 1, 1], [0, 1, 3, 2, -1, 1]];
@@ -3286,6 +3361,9 @@ const ICON = {
   stonewall: pixelSvg(['GG.GG.GG', 'GGGGGGGG', 'gGgggGgg', 'GGGGGGGG', 'ggGgggGg', 'GGGGGGGG', 'gGgggGgg'], { G: '#5a5664', g: '#8c8a96' }),
   stonefloor: pixelSvg(['GGGgGGGG', 'GGGgGGGG', 'gggggggg', 'GgGGGGgG', 'GgGGGGgG', 'gggggggg'], { G: '#8c8894', g: '#3e3a44' }),
   hearth: pixelSvg(['...GG...', '...GG...', '..GGGG..', '.GGGGGG.', '.G.yy.G.', '.GyrryG.', 'GGGGGGGG'], { G: '#8a8694', y: '#f2c14e', r: '#e8642a' }),
+  fence: pixelSvg(['b...b...b', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'b...b...b'], { b: '#6a4a2c', L: '#8a6440' }),
+  stonefence: pixelSvg(['.ccc.ccc.', 'ccccccccc', '.GG.gGG.G', 'GggGGgGGg', 'gGGgGGggG', 'GgGGgGGGg'], { c: '#a8a49a', G: '#8e8a80', g: '#6a665e' }),
+  gate: pixelSvg(['P.......P', 'PwwwwwwwP', 'Pw.w.w.wP', 'PwLwLw.wP', 'Pw.wLwLwP', 'PwwwwwwwP', 'P.......P'], { P: '#5a3c24', w: '#8a6440', L: '#6a4428' }),
   remove: pixelSvg(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
 };
 $('woodIcon').innerHTML = ICON.wood;
@@ -3315,7 +3393,8 @@ const SLOTS = {
 const KIND_SLOT = {
   floor: { name: 'WOOD FLOOR', icon: 'floor' }, stonefloor: { name: 'STONE FLOOR', icon: 'stonefloor' },
   wall: { name: 'TIMBER WALL', icon: 'wall' }, logwall: { name: 'LOG WALL', icon: 'logwall' }, stonewall: { name: 'STONE WALL', icon: 'stonewall' },
-  door: { name: 'WOODEN DOOR', icon: 'door' },
+  fence: { name: 'WOOD FENCE', icon: 'fence' }, stonefence: { name: 'FIELDSTONE WALL', icon: 'stonefence' },
+  door: { name: 'WOODEN DOOR', icon: 'door' }, gate: { name: 'WOODEN GATE', icon: 'gate' },
 };
 const catPick = { floors: 'floor', walls: 'wall', doors: 'door' };
 let subOpen = null;
@@ -3867,7 +3946,7 @@ function wallUnder(x, y, z) {
     const w = wallOn(c, r, d);
     if (!w) continue;
     const [ec, er, ew] = edgeOf(c, r, d), j = ew ? T(ec - 1, er) : T(ec, er - 1), base = Math.max(LV[T(ec, er)], LV[j]) * STEP;
-    if (y >= base && y <= base + WALL_H) return { c: ec, r: er, w: ew, kind: w };
+    if (y >= base && y <= base + (isFenceVal(w) ? FENCE_H + 0.1 : WALL_H)) return { c: ec, r: er, w: ew, kind: w };
   }
   return null;
 }
@@ -3973,6 +4052,7 @@ const ghostBad = new THREE.MeshBasicMaterial({ color: '#ff6a5a', transparent: tr
 const ghostGeo = { floor: new THREE.BoxGeometry(1, 0.08, 1), wall: new THREE.BoxGeometry(1, WALL_H, 0.22), door: new THREE.BoxGeometry(1, WALL_H, 0.12) };
 ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new THREE.BoxGeometry(1, WALL_H, 0.32);
 ghostGeo.hearth = new THREE.CylinderGeometry(0.5, 0.5, 0.7, 8);
+ghostGeo.fence = new THREE.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new THREE.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new THREE.BoxGeometry(1, FENCE_H, 0.42);
 const ghosts = [];
 function showGhosts(spots) {
   while (ghosts.length < spots.length) { const g = new THREE.Mesh(ghostGeo.wall, ghostMat); g.renderOrder = 4; scene.add(g); ghosts.push(g); }
@@ -4012,10 +4092,10 @@ function edgeSpot(ec, er, w, kind) {
   // along a cliff top only the high side needs to be clear and flat: the wall stands on its edge and may
   // overhang the slope below a little (no doors there, they'd open onto the drop)
   const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
-  const ground = cliff ? kind !== 'door' && flat(hi) && LV[hi] - LV[lo] === 1 && !OBJ[OB[lo]].tile : flat(a) && flat(b);
+  const ground = cliff ? !isDoorKind(kind) && flat(hi) && LV[hi] - LV[lo] === 1 && !OBJ[OB[lo]].tile : flat(a) && flat(b);
   let ok = ground && !(w ? WW : WN)[a] && BI[a] !== TOWN && BI[b] !== TOWN;
   let why = (w ? WW : WN)[a] ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.'
-    : cliff && kind === 'door' ? 'A door here would open onto the drop.' : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
+    : cliff && isDoorKind(kind) ? `A ${kind} here would open onto the drop.` : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
   if (ok) for (const t of cliff ? [hi] : [a, b]) if (!claimedAt(t)) { ok = false; why = plotWhy(t); break; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   // keep anyone from being walled inside the wall itself
@@ -4023,7 +4103,7 @@ function edgeSpot(ec, er, w, kind) {
     const ex = w ? Math.abs(e.x - ec) : Math.max(0, Math.abs(e.x - mx) - 0.5), ez = w ? Math.max(0, Math.abs(e.z - mz) - 0.5) : Math.abs(e.z - er);
     if (Math.hypot(ex, ez) < 0.36) { ok = false; why = 'Something is standing in the way.'; }
   }
-  return { kind, c: ec, r: er, w, ok, why, x: mx, z: mz, y: Math.max(LV[a], LV[b]) * STEP + WALL_H / 2, ry: w ? Math.PI / 2 : 0 };
+  return { kind, c: ec, r: er, w, ok, why, x: mx, z: mz, y: Math.max(LV[a], LV[b]) * STEP + (isFenceKind(kind) ? FENCE_H : WALL_H) / 2, ry: w ? Math.PI / 2 : 0 };
 }
 // a hearth claims the unclaimed plot it stands on
 function hearthSpot(c, r) {
@@ -4121,12 +4201,14 @@ function placeSpot(s) {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
     // clear the grass and flowers either side
     for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
-    if (s.kind === 'door') makeDoor(s.c, s.r, s.w);
+    if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind === 'gate');
     markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
     hearthsBy(s.c, s.r, s.w);
-    const before = rooms.size;
-    refreshRooms(s.c, s.r, s.w);
-    if (rooms.size > before) { sfx.roof(); toast('The room is closed in. A roof goes up.', 'good'); }
+    if (!isFenceKind(s.kind)) {
+      const before = rooms.size;
+      refreshRooms(s.c, s.r, s.w);
+      if (rooms.size > before) { sfx.roof(); toast('The room is closed in. A roof goes up.', 'good'); }
+    }
   }
   paintMapTile(s.c, s.r);
   markPieces(s.c, s.r);
@@ -4138,7 +4220,7 @@ function placeMany(spots) {
   flushDirty();
   sfx.place();
   const mid = go[Math.floor(go.length / 2)];
-  puff(mid.x, mid.y - (isFloor(mid.kind) || mid.kind === 'hearth' ? 0 : WALL_H / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
+  puff(mid.x, mid.y - (isFloor(mid.kind) || mid.kind === 'hearth' ? 0 : (isFenceKind(mid.kind) ? FENCE_H : WALL_H) / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
   if (miss && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
 }
 function placePiece() {
@@ -4187,7 +4269,7 @@ function lightHearth(c, r) {
 // while the wall stands; if it comes down it moves only when just one wall is left round it, and turns back
 // into the round pit once there are none.
 function shapeHearth(h) {
-  const sides = [0, 1, 2, 3].filter(d => { const w = wallOn(h.c, h.r, d); return w && w !== KIND_VAL.door; });
+  const sides = [0, 1, 2, 3].filter(d => { const w = wallOn(h.c, h.r, d); return w && !isDoorVal(w) && !isFenceVal(w); });
   if (!sides.length) h.side = -1;
   else if (h.side < 0 || (!sides.includes(h.side) && sides.length === 1)) h.side = sides[0];
   // a fireplace's fire burns smaller, at the back of its firebox
@@ -4245,7 +4327,8 @@ function removePiece() {
     if (!target && FL[i]) target = { kind: FLOOR_KIND[FL[i]], c, r };
   }
   if (!target) { sfx.nope(); return; }
-  if (BI[T(target.c, target.r)] === TOWN) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
+  const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
+  if (BI[T(target.c, target.r)] === TOWN || (across >= 0 && BI[across] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth';
   const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
@@ -5343,6 +5426,9 @@ window.GAME = {
     return null;
   },
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
+  townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
+  fenceCount: () => { const n = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
+  stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp })),
   clearFoes: () => foes.slice().forEach(removeFoe),
   face: a => { H.face = a; },
