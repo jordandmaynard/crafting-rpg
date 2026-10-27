@@ -12,7 +12,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 ## Controls
 
-- **Move:** WASD (W always walks up the screen). You always face the cursor as you walk, so you can back away from something while facing it.
+- **Move:** WASD (W always walks up the screen). You always face the cursor as you walk, so you can back away from something while facing it. The forward walk, a backward walk and a sidestep blend smoothly by which way you step against the way you face.
 - **Attack:** left click, aimed at the cursor. Hold to keep swinging; the third swing of a combo is a heavy overhead. Hitting trees and rocks gathers wood and stone.
 - **Q** whirlwind, **E** lunge, **Space** dash. The whirlwind and the lunge also cut and break trees and rocks they reach, and every blow gathers wood or stone in proportion to its damage.
 - **F** open and close doors.

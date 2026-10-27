@@ -3047,7 +3047,7 @@ const H = {
   wood: 0, stone: 0, kills: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1],
-  cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false,
+  cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
   kx: 0, kz: 0,
 };
 const CD = { Q: 8, E: 7, DASH: 2.4 };
@@ -4251,9 +4251,17 @@ function update(dt) {
     }
     vx += H.kx; vz += H.kz;
     H.kx *= Math.max(0, 1 - dt * 9); H.kz *= Math.max(0, 1 - dt * 9);
+    const x0 = H.x, z0 = H.z;
     const moved = moveEntity(H, vx * dt, vz * dt, 0.26, false);
     H.moving = moved > dt * 0.5;
-    if (H.moving) H.walkPhase += moved * 5.2;
+    if (H.moving) {
+      H.walkPhase += moved * 5.2;
+      // which way the step goes against the way you face, eased so the gaits blend as it swings round
+      const mx = H.x - x0, mz = H.z - z0, ml = Math.hypot(mx, mz) || 1, fx = Math.sin(H.face), fz = Math.cos(H.face);
+      const k = Math.min(1, dt * 10);
+      H.stepF += ((mx * fx + mz * fz) / ml - H.stepF) * k;
+      H.stepS += ((mx * fz - mz * fx) / ml - H.stepS) * k;
+    }
     H.y = surfaceY(H.x, H.z);
 
     // attacks
@@ -4389,11 +4397,20 @@ function update(dt) {
 }
 
 function animateHero(dt) {
-  const walk = H.moving && H.dash < 0 ? Math.sin(H.walkPhase) : 0;
-  hero.legL.rotation.x = walk * 0.75; hero.legR.rotation.x = -walk * 0.75;
-  hero.body.position.y = H.moving ? Math.abs(Math.cos(H.walkPhase)) * 0.03 : Math.sin(time * 2) * 0.006;
-  hero.armL.rotation.set(-walk * 0.6, 0, 0.08);
-  let ax = walk * 0.6, ay = 0, sx = 0;
+  // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
+  // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
+  // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
+  // the leg on the side you're going.
+  const on = H.moving && H.dash < 0, walk = on ? Math.sin(H.walkPhase) : 0;
+  const f = H.stepF, sd = H.stepS, side = sd * sd, stride = f >= 0 ? 0.75 : 0.55;
+  const open = on ? Math.abs(Math.sin(H.walkPhase)) * 0.34 * side : 0, lean = on ? Math.sin(H.walkPhase) * 0.1 * side * Math.sign(sd) : 0;
+  hero.legL.rotation.set(walk * stride * f, 0, open + lean);
+  hero.legR.rotation.set(-walk * stride * f, 0, -open + lean);
+  hero.body.position.y = H.moving ? Math.abs(Math.cos(H.walkPhase)) * (0.03 - 0.012 * side) : Math.sin(time * 2) * 0.006;
+  // a lean into a sidestep (and, below, back when walking backward)
+  hero.body.rotation.z = on ? -sd * 0.07 : 0;
+  hero.armL.rotation.set(-walk * 0.6 * f, 0, 0.08 + 0.18 * side);
+  let ax = walk * 0.6 * f, ay = 0, sx = 0;
   if (H.swing >= 0) {
     const len = SWING_T[H.combo], u = smooth(0, 1, Math.min(1, H.swing / (len * 0.62)));
     if (H.combo === 2) { ax = -2.9 + u * 2.3; sx = Math.PI / 2 * 0.2; }
@@ -4407,6 +4424,7 @@ function animateHero(dt) {
   hero.armR.rotation.set(ax, ay, -0.08);
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
   hero.body.rotation.y = H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
+  hero.body.rotation.x = on && f < 0 ? f * 0.06 : 0;
   hero.g.rotation.x = H.dash >= 0 ? 0.35 : H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
 }
 
@@ -5028,6 +5046,7 @@ window.GAME = {
   pickAt: (sx, sy) => { const m = [mouse.x, mouse.y]; mouse.x = sx; mouse.y = sy; const p = pickGround(false); mouse.x = m[0]; mouse.y = m[1]; return p && [p.x, p.z]; },
   swing: () => H.swing,
   heroFace: () => Math.atan2(Math.sin(H.face), Math.cos(H.face)),
+  gait: () => [H.stepF, H.stepS, hero.legL.rotation.x, hero.legL.rotation.z],
   hp: v => { H.hp = v; renderHp(); },
   respawn: () => { respawn(); return [H.x, H.z]; },
   togglePlots, miniZoom: z => { miniZoom = z; },
