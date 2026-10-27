@@ -2196,27 +2196,48 @@ function oreVeins(x, z, k, vein) {
 // A redwood: a fluted trunk far taller than the view on a flared, rooted foot. Its crown is up out of
 // sight, in the canopy buffer, which draws nothing but casts the forest's dappled shade.
 const SEQ_H = 34;
+const SEQ_RINGS = [-0.3, 0, 0.16, 0.36, 0.62, 0.95, 1.4, 2, 2.8, 3.9, 5.4, 7.5, 10.5, 14.5, 19.5, 26, SEQ_H], SEQ_SEGS = 14;
 function sequoia(x, z, k) {
-  const y = groundAt(x, z), R = 0.46 + k * 0.12, bark = shade(CC('#7e3c26'), 0.88 + k * 0.2), dark = shade(bark, 0.62), lite = shade(bark, 1.18);
-  for (let i = 0; i < 6; i++) {
-    const a = k * 6 + i * 1.047 + hash(x, z, i) * 0.4, l = 0.5 + hash(x, z, i + 6) * 0.35;
-    part(G.box, i % 2 ? bark : dark, x + Math.cos(a) * (R + l * 0.35), y + 0.1, z + Math.sin(a) * (R + l * 0.35), { sx: l, sy: 0.28, sz: 0.2, ry: -a, rz: -0.28, into: 'trunk' });
+  const y0 = groundAt(x, z), R0 = 0.4 + k * 0.12, S = SEQ_SEGS, bark = shade(CC('#7e3c26'), 0.88 + k * 0.2), soil = CC('#3e2c1e');
+  // buttresses: a handful of uneven ridges that splay out into roots at the foot and climb the trunk as
+  // fading flutes, so no two trees, nor two sides of one, are alike
+  const amp = new Float32Array(S), nr = 4 + Math.floor(hash(x, z, 70) * 3);
+  for (let n = 0; n < nr; n++) {
+    const j = Math.floor(hash(x, z, 71 + n) * S), a = 0.5 + hash(x, z, 80 + n) * 0.8;
+    amp[j] = Math.max(amp[j], a); amp[(j + 1) % S] = Math.max(amp[(j + 1) % S], a * 0.3); amp[(j + S - 1) % S] = Math.max(amp[(j + S - 1) % S], a * 0.3);
   }
-  part(G.cyl8, dark, x, y + 0.35, z, { sx: R * 2.7, sy: 0.7, sz: R * 2.7, ry: k, into: 'trunk' });
-  part(G.cyl8, bark, x, y + 1.1, z, { sx: R * 2.35, sy: 1.0, sz: R * 2.35, ry: k + 0.2, into: 'trunk' });
-  for (let s = 0; s < 4; s++) {
-    const h = (SEQ_H - 1.6) / 4, w = R * 2 * (1 - s * 0.06);
-    part(G.cyl8, s % 2 ? bark : shade(bark, 0.94), x, y + 1.6 + h * (s + 0.5), z, { sx: w, sy: h, sz: w, ry: k + s * 0.39, into: 'trunk' });
+  const spin = hash(x, z, 90) * 6.28, lx = (hash(x, z, 91) - 0.5) * 0.008, lz = (hash(x, z, 92) - 0.5) * 0.008;
+  const ring = SEQ_RINGS.map((h, q) => {
+    // a trunk that wanders a little as it climbs, with a slow twist in the grain
+    const cx = x + Math.sin(h * 0.21 + k * 9) * 0.1 + lx * h, cz = z + Math.cos(h * 0.17 + k * 7) * 0.1 + lz * h;
+    const base = R0 * (1 - Math.max(0, h) / SEQ_H * 0.3) * (1 + 0.6 * Math.exp(-h / 0.7) + 0.2 * Math.exp(-h / 3));
+    const pts = [], cols = [];
+    for (let j = 0; j < S; j++) {
+      const th = spin + j * 6.28318 / S + h * 0.015 + (hash(x * 3 + j, z, 93) - 0.5) * 0.12;
+      const rad = (base + R0 * amp[j] * (1.4 * Math.exp(-Math.max(0, h) / 0.9) + 0.1)) * (1 + (hash(x + j, z + q, 94) - 0.5) * 0.1);
+      pts.push([cx + Math.cos(th) * rad, y0 + h, cz + Math.sin(th) * rad]);
+      // streaky bark, paler along the ridges, darkened with earth at the foot
+      const c = shade(bark, (0.76 + hash(x, z, 100 + j) * 0.36) * (1 + amp[j] * 0.12));
+      cols.push(h < 0.5 ? c.clone().lerp(soil, 0.45 * (0.5 - Math.max(0, h)) / 0.5) : c);
+    }
+    return { pts, cols };
+  });
+  const save = OUT; OUT = TRUNK;
+  for (let q = 0; q + 1 < ring.length; q++) {
+    const lo = ring[q], hi = ring[q + 1];
+    for (let j = 0; j < S; j++) {
+      const j2 = (j + 1) % S;
+      tri(lo.pts[j], hi.pts[j], lo.pts[j2], lo.cols[j], hi.cols[j], lo.cols[j2]);
+      tri(hi.pts[j], hi.pts[j2], lo.pts[j2], hi.cols[j], hi.cols[j2], lo.cols[j2]);
+    }
   }
-  // deep furrows up the bark
-  for (let i = 0; i < 5; i++) {
-    const a = k * 3 + i * 1.257;
-    part(G.box, i % 2 ? dark : lite, x + Math.cos(a) * R * 0.98, y + 0.9 + SEQ_H / 2, z + Math.sin(a) * R * 0.98, { sx: 0.07, sy: SEQ_H, sz: 0.07, ry: -a, into: 'trunk' });
-  }
+  OUT = save;
+  const y = y0, dark = shade(bark, 0.62);
   // dead stubs of the lowest boughs
   for (let i = 0; i < 3; i++) {
-    const a = hash(x, z, i + 20) * 6.28, hy = 5 + i * 3.5 + hash(x, z, i + 23) * 2;
-    part(G.box, dark, x + Math.cos(a) * (R + 0.25), y + hy, z + Math.sin(a) * (R + 0.25), { sx: 0.6, sy: 0.1, sz: 0.1, ry: -a, rz: 0.35, into: 'trunk' });
+    const a = hash(x, z, i + 20) * 6.28, hy = 5 + i * 3.5 + hash(x, z, i + 23) * 2, R = R0 * (1 - hy / SEQ_H * 0.3) + 0.22;
+    const cx = x + Math.sin(hy * 0.21 + k * 9) * 0.1 + lx * hy, cz = z + Math.cos(hy * 0.17 + k * 7) * 0.1 + lz * hy;
+    part(G.box, dark, cx + Math.cos(a) * R, y + hy, cz + Math.sin(a) * R, { sx: 0.6, sy: 0.1, sz: 0.1, ry: -a, rz: 0.35, into: 'trunk' });
   }
   for (let i = 0; i < 7; i++) {
     const a = hash(x, z, i + 30) * 6.28, d = 0.5 + hash(x, z, i + 37) * 3.6, w = 2 + hash(x, z, i + 44) * 2.4;
