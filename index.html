@@ -1723,7 +1723,18 @@ class Buf {
 }
 let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf();
 const bufGround = new Buf(), bufWater = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
-const bufTrunk = new Buf(), bufCanopy = new Buf();
+// trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
+class TreeBuf extends Buf {
+  constructor() { super(); this.b = new Float32Array(this.p.length); }
+  need(k) { super.need(k); if (this.b.length < this.p.length) { const b = new Float32Array(this.p.length); b.set(this.b); this.b = b; } }
+  tag(from, x, y, z) { for (let i = from; i < this.n; i += 3) { this.b[i] = x; this.b[i + 1] = y; this.b[i + 2] = z; } }
+  mesh(mat) {
+    const m = super.mesh(mat);
+    if (m) m.geometry.setAttribute('tree', new THREE.BufferAttribute(this.b.slice(0, this.n), 3));
+    return m;
+  }
+}
+const bufTrunk = new TreeBuf(), bufCanopy = new Buf();
 function tri(a, b, c, ca, cb = ca, cc = ca) {
   const B = OUT; B.need(9);
   const p = B.p, k = B.c; let n = B.n;
@@ -1951,29 +1962,46 @@ function buildWater(c0, r0, grid, GW, ch) {
   ch.water2 = new THREE.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
 }
 const groundMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
-// Redwood trunks draw like the rest, but those standing between the camera and the bottom of the view are
-// left out (they'd rise right across it from off screen), thinning away in a dither over two tiles.
-const TRUNK_U = { cutC: { value: new THREE.Vector2() }, cutDir: { value: new THREE.Vector2(0, 1) }, cutD: { value: 1e9 } };
-const trunkMat = flatMat({ vertexColors: true });
+// Redwood trunks are cut away, as the walls are indoors, where they'd hide you or rise across the view from
+// off screen: those below you on the screen and toward its middle, and any standing below its bottom edge.
+// A cut tree drops to a stump (TRUNK_CUT tiles) with a ragged, broken top, a dark rim, and dark heartwood
+// showing inside. Each tree is judged by its own centre, and the height eases over a couple of tiles at
+// the edges of the cut, so trees sink and rise as you walk rather than popping.
+const TRUNK_CUT = 1.4;
+const TRUNK_U = { cutC: { value: new THREE.Vector2() }, cutDir: { value: new THREE.Vector2(0, 1) }, cutRight: { value: new THREE.Vector2(1, 0) },
+  cutD: { value: 1e9 }, cutW: { value: 4 }, cutLow: { value: TRUNK_CUT } };
+const trunkMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
 trunkMat.onBeforeCompile = function (shader) {
   THREE.MeshStandardMaterial.prototype.onBeforeCompile.call(this, shader);
   Object.assign(shader.uniforms, TRUNK_U);
-  shader.vertexShader = 'varying vec2 vTrunkXZ;\n' + shader.vertexShader.replace('#include <project_vertex>',
-    '#include <project_vertex>\n  vTrunkXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
-  shader.fragmentShader = 'uniform vec2 cutC, cutDir; uniform float cutD; varying vec2 vTrunkXZ;\n' + shader.fragmentShader.replace('void main() {', `void main() {
-  vec2 bp = mod(floor(gl_FragCoord.xy), 2.0);
-  float fade = clamp((dot(vTrunkXZ - cutC, cutDir) - cutD) / 2.0 + 1.0, 0.0, 1.0);
-  if (fade > (2.0 * bp.x + 3.0 * bp.y - 4.0 * bp.x * bp.y) / 4.0 + 0.125) discard;`);
+  shader.vertexShader = 'attribute vec3 tree;\nvarying vec3 vTree, vTrunkW;\n' + shader.vertexShader.replace('#include <project_vertex>',
+    '#include <project_vertex>\n  vTrunkW = (modelMatrix * vec4(transformed, 1.0)).xyz; vTree = tree;');
+  shader.fragmentShader = 'uniform vec2 cutC, cutDir, cutRight; uniform float cutD, cutW, cutLow; varying vec3 vTree, vTrunkW;\n' + shader.fragmentShader
+    .replace('void main() {', `void main() {
+  vec2 rel = vTree.xz - cutC;
+  float along = dot(rel, cutDir), lat = abs(dot(rel, cutRight));
+  float cutA = smoothstep(-0.5, 1.0, along) * (1.0 - smoothstep(cutW, cutW + 2.0, lat));
+  float cutB = smoothstep(cutD - 2.0, cutD, along);
+  float top = mix(200.0, cutLow, max(cutA, cutB));
+  // a broken edge: splintered, higher on some sides than others
+  vec3 q = vTrunkW;
+  top += 0.3 * sin(q.x * 5.3 + q.z * 2.1 + vTree.x) + 0.18 * sin(q.x * 2.2 - q.z * 6.1 + vTree.z) + 0.12 * sin((q.x + q.z) * 14.0);
+  float hgt = vTrunkW.y - vTree.y;
+  if (hgt > top) discard;`)
+    .replace('#include <color_fragment>', `#include <color_fragment>
+  if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.2, 0.09, 0.05);
+  else diffuseColor.rgb *= mix(1.0, 0.5, smoothstep(top - 0.22, top, hgt));`);
 };
 trunkMat.customProgramCacheKey = () => 'trunk';
-// where the cut falls: a tile in from the ground at the bottom middle of the view, measured toward the camera
+// where the cut falls: the ground at the bottom middle of the view, measured toward the camera
 const cutRay = new THREE.Raycaster(), cutPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), cutHit = new THREE.Vector3(), NDC_LOW = new THREE.Vector2(0, -1);
 function updateTrunkCut() {
   const U = TRUNK_U, sx = Math.sin(yaw), sz = Math.cos(yaw);
   camera.updateMatrixWorld();
   cutRay.setFromCamera(NDC_LOW, camera); cutPlane.constant = -camTarget.y;
-  U.cutC.value.set(camTarget.x, camTarget.z); U.cutDir.value.set(sx, sz);
-  U.cutD.value = cutRay.ray.intersectPlane(cutPlane, cutHit) ? (cutHit.x - camTarget.x) * sx + (cutHit.z - camTarget.z) * sz - 1 : 1e9;
+  U.cutC.value.set(camTarget.x, camTarget.z); U.cutDir.value.set(sx, sz); U.cutRight.value.set(sz, -sx);
+  U.cutD.value = cutRay.ray.intersectPlane(cutPlane, cutHit) ? (cutHit.x - camTarget.x) * sx + (cutHit.z - camTarget.z) * sz : 1e9;
+  U.cutW.value = Math.max(3, spanW * 0.18);
 }
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
 function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
@@ -2201,6 +2229,7 @@ function sequoia(x, z, k) {
   const y0 = groundAt(x, z), R0 = 0.4 + k * 0.12, S = SEQ_SEGS, bark = shade(CC('#7e3c26'), 0.88 + k * 0.2), soil = CC('#3e2c1e');
   // buttresses: a handful of uneven ridges that splay out into roots at the foot and climb the trunk as
   // fading flutes, so no two trees, nor two sides of one, are alike
+  const from = TRUNK.n;
   const amp = new Float32Array(S), nr = 4 + Math.floor(hash(x, z, 70) * 3);
   for (let n = 0; n < nr; n++) {
     const j = Math.floor(hash(x, z, 71 + n) * S), a = 0.5 + hash(x, z, 80 + n) * 0.8;
@@ -2239,6 +2268,7 @@ function sequoia(x, z, k) {
     const cx = x + Math.sin(hy * 0.21 + k * 9) * 0.1 + lx * hy, cz = z + Math.cos(hy * 0.17 + k * 7) * 0.1 + lz * hy;
     part(G.box, dark, cx + Math.cos(a) * R, y + hy, cz + Math.sin(a) * R, { sx: 0.6, sy: 0.1, sz: 0.1, ry: -a, rz: 0.35, into: 'trunk' });
   }
+  if (TRUNK.tag) TRUNK.tag(from, x, y, z);
   for (let i = 0; i < 7; i++) {
     const a = hash(x, z, i + 30) * 6.28, d = 0.5 + hash(x, z, i + 37) * 3.6, w = 2 + hash(x, z, i + 44) * 2.4;
     part(G.ico, bark, x + Math.cos(a) * d, y + SEQ_H - 3 + hash(x, z, i + 51) * 6, z + Math.sin(a) * d, { sx: w, sy: w * 0.55, sz: w, ry: a, into: 'canopy' });
