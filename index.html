@@ -2129,16 +2129,23 @@ function bridgeDeck(c, r, i) {
   }
 }
 // A hearth: a round stone firepit under a stone hood on four short pillars, and a chimney stack that
-// rises clear of any roof built over it (the fire itself is animated apart, see the fires)
+// rises clear of any roof built over it (the fire itself is animated apart, see the fires). Against a wall
+// it is built into it as a fireplace instead (see shapeHearth).
 const HEARTH_REACH = 3.5;
-function hearthTop(c, r) {
+// where the stack stands: over the middle of the tile, or back against the wall of a fireplace
+const FIRE_BACK = 0.3;
+const stackAt = (c, r, side) => side < 0 ? [c + 0.5, r + 0.5] : [c + 0.5 + DC[side] * FIRE_BACK, r + 0.5 + DR[side] * FIRE_BACK];
+function hearthTop(c, r, side = -1) {
   const i = T(c, r), y = LV[i] * STEP, rm = rooms.get(roomOf.get(i));
   if (!rm || !rm.roofY) return y + 2.4;
+  const [sx, sz] = stackAt(c, r, side);
   let top = 0;
-  for (const [dx, dz] of [[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]]) top = Math.max(top, rm.roofY(c + dx, r + dz));
+  for (const [dx, dz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) top = Math.max(top, rm.roofY(sx + dx, sz + dz));
   return Math.max(y + 2.4, top + 0.45);
 }
 function hearth(x, z, c, r) {
+  const lit = hearths.get(T(c, r));
+  if (lit && lit.side >= 0) return fireplace(x, z, c, r, lit.side);
   const y = surfaceY(x, z), top = hearthTop(c, r), st = '#8a8694', dk = '#4e4a56';
   part(G.cyl8, dk, x, y + 0.04, z, { sx: 0.98, sy: 0.08, sz: 0.98 });
   for (let a = 0; a < 10; a++) {
@@ -2158,6 +2165,34 @@ function hearth(x, z, c, r) {
   for (let k = 0; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), x, y + 1.4 + k * 0.3, z, { sx: 0.36, sy: 0.03, sz: 0.36 });
   part(G.box, dk, x, top + 0.04, z, { sx: 0.44, sy: 0.1, sz: 0.44 });
   part(G.box, '#ffb050', x, y + 0.14, z, { sx: 0.3, sy: 0.04, sz: 0.3, into: 'glow' });
+}
+// the fireplace: a stone hearthstone, a firebox between two jambs under a mantel, and a chimney breast
+// against the wall narrowing into the stack. v runs from the middle of the tile back to the wall (0.5),
+// u across it.
+function fireplace(x, z, c, r, side) {
+  const y = surfaceY(x, z), top = hearthTop(c, r, side), st = '#8a8694', dk = '#4e4a56';
+  const ox = DC[side], oz = DR[side], ry = side & 1 ? Math.PI / 2 : 0;
+  // boxes are sized across (u) and deep (v), whichever way the wall runs
+  const box = (col, u, v, yy, w, hh, d, into) => part(G.box, col, x - oz * u + ox * v, yy, z + ox * u + oz * v, { sx: w, sy: hh, sz: d, ry, into });
+  box(dk, 0, 0.08, y + 0.03, 1.02, 0.06, 0.62);
+  for (let k = 0; k < 4; k++) box(shade(CC(st), 0.86 + hash(c + k, r, 33) * 0.22), -0.36 + k * 0.24, -0.2, y + 0.06, 0.22, 0.06, 0.12);
+  // the back of the firebox, and its sooty inside
+  box(shade(CC(st), 0.82), 0, FIRE_BACK + 0.04, y + 0.62, 0.94, 1.24, 0.2);
+  box('#2a2226', 0, FIRE_BACK - 0.07, y + 0.36, 0.5, 0.62, 0.02);
+  // the jambs, coursed stone
+  for (const u of [-0.36, 0.36]) for (let k = 0; k < 3; k++)
+    box(shade(CC(st), 0.84 + hash(c + k, r + (u > 0 ? 1 : 0), 34) * 0.24), u, 0.16, y + 0.14 + k * 0.25, 0.22 - (k & 1) * 0.03, 0.25, 0.44 - (k & 1) * 0.04);
+  // lintel and mantel shelf
+  box(shade(CC(st), 0.92), 0, 0.15, y + 0.82, 0.98, 0.16, 0.46);
+  box('#6a4a32', 0, 0.12, y + 0.94, 1.06, 0.07, 0.54);
+  // the breast narrowing to the stack
+  box(shade(CC(st), 0.88), 0, FIRE_BACK - 0.02, y + 1.2, 0.8, 0.46, 0.3);
+  box(shade(CC(st), 0.84), 0, FIRE_BACK, y + 1.5, 0.6, 0.16, 0.26);
+  const [sx, sz] = stackAt(c, r, side), s0 = y + 1.58, h = top - s0;
+  part(G.box, shade(CC(st), 0.8), sx, s0 + h / 2, sz, { sx: 0.36, sy: h, sz: 0.3, ry });
+  for (let k = 0; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), sx, s0 + 0.15 + k * 0.3, sz, { sx: 0.38, sy: 0.03, sz: 0.32, ry });
+  part(G.box, dk, sx, top + 0.04, sz, { sx: 0.44, sy: 0.1, sz: 0.38, ry });
+  box('#ffb050', 0, 0.1, y + 0.08, 0.36, 0.03, 0.22, 'glow');
 }
 // a waystone where a road ends: a ring of standing stones round a rune that glows
 function shrine(x, z, k) {
@@ -3480,7 +3515,7 @@ const plotWhy = i => PLOT[i] ? 'Claim this plot with a hearth before you build o
 const standingIn = (x, z, r) => [H, ...foes].some(e => Math.hypot(e.x - x, e.z - z) < r);
 function floorSpot(c, r, kind) {
   const i = T(c, r);
-  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN;
+  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH) && !OBJ[OB[i]].tile && BI[i] !== TOWN;
   let why = FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.';
   if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
   return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
@@ -3488,7 +3523,7 @@ function floorSpot(c, r, kind) {
 // a wall or door on the edge named by (ec, er, w)
 function edgeSpot(ec, er, w, kind) {
   const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1);
-  const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && !OBJ[OB[i]].tile && !OBJ[OB[i]].solid;
+  const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && !OBJ[OB[i]].tile && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH);
   // along a cliff top only the high side needs to be clear and flat: the wall stands on its edge and may
   // overhang the slope below a little (no doors there, they'd open onto the drop)
   const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
@@ -3594,14 +3629,16 @@ function placeSpot(s) {
   buildCount[ch]++;
   if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
-    FL[i] = FLOOR_VAL[s.kind]; OB[i] = 0; markObj(s.c, s.r);
+    FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH) OB[i] = 0; markObj(s.c, s.r);
+    if (hearths.has(i)) shapeHearth(hearths.get(i));
   } else if (s.kind === 'hearth') lightHearth(s.c, s.r);
   else {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
     // clear the grass and flowers either side
-    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i]) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
+    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
     if (s.kind === 'door') makeDoor(s.c, s.r, s.w);
     markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
+    hearthsBy(s.c, s.r, s.w);
     const before = rooms.size;
     refreshRooms(s.c, s.r, s.w);
     if (rooms.size > before) { sfx.roof(); toast('The room is closed in. A roof goes up.', 'good'); }
@@ -3654,10 +3691,29 @@ function lightHearth(c, r) {
   }
   fire.position.set(c + 0.5, surfaceY(c + 0.5, r + 0.5), r + 0.5);
   scene.add(fire);
-  hearths.set(i, { c, r, plot: pl.id, fire, smoke: 0 });
+  const h = { c, r, plot: pl.id, fire, smoke: 0, side: -1 };
+  hearths.set(i, h);
+  shapeHearth(h);
   pl.claimed = true; pl.hearth = i;
   paintPlot(pl);
   toast('The hearth is lit. This plot is yours to build on.', 'good');
+}
+// A wall (not a door) on a side of the hearth builds it into that wall as a fireplace. It stays on that wall
+// while the wall stands; if it comes down it moves only when just one wall is left round it, and turns back
+// into the round pit once there are none.
+function shapeHearth(h) {
+  const sides = [0, 1, 2, 3].filter(d => { const w = wallOn(h.c, h.r, d); return w && w !== KIND_VAL.door; });
+  if (!sides.length) h.side = -1;
+  else if (h.side < 0 || (!sides.includes(h.side) && sides.length === 1)) h.side = sides[0];
+  // a fireplace's fire burns smaller, at the back of its firebox
+  const fp = h.side >= 0, x = h.c + 0.5 + (fp ? DC[h.side] * 0.07 : 0), z = h.r + 0.5 + (fp ? DR[h.side] * 0.07 : 0);
+  h.fire.position.set(x, surfaceY(x, z), z);
+  h.fire.scale.setScalar(fp ? 0.75 : 1);
+  markObj(h.c, h.r);
+}
+// the hearths either side of a wall that just went up or came down
+function hearthsBy(ec, er, w) {
+  for (const i of [T(ec, er), w ? T(ec - 1, er) : T(ec, er - 1)]) if (hearths.has(i)) shapeHearth(hearths.get(i));
 }
 function putOutHearth(i) {
   const h = hearths.get(i), pl = plots[h.plot];
@@ -3682,7 +3738,7 @@ function updateHearths(dt) {
       m.scale.set(1, f * (k ? 0.8 : 1.25), 1); m.position.y = 0.12 + f * 0.06 * (k ? 0.8 : 1.25);
     }
     h.smoke -= dt;
-    if (h.smoke < 0 && d < 30) { h.smoke = 0.45 + Math.random() * 0.3; puff(h.c + 0.5, hearthTop(h.c, h.r) + 0.05, h.r + 0.5, '#9a96a0', 1, 0.12); }
+    if (h.smoke < 0 && d < 30) { h.smoke = 0.45 + Math.random() * 0.3; const [sx, sz] = stackAt(h.c, h.r, h.side); puff(sx, hearthTop(h.c, h.r, h.side) + 0.05, sz, '#9a96a0', 1, 0.12); }
   }
   if (near < HEARTH_REACH && H.alive) {
     if (H.hp < MAX_HP) { H.hp = Math.min(MAX_HP, H.hp + dt * 10); renderHp(); }
@@ -3719,6 +3775,7 @@ function removePiece() {
     if (d) { scene.remove(d.pivot); doors.delete(key); openDoors.delete(key); }
     markObj(target.c, target.r); if (target.w) markObj(target.c - 1, target.r); else markObj(target.c, target.r - 1);
     refreshRooms(target.c, target.r, target.w);
+    hearthsBy(target.c, target.r, target.w);
   }
   pay(target.kind, -1);
   paintMapTile(target.c, target.r);
@@ -4626,6 +4683,15 @@ window.GAME = {
     releaseBuild(); forcedPick = null;
     return { n: spots.length, go, why: (spots.find(s => !s.go) || {}).why };
   },
+  // take down the wall on side d of a tile, as the cursor would
+  unbuild: (c, r, d) => {
+    const [ec, er, w] = edgeOf(c, r, d), kind = (w ? WW : WN)[T(ec, er)];
+    if (!kind) return false;
+    setBuildKind('remove'); forcedPick = { x: c + 0.5, y: LV[T(c, r)] * STEP, z: r + 0.5, wall: { kind, c: ec, r: er, w } };
+    removePiece(); forcedPick = null;
+    return !(w ? WW : WN)[T(ec, er)];
+  },
+  hearth: () => { const h = hearths.values().next().value; return h ? { c: h.c, r: h.r, side: h.side, fl: FL[T(h.c, h.r)], ob: OB[T(h.c, h.r)] } : null; },
   hp: v => { H.hp = v; renderHp(); },
   respawn: () => { respawn(); return [H.x, H.z]; },
   togglePlots, miniZoom: z => { miniZoom = z; },
