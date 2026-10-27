@@ -459,8 +459,8 @@ async function generate(progress) {
     if (fbm(nX, c / 26 + 31, r / 26, 2) < (meadow ? -0.35 : b === SNOW ? 0.5 : 0.22)) continue;
     const d0 = Math.floor(hs(c, r, 11) * 4);
     for (let k = 0; k < 4; k++) {
-      const d = (d0 + k) & 3, can = canRamp(i, d, lock);
-      if (can === 2 || (meadow && can === 1)) { setRamp(i, d, lock, can); break; }
+      const d = (d0 + k) & 3, pair = canRampPair(i, d, lock), can = Math.floor(pair / (N * N));
+      if (can === 2 || (meadow && can === 1)) { setRampPair(i, d, lock, pair); break; }
     }
   }
 
@@ -1280,6 +1280,27 @@ function canRamp(i, d, lock) {
   const foot2 = foot - DI[d];
   return !lock[foot] && !TN[foot] && LV[foot2] === L && !SH[foot2] ? 2 : 1;
 }
+// Ramps come in pairs side by side, so every ramp is an even number of tiles wide (pairs that meet make wider
+// ones). The pair for tile i: the tile beside it, to whichever side also has room, and the length both allow.
+// Gives (len * N * N + j) or 0.
+function canRampPair(i, d, lock) {
+  const a = canRamp(i, d, lock);
+  if (!a) return 0;
+  const c = i % N, r = (i - c) / N, flipSide = hs(c, r, 13 + d) > 0.5;
+  for (let k = 0; k < 2; k++) {
+    const side = (d + ((k === 0) === flipSide ? 1 : 3)) & 3, jc = c + DC[side], jr = r + DR[side];
+    if (jc < 1 || jr < 1 || jc >= N - 1 || jr >= N - 1) continue;
+    const j = i + DI[side];
+    if (LV[j] !== LV[i]) continue;
+    const b = canRamp(j, d, lock);
+    if (b) return Math.min(a, b) * N * N + j;
+  }
+  return 0;
+}
+function setRampPair(i, d, lock, pair) {
+  const len = Math.floor(pair / (N * N)), j = pair % (N * N);
+  setRamp(i, d, lock, len); setRamp(j, d, lock, len);
+}
 function setRamp(i, d, lock, len = 1) {
   lock[i] = lock[i + DI[d]] = lock[i - DI[d]] = 1;
   if (len < 2) { SH[i] = d + 1; return; }
@@ -1329,7 +1350,7 @@ async function connectAll(start, lock, rand, progress) {
       if (SH[i] || lock[i] || !LV[i] || TN[i]) continue;
       for (let d = 0; d < 4; d++) {
         const top = i + DI[d];
-        if (reach[i] === reach[top] || !canRamp(i, d, lock)) continue;
+        if (reach[i] === reach[top] || !canRampPair(i, d, lock)) continue;
         if (reach[i - DI[d]] !== reach[i]) continue;
         const k = reach[i] ? comp[top] : comp[i];
         if (k < 0) continue;
@@ -1341,9 +1362,9 @@ async function connectAll(start, lock, rand, progress) {
     for (let k = 0; k < nComp; k++) {
       if (!cnt[k]) continue;
       const i = pick[k] >> 2, d = pick[k] & 3, top = i + DI[d];
-      const len = canRamp(i, d, lock);
-      if (!len || reach[i] === reach[top]) continue;
-      setRamp(i, d, lock, len);
+      const pair = canRampPair(i, d, lock);
+      if (!pair || reach[i] === reach[top]) continue;
+      setRampPair(i, d, lock, pair);
       const n = reach[i] ? top : i;
       if (!reach[n]) { reach[n] = 1; queue[qt++] = n; }
       if (!reach[i - DI[d]]) { reach[i - DI[d]] = 1; queue[qt++] = i - DI[d]; }
@@ -3644,7 +3665,7 @@ const H = {
   x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true,
   wood: 0, stone: 0, kills: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
-  whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1],
+  whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null,
   cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
   kx: 0, kz: 0,
 };
@@ -4305,7 +4326,7 @@ function updateAim() {
 
 // ---------- Abilities ----------
 function startSwing() {
-  if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0) return;
+  if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
   H.combo = H.comboT > 0 ? (H.combo + 1) % 3 : 0;
   H.swing = 0; H.hitDone = false; H.comboT = 0.9;
   H.face = Math.atan2(aim.x, aim.z);
@@ -4313,24 +4334,41 @@ function startSwing() {
 }
 const SWING_T = [0.32, 0.32, 0.46], SWING_DMG = [12, 12, 20];
 function castWhirl() {
-  if (mode !== 'play' || !H.alive || H.cdQ > 0 || H.whirl >= 0 || H.lunge >= 0) return;
+  if (mode !== 'play' || !H.alive || H.cdQ > 0 || H.whirl >= 0 || H.lunge >= 0 || H.flip) return;
   H.whirl = 0; H.whirlTick = 0; H.cdQ = CD.Q; H.swing = -1;
   sfx.whirl();
 }
 function castLunge() {
-  if (mode !== 'play' || !H.alive || H.cdE > 0 || H.lunge >= 0 || H.whirl >= 0) return;
+  if (mode !== 'play' || !H.alive || H.cdE > 0 || H.lunge >= 0 || H.whirl >= 0 || H.flip) return;
   H.lunge = 0; H.cdE = CD.E; H.swing = -1; H.lungeHit = new Set();
   H.face = Math.atan2(aim.x, aim.z);
   sfx.dash();
 }
 function castDash() {
-  if (!H.alive || H.cdDash > 0 || H.dash >= 0) return;
+  if (!H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
   H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = CD.DASH; H.invuln = Math.max(H.invuln, 0.25); H.swing = -1;
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
+}
+// Dashing off the top of a cliff: a front flip down onto the tile at its foot. Taken when the dash runs
+// mostly straight at a drop to flat, dry, open ground and you're within half a tile of the edge.
+function cliffFlip() {
+  const [dx, dz] = H.dashDir, c = Math.floor(H.x), r = Math.floor(H.z), i = T(c, r);
+  if (Math.max(Math.abs(dx), Math.abs(dz)) < 0.6) return null;
+  const d = Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0);
+  const gap = d === 1 ? c + 1 - H.x : d === 3 ? H.x - c : d === 2 ? r + 1 - H.z : H.z - r;
+  const nc = c + DC[d], nr = r + DR[d];
+  if (gap > 0.5 || nc < 0 || nr < 0 || nc >= N || nr >= N) return null;
+  const n = T(nc, nr);
+  if (!(RIM[i] & 256 << d) || SH[i] || SH[n] || BR[i] || !LV[n] || LV[n] >= LV[i] || WT[n] >= 2 || OBJ[OB[n]].tile || wallOn(c, r, d)) return null;
+  // land past the slope at the foot, keeping to the middle of the tile across the way you went
+  const across = d & 1 ? clamp(H.z - r, 0.3, 0.7) : clamp(H.x - c, 0.3, 0.7), into = 0.8;
+  const x1 = d & 1 ? nc + (d === 1 ? into : 1 - into) : nc + across, z1 = d & 1 ? nr + across : nr + (d === 2 ? into : 1 - into);
+  const drop = H.y - LV[n] * STEP;
+  return { t: 0, dur: 0.5 + 0.06 * drop, x0: H.x, z0: H.z, y0: H.y, x1, z1, y1: LV[n] * STEP, face: [0, Math.PI / 2, Math.PI, -Math.PI / 2][d] };
 }
 // WASD, turned so W always walks up the screen
 function moveInput() {
@@ -4871,7 +4909,17 @@ function update(dt) {
   if (H.alive) {
     const m = moveInput();
     let vx = 0, vz = 0;
-    if (H.dash >= 0) {
+    if (H.dash >= 0 && !H.flip) { const f = cliffFlip(); if (f) { H.flip = f; H.dash = -1; H.invuln = Math.max(H.invuln, f.dur); sfx.dash(); } }
+    if (H.flip) {
+      // the flip: across and down on an arc, turning over once, then a puff of dust where you land
+      const F = H.flip;
+      F.t += dt;
+      const u = Math.min(1, F.t / F.dur);
+      H.x = F.x0 + (F.x1 - F.x0) * u; H.z = F.z0 + (F.z1 - F.z0) * u;
+      H.y = F.y0 + (F.y1 - F.y0) * u * u + 0.75 * 4 * u * (1 - u);
+      H.face = Math.atan2(F.x1 - F.x0, F.z1 - F.z0);
+      if (u >= 1) { H.flip = null; H.y = surfaceY(H.x, H.z); puff(H.x, H.y, H.z, '#c8bca0', 8, 0.7); }
+    } else if (H.dash >= 0) {
       H.dash += dt;
       const sp = 17 * (1 - H.dash / 0.22);
       vx = H.dashDir[0] * sp; vz = H.dashDir[1] * sp;
@@ -4896,7 +4944,7 @@ function update(dt) {
     vx += H.kx; vz += H.kz;
     H.kx *= Math.max(0, 1 - dt * 9); H.kz *= Math.max(0, 1 - dt * 9);
     const x0 = H.x, z0 = H.z;
-    const moved = moveEntity(H, vx * dt, vz * dt, 0.26, false);
+    const moved = H.flip ? 0 : moveEntity(H, vx * dt, vz * dt, 0.26, false);
     H.moving = moved > dt * 0.5;
     if (H.moving) {
       H.walkPhase += moved * WALK.cadence;
@@ -4906,7 +4954,7 @@ function update(dt) {
       H.stepF += ((mx * fx + mz * fz) / ml - H.stepF) * k;
       H.stepS += ((mx * fz - mz * fx) / ml - H.stepS) * k;
     }
-    H.y = surfaceY(H.x, H.z);
+    if (!H.flip) H.y = surfaceY(H.x, H.z);
 
     // attacks
     if (mode === 'play' && (mouse.down || PAD.attack) && H.swing < 0) startSwing();
@@ -4944,7 +4992,7 @@ function update(dt) {
   H.hurtT += dt;
   heroTunic.emissive.set(H.hurtT < 0.4 && Math.floor(H.hurtT * 12) % 2 === 0 ? '#a01810' : '#000000');
   heroSkin.emissive.copy(heroTunic.emissive);
-  heroShadow.position.set(H.x, H.y + 0.02, H.z);
+  heroShadow.position.set(H.x, (H.flip ? surfaceY(H.x, H.z) : H.y) + 0.02, H.z);
 
   // ----- foes -----
   const night = daylight() < 0.35;
@@ -5070,6 +5118,16 @@ function animateHero(dt) {
   hero.body.rotation.y = H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
   hero.g.rotation.x = H.dash >= 0 ? 0.35 : H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
+  hero.g.position.set(0, 0, 0);
+  if (H.flip) {
+    // tucked, turning head over heels about the middle of the body (not the feet)
+    const u = Math.min(1, H.flip.t / H.flip.dur), th = Math.PI * 2 * smooth(0.05, 0.92, u), hc = 0.55;
+    hero.g.rotation.x = th;
+    hero.g.position.set(0, hc * (1 - Math.cos(th)), -hc * Math.sin(th));
+    const tuck = Math.sin(u * Math.PI);
+    hero.legL.rotation.set(-1.6 * tuck, 0, 0); hero.legR.rotation.set(-1.6 * tuck, 0, 0);
+    hero.armL.rotation.set(-1.2 * tuck, 0, 0.1);
+  }
 }
 
 function updateFoe(f, dt, night) {
@@ -5802,6 +5860,23 @@ window.GAME = {
   fenceCount: () => { const n = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp, homing: f.homing, calm: +f.calm.toFixed(1), path: f.path ? f.path.length : -1 })),
+  // dash the way you face, and run the whole game for a while, 60 steps a second, with nothing drawn
+  dash: () => castDash(),
+  tick: sec => { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); return { x: H.x, z: H.z, y: H.y, flip: !!H.flip, rx: hero.g.rotation.x }; },
+  // every ramp's width: runs of the same ramp shape side by side
+  rampWidths: () => {
+    const w = {};
+    for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+      const i = T(c, r), s = SH[i];
+      if (!s) continue;
+      const d = rampDir(s), side = (d + 1) & 3, back = i - DI[side];
+      if (SH[back] === s && LV[back] === LV[i]) continue;
+      let n = 0, j = i;
+      while (SH[j] === s && LV[j] === LV[i]) { n++; j += DI[side]; }
+      w[n] = (w[n] || 0) + 1;
+    }
+    return w;
+  },
   // run the foes on their own for a while, 30 steps a second, with nothing drawn
   simFoes: (sec, night = false) => { for (let t = 0; t < sec; t += 1 / 30) for (const f of foes.slice()) updateFoe(f, 1 / 30, night); return GAME.foeList(); },
   findPath: (c0, r0, c1, r1) => { const p = findPath(c0, r0, c1, r1); return p && p.length; },
