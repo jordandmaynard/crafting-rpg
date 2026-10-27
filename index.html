@@ -1437,9 +1437,14 @@ const stage = $('stage');
 const renderer = new THREE.WebGLRenderer({ antialias: false });
 renderer.setPixelRatio(1);
 renderer.autoClear = false;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 stage.appendChild(renderer.domElement);
 const cv = renderer.domElement;
 const scene = new THREE.Scene();
+// distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
+const FOG = { on: 1, start: 2, end: 30, amount: 0.7, day: '#b8c4d8', dusk: '#d8a890', night: '#161830' };
+scene.fog = new THREE.Fog('#b8c4d8', 1e5, 1e5 + 1);
 // no scene.background: it would force a clear before the hero's second pass
 renderer.setClearColor('#0b0912', 1);
 // the view (T > Camera): the pixel-true orthographic camera, or a perspective one with a settable field of view
@@ -1465,12 +1470,12 @@ const outlineMat = new THREE.ShaderMaterial({
   uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new THREE.Vector2(1, 1) },
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new THREE.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() },
-    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 } },
+    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     uniform sampler2D tColor, tDepth, tNormal; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
     uniform float useDepth, useSobel, sStep, sTh, sStrength; uniform vec3 sColor;
-    uniform float ss, persp, near, far;
+    uniform float ss, persp, near, far, fogNear, fogFar;
     varying vec2 vUv;
     // the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
     // samples, and its depth and normal are read at its middle sample
@@ -1487,6 +1492,8 @@ const outlineMat = new THREE.ShaderMaterial({
     vec3 normalAt(vec2 px, vec3 n0) { vec4 g = texture2D(tNormal, mid(px)); return g.a < 0.5 ? n0 : g.rgb * 2.0 - 1.0; }
     void main() {
       vec2 px = floor(vUv * res);
+      // strokes fade into the haze with the ground they outline
+      float haze = 1.0 - clamp((depthAt(px) + near - fogNear) / (fogFar - fogNear), 0.0, 1.0);
       vec3 col = vec3(0.0);
       for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
         if (float(i) >= ss || float(j) >= ss) continue;
@@ -1502,7 +1509,7 @@ const outlineMat = new THREE.ShaderMaterial({
           vec3 g = normalAt(px + vec2(-s, s), n0), h = normalAt(px + vec2(0.0, s), n0), k = normalAt(px + vec2(s, s), n0);
           vec3 nx = (c + 2.0 * f + k) - (a + 2.0 * d + g), ny = (g + 2.0 * h + k) - (a + 2.0 * b + c);
           float e2 = smoothstep(sTh, sTh * 1.3, sqrt(dot(nx, nx) + dot(ny, ny)) * 0.25);
-          col = mix(col, sColor, e2 * sStrength);
+          col = mix(col, sColor, e2 * sStrength * haze);
         }
       }
       if (useDepth > 0.5) {
@@ -1512,7 +1519,7 @@ const outlineMat = new THREE.ShaderMaterial({
           if (abs(o.x) > thick || abs(o.y) > thick || dot(o, o) > r2) continue;
           if (depthAt(px + o) - t > dist) e = 1.0;
         }
-        col = mix(col, color, e * strength);
+        col = mix(col, color, e * strength * haze);
       }
       gl_FragColor = vec4(col, 1.0);
     }`,
@@ -1588,8 +1595,8 @@ const cloudTex = (() => {
   return t;
 })();
 const CLOUD_U = { tCloud: { value: cloudTex }, cloudOff: { value: new THREE.Vector2() }, cloudScale: { value: 56 },
-  cloudAmt: { value: 0.4 }, cloudCover: { value: 0.45 }, cloudSoft: { value: 0.16 } };
-const CLOUD_GLSL = `uniform sampler2D tCloud; uniform vec2 cloudOff; uniform float cloudScale, cloudAmt, cloudCover, cloudSoft;
+  cloudAmt: { value: 0.4 }, cloudCover: { value: 0.45 }, cloudSoft: { value: 0.16 }, shadowAmt: { value: 0.8 } };
+const CLOUD_GLSL = `uniform sampler2D tCloud; uniform vec2 cloudOff; uniform float cloudScale, cloudAmt, cloudCover, cloudSoft, shadowAmt;
 varying vec2 vCloudXZ;
 float cloudShade() {
   float n = texture2D(tCloud, (vCloudXZ + cloudOff) / cloudScale).r;
@@ -1602,7 +1609,10 @@ THREE.MeshStandardMaterial.prototype.onBeforeCompile = function (shader) {
     '#include <project_vertex>\n  vCloudXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
   shader.fragmentShader = CLOUD_GLSL + shader.fragmentShader.replace('#include <lights_fragment_begin>',
     THREE.ShaderChunk.lights_fragment_begin.replace('getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );',
-      'getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );\n\t\tdirectLight.color *= cloudShade();'));
+      'getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );\n\t\tdirectLight.color *= cloudShade();')
+      // the sun's shadow only takes away shadowAmt of its light (T > Shadows)
+      .replace('? getShadow( directionalShadowMap[ i ]', '? mix( 1.0, getShadow( directionalShadowMap[ i ]')
+      .replace('vDirectionalShadowCoord[ i ] ) : 1.0;', 'vDirectionalShadowCoord[ i ] ), shadowAmt ) : 1.0;'));
 };
 function updateClouds(dt) {
   const a = CLOUDS.direction * Math.PI / 180, o = CLOUD_U.cloudOff.value, S = CLOUDS.scale;
@@ -1611,6 +1621,12 @@ function updateClouds(dt) {
   CLOUD_U.cloudCover.value = CLOUDS.cover; CLOUD_U.cloudSoft.value = Math.max(0.01, CLOUDS.softness);
 }
 
+// everything lit by the sun (not the glows, the water or the hero's see-through silhouette) casts and takes
+// the sun's shadow
+function shadowy(obj) {
+  obj.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial && !o.material.transparent) o.castShadow = o.receiveShadow = true; });
+  return obj;
+}
 // Growable vertex buffers: every chunk writes its triangles here, then copies them into a mesh.
 class Buf {
   constructor() { this.p = new Float32Array(1 << 16); this.c = new Float32Array(1 << 16); this.n = 0; }
@@ -1626,7 +1642,7 @@ class Buf {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(this.p.slice(0, this.n), 3));
     g.setAttribute('color', new THREE.BufferAttribute(this.c.slice(0, this.n), 3));
-    return new THREE.Mesh(g, mat);
+    return shadowy(new THREE.Mesh(g, mat));
   }
 }
 let OUT = new Buf(), GLOW = new Buf();
@@ -1913,17 +1929,19 @@ const WATER_U = Object.assign({
   foamAmt: { value: 1 }, shoreFoam: { value: 0.6 }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() },
   skyCol: { value: new THREE.Color() }, viewDir: { value: new THREE.Vector3(0, -1, 0) }, waterCol: { value: new THREE.Vector3() },
   absorb: { value: new THREE.Vector3() }, lampPos: { value: new THREE.Vector3() }, lampCol: { value: new THREE.Color() }, lampRange: { value: 9 },
+  fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
 }, CLOUD_U);
 const WATER_VS = `
 attribute float wDepth, wFall; attribute vec2 wFlow;
-varying vec3 vPos; varying float vDepth, vFall; varying vec2 vFlow, vCloudXZ;
+varying vec3 vPos; varying float vDepth, vFall, vFogZ; varying vec2 vFlow, vCloudXZ;
 void main() {
-  vec4 w = modelMatrix * vec4(position, 1.0);
-  vPos = w.xyz; vDepth = wDepth; vFall = wFall; vFlow = wFlow; vCloudXZ = w.xz;
-  gl_Position = projectionMatrix * viewMatrix * w;
+  vec4 w = modelMatrix * vec4(position, 1.0), v = viewMatrix * w;
+  vPos = w.xyz; vDepth = wDepth; vFall = wFall; vFlow = wFlow; vCloudXZ = w.xz; vFogZ = -v.z;
+  gl_Position = projectionMatrix * v;
 }`;
 const WATER_FS = CLOUD_GLSL + `
-uniform sampler2D tWave; uniform float time, waveAmp, flowSpeed, glitter, rough, foamAmt, shoreFoam, lampRange, passAdd;
+uniform sampler2D tWave; uniform float time, waveAmp, flowSpeed, glitter, rough, foamAmt, shoreFoam, lampRange, passAdd, fogNear, fogFar;
+varying float vFogZ;
 uniform vec3 sunDir, sunCol, skyCol, viewDir, waterCol, absorb, lampPos, lampCol;
 varying vec3 vPos; varying float vDepth, vFall; varying vec2 vFlow;
 vec2 slopeAt(vec2 uv) { return texture2D(tWave, uv).rg * 2.0 - 1.0; }
@@ -1965,7 +1983,8 @@ void main() {
   vec3 add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr + spec) * (1.0 - fm) + foamLit * fm;
   vec3 mul = Tr * (1.0 - Fr) * (1.0 - fm);
   // the waterline: fade in over the first few hundredths so the shore isn't a hard edge
-  float f = smoothstep(0.0, 0.03, vDepth);
+  // and into the haze: the ground under it is already hazed, so the water just fades out over it
+  float f = smoothstep(0.0, 0.03, vDepth) * (1.0 - clamp((vFogZ - fogNear) / (fogFar - fogNear), 0.0, 1.0));
   gl_FragColor = passAdd > 0.5 ? vec4(add * f, 1.0) : vec4(mix(vec3(1.0), mul, f), 1.0);
 }`;
 const makeWaterMat = add => new THREE.ShaderMaterial({
@@ -2464,7 +2483,7 @@ function makeDoor(c, r, w) {
   for (const yy of [0.25, 0.85]) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
   const ring = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
   pivot.add(leaf);
-  scene.add(pivot);
+  scene.add(shadowy(pivot));
   const d = { pivot, open: false, t: 0, side: 1, c, r, w };
   doors.set(edgeKey(c, r, w), d);
   return d;
@@ -3020,7 +3039,7 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // silhouette shows through instead.
 const hero = makeHuman();
 const heroRoot = new THREE.Group();
-heroRoot.add(hero.g);
+heroRoot.add(shadowy(hero.g));
 scene.add(heroRoot);
 const silMat = new THREE.MeshBasicMaterial({ color: '#4fb8b0', depthWrite: false, depthFunc: THREE.GreaterDepth });
 hero.parts.slice().forEach(p => {
@@ -3058,7 +3077,7 @@ const foeShadows = [];
 function spawnFoe(kind, x, z) {
   const d = FOE[kind], f = d.make();
   f.g.position.set(x, surfaceY(x, z), z);
-  scene.add(f.g);
+  scene.add(shadowy(f.g));
   const sh = new THREE.Mesh(shadowGeo, shadowMat); scene.add(sh);
   const foe = Object.assign(f, { kind, def: d, x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
     home: [x, z], wander: null, wanderT: Math.random() * 3, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
@@ -4126,6 +4145,37 @@ function advanceClock(dt) {
   if (SKY.timeOfDay < 0) SKY.timeOfDay += 24;
   clock = SKY.timeOfDay / 24;
 }
+// three's fog runs from none at near to all at far; `amount` < 1 is had by setting far past where it's reached
+function updateFog(dusk, day) {
+  const d = camera.position.distanceTo(camTarget), on = FOG.on > 0.5 && FOG.amount > 0;
+  const near = d + FOG.start, full = d + Math.max(FOG.start + 1, FOG.end);
+  scene.fog.near = on ? near : 1e5; scene.fog.far = on ? near + (full - near) / Math.max(0.05, FOG.amount) : 1e5 + 1;
+  scene.fog.color.set(FOG.night).lerp(tmpC2.set(FOG.dusk), dusk).lerp(tmpC2.set(FOG.day), day);
+  const U = WATER_U; U.fogNear.value = scene.fog.near; U.fogFar.value = scene.fog.far;
+  const O = outlineMat.uniforms; O.fogNear.value = scene.fog.near; O.fogFar.value = scene.fog.far;
+}
+// The sun (or moon) shines from (dx, dy, dz). Its shadow map covers a square SHADOWS.range tiles each way of
+// the view's centre, slid only in whole texels of the map so shadow edges don't crawl as you walk.
+const SHADOWS = { on: 1, strength: 0.8, range: 40, softness: 1 };
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+sun.shadow.camera.layers.enableAll();   // the hero draws on its own layer, and casts too
+const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3(), shC = new THREE.Vector3();
+function placeSun(dx, dy, dz) {
+  const R = SHADOWS.range, cam = sun.shadow.camera;
+  sun.castShadow = SHADOWS.on > 0.5 && dy > 0.02;
+  if (cam.right !== R) { cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R; cam.near = 1; cam.far = 260; cam.updateProjectionMatrix(); }
+  sun.shadow.radius = SHADOWS.softness;
+  shZ.set(dx, Math.max(0.05, dy), dz).normalize();
+  shX.set(0, 1, 0).cross(shZ).normalize(); shY.copy(shZ).cross(shX);
+  shC.set(camTarget.x, H.y, camTarget.z);
+  const texel = 2 * R / sun.shadow.mapSize.x, a = shC.dot(shX), b = shC.dot(shY);
+  shC.addScaledVector(shX, Math.round(a / texel) * texel - a).addScaledVector(shY, Math.round(b / texel) * texel - b);
+  sun.target.position.copy(shC);
+  sun.position.copy(shC).addScaledVector(shZ, 120);
+  sun.target.updateMatrixWorld();
+  CLOUD_U.shadowAmt.value = SHADOWS.strength;
+}
 function updateSky() {
   sunDir = sunDirection();
   const y = sunDir[1], dayF = smoothstep(-0.12, 0.35, y);
@@ -4139,19 +4189,19 @@ function updateSky() {
     const mag = Math.max(tmpC.r, tmpC.g, tmpC.b);
     sun.color.copy(normC(tmpC));
     sun.intensity = mag * SKY.sunStrength * 2.5 * risen * exposure;
-    sun.position.set(H.x + sunDir[0] * 20, H.y + y * 20, H.z + sunDir[2] * 20);
+    placeSun(sunDir[0], y, sunDir[2]);
   } else {
     sun.color.set(SKY.moonColor);
     sun.intensity = 0.45 * SKY.moonStrength * 0.2 * smoothstep(0, 0.15, -y) * exposure;
-    sun.position.set(H.x - sunDir[0] * 20, H.y - y * 20, H.z - sunDir[2] * 20);
+    placeSun(-sunDir[0], -y, -sunDir[2]);
   }
-  sun.target.position.set(H.x, H.y, H.z);
   // the sky's light: night, through dusk round the horizon, to day
   const a = smoothstep(-0.2, -0.02, y), b = smoothstep(0.02, 0.3, y);
   tmpC.set(SKY.bgNight).lerp(tmpC2.set(SKY.bgDusk), a).lerp(tmpC2.set(SKY.bgDay), b);
   hemi.color.copy(normC(tmpC)).multiply(tmpC2.set(SKY.skyColor));
   hemi.groundColor.setRGB(0.26, 0.24, 0.17).multiplyScalar(1 / 0.26 * (0.18 + 0.4 * dayF)).lerp(tmpC2.set('#120e22'), 1 - dayF);
   hemi.intensity = (SKY.skyStrength * 0.62 * dayF + SKY.nightLight * 0.8) * exposure;
+  updateFog(a, b);
   const d = daylight();
   // on the line from the hero to the camera, a little toward it and raised, so the side you see is lit
   heroLight.intensity = HERO_LIGHT.day + (HERO_LIGHT.night - HERO_LIGHT.day) * (1 - d);
@@ -4214,6 +4264,8 @@ function spawnTick(dt) {
 }
 
 // ---------- Update ----------
+// the walk (T > Walk): cadence is leg swings per tile walked (radians of the cycle); the rest are swing angles
+const WALK = { cadence: 5.2, stride: 0.75, backStride: 0.55, arms: 0.6, sideOpen: 0.34, bob: 0.03, lean: 0.07 };
 let time = 0, regionName = '', regionT = 0;
 function heroSpeed() { return (mode === 'build' ? 4.4 : 4.6) * (WT[T(Math.floor(H.x), Math.floor(H.z))] === 1 ? 0.62 : 1); }
 function update(dt) {
@@ -4255,7 +4307,7 @@ function update(dt) {
     const moved = moveEntity(H, vx * dt, vz * dt, 0.26, false);
     H.moving = moved > dt * 0.5;
     if (H.moving) {
-      H.walkPhase += moved * 5.2;
+      H.walkPhase += moved * WALK.cadence;
       // which way the step goes against the way you face, eased so the gaits blend as it swings round
       const mx = H.x - x0, mz = H.z - z0, ml = Math.hypot(mx, mz) || 1, fx = Math.sin(H.face), fz = Math.cos(H.face);
       const k = Math.min(1, dt * 10);
@@ -4402,15 +4454,15 @@ function animateHero(dt) {
   // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
   // the leg on the side you're going.
   const on = H.moving && H.dash < 0, walk = on ? Math.sin(H.walkPhase) : 0;
-  const f = H.stepF, sd = H.stepS, side = sd * sd, stride = f >= 0 ? 0.75 : 0.55;
-  const open = on ? Math.abs(Math.sin(H.walkPhase)) * 0.34 * side : 0, lean = on ? Math.sin(H.walkPhase) * 0.1 * side * Math.sign(sd) : 0;
+  const f = H.stepF, sd = H.stepS, side = sd * sd, stride = f >= 0 ? WALK.stride : WALK.backStride;
+  const open = on ? Math.abs(Math.sin(H.walkPhase)) * WALK.sideOpen * side : 0, lean = on ? Math.sin(H.walkPhase) * 0.3 * WALK.sideOpen * side * Math.sign(sd) : 0;
   hero.legL.rotation.set(walk * stride * f, 0, open + lean);
   hero.legR.rotation.set(-walk * stride * f, 0, -open + lean);
-  hero.body.position.y = H.moving ? Math.abs(Math.cos(H.walkPhase)) * (0.03 - 0.012 * side) : Math.sin(time * 2) * 0.006;
+  hero.body.position.y = H.moving ? Math.abs(Math.cos(H.walkPhase)) * WALK.bob * (1 - 0.4 * side) : Math.sin(time * 2) * 0.006;
   // a lean into a sidestep (and, below, back when walking backward)
-  hero.body.rotation.z = on ? -sd * 0.07 : 0;
-  hero.armL.rotation.set(-walk * 0.6 * f, 0, 0.08 + 0.18 * side);
-  let ax = walk * 0.6 * f, ay = 0, sx = 0;
+  hero.body.rotation.z = on ? -sd * WALK.lean : 0;
+  hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
+  let ax = walk * WALK.arms * f, ay = 0, sx = 0;
   if (H.swing >= 0) {
     const len = SWING_T[H.combo], u = smooth(0, 1, Math.min(1, H.swing / (len * 0.62)));
     if (H.combo === 2) { ax = -2.9 + u * 2.3; sx = Math.PI / 2 * 0.2; }
@@ -4424,7 +4476,7 @@ function animateHero(dt) {
   hero.armR.rotation.set(ax, ay, -0.08);
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
   hero.body.rotation.y = H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
-  hero.body.rotation.x = on && f < 0 ? f * 0.06 : 0;
+  hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
   hero.g.rotation.x = H.dash >= 0 ? 0.35 : H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
 }
 
@@ -4833,6 +4885,30 @@ const TUNING = [
     [SKY, 'exposure', 'Exposure', 0.2, 3, 0.01],
     [SKY, 'autoExposure', 'Auto exposure: opens up at dusk and night (0 off)', 0, 1, 0.01],
   ]],
+  ['Shadows', [
+    [SHADOWS, 'on', 'Sun and moon shadows (0 off, 1 on)', 0, 1, 1],
+    [SHADOWS, 'strength', 'How much light a shadow takes away', 0, 1, 0.01],
+    [SHADOWS, 'range', 'Reach round the view (tiles; smaller is sharper)', 10, 100, 1],
+    [SHADOWS, 'softness', 'Edge softness', 0, 4, 0.1],
+  ]],
+  ['Haze', [
+    [FOG, 'on', 'Distance haze (0 off, 1 on)', 0, 1, 1],
+    [FOG, 'start', 'Starts this far beyond the hero (tiles)', 0, 80, 1],
+    [FOG, 'end', 'Thickest this far beyond the hero (tiles)', 5, 300, 1],
+    [FOG, 'amount', 'How thick it gets', 0, 1, 0.01],
+    [FOG, 'day', 'By day', 'color'],
+    [FOG, 'dusk', 'At dusk', 'color'],
+    [FOG, 'night', 'By night', 'color'],
+  ]],
+  ['Walk', [
+    [WALK, 'cadence', 'Cadence: steps per tile walked', 1, 12, 0.1],
+    [WALK, 'stride', 'Forward stride (leg swing)', 0, 1.5, 0.01],
+    [WALK, 'backStride', 'Backward stride', 0, 1.5, 0.01],
+    [WALK, 'arms', 'Arm swing', 0, 1.5, 0.01],
+    [WALK, 'sideOpen', 'Sidestep: how wide the legs open', 0, 1, 0.01],
+    [WALK, 'bob', 'Bob up and down', 0, 0.12, 0.002],
+    [WALK, 'lean', 'Lean into a sidestep or back', 0, 0.4, 0.01],
+  ]],
   ['Cloud shadows', [
     [CLOUDS, 'strength', 'How much a cloud dims the sun (0 none)', 0, 1, 0.01],
     [CLOUDS, 'cover', 'Cloud cover', 0, 1, 0.01],
@@ -5045,6 +5121,7 @@ window.GAME = {
   // the ground the cursor would pick at a screen point
   pickAt: (sx, sy) => { const m = [mouse.x, mouse.y]; mouse.x = sx; mouse.y = sy; const p = pickGround(false); mouse.x = m[0]; mouse.y = m[1]; return p && [p.x, p.z]; },
   swing: () => H.swing,
+  shadowInfo: () => ({ cast: sun.castShadow, amt: CLOUD_U.shadowAmt.value, fog: [Math.round(scene.fog.near), Math.round(scene.fog.far), scene.fog.color.getHexString()], meshesCasting: (() => { let n = 0; scene.traverse(o => { if (o.castShadow) n++; }); return n; })() }),
   heroFace: () => Math.atan2(Math.sin(H.face), Math.cos(H.face)),
   gait: () => [H.stepF, H.stepS, hero.legL.rotation.x, hero.legL.rotation.z],
   hp: v => { H.hp = v; renderHp(); },
