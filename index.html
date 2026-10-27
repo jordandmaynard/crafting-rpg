@@ -175,7 +175,7 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li><span><kbd>WASD</kbd> move, aim with the mouse, <kbd>LMB</kbd> attack (hold to keep swinging). Hit trees and rocks to gather.</li>
       <li><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash, <kbd>F</kbd> open and close doors.</span></li>
       <li><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
-      <li>Close a room with walls and doors and a roof goes up. It hides while you are inside, and you heal faster under it.</li>
+      <li>Close a room with walls and doors and a roof goes up (rooms that meet across a wall share one roof). It hides while you are inside, and you heal faster under it.</li>
       <li>Towns are safe. The wilds grow bolder at night.</li>
       <li><span><kbd>M</kbd> map (wheel zooms it and the minimap), <kbd>P</kbd> plot outlines on the maps, wheel to zoom, hold the right mouse button and drag (or <kbd>Z</kbd> / <kbd>C</kbd>) to turn the camera.</span></li>
     </ul>
@@ -911,6 +911,7 @@ function raiseHouses(t, n) {
 // once the scene exists, the town houses get their doors and roofs
 function finishTowns() {
   for (const t of towns) for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
+  settleBuildings();
 }
 
 // Roads join the towns and a few waystones in every biome. They follow the walkable ground, so
@@ -1992,15 +1993,20 @@ function pine(x, z, k, snow = false) {
 function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
   const y = groundAt(x, z), S = TS * (0.9 + k * 0.25);
   part(G.box, bark, x, y + 0.32 * S, z, { sx: 0.16 * S, sy: 0.64 * S, sz: 0.16 * S });
-  part(G.ico, shade(CC(leaf), 0.9 + k * 0.2), x, y + 0.92 * S, z, { s: (0.72 + k * 0.2) * S, ry: k * 5 });
-  part(G.ico, shade(CC(leaf), 1.1), x + 0.14 * S, y + 1.16 * S, z - 0.06 * S, { s: 0.42 * S, ry: k * 2 });
+  // a broad, spreading crown: a wide main mass, a lobe out to each side and one on top
+  const w = (0.98 + k * 0.2) * S, a = k * 6.28;
+  part(G.ico, shade(CC(leaf), 0.9 + k * 0.2), x, y + 0.94 * S, z, { sx: w, sy: (0.7 + k * 0.12) * S, sz: w * 0.92, ry: k * 5 });
+  for (const sd of [-1, 1]) part(G.ico, shade(CC(leaf), 0.96 + sd * 0.05), x + Math.cos(a) * 0.36 * sd * S, y + 0.86 * S, z + Math.sin(a) * 0.36 * sd * S, { s: 0.5 * S, ry: k * 3 + sd });
+  part(G.ico, shade(CC(leaf), 1.1), x + 0.12 * S, y + 1.2 * S, z - 0.06 * S, { sx: 0.5 * S, sy: 0.38 * S, sz: 0.46 * S, ry: k * 2 });
 }
 function birch(x, z, k) {
   const y = groundAt(x, z), S = TS * (0.85 + k * 0.3);
   part(G.box, '#e8e4d8', x, y + 0.45 * S, z, { sx: 0.11 * S, sy: 0.9 * S, sz: 0.11 * S });
   part(G.box, '#3a3430', x, y + 0.3 * S, z, { sx: 0.115 * S, sy: 0.04 * S, sz: 0.115 * S });
   part(G.box, '#3a3430', x, y + 0.62 * S, z, { sx: 0.115 * S, sy: 0.04 * S, sz: 0.115 * S });
-  part(G.ico, shade(CC('#9ab84a'), 0.9 + k * 0.2), x, y + 1.05 * S, z, { sx: 0.52 * S, sy: 0.7 * S, sz: 0.52 * S, ry: k * 4 });
+  // a tall, narrow crown
+  part(G.ico, shade(CC('#9ab84a'), 0.9 + k * 0.2), x, y + 1.22 * S, z, { sx: 0.5 * S, sy: 1.08 * S, sz: 0.5 * S, ry: k * 4 });
+  part(G.ico, shade(CC('#9ab84a'), 1.06 + k * 0.1), x + 0.05 * S, y + 1.62 * S, z - 0.03 * S, { sx: 0.3 * S, sy: 0.5 * S, sz: 0.3 * S, ry: k * 2 });
 }
 function deadTree(x, z, k, bark = '#3a3030') {
   const y = groundAt(x, z), h = (0.8 + k * 0.5) * TS;
@@ -2235,7 +2241,7 @@ const HEARTH_REACH = 3.5;
 const FIRE_BACK = 0.3;
 const stackAt = (c, r, side) => side < 0 ? [c + 0.5, r + 0.5] : [c + 0.5 + DC[side] * FIRE_BACK, r + 0.5 + DR[side] * FIRE_BACK];
 function hearthTop(c, r, side = -1) {
-  const i = T(c, r), y = LV[i] * STEP, rm = rooms.get(roomOf.get(i));
+  const i = T(c, r), y = LV[i] * STEP, rm = bldOf(i);
   if (!rm || !rm.roofY) return y + 2.4;
   const [sx, sz] = stackAt(c, r, side);
   let top = 0;
@@ -2452,12 +2458,16 @@ function makeDoor(c, r, w) {
 }
 
 // ---------- Rooms and roofs ----------
-// A room is any patch of tiles closed in on every side by walls and doors. It gets a hipped roof,
-// built from the distance to the nearest outside tile so any shape of room roofs cleanly.
-const MAX_ROOM = 220, ROOF_SLOPE = 0.62;
-const rooms = new Map();     // id -> { tiles, set, mesh }
+// A room is any patch of tiles closed in on every side by walls and doors. Rooms that meet across a wall or
+// door make one building (a room walled off inside a bigger one, a row of rooms), and each building gets
+// one hipped roof over all its rooms, built from the distance to the nearest outside tile so any shape of
+// building roofs cleanly.
+const MAX_ROOM = 500, ROOF_SLOPE = 0.62;
+const rooms = new Map();     // id -> { tiles, set, color, bld }
 const roomOf = new Map();    // tile -> room id
-let roomSeq = 1;
+const buildings = new Map(); // id -> { id, rooms, tiles, set, color, mesh, roofY }
+let roomSeq = 1, bldSeq = 1;
+const bldOf = i => { const rm = rooms.get(roomOf.get(i)); return rm ? buildings.get(rm.bld) : null; };
 const roofMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
 function findRoom(c0, r0) {
   const seen = new Set([T(c0, r0)]), q = [[c0, r0]];
@@ -2475,23 +2485,56 @@ function findRoom(c0, r0) {
   }
   return q;
 }
+// rooms whose building has to be worked out again once the walls settle
+const regroup = new Set();
+function dropBuilding(b) {
+  if (!b) return;
+  if (b.mesh) { scene.remove(b.mesh); b.mesh.geometry.dispose(); }
+  buildings.delete(b.id);
+  for (const id of b.rooms) { regroup.add(id); const rm = rooms.get(id); if (rm) rm.bld = 0; }
+}
 function dropRoom(id) {
   const rm = rooms.get(id);
   if (!rm) return;
+  dropBuilding(buildings.get(rm.bld));
   rm.tiles.forEach(([c, r]) => roomOf.delete(T(c, r)));
-  if (rm.mesh) { scene.remove(rm.mesh); rm.mesh.geometry.dispose(); }
   rooms.delete(id);
+  regroup.delete(id);
 }
 function makeRoom(tiles, color = '#9a4434') {
   const id = roomSeq++, set = new Set(tiles.map(([c, r]) => T(c, r)));
-  const rm = { id, tiles, set, mesh: null, color };
+  const rm = { id, tiles, set, color, bld: 0 };
   rooms.set(id, rm);
   tiles.forEach(([c, r]) => roomOf.set(T(c, r), id));
-  rm.mesh = roofMesh(rm);
-  scene.add(rm.mesh);
+  regroup.add(id);
   return rm;
 }
-function roofMesh(rm) {
+// gather the rooms that meet across walls and doors into buildings, and roof each one
+function settleBuildings() {
+  for (const start of regroup) {
+    const rm0 = rooms.get(start);
+    if (!rm0 || rm0.bld) continue;
+    const ids = new Set([start]), q = [start];
+    while (q.length) {
+      const rm = rooms.get(q.pop());
+      for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
+        if (!wallOn(c, r, d)) continue;
+        const other = roomOf.get(T(c + DC[d], r + DR[d]));
+        if (other && !ids.has(other)) { ids.add(other); q.push(other); }
+      }
+    }
+    // a room already in a building joins this one: that building is taken down and roofed again whole
+    for (const id of ids) { const b = buildings.get(rooms.get(id).bld); if (b) dropBuilding(b); }
+    const list = [...ids].map(id => rooms.get(id)), tiles = list.flatMap(rm => rm.tiles);
+    const b = { id: bldSeq++, rooms: ids, tiles, set: new Set(tiles.map(([c, r]) => T(c, r))), color: list[0].color, mesh: null, roofY: null };
+    for (const rm of list) rm.bld = b.id;
+    buildings.set(b.id, b);
+    b.mesh = roofMesh(b);
+    scene.add(b.mesh);
+  }
+  regroup.clear();
+}
+function roofMesh(rm) {   // rm: a building
   let top = 0;
   const outside = [];
   const oseen = new Set();
@@ -2603,6 +2646,7 @@ function refreshRooms(c, r, w) {
     const tiles = findRoom(tc, tr);
     if (tiles) makeRoom(tiles);
   }
+  settleBuildings();
   // a roof going up or coming down round a hearth: its chimney grows or shrinks to suit
   for (const h of hearths.values()) if (Math.abs(h.c - c) < 24 && Math.abs(h.r - r) < 24) rebuildObjects(h.c, h.r);
 }
@@ -4175,9 +4219,9 @@ function update(dt) {
     if (d.life > 0.7) { scene.remove(d.m); d.m.material.dispose(); dust.splice(i, 1); }
   }
 
-  // ----- roofs: hidden over the room you stand in, and all of them while building -----
-  const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z)));
-  for (const rm of rooms.values()) rm.mesh.visible = mode !== 'build' && rm.id !== inside;
+  // ----- roofs: hidden over the building you stand in, and all of them while building -----
+  const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z))), inBld = inside ? rooms.get(inside).bld : 0;
+  for (const b of buildings.values()) b.mesh.visible = mode !== 'build' && b.id !== inBld;
   updateCutaway(inside);
 
   updateGhost();
@@ -4789,7 +4833,7 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
-  get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
+  get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(7).fill(0), sh = new Array(13).fill(0), ob = {};
     for (let i = 0; i < N * N; i++) { lv[LV[i]]++; if (LV[i]) bi[BI[i]]++; sh[SH[i]]++; if (OB[i]) ob[OB[i]] = (ob[OB[i]] || 0) + 1; }
