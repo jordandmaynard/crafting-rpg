@@ -178,7 +178,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 <div class="modal" id="intro">
   <div class="sheet">
     <h1>EMBER<em>WILD</em></h1>
-    <div class="sub">A NEW WILD EVERY TIME · 1024 × 1024 TILES · MEADOW · WOOD · BOG · GRAVES · FROST · DESERT</div>
+    <div class="sub">A NEW WILD EVERY TIME · 1024 × 1024 TILES · MEADOW · WOOD · ELDERWOOD · BOG · GRAVES · FROST · DESERT</div>
     <ul>
       <li>You are a human adventurer, alone in an untamed land. Fell trees and break rocks for wood and stone, and raise a shelter before night falls.</li>
       <li class="kb-only"><span><kbd>WASD</kbd> move, aim with the mouse, <kbd>LMB</kbd> attack (hold to keep swinging). Hit trees and rocks to gather.</li>
@@ -266,7 +266,7 @@ const rampDir = s => (s - 1) & 3;
 const EDGE_K = [[0, 1], [1, 2], [2, 3], [3, 0]], OPP_K = [[3, 2], [0, 3], [1, 0], [2, 1]];
 const CX = [0, 1, 1, 0], CZ = [0, 0, 1, 1];
 
-const MEADOW = 0, FOREST = 1, SWAMP = 2, GRAVE = 3, SNOW = 4, DESERT = 5, TOWN = 6;
+const MEADOW = 0, FOREST = 1, SWAMP = 2, GRAVE = 3, SNOW = 4, DESERT = 5, TOWN = 6, DEEP = 7;
 const BIOMES = [
   { name: 'GOLDENREACH MEADOWS', foes: ['boar', 'goblin'] },
   { name: 'THE WHISPERING WOOD', foes: ['goblin', 'wolf'] },
@@ -275,10 +275,12 @@ const BIOMES = [
   { name: 'THE FROSTSPINE', foes: ['frostwolf', 'wraith'] },
   { name: 'THE SUNSCORCH WASTE', foes: ['scorpion', 'skeleton'] },
   { name: 'EMBERBROOK', foes: [] },
+  { name: 'THE ELDERWOOD', foes: ['spider', 'spider', 'mantrap'] },
 ];
 const TOWN_NAMES = ['EMBERBROOK', 'ASHFORD', 'BRAMBLEGATE', 'THORNWICK', 'MILLHAVEN', 'OAKENREST', 'STONEMERE', 'WILLOWDEEP'];
 const towns = [];
 const TOWN_R = 10;
+const DEEP_IN = 10;   // tiles of ordinary forest, give or take, ringing a deep forest
 const spawn = { x: N / 2 + 0.5, z: N / 2 + 0.5 };
 
 // corner height in levels, and the walking rule from Dungeon Golf: two tiles join only where
@@ -415,6 +417,25 @@ async function generate(progress) {
     else if (wet > -0.06) b = FOREST;
     else b = MEADOW;
     BI[i] = b;
+  }
+  // 3b. The deep forest: the heart of a wood big enough to have one, ringed all round by ordinary forest
+  {
+    const din = new Uint8Array(N * N).fill(255), q = new Int32Array(N * N);
+    let qh = 0, qt = 0;
+    for (let i = 0; i < N * N; i++) if (BI[i] !== FOREST) { din[i] = 0; q[qt++] = i; }
+    while (qh < qt) {
+      const i = q[qh++], c = i % N, r = (i - c) / N, d = din[i] + 1;
+      if (d > 60) continue;
+      if (c > 0 && din[i - 1] > d) { din[i - 1] = d; q[qt++] = i - 1; }
+      if (c < N - 1 && din[i + 1] > d) { din[i + 1] = d; q[qt++] = i + 1; }
+      if (r > 0 && din[i - N] > d) { din[i - N] = d; q[qt++] = i - N; }
+      if (r < N - 1 && din[i + N] > d) { din[i + N] = d; q[qt++] = i + N; }
+    }
+    // how far in it starts wanders with a slow noise, so its edge isn't a copy of the wood's
+    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+      const i = T(c, r);
+      if (BI[i] === FOREST && din[i] >= DEEP_IN + fbm(nX, c / 22 + 140, r / 22, 2) * 8) BI[i] = DEEP;
+    }
   }
 
   // 4. Towns: flat clearings with a plaza, a well, streets and houses
@@ -733,7 +754,7 @@ function deepenSea() {
 const PLOT = new Uint16Array(N * N);
 const plots = [null];   // id -> { id, n, c, r, x0, z0, x1, z1, edge, claimed, hearth }
 const PLOT_GRID = 42, PLOT_R = 25, PLOT_MIN = 600, OFF_LEVEL = 4;
-const plotGround = i => LV[i] > 0 && !BR[i] && !PATH[i] && BI[i] !== TOWN && OB[i] !== O.SHRINE;
+const plotGround = i => LV[i] > 0 && !BR[i] && !PATH[i] && BI[i] !== TOWN && BI[i] !== DEEP && OB[i] !== O.SHRINE;
 function layPlots(rand) {
   const dist = new Float32Array(N * N).fill(1e9), own = new Int32Array(N * N), seeds = [null];
   const hk = new Float32Array(1 << 21), hv = new Int32Array(1 << 21);
@@ -1012,7 +1033,7 @@ function makeBridge(from, d, span) {
 }
 async function layRoads(rand, progress) {
   const nodes = towns.map(t => ({ c: t.c, r: t.r, town: t }));
-  for (const b of [MEADOW, FOREST, SWAMP, GRAVE, SNOW, DESERT]) {
+  for (const b of [MEADOW, FOREST, SWAMP, GRAVE, SNOW, DESERT, DEEP]) {
     let got = 0;
     for (let k = 0; k < 6000 && got < 3; k++) {
       const c = 48 + Math.floor(rand() * (N - 96)), r = 48 + Math.floor(rand() * (N - 96)), i = T(c, r);
@@ -1178,7 +1199,7 @@ function placeTowns(rand) {
   const want = 7;
   const ok = (c, r) => {
     const L = LV[T(c, r)], b = BI[T(c, r)];
-    if (L < 1 || L > 4 || b === SNOW || b === SWAMP || b === GRAVE) return false;
+    if (L < 1 || L > 4 || b === SNOW || b === SWAMP || b === GRAVE || b === DEEP) return false;
     let good = 0, all = 0;
     for (let dr = -TOWN_R; dr <= TOWN_R; dr += 2) for (let dc = -TOWN_R; dc <= TOWN_R; dc += 2) {
       if (dc * dc + dr * dr > TOWN_R * TOWN_R) continue;
@@ -1316,7 +1337,8 @@ const O = {
   PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6,
   ROCK: 10, ICEROCK: 11, SANDROCK: 12,
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
-  FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36,
+  SEQUOIA: 7,
+  FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37,
   TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50,
 };
 const OBJ = [];
@@ -1328,6 +1350,8 @@ def(O.BIRCH, { name: 'birch', solid: 0.2, hp: 3, give: 'wood', tree: true });
 def(O.DEAD, { name: 'dead tree', solid: 0.16, hp: 3, give: 'wood', tree: true });
 def(O.SNOWPINE, { name: 'frost pine', solid: 0.22, hp: 4, give: 'wood', tree: true });
 def(O.CACTUS, { name: 'cactus', solid: 0.18, hp: 2, give: 'wood', tree: true });
+// the deep forest's redwoods: far too big to fell
+def(O.SEQUOIA, { name: 'redwood', solid: 0.62 });
 def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.ICEROCK, { name: 'ice rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.SANDROCK, { name: 'sandstone', solid: 0.3, hp: 4, give: 'stone' });
@@ -1338,7 +1362,7 @@ def(O.CRYPT, { tile: true });
 def(O.SHRINE, { tile: true });
 def(O.LAMP, { solid: 0.1 });
 def(O.HEARTH, { solid: 0.44 });
-[O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG].forEach(id => def(id, {}));
+[O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG, O.FERN].forEach(id => def(id, {}));
 
 // where on its tile an object stands (round ones wander a little off centre)
 function objPos(c, r, o) {
@@ -1416,6 +1440,19 @@ function placeScenery(c, r) {
       else if (k < 0.19) OB[i] = O.BONES;
       else if (k < 0.193 && k2 > 0.5) OB[i] = O.CRYPT;
       return;
+    case DEEP: {
+      // redwoods on a loose grid: at most one to each 4 × 4 block, on its inner 3 × 3, so never side by side
+      const bc = c >> 2, br = r >> 2, pick = Math.floor(hs(bc, br, 21) * 9);
+      if ((c & 3) === pick % 3 && (r & 3) === Math.floor(pick / 3) && hs(bc, br, 22) < 0.85) { OB[i] = O.SEQUOIA; return; }
+      // and in their shade ferns, toadstools, fallen logs, the odd young pine
+      if (k < 0.12) OB[i] = O.FERN;
+      else if (k < 0.15) OB[i] = O.MUSHROOM;
+      else if (k < 0.165) OB[i] = O.LOG;
+      else if (k < 0.18) OB[i] = O.ROCK;
+      else if (k < 0.2) OB[i] = O.PINE;
+      else if (k < 0.23) OB[i] = O.BUSH;
+      return;
+    }
     case SNOW: {
       const dense = fbm(nX, c / 28 + 90, r / 28, 2);
       if (k < 0.05 + Math.max(0, dense) * 0.3) OB[i] = O.SNOWPINE;
@@ -1443,7 +1480,7 @@ stage.appendChild(renderer.domElement);
 const cv = renderer.domElement;
 const scene = new THREE.Scene();
 // distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
-const FOG = { on: 1, start: 2, end: 30, amount: 0.7, day: '#b8c4d8', dusk: '#d8a890', night: '#161830' };
+const FOG = { on: 1, start: 0, end: 31, amount: 0.8, day: '#b8c4d8', dusk: '#d8a890', night: '#020203' };
 scene.fog = new THREE.Fog('#b8c4d8', 1e5, 1e5 + 1);
 // no scene.background: it would force a clear before the hero's second pass
 renderer.setClearColor('#0b0912', 1);
@@ -1534,6 +1571,7 @@ function renderWorld() {
   // three draws the sun's shadow map anew in every render, keeping only casters on the camera's layers:
   // draw it once, in the world pass (the hero casts there through a stand-in), and reuse it after
   renderer.shadowMap.autoUpdate = true;
+  updateTrunkCut();
   camera.layers.set(0); renderer.render(scene, camera);
   renderer.shadowMap.autoUpdate = false;
   camera.layers.set(1); renderer.render(scene, camera);
@@ -1542,10 +1580,10 @@ function renderWorld() {
     // the same view again with every surface drawn as its normal, sky left clear
     renderer.setRenderTarget(normRT);
     renderer.setClearColor(0x000000, 0); renderer.clear();
-    scene.overrideMaterial = normalMat;
+    scene.overrideMaterial = normalMat; tallVisible(false);
     camera.layers.set(0); renderer.render(scene, camera);
     camera.layers.set(1); renderer.render(scene, camera);
-    scene.overrideMaterial = null;
+    scene.overrideMaterial = null; tallVisible(true);
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
@@ -1627,6 +1665,8 @@ function updateClouds(dt) {
 
 // everything lit by the sun (not the glows, the water or the hero's see-through silhouette) casts and takes
 // the sun's shadow
+// draws nothing, but casts: the hero's stand-in on the world layer, and the redwoods' crowns up out of sight
+const castOnlyMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
 function shadowy(obj) {
   obj.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial && !o.material.transparent) o.castShadow = o.receiveShadow = true; });
   return obj;
@@ -1652,8 +1692,9 @@ class Buf {
     return shadowy(new THREE.Mesh(g, mat));
   }
 }
-let OUT = new Buf(), GLOW = new Buf();
+let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf();
 const bufGround = new Buf(), bufWater = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
+const bufTrunk = new Buf(), bufCanopy = new Buf();
 function tri(a, b, c, ca, cb = ca, cc = ca) {
   const B = OUT; B.need(9);
   const p = B.p, k = B.c; let n = B.n;
@@ -1681,7 +1722,7 @@ for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attrib
 function part(geo, color, x, y, z, { ry = 0, rx = 0, rz = 0, s = 1, sx = s, sy = s, sz = s, into = 'world' } = {}) {
   dummy.position.set(x, y, z); dummy.rotation.set(rx, ry, rz); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = into === 'glow' ? GLOW : OUT;
+  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -1705,6 +1746,8 @@ PAL[GRAVE] = P('#4c5446', '#444b40', '#6c6672', '#605a66', '#56525e', '#22202a',
 PAL[SNOW] = P('#e6eef6', '#d8e2ee', '#98a4b8', '#8c98ac', '#7a8496', '#363e50', '#ffffff');
 PAL[DESERT] = P('#d8b878', '#ccac6c', '#a47c4a', '#987244', '#b0784a', '#5a3a24', '#e8d098');
 PAL[TOWN] = P('#6f9446', '#668a42', '#968b78', '#8a806e', '#7a6a58', '#3a3028', '#6a8a44');
+// a floor of fallen needles: brown going green
+PAL[DEEP] = P('#5e5a34', '#57532f', '#6e5638', '#624c32', '#5a4e44', '#262018', '#7a5a2e');
 PAL[SNOW].lip = C('#f4f8ff'); PAL[SNOW].rim = C('#a8b6ca');
 const PLAZA = C('#a09480'), PLAZA_B = C('#948872');
 const FLOWER = [C('#e8d24a'), C('#e86a8a'), C('#f0f0f0'), C('#8a7af0')];
@@ -1879,6 +1922,32 @@ function buildWater(c0, r0, grid, GW, ch) {
   ch.water2 = new THREE.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
 }
 const groundMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
+// Redwood trunks draw like the rest, but those standing between the camera and the bottom of the view are
+// left out (they'd rise right across it from off screen), thinning away in a dither over two tiles.
+const TRUNK_U = { cutC: { value: new THREE.Vector2() }, cutDir: { value: new THREE.Vector2(0, 1) }, cutD: { value: 1e9 } };
+const trunkMat = flatMat({ vertexColors: true });
+trunkMat.onBeforeCompile = function (shader) {
+  THREE.MeshStandardMaterial.prototype.onBeforeCompile.call(this, shader);
+  Object.assign(shader.uniforms, TRUNK_U);
+  shader.vertexShader = 'varying vec2 vTrunkXZ;\n' + shader.vertexShader.replace('#include <project_vertex>',
+    '#include <project_vertex>\n  vTrunkXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
+  shader.fragmentShader = 'uniform vec2 cutC, cutDir; uniform float cutD; varying vec2 vTrunkXZ;\n' + shader.fragmentShader.replace('void main() {', `void main() {
+  vec2 bp = mod(floor(gl_FragCoord.xy), 2.0);
+  float fade = clamp((dot(vTrunkXZ - cutC, cutDir) - cutD) / 2.0 + 1.0, 0.0, 1.0);
+  if (fade > (2.0 * bp.x + 3.0 * bp.y - 4.0 * bp.x * bp.y) / 4.0 + 0.125) discard;`);
+};
+trunkMat.customProgramCacheKey = () => 'trunk';
+// where the cut falls: a tile in from the ground at the bottom middle of the view, measured toward the camera
+const cutRay = new THREE.Raycaster(), cutPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), cutHit = new THREE.Vector3(), NDC_LOW = new THREE.Vector2(0, -1);
+function updateTrunkCut() {
+  const U = TRUNK_U, sx = Math.sin(yaw), sz = Math.cos(yaw);
+  camera.updateMatrixWorld();
+  cutRay.setFromCamera(NDC_LOW, camera); cutPlane.constant = -camTarget.y;
+  U.cutC.value.set(camTarget.x, camTarget.z); U.cutDir.value.set(sx, sz);
+  U.cutD.value = cutRay.ray.intersectPlane(cutPlane, cutHit) ? (cutHit.x - camTarget.x) * sx + (cutHit.z - camTarget.z) * sz - 1 : 1e9;
+}
+// the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
+function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
 const waterMat = new THREE.MeshStandardMaterial({ vertexColors: true, emissive: '#0c2228', roughness: 0.55, metalness: 0, flatShading: true, transparent: true, opacity: 0.74, depthWrite: false });
 const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true });
 
@@ -2068,7 +2137,7 @@ function bush(x, z, k, c = '#3f7a34') { const y = groundAt(x, z); part(G.ico, sh
 // plants at its base, so it plainly grows out of the ground and can't be mistaken for the cliffs' rocks
 const ROCK_PLANTS = {
   [MEADOW]: ['#5e8a3a', '#e8d24a'], [FOREST]: ['#3a6a2e', '#4f7a3a'], [SWAMP]: ['#6a7a3a', '#4a5a30'], [GRAVE]: ['#5a6450', '#7a7a6a'],
-  [SNOW]: ['#dde8f2', '#a8b8c8'], [DESERT]: ['#8a7a4a', '#a89058'], [TOWN]: ['#5e8a3a', '#e86a8a'],
+  [SNOW]: ['#dde8f2', '#a8b8c8'], [DESERT]: ['#8a7a4a', '#a89058'], [TOWN]: ['#5e8a3a', '#e86a8a'], [DEEP]: ['#4a5a2a', '#6a5a2e'],
 };
 function rock(x, z, k, c = '#7a7684') {
   const y = groundAt(x, z), base = CC(c), h = 0.95 + k * 0.35, lean = (k - 0.5) * 0.25;
@@ -2094,6 +2163,43 @@ function oreVeins(x, z, k, vein) {
   const y = groundAt(x, z), h = 0.95 + k * 0.35, lean = (k - 0.5) * 0.25;
   part(G.box, CC(vein), x - 0.05, y + h * 0.5, z + 0.21, { sx: 0.08, sy: h * 0.42, sz: 0.06, ry: k * 2, rz: 0.4 + lean });
   part(G.box, CC(vein), x + 0.1, y + h * 0.66, z + 0.18, { sx: 0.06, sy: h * 0.22, sz: 0.06, ry: k * 2, rz: -0.5 });
+}
+// A redwood: a fluted trunk far taller than the view on a flared, rooted foot. Its crown is up out of
+// sight, in the canopy buffer, which draws nothing but casts the forest's dappled shade.
+const SEQ_H = 34;
+function sequoia(x, z, k) {
+  const y = groundAt(x, z), R = 0.46 + k * 0.12, bark = shade(CC('#7e3c26'), 0.88 + k * 0.2), dark = shade(bark, 0.62), lite = shade(bark, 1.18);
+  for (let i = 0; i < 6; i++) {
+    const a = k * 6 + i * 1.047 + hash(x, z, i) * 0.4, l = 0.5 + hash(x, z, i + 6) * 0.35;
+    part(G.box, i % 2 ? bark : dark, x + Math.cos(a) * (R + l * 0.35), y + 0.1, z + Math.sin(a) * (R + l * 0.35), { sx: l, sy: 0.28, sz: 0.2, ry: -a, rz: -0.28, into: 'trunk' });
+  }
+  part(G.cyl8, dark, x, y + 0.35, z, { sx: R * 2.7, sy: 0.7, sz: R * 2.7, ry: k, into: 'trunk' });
+  part(G.cyl8, bark, x, y + 1.1, z, { sx: R * 2.35, sy: 1.0, sz: R * 2.35, ry: k + 0.2, into: 'trunk' });
+  for (let s = 0; s < 4; s++) {
+    const h = (SEQ_H - 1.6) / 4, w = R * 2 * (1 - s * 0.06);
+    part(G.cyl8, s % 2 ? bark : shade(bark, 0.94), x, y + 1.6 + h * (s + 0.5), z, { sx: w, sy: h, sz: w, ry: k + s * 0.39, into: 'trunk' });
+  }
+  // deep furrows up the bark
+  for (let i = 0; i < 5; i++) {
+    const a = k * 3 + i * 1.257;
+    part(G.box, i % 2 ? dark : lite, x + Math.cos(a) * R * 0.98, y + 0.9 + SEQ_H / 2, z + Math.sin(a) * R * 0.98, { sx: 0.07, sy: SEQ_H, sz: 0.07, ry: -a, into: 'trunk' });
+  }
+  // dead stubs of the lowest boughs
+  for (let i = 0; i < 3; i++) {
+    const a = hash(x, z, i + 20) * 6.28, hy = 5 + i * 3.5 + hash(x, z, i + 23) * 2;
+    part(G.box, dark, x + Math.cos(a) * (R + 0.25), y + hy, z + Math.sin(a) * (R + 0.25), { sx: 0.6, sy: 0.1, sz: 0.1, ry: -a, rz: 0.35, into: 'trunk' });
+  }
+  for (let i = 0; i < 7; i++) {
+    const a = hash(x, z, i + 30) * 6.28, d = 0.5 + hash(x, z, i + 37) * 3.6, w = 2 + hash(x, z, i + 44) * 2.4;
+    part(G.ico, bark, x + Math.cos(a) * d, y + SEQ_H - 3 + hash(x, z, i + 51) * 6, z + Math.sin(a) * d, { sx: w, sy: w * 0.55, sz: w, ry: a, into: 'canopy' });
+  }
+}
+function fern(x, z, k) {
+  const y = groundAt(x, z), g = shade(CC('#4a7a2e'), 0.82 + k * 0.3), n = 6 + Math.floor(k * 3);
+  for (let i = 0; i < n; i++) {
+    const a = k * 5 + i * 6.28 / n + hash(x, z, i) * 0.3, l = 0.3 + hash(x, z, i + 9) * 0.14;
+    part(G.box, i % 2 ? g : shade(g, 1.12), x + Math.cos(a) * l * 0.45, y + 0.09, z + Math.sin(a) * l * 0.45, { sx: l, sy: 0.02, sz: 0.11, ry: -a, rz: 0.45 });
+  }
 }
 function mushroom(x, z, k) {
   const y = groundAt(x, z);
@@ -2183,12 +2289,14 @@ function drawObject(o, c, r) {
     case O.SNOWPINE: return pine(x, z, k2, true);
     case O.OAK: return roundTree(x, z, k2, BI[T(c, r)] === TOWN ? '#5a9a3e' : '#4f8a3a');
     case O.BIRCH: return birch(x, z, k2);
+    case O.SEQUOIA: return sequoia(x, z, k2);
+    case O.FERN: return fern(x, z, k2);
     case O.DEAD: return deadTree(x, z, k2, BI[T(c, r)] === SWAMP ? '#3a3428' : '#3a3030');
     case O.CACTUS: return cactus(x, z, k2);
     case O.ROCK: return rock(x, z, k2);
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
     case O.SANDROCK: return rock(x, z, k2, '#b8865a');
-    case O.BUSH: return bush(x, z, k2, BI[T(c, r)] === SWAMP ? '#4a6a34' : '#3f7a34');
+    case O.BUSH: return bush(x, z, k2, BI[T(c, r)] === SWAMP ? '#4a6a34' : BI[T(c, r)] === DEEP ? '#355f2c' : '#3f7a34');
     case O.SNOWBUSH: return bush(x, z, k2, '#dde8f2');
     case O.DRYBUSH: return bush(x, z, k2, '#8a7a4a');
     case O.FLOWERS: return flowers(x, z);
@@ -2216,6 +2324,7 @@ function drawObject(o, c, r) {
 const CLIFF_ROCK = [];
 CLIFF_ROCK[MEADOW] = ['#8a8478', null]; CLIFF_ROCK[FOREST] = ['#6e6a62', '#4a7038']; CLIFF_ROCK[SWAMP] = ['#5a5446', '#4e5e30'];
 CLIFF_ROCK[GRAVE] = ['#4e4a58', null]; CLIFF_ROCK[SNOW] = ['#7e889c', '#eef4fa']; CLIFF_ROCK[DESERT] = ['#b07a4a', null]; CLIFF_ROCK[TOWN] = ['#8a8478', null];
+CLIFF_ROCK[DEEP] = ['#5e5a52', '#4a6030'];
 function slopeRock(x, z, k, b) {
   const [col, cap] = CLIFF_ROCK[b], y = surfH(x, z), s = 0.26 + k * 0.2;
   if (b === DESERT) {
@@ -2352,7 +2461,7 @@ function shrine(x, z, k) {
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 function buildObjects(cx, cz, ch) {
-  OUT = bufObj; GLOW = bufGlow; bufObj.n = 0; bufGlow.n = 0;
+  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = 0;
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
@@ -2362,6 +2471,9 @@ function buildObjects(cx, cz, ch) {
   }
   ch.obj = bufObj.mesh(groundMat);
   ch.glow = bufGlow.mesh(glowMat);
+  ch.trunk = bufTrunk.mesh(trunkMat);
+  ch.canopy = bufCanopy.mesh(castOnlyMat);
+  if (ch.canopy) ch.canopy.castShadow = true;
 }
 
 // ---------- Building pieces ----------
@@ -2695,7 +2807,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.bog, ch.water, ch.water2, ch.obj, ch.glow, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.bog, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.canopy, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0 };
 function buildChunk(cx, cz) {
   const t0 = performance.now();
@@ -2718,7 +2830,7 @@ function rebuildObjects(c, r) {
   if (!ch) return;
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow);
+  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'canopy', tmp.canopy);
 }
 function rebuildPieces(c, r) {
   const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
@@ -2944,6 +3056,50 @@ function makeBoar() {
   g.scale.setScalar(1.35);
   return { g, parts, topH: 0.6 };
 }
+// a giant spider: low and quick on eight jointed legs, which scuttle as it runs
+function makeSpider() {
+  const g = new THREE.Group(), parts = [], add = boxer(g, parts), legs = [];
+  const hide = flatMat({ color: '#2e2620' }), hideL = flatMat({ color: '#4a3c30' }), mark = flatMat({ color: '#9a2e1e' }), eye = new THREE.MeshBasicMaterial({ color: '#ff3a2a' });
+  add(0.3, 0.22, 0.34, 0, 0.26, -0.18, hide);
+  add(0.1, 0.03, 0.18, 0, 0.375, -0.18, mark);
+  add(0.2, 0.13, 0.2, 0, 0.21, 0.07, hideL);
+  for (const [ex, ey] of [[-0.04, 0.25], [0.04, 0.25], [-0.07, 0.235], [0.07, 0.235]]) add(0.03, 0.03, 0.02, ex, ey, 0.175, eye);
+  add(0.03, 0.07, 0.03, -0.035, 0.13, 0.17, mark, 0.3); add(0.03, 0.07, 0.03, 0.035, 0.13, 0.17, mark, 0.3);
+  for (const sd of [-1, 1]) for (let k = 0; k < 4; k++) {
+    const p = new THREE.Group(), leg = boxer(p, parts);
+    p.position.set(sd * 0.08, 0.21, 0.13 - k * 0.075); p.rotation.y = sd * (k - 1.5) * 0.38; p.userData.ry = p.rotation.y;
+    g.add(p); legs.push(p);
+    leg(0.27, 0.035, 0.035, sd * 0.11, 0.08, 0, hideL, 0, sd * 0.62);
+    leg(0.03, 0.36, 0.03, sd * 0.255, -0.025, 0, hide, 0, sd * 0.25);
+  }
+  g.scale.setScalar(1.3);
+  return { g, parts, legs, topH: 0.5 };
+}
+// a mantrap: a rooted snapper in a rosette of leaves. It can't walk, but its stalk lunges the head out to bite.
+function makeMantrap() {
+  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
+  const leaf = flatMat({ color: '#3e6a2a' }), leafD = flatMat({ color: '#2e5020' }), stemM = flatMat({ color: '#4f7e32' }), skin = flatMat({ color: '#5a8a34' });
+  const maw = flatMat({ color: '#b8324a' }), tooth = flatMat({ color: '#f0ead0' }), spot = flatMat({ color: '#c8d860' });
+  for (let k = 0; k < 7; k++) {
+    const a = k * 0.898;
+    add(0.38, 0.03, 0.15, Math.cos(a) * 0.22, 0.05, Math.sin(a) * 0.22, k % 2 ? leaf : leafD, 0, 0.3, -a);
+  }
+  const pivot = (parent, x, y, z) => { const p = new THREE.Group(); p.position.set(x, y, z); parent.add(p); return p; };
+  const stalk = pivot(g, 0, 0.04, 0), neck = pivot(stalk, 0, 0.36, 0), head = pivot(neck, 0, 0.3, 0);
+  boxer(stalk, parts)(0.08, 0.38, 0.08, 0, 0.18, 0, stemM);
+  boxer(neck, parts)(0.065, 0.32, 0.065, 0, 0.15, 0, stemM);
+  const jawU = pivot(head, 0, 0.02, -0.06), jawL = pivot(head, 0, -0.02, -0.06);
+  const u = boxer(jawU, parts), l = boxer(jawL, parts);
+  u(0.28, 0.08, 0.32, 0, 0.045, 0.16, skin); u(0.24, 0.02, 0.28, 0, 0.0, 0.16, maw);
+  u(0.06, 0.02, 0.06, -0.06, 0.09, 0.1, spot); u(0.05, 0.02, 0.05, 0.07, 0.09, 0.2, spot);
+  l(0.26, 0.07, 0.3, 0, -0.04, 0.15, skin); l(0.22, 0.02, 0.26, 0, 0.0, 0.15, maw);
+  for (let t = 0; t < 5; t++) {
+    const tx = -0.1 + t * 0.05;
+    u(0.025, 0.06, 0.025, tx, -0.025, 0.3, tooth); l(0.025, 0.06, 0.025, tx + 0.025, 0.025, 0.28, tooth);
+  }
+  g.scale.setScalar(1.3);
+  return { g, parts, plant: { stalk, neck, head, jawU, jawL }, topH: 0.95 };
+}
 const FOE = {
   goblin: { make: makeGoblin, name: 'Goblin', hp: 30, dmg: 7, speed: 2.7, reach: 0.8, aggro: 8, rad: 0.25 },
   wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28 },
@@ -2955,6 +3111,9 @@ const FOE = {
   wraith: { make: () => makeGhost('#a8d8ff', '#2a5a9a'), name: 'Ice wraith', hp: 36, dmg: 11, speed: 2.6, reach: 0.9, aggro: 10, rad: 0.25 },
   scorpion: { make: makeScorpion, name: 'Giant scorpion', hp: 36, dmg: 9, speed: 3.1, reach: 0.9, aggro: 8, rad: 0.3 },
   boar: { make: makeBoar, name: 'Wild boar', hp: 36, dmg: 9, speed: 3.6, reach: 0.85, aggro: 6, rad: 0.3 },
+  spider: { make: makeSpider, name: 'Giant spider', hp: 24, dmg: 7, speed: 4.4, reach: 0.8, aggro: 9, rad: 0.3 },
+  // rooted: never moves, only turns to face you and lunges its head out to bite
+  mantrap: { make: makeMantrap, name: 'Mantrap', hp: 44, dmg: 12, speed: 0, reach: 1.55, aggro: 3.4, rad: 0.3, rooted: true },
 };
 
 // ---------- Movement and collision ----------
@@ -3056,7 +3215,6 @@ hero.parts.slice().forEach(p => {
 });
 heroRoot.traverse(o => o.layers.set(1));
 // the hero's shadow: a copy of each part on the world layer that draws nothing but casts
-const castOnlyMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
 hero.parts.slice().forEach(p => {
   const s = new THREE.Mesh(p.geometry, castOnlyMat);
   s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true;
@@ -4270,15 +4428,15 @@ function spawnTick(dt) {
     if (!kinds.length) continue;
     // a small pack, sometimes
     const kind = kinds[Math.floor(Math.random() * kinds.length)];
-    const n = Math.random() < (night ? 0.4 : 0.2) ? 2 : 1;
-    for (let k = 0; k < n; k++) spawnFoe(kind, c + 0.5 + (k ? 0.4 : 0), r + 0.5);
+    const n = FOE[kind].rooted ? 1 : Math.random() < (night ? 0.4 : 0.2) ? (kind === 'spider' ? 3 : 2) : 1;
+    for (let k = 0; k < n; k++) spawnFoe(kind, c + 0.5 + (k ? 0.4 * Math.cos(k * 2.1) : 0), r + 0.5 + (k ? 0.4 * Math.sin(k * 2.1) : 0));
     return;
   }
 }
 
 // ---------- Update ----------
 // the walk (T > Walk): cadence is leg swings per tile walked (radians of the cycle); the rest are swing angles
-const WALK = { cadence: 5.2, stride: 0.75, backStride: 0.55, arms: 0.6, sideOpen: 0.34, bob: 0.03, lean: 0.07 };
+const WALK = { cadence: 3.3, stride: 0.85, backStride: 0.55, arms: 0.6, sideOpen: 0.57, bob: 0.03, lean: 0.1 };
 let time = 0, regionName = '', regionT = 0;
 function heroSpeed() { return (mode === 'build' ? 4.4 : 4.6) * (WT[T(Math.floor(H.x), Math.floor(H.z))] === 1 ? 0.62 : 1); }
 function update(dt) {
@@ -4514,6 +4672,7 @@ function updateFoe(f, dt, night) {
     if (f.atk > 0.85) { f.atk = -1; f.cd = 0.9 + Math.random() * 0.5; }
   } else if (f.aggro) {
     if (dist < d.reach && f.cd <= 0 && H.alive) { f.atk = 0; f.struck = false; }
+    else if (d.rooted) f.face += angDiff(Math.atan2(dx, dz), f.face) * Math.min(1, dt * 4);
     else if (dist > d.reach * 0.75) {
       let mx = dx / dist, mz = dz / dist;
       // stuck on a wall or cliff: slide off sideways for a moment
@@ -4521,7 +4680,7 @@ function updateFoe(f, dt, night) {
       vx = mx * d.speed; vz = mz * d.speed; want = d.speed * dt;
       f.face += angDiff(Math.atan2(mx, mz), f.face) * Math.min(1, dt * 8);
     }
-  } else {
+  } else if (!d.rooted) {
     f.wanderT -= dt;
     if (f.wanderT <= 0) {
       f.wanderT = 2 + Math.random() * 4;
@@ -4533,6 +4692,7 @@ function updateFoe(f, dt, night) {
       else { vx = wx / wl * d.speed * 0.35; vz = wz / wl * d.speed * 0.35; want = d.speed * 0.35 * dt; f.face += angDiff(Math.atan2(wx, wz), f.face) * Math.min(1, dt * 5); }
     }
   }
+  if (d.rooted) f.kx = f.kz = 0;
   vx += f.kx; vz += f.kz;
   f.kx *= Math.max(0, 1 - dt * 8); f.kz *= Math.max(0, 1 - dt * 8);
   const got = moveEntity(f, vx * dt, vz * dt, d.rad, true);
@@ -4546,10 +4706,35 @@ function updateFoe(f, dt, night) {
   if (f.slime) { const b = Math.sin(time * (moving ? 9 : 3) + f.phase) * (moving ? 0.12 : 0.06); f.g.scale.set(sc * (1 + b + sq), sc * (1 - b - sq), sc * (1 + b + sq)); lift = moving ? Math.max(0, Math.sin(time * 9 + f.phase)) * 0.12 : 0; }
   else { f.g.scale.set(sc * (1 + sq * 0.5), sc * (1 - sq), sc * (1 + sq * 0.5)); lift = moving ? Math.abs(Math.sin(time * 11 + f.phase)) * 0.06 : 0; }
   if (f.ghost) lift = 0.15 + Math.sin(time * 2 + f.phase) * 0.07;
+  if (f.plant) { posePlant(f, sq); return; }
+  if (f.legs) f.legs.forEach((p, k) => { p.rotation.y = p.userData.ry + (moving ? Math.sin(time * 22 + f.phase + k * 1.9) * 0.3 : 0); p.rotation.z = moving ? Math.max(0, Math.sin(time * 22 + f.phase + k * 1.9)) * 0.15 * (k < 4 ? -1 : 1) : 0; });
   if (f.atk >= 0) { if (f.atk < 0.45) lean = -0.25 * (f.atk / 0.45); else if (f.atk < 0.6) { lean = 0.35; fwd = 0.25; } else lean = 0.35 * (1 - (f.atk - 0.6) / 0.25); }
   f.g.position.set(f.x + Math.sin(f.face) * fwd, f.y + lift, f.z + Math.cos(f.face) * fwd);
   f.g.rotation.set(lean, f.face, moving && !f.slime ? Math.sin(time * 11 + f.phase) * 0.06 : 0);
   if (f.jaw) f.jaw.position.y = 0.625 - Math.max(0, Math.sin(time * 9 + f.phase)) * 0.02;
+  f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
+  f.shadow.position.set(f.x, f.y + 0.02, f.z);
+}
+
+// the mantrap: it sways while it waits; to bite it rears back with its jaws wide, then throws the stalk forward,
+// the neck stretching, and snaps shut at full reach
+function posePlant(f, sq) {
+  const P = f.plant, sc = f.base, t = f.atk;
+  let back = 0, out = 0, open = 0.28 + Math.sin(time * 2.2 + f.phase) * 0.06;
+  if (t >= 0) {
+    if (t < 0.45) { const u = t / 0.45; back = u; open = 0.28 + u * 0.7; }
+    else if (t < 0.6) { const u = (t - 0.45) / 0.15; out = u; open = 0.98 * (1 - u); }
+    else { out = 1 - (t - 0.6) / 0.25; open = 0.05; }
+  } else if (f.aggro) open += 0.2;
+  const sway = t >= 0 ? 0 : Math.sin(time * 1.3 + f.phase) * 0.09;
+  P.stalk.rotation.set(-0.4 * back + 1.0 * out, 0, sway);
+  P.neck.rotation.set(-0.3 * back + 0.45 * out, 0, -sway * 0.6);
+  P.neck.scale.set(1, 1 + out * 1.1, 1);
+  P.head.rotation.set(0.25 * back - 0.9 * out, 0, 0);
+  P.jawU.rotation.x = -open; P.jawL.rotation.x = open * 0.7;
+  f.g.scale.set(sc * (1 + sq * 0.3), sc * (1 - sq * 0.5), sc * (1 + sq * 0.3));
+  f.g.position.set(f.x, f.y, f.z);
+  f.g.rotation.set(0, f.face, 0);
   f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
   f.shadow.position.set(f.x, f.y + 0.02, f.z);
 }
@@ -5083,7 +5268,7 @@ let genMs = 0;
 window.GAME = {
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
-    const lv = new Array(MAXL + 1).fill(0), bi = new Array(7).fill(0), sh = new Array(13).fill(0), ob = {};
+    const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
     for (let i = 0; i < N * N; i++) { lv[LV[i]]++; if (LV[i]) bi[BI[i]]++; sh[SH[i]]++; if (OB[i]) ob[OB[i]] = (ob[OB[i]] || 0) + 1; }
     let lake = 0, river = 0, canyon = 0, bridge = 0;
     for (let i = 0; i < N * N; i++) { if (WT[i] === 2) lake++; else if (WT[i] === 3) river++; if (CY[i]) canyon++; if (BR[i]) bridge++; }
@@ -5153,6 +5338,7 @@ window.GAME = {
     return null;
   },
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
+  foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp })),
   clearFoes: () => foes.slice().forEach(removeFoe),
   face: a => { H.face = a; },
   aimAt: (x, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, surfaceY(x, z) + 0.5, z).project(camera); mouse.x = rect.left + (v3.x + 1) / 2 * rect.width; mouse.y = rect.top + (1 - v3.y) / 2 * rect.height; },
