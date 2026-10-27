@@ -1428,7 +1428,11 @@ const cv = renderer.domElement;
 const scene = new THREE.Scene();
 // no scene.background: it would force a clear before the hero's second pass
 renderer.setClearColor('#0b0912', 1);
-const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
+// the view (T > Camera): the pixel-true orthographic camera, or a perspective one with a settable field of view
+const VIEW = { perspective: 0, fov: 30 };
+const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
+const perspCam = new THREE.PerspectiveCamera(VIEW.fov, 1, 1, 400);
+let camera = orthoCam;
 
 // ---------- Outlines (T > Outline) ----------
 // As Crafting and Conquest's toon strokes: wherever the ground a few pixels away lies more than `distance`
@@ -1446,21 +1450,37 @@ outlineRT.depthTexture.type = THREE.UnsignedIntType;
 const outlineMat = new THREE.ShaderMaterial({
   uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new THREE.Vector2(1, 1) },
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new THREE.Color() },
-    span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() } },
+    span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() },
+    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     uniform sampler2D tColor, tDepth, tNormal; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
     uniform float useDepth, useSobel, sStep, sTh, sStrength; uniform vec3 sColor;
+    uniform float ss, persp, near, far;
     varying vec2 vUv;
-    // orthographic depth is linear: back from the near plane in world units (empty sky reads as far)
-    float depthAt(vec2 px) { return texture2D(tDepth, (clamp(px, vec2(0.0), res - 1.0) + 0.5) / res).x * span; }
+    // the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
+    // samples, and its depth and normal are read at its middle sample
+    vec2 mid(vec2 px) { return ((clamp(px, vec2(0.0), res - 1.0) * ss + floor(ss * 0.5)) + 0.5) / (res * ss); }
+    // depth back from the near plane in world units (empty sky reads as far): linear for the orthographic
+    // camera, unprojected for the perspective one
+    float depthAt(vec2 px) {
+      float d = texture2D(tDepth, mid(px)).x;
+      if (persp < 0.5) return d * span;
+      float z = d * 2.0 - 1.0;
+      return 2.0 * near * far / (far + near - z * (far - near)) - near;
+    }
     // the view-space normal there (empty sky counts as the centre's, so it never strokes)
-    vec3 normalAt(vec2 px, vec3 n0) { vec4 g = texture2D(tNormal, (clamp(px, vec2(0.0), res - 1.0) + 0.5) / res); return g.a < 0.5 ? n0 : g.rgb * 2.0 - 1.0; }
+    vec3 normalAt(vec2 px, vec3 n0) { vec4 g = texture2D(tNormal, mid(px)); return g.a < 0.5 ? n0 : g.rgb * 2.0 - 1.0; }
     void main() {
       vec2 px = floor(vUv * res);
-      vec3 col = texture2D(tColor, (px + 0.5) / res).rgb;
+      vec3 col = vec3(0.0);
+      for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+        if (float(i) >= ss || float(j) >= ss) continue;
+        col += texture2D(tColor, (px * ss + vec2(float(i), float(j)) + 0.5) / (res * ss)).rgb;
+      }
+      col /= ss * ss;
       if (useSobel > 0.5) {
-        vec4 g0 = texture2D(tNormal, (px + 0.5) / res);
+        vec4 g0 = texture2D(tNormal, mid(px));
         if (g0.a > 0.5) {
           vec3 n0 = g0.rgb * 2.0 - 1.0; float s = sStep;
           vec3 a = normalAt(px + vec2(-s, -s), n0), b = normalAt(px + vec2(0.0, -s), n0), c = normalAt(px + vec2(s, -s), n0);
@@ -1487,7 +1507,7 @@ const outlineMat = new THREE.ShaderMaterial({
 const outlineScene = new THREE.Scene(), outlineCam = new THREE.Camera();
 outlineScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), outlineMat));
 function renderWorld() {
-  const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0, on = depthOn || sobelOn;
+  const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0, on = depthOn || sobelOn || ssNow > 1;
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   camera.layers.set(0); renderer.render(scene, camera);
@@ -1506,6 +1526,7 @@ function renderWorld() {
   const u = outlineMat.uniforms;
   u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
+  u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
   u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
   // the kernel's spacing: the stroke falls on both sides of a crease, so half the thickness
   u.sStep.value = Math.max(1, Math.round(SOBEL.thickness / 2));
@@ -2321,9 +2342,11 @@ function wallOn(c, r, d) {
 const buildCount = new Uint16Array(NC * NC);
 function plankFloor(c, r) {
   const y = LV[T(c, r)] * STEP;
+  // four boards over a dark bed that shows in the seams between them
+  part(G.box, '#3e2c1e', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
   for (let k = 0; k < 4; k++) {
     const col = shade(CC(k % 2 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(c, r, k + 40) * 0.14);
-    part(G.box, col, c + 0.125 + k * 0.25, y + 0.03, r + 0.5, { sx: 0.24, sy: 0.06, sz: 1 });
+    part(G.box, col, c + 0.125 + k * 0.25, y + 0.03, r + 0.5, { sx: 0.215, sy: 0.06, sz: 1 });
   }
 }
 // flagstones: four slabs a tile, offset row to row, over a dark mortar bed
@@ -2633,8 +2656,14 @@ function streamChunks(budgetMs) {
   streamFrame++;
   const t0 = performance.now();
   // how far the view reaches over the ground, plus room for tall terrain poking in from below
-  const hw = (camera.right - camera.left) / 2, hh = (camera.top - camera.bottom);
-  const reach = Math.hypot(hw, hh) + 10;
+  const hw = spanW / 2, hh = spanH;
+  let reach = Math.hypot(hw, hh) + 10;
+  if (camera === perspCam) {
+    // the top of a perspective view reaches far over the ground: out to where its top edge meets it
+    const half = camera.fov * Math.PI / 360, d = camera.position.distanceTo(camTarget), dip = Math.PI / 6 - half;
+    const far = dip > 0.06 ? d * Math.sin(Math.PI / 6) / Math.tan(dip) - d * Math.cos(Math.PI / 6) : 200;
+    reach = Math.min(200, Math.max(reach, far * 1.1 + 10));
+  }
   const ccx = camTarget.x / CH, ccz = camTarget.z / CH, rad = reach / CH + 0.75;
   const want = [];
   for (let cz = Math.max(0, Math.floor(ccz - rad)); cz <= Math.min(NC - 1, Math.floor(ccz + rad)); cz++)
@@ -3437,12 +3466,16 @@ $('mini').addEventListener('click', () => toggleMap());
 // the point on the ground under the cursor: march the view ray down until it meets the terrain
 const ray = new THREE.Vector3(), rayDir = new THREE.Vector3();
 let forcedPick = null;   // set by the test hook to stand in for the cursor
+// the ray from the camera through a point on the screen (-1..1 each way), for either camera
+function viewRay(nx, ny) {
+  ray.set(nx, ny, -1).unproject(camera);
+  rayDir.set(nx, ny, 1).unproject(camera).sub(ray).normalize();
+}
 function pickGround(withWalls) {
   if (forcedPick) return forcedPick;
   const rect = cv.getBoundingClientRect();
   const nx = (mouse.x - rect.left) / rect.width * 2 - 1, ny = -(mouse.y - rect.top) / rect.height * 2 + 1;
-  ray.set(nx, ny, -1).unproject(camera);
-  camera.getWorldDirection(rayDir);
+  viewRay(nx, ny);
   const top = (MAXL + 3) * STEP;
   let t = (ray.y - top) / -rayDir.y, prev = t;
   const at = s => [ray.x + rayDir.x * s, ray.y + rayDir.y * s, ray.z + rayDir.z * s];
@@ -3480,8 +3513,7 @@ let cursor = null, aim = { x: 0, z: 1 };
 function updateAim() {
   const rect = cv.getBoundingClientRect();
   const nx = (mouse.x - rect.left) / rect.width * 2 - 1, ny = -(mouse.y - rect.top) / rect.height * 2 + 1;
-  ray.set(nx, ny, -1).unproject(camera);
-  camera.getWorldDirection(rayDir);
+  viewRay(nx, ny);
   // aim along the plane through the hero's chest
   const t = (ray.y - (H.y + 0.5)) / -rayDir.y;
   const x = ray.x + rayDir.x * t, z = ray.z + rayDir.z * t;
@@ -4261,7 +4293,10 @@ const camTarget = new THREE.Vector3();
 let texel = 0.03, pxScale = 3;
 const MOBILE = matchMedia('(pointer: coarse)').matches;
 // Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 to size it from the screen
-const PIXEL = { size: 3, autoDiv: 260 };
+// antiAlias: the scene is drawn this many times finer each way and averaged into each mosaic pixel, so thin
+// lines and edges come out as blended colours instead of broken runs of pixels (1 = off)
+const PIXEL = { size: 3, autoDiv: 260, antiAlias: 2 };
+let ssNow = 1, spanW = 1, spanH = 1;   // the orthographic view's width and height in world units
 const pixelBase = () => PIXEL.size >= 1 ? Math.round(PIXEL.size) : Math.max(2, Math.round(Math.min(innerWidth, innerHeight) / PIXEL.autoDiv));
 // the mosaic follows the zoom: full size at standard zoom and closer, smaller (down to 2) zoomed out;
 // phones get half the desktop mosaic
@@ -4274,16 +4309,19 @@ function resize() {
   const w = innerWidth, h = innerHeight;
   const px = pxScale = pixelSize();
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
+  ssNow = Math.max(1, Math.min(4, Math.round(PIXEL.antiAlias)));
   renderer.setSize(rw, rh, false);
-  outlineRT.setSize(rw, rh); normRT.setSize(rw, rh); outlineMat.uniforms.res.value.set(rw, rh);
+  outlineRT.setSize(rw * ssNow, rh * ssNow); normRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
   cv.style.width = rw * px + 'px'; cv.style.height = rh * px + 'px';
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
   const tilePx = Math.max(6, Math.round(Math.SQRT1_2 / (viewH / (rh - 2)) / 2) * 2);
   texel = Math.SQRT1_2 / tilePx;
-  camera.left = -texel * rw / 2; camera.right = texel * rw / 2;
-  camera.top = texel * rh / 2; camera.bottom = -texel * rh / 2;
-  camera.updateProjectionMatrix();
+  orthoCam.left = -texel * rw / 2; orthoCam.right = texel * rw / 2;
+  orthoCam.top = texel * rh / 2; orthoCam.bottom = -texel * rh / 2;
+  orthoCam.updateProjectionMatrix();
+  spanW = texel * rw; spanH = texel * rh;
+  perspCam.aspect = rw / rh;
 }
 addEventListener('resize', resize);
 const setZoom = z => { zoom = Math.min(2, Math.max(0.5, z)); resize(); };
@@ -4296,6 +4334,19 @@ function updateCamera(dt) {
   const want = new THREE.Vector3(H.x, H.y, H.z);
   camTarget.lerp(want, Math.min(1, dt * 7));
   if (camTarget.distanceToSquared(want) < 1e-8) camTarget.copy(want);
+  if (VIEW.perspective > 0.5) {
+    // as far back as frames the same height of ground at the hero as the orthographic view does
+    camera = perspCam;
+    const fov = Math.max(5, Math.min(60, VIEW.fov)), d = spanH / 2 / Math.tan(fov * Math.PI / 360);
+    if (camera.fov !== fov || Math.abs(camera.near - d * 0.25) > 1e-6) { camera.fov = fov; camera.near = d * 0.25; camera.far = d + 260; camera.updateProjectionMatrix(); }
+    camera.position.set(camTarget.x + Math.sin(yaw) * Math.cos(Math.PI / 6) * d, camTarget.y + d * Math.sin(Math.PI / 6), camTarget.z + Math.cos(yaw) * Math.cos(Math.PI / 6) * d);
+    camera.lookAt(camTarget);
+    camera.updateMatrixWorld();
+    const dpr = devicePixelRatio || 1, s0 = Math.round(-pxScale * dpr) / dpr;
+    cv.style.transform = `translate(${s0}px, ${s0}px)`;
+    return;
+  }
+  camera = orthoCam;
   // 30° elevation at a 45° yaw makes grid lines a strict 2:1 pixel staircase
   camera.position.set(camTarget.x + Math.sin(yaw) * CAM_DIST, camTarget.y + CAM_DIST * Math.tan(Math.PI / 6), camTarget.z + Math.cos(yaw) * CAM_DIST);
   camera.lookAt(camTarget);
@@ -4545,6 +4596,11 @@ const TUNING = [
   ['Pixels', [
     [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto; shrinks to 2 zoomed out)', 0, 10, 1],
     [PIXEL, 'autoDiv', 'Auto: screen px per mosaic px', 120, 520, 10],
+    [PIXEL, 'antiAlias', 'Anti-aliasing: samples each way per mosaic pixel (1 off)', 1, 4, 1],
+  ]],
+  ['Camera', [
+    [VIEW, 'perspective', 'Perspective (0 orthographic, 1 perspective)', 0, 1, 1],
+    [VIEW, 'fov', 'Perspective field of view (degrees)', 5, 60, 1],
   ]],
   ['Hero light', [
     [HERO_LIGHT, 'night', 'Strength at night', 0, 6, 0.05],
@@ -4710,7 +4766,7 @@ function frame(now) {
   updateHearths(dt);
   streamChunks(6);
   drawMini(dt);
-  if (pixelSize() !== pxScale) resize();
+  if (pixelSize() !== pxScale || Math.round(PIXEL.antiAlias) !== ssNow) resize();
   renderWorld();
   requestAnimationFrame(frame);
 }
@@ -4781,6 +4837,10 @@ window.GAME = {
     return !(w ? WW : WN)[T(ec, er)];
   },
   hearth: () => { const h = hearths.values().next().value; return h ? { c: h.c, r: h.r, side: h.side, fl: FL[T(h.c, h.r)], ob: OB[T(h.c, h.r)] } : null; },
+  surf: (x, z) => surfH(x, z),
+  view: (persp, fov, aa) => { VIEW.perspective = persp; if (fov) VIEW.fov = fov; if (aa) PIXEL.antiAlias = aa; },
+  // the ground the cursor would pick at a screen point
+  pickAt: (sx, sy) => { const m = [mouse.x, mouse.y]; mouse.x = sx; mouse.y = sy; const p = pickGround(false); mouse.x = m[0]; mouse.y = m[1]; return p && [p.x, p.z]; },
   hp: v => { H.hp = v; renderHp(); },
   respawn: () => { respawn(); return [H.x, H.z]; },
   togglePlots, miniZoom: z => { miniZoom = z; },
