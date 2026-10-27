@@ -1405,8 +1405,11 @@ function cliffRocks(c, r, i) {
   for (let d = 0; d < 4; d++) {
     if (!(m & 1 << d)) continue;
     const n = water ? (hs(c, r, 100 + d) < 0.3 ? 1 : 0) : 2 + (hs(c, r, 100 + d) > 0.45 ? 1 : 0);
+    // a wall built along the top clears the rocks off the edge and the top of the slope under it
+    const walled = !water && wallOn(c, r, d);
     for (let k = 0; k < n; k++) {
       const t = (k + 0.2 + hs(c, r, 110 + d * 4 + k) * 0.6) / n, depth = 0.05 + hs(c, r, 120 + d * 4 + k) * 0.18;
+      if (walled && depth < 0.17) continue;
       const x = d === 1 ? c + 1 - depth : d === 3 ? c + depth : c + t, z = d === 0 ? r + depth : d === 2 ? r + 1 - depth : r + t;
       slopeRock(x, z, hs(c, r, 130 + d * 4 + k), b);
     }
@@ -1417,7 +1420,7 @@ function cliffRocks(c, r, i) {
       return d === 1 ? [c + 1 - k, r + t] : d === 3 ? [c + k, r + t] : d === 0 ? [c + t, r + k] : [c + t, r + 1 - k];
     };
     const kt = hs(c, r, 160 + d), kb = hs(c, r, 164 + d);
-    if (kt < 0.7) { const [x, z] = along(0, -0.04 - kt * 0.1); slopeRock(x, z, kt * 0.6, b); }
+    if (kt < 0.7 && !walled) { const [x, z] = along(0, -0.04 - kt * 0.1); slopeRock(x, z, kt * 0.6, b); }
     if (kb < 0.75 && !SH[i]) { const [x, z] = along(1, 0.42 + kb * 0.06); slopeRock(x, z, kb * 0.5, b); }
   }
   if (!water) for (let k = 0; k < 4; k++) if (m & 16 << k) slopeRock(c + (CX[k] ? 0.84 : 0.16), r + (CZ[k] ? 0.84 : 0.16), hs(c, r, 140 + k), b);
@@ -2684,8 +2687,13 @@ function buildSpot() {
   let d = 0; for (let k = 1; k < 4; k++) if (dist[k] < dist[d]) d = k;
   const [ec, er, w] = edgeOf(c, r, d), a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1);
   const flat = i => LV[i] > 0 && !SH[i] && !OBJ[OB[i]].tile && !OBJ[OB[i]].solid;
-  let ok = flat(a) && flat(b) && LV[a] === LV[b] && !(w ? WW : WN)[a] && BI[a] !== TOWN && BI[b] !== TOWN;
-  let why = (w ? WW : WN)[a] ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.' : 'Walls need clear, flat ground at one height on both sides.';
+  // along a cliff top only the high side needs to be clear and flat: the wall stands on its edge and may
+  // overhang the slope below a little (no doors there, they'd open onto the drop)
+  const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
+  const ground = cliff ? buildKind !== 'door' && flat(hi) && LV[hi] - LV[lo] === 1 && !OBJ[OB[lo]].tile : flat(a) && flat(b);
+  let ok = ground && !(w ? WW : WN)[a] && BI[a] !== TOWN && BI[b] !== TOWN;
+  let why = (w ? WW : WN)[a] ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.'
+    : cliff && buildKind === 'door' ? 'A door here would open onto the drop.' : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   // keep anyone from being walled inside the wall itself
   if (ok) for (const e of [H, ...foes]) {
@@ -2725,6 +2733,7 @@ function placePiece() {
     // clear the grass and flowers either side
     for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i]) { OB[i] = 0; const c = i % N, r = (i - c) / N; rebuildObjects(c, r); }
     if (s.kind === 'door') makeDoor(s.c, s.r, s.w);
+    rebuildObjects(s.c, s.r); if (s.w) rebuildObjects(s.c - 1, s.r); else rebuildObjects(s.c, s.r - 1);
     const before = rooms.size;
     refreshRooms(s.c, s.r, s.w);
     if (rooms.size > before) { sfx.roof(); toast('The room is closed in. A roof goes up.', 'good'); }
@@ -2758,6 +2767,7 @@ function removePiece() {
     const key = edgeKey(target.c, target.r, target.w);
     const d = doors.get(key);
     if (d) { scene.remove(d.pivot); doors.delete(key); openDoors.delete(key); }
+    rebuildObjects(target.c, target.r); if (target.w) rebuildObjects(target.c - 1, target.r); else rebuildObjects(target.c, target.r - 1);
     refreshRooms(target.c, target.r, target.w);
   }
   pay(target.kind, -1);
