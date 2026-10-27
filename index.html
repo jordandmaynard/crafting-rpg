@@ -1531,7 +1531,11 @@ function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0, on = depthOn || sobelOn || ssNow > 1;
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
+  // three draws the sun's shadow map anew in every render, keeping only casters on the camera's layers:
+  // draw it once, in the world pass (the hero casts there through a stand-in), and reuse it after
+  renderer.shadowMap.autoUpdate = true;
   camera.layers.set(0); renderer.render(scene, camera);
+  renderer.shadowMap.autoUpdate = false;
   camera.layers.set(1); renderer.render(scene, camera);
   if (!on) return;
   if (sobelOn) {
@@ -1642,6 +1646,9 @@ class Buf {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(this.p.slice(0, this.n), 3));
     g.setAttribute('color', new THREE.BufferAttribute(this.c.slice(0, this.n), 3));
+    // flat shading doesn't need normals to draw, but the shadow lookup nudges each point out along its
+    // normal (normalBias), and with none every lookup misses and nothing is shadowed
+    g.computeVertexNormals();
     return shadowy(new THREE.Mesh(g, mat));
   }
 }
@@ -3048,6 +3055,13 @@ hero.parts.slice().forEach(p => {
   p.parent.add(s);
 });
 heroRoot.traverse(o => o.layers.set(1));
+// the hero's shadow: a copy of each part on the world layer that draws nothing but casts
+const castOnlyMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+hero.parts.slice().forEach(p => {
+  const s = new THREE.Mesh(p.geometry, castOnlyMat);
+  s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true;
+  p.parent.add(s);
+});
 const shadowMat = new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.35, depthWrite: false });
 const shadowGeo = new THREE.CircleGeometry(0.26, 8).rotateX(-Math.PI / 2);
 const heroShadow = new THREE.Mesh(shadowGeo, shadowMat);
@@ -4159,7 +4173,6 @@ function updateFog(dusk, day) {
 const SHADOWS = { on: 1, strength: 0.8, range: 40, softness: 1 };
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
-sun.shadow.camera.layers.enableAll();   // the hero draws on its own layer, and casts too
 const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3(), shC = new THREE.Vector3();
 function placeSun(dx, dy, dz) {
   const R = SHADOWS.range, cam = sun.shadow.camera;
@@ -4871,16 +4884,16 @@ const TUNING = [
     [SKY, 'latitude', 'Latitude: how high the sun climbs (degrees)', -80, 80, 1],
     [SKY, 'season', 'Season: the sun\'s declination (+23 midsummer, -23 midwinter)', -23.5, 23.5, 0.5],
     [SKY, 'north', 'Which way north is (degrees)', -180, 180, 1],
-    [SKY, 'sunStrength', 'Sunlight strength', 0, 2, 0.01],
-    [SKY, 'sunColor', 'Sunlight tint', 'color'],
-    [SKY, 'haze', 'Haze: redder, dimmer low sun', 0, 40, 0.5],
-    [SKY, 'skyStrength', 'Skylight strength', 0, 3, 0.01],
-    [SKY, 'skyColor', 'Skylight tint', 'color'],
-    [SKY, 'bgDay', 'Sky light by day', 'color'],
-    [SKY, 'bgDusk', 'Sky light at dusk', 'color'],
-    [SKY, 'bgNight', 'Sky light by night', 'color'],
-    [SKY, 'moonStrength', 'Moonlight strength', 0, 4, 0.01],
-    [SKY, 'moonColor', 'Moonlight tint', 'color'],
+    [SKY, 'sunStrength', 'Sun: strength of its direct light', 0, 2, 0.01],
+    [SKY, 'sunColor', 'Sun: tint', 'color'],
+    [SKY, 'haze', 'Sun: how much the air reddens and dims it when low (not the distance haze)', 0, 40, 0.5],
+    [SKY, 'skyStrength', 'Sky fill: strength of the soft light from the whole sky (lights the shade)', 0, 3, 0.01],
+    [SKY, 'skyColor', 'Sky fill: tint', 'color'],
+    [SKY, 'bgDay', 'Sky fill: colour by day', 'color'],
+    [SKY, 'bgDusk', 'Sky fill: colour at dusk', 'color'],
+    [SKY, 'bgNight', 'Sky fill: colour by night', 'color'],
+    [SKY, 'moonStrength', 'Moon: strength of its direct light', 0, 4, 0.01],
+    [SKY, 'moonColor', 'Moon: tint', 'color'],
     [SKY, 'nightLight', 'Night sky glow', 0, 1, 0.01],
     [SKY, 'exposure', 'Exposure', 0.2, 3, 0.01],
     [SKY, 'autoExposure', 'Auto exposure: opens up at dusk and night (0 off)', 0, 1, 0.01],
