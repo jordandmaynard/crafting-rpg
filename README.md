@@ -12,7 +12,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 ## Controls
 
-- **Move:** WASD (W always walks up the screen).
+- **Move:** WASD (W always walks up the screen). You always face the cursor as you walk, so you can back away from something while facing it.
 - **Attack:** left click, aimed at the cursor. Hold to keep swinging; the third swing of a combo is a heavy overhead. Hitting trees and rocks gathers wood and stone.
 - **Q** whirlwind, **E** lunge, **Space** dash. The whirlwind and the lunge also cut and break trees and rocks they reach, and every blow gathers wood or stone in proportion to its damage.
 - **F** open and close doors.
@@ -25,7 +25,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 Press any button on a controller and the game switches to it: the action bar, the door prompt, the help and the map show Xbox button glyphs, and a key or the mouse switches back.
 
-- **Play:** left stick moves, right stick aims (or you face the way you walk), **RT** attacks (hold to keep swinging), **X** whirlwind, **Y** lunge, **A** dash, **B** opens and closes doors.
+- **Play:** left stick moves, right stick aims (let go and you face the way you walk), **RT** attacks (hold to keep swinging), **X** whirlwind, **Y** lunge, **A** dash, **B** opens and closes doors.
 - **Build (MENU):** the right stick moves a diamond cursor around you. **RT** places (hold it and move the cursor to lay a row or an area), **LT** removes, **X** / **Y** / **A** open the floor, wall and door rows (press again to step to the next kind), **RB** hearth, **B** closes the row or leaves build mode.
 - **Both:** **VIEW** map (left stick pans, **RT** / **LT** zoom, **B** closes), **L3** plot outlines, D-pad up and down zoom, left and right turn the camera.
 
