@@ -858,7 +858,7 @@ const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
 // As Crafting and Conquest's toon strokes: wherever the ground a few pixels away lies more than `distance`
 // tiles further back than this pixel (an edge with something behind it), this pixel is stroked. It runs on
 // the low-res buffer, so the stroke is whole mosaic pixels, `thickness` of them wide.
-const OUTLINE = { on: 0, distance: 0.6, thickness: 1, strength: 1, color: '#000000' };
+const OUTLINE = { on: 1, distance: 0.4, thickness: 1, strength: 0.73, color: '#000000' };
 const outlineRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
 outlineRT.depthTexture = new THREE.DepthTexture(1, 1);
 outlineRT.depthTexture.type = THREE.UnsignedIntType;
@@ -1350,7 +1350,6 @@ function plankFloor(c, r) {
 }
 // walls of the room you stand in whose outside faces the camera, drawn only up to the stone footing
 const cutEdges = new Set();
-let cutKey = '';
 // a wall or doorframe along an edge: stone footing, plaster panel, timber posts and beams
 function wallPiece(c, r, w, door) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1);
@@ -1497,24 +1496,34 @@ function roofMesh(rm) {
   OUT = save;
   return m;
 }
-// Standing in a room, the walls between you and the camera drop to their stone footing. Which ones
-// those are only changes when the room does or the camera swings past a side, so chunks rebuild rarely.
+// Standing in a room, its walls whose outside faces the camera drop to their stone footing, and so does
+// every wall nearby that sits lower on the screen than you. Doors always stand full height. The set is
+// worked out each frame and the chunks holding walls that changed are rebuilt.
+const CUT_R = 10, wantCut = new Set();
 function updateCutaway(inside) {
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
-  const key = inside ? inside + ':' + (sy > 0) + (sy < 0) + (cy > 0) + (cy < 0) + ':' + roomSeq : '';
-  if (key === cutKey) return;
-  cutKey = key;
+  wantCut.clear();
+  const rm = inside && rooms.get(inside);
+  if (rm) {
+    for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
+      if (wallOn(c, r, d) !== 1 || rm.set.has(T(c + DC[d], r + DR[d]))) continue;
+      if (DC[d] * sy + DR[d] * cy > 1e-3) { const [ec, er, w] = edgeOf(c, r, d); wantCut.add(edgeKey(ec, er, w)); }
+    }
+    // toward the camera is lower on the screen
+    const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+    for (let r = Math.max(0, r0 - CUT_R); r <= Math.min(N - 1, r0 + CUT_R); r++) for (let c = Math.max(0, c0 - CUT_R); c <= Math.min(N - 1, c0 + CUT_R); c++) {
+      const i = T(c, r);
+      if (WN[i] === 1 && (c + 0.5 - H.x) * sy + (r - H.z) * cy > 0) wantCut.add(edgeKey(c, r, 0));
+      if (WW[i] === 1 && (c - H.x) * sy + (r + 0.5 - H.z) * cy > 0) wantCut.add(edgeKey(c, r, 1));
+    }
+  }
+  if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
   const touched = new Set();
   const mark = e => { const t = e >> 1, c = t % N; touched.add(Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH)); };
-  cutEdges.forEach(mark);
+  for (const k of cutEdges) if (!wantCut.has(k)) mark(k);
+  for (const k of wantCut) if (!cutEdges.has(k)) mark(k);
   cutEdges.clear();
-  const rm = inside && rooms.get(inside);
-  if (rm) for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
-    if (!wallOn(c, r, d) || rm.set.has(T(c + DC[d], r + DR[d]))) continue;
-    if (DC[d] * sy + DR[d] * cy > 1e-3) { const [ec, er, w] = edgeOf(c, r, d); cutEdges.add(edgeKey(ec, er, w)); }
-  }
-  cutEdges.forEach(mark);
-  for (const d of doors.values()) d.pivot.visible = !cutEdges.has(edgeKey(d.c, d.r, d.w));
+  for (const k of wantCut) cutEdges.add(k);
   touched.forEach(k => { const ch = chunks.get(k); if (ch) { const tmp = {}; buildPieces(ch.cx, ch.cz, tmp); swapMesh(ch, 'build', tmp.build); } });
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
@@ -1559,7 +1568,6 @@ function rebuildObjects(c, r) {
   swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow);
 }
 function rebuildPieces(c, r) {
-  cutKey = '';
   const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
   if (!ch) return;
   const tmp = {};
@@ -1892,7 +1900,10 @@ const shadowMat = new THREE.MeshBasicMaterial({ color: '#000', transparent: true
 const shadowGeo = new THREE.CircleGeometry(0.26, 8).rotateX(-Math.PI / 2);
 const heroShadow = new THREE.Mesh(shadowGeo, shadowMat);
 scene.add(heroShadow);
-const heroLight = addLight(new THREE.PointLight('#ffb060', 0, 9, 1.6));
+// Tuning (T > Hero light): strength by night and by day, reach, falloff, colour, and where it hangs:
+// `toward` tiles from the hero along the line to the camera, then `height` above that
+const HERO_LIGHT = { night: 1.5, day: 0, range: 9, decay: 1.6, toward: 1.2, height: 1.0, color: '#ffb060' };
+const heroLight = addLight(new THREE.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.range, HERO_LIGHT.decay));
 // a few lamp lights shared out to whichever town lamps are nearest
 const lampLights = [0, 1, 2, 3].map(() => addLight(new THREE.PointLight('#ffb060', 0, 4.5, 2)));
 lights.forEach(l => l.layers.enableAll());
@@ -2141,15 +2152,22 @@ function detach(i, c, r) {
   rebuildObjects(c, r);
   return d;
 }
-function strikeProp(i, c, r, dirx, dirz) {
+// Every blow takes toughness off a prop in proportion to its damage (a plain swing takes one point), and
+// each point taken off yields one wood or stone, fractions carried over to the next blow.
+const harvestCarry = { wood: 0, stone: 0 };
+function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const o = OB[i], od = OBJ[o];
   const d = detach(i, c, r);
-  d.hp--; d.shake = 1; d.sx = dirx; d.sz = dirz;
+  const before = d.hp;
+  d.hp = Math.max(0, d.hp - dmg / SWING_DMG[0]);
+  d.shake = 1; d.sx = dirx; d.sz = dirz;
   const res = od.give;
   const top = LV[i] * STEP + (od.tree ? 0.7 : 0.25);
   chips(d.x, top, d.z, res === 'wood' ? 'wood' : 'stone', od.tree ? 4 : 6);
   if (res === 'wood') sfx.chop(); else sfx.clink();
-  let gain = 1;
+  harvestCarry[res] += before - d.hp;
+  let gain = Math.floor(harvestCarry[res] + 1e-6);
+  harvestCarry[res] -= gain;
   if (d.hp <= 0) {
     gain += 2;
     OB[i] = 0;
@@ -2165,9 +2183,20 @@ function strikeProp(i, c, r, dirx, dirz) {
       puff(d.x, LV[i] * STEP, d.z, '#a8a4b0', 8, 1.2);
     }
   }
+  if (!gain) return;
   H[res] += gain;
   floatText('+' + gain + ' ' + res.toUpperCase(), d.x, top + 0.6, d.z, res === 'wood' ? '#e0b070' : '#c8c6d0');
   renderStats(); bump(res === 'wood' ? 'woodPlate' : 'stonePlate');
+}
+// the trees and rocks within reach of the hero (on their level), for the whirl and the lunge
+function propsNear(reach, fn) {
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+    const c = c0 + dc, r = r0 + dr, i = T(c, r), o = OB[i];
+    if (!OBJ[o].hp || Math.abs(LV[i] * STEP - H.y) > 0.6) continue;
+    const [ox, oz] = objPos(c, r, o), dx = ox - H.x, dz = oz - H.z, d = Math.hypot(dx, dz) || 1e-4;
+    if (d <= reach + OBJ[o].solid) fn(i, c, r, dx / d, dz / d);
+  }
 }
 
 // ---------- Combat ----------
@@ -2207,7 +2236,7 @@ function swingHit(range, arc, dmg) {
     if (d > range + OBJ[o].solid || Math.abs(angDiff(Math.atan2(dx, dz), H.face)) > arc / 2 + 0.2) continue;
     if (d < bd) { bd = d; best = [i, c, r, dx / d, dz / d]; }
   }
-  if (best) strikeProp(...best);
+  if (best) strikeProp(...best, dmg);
 }
 function hurtHero(dmg, fromX, fromZ) {
   if (!H.alive || H.invuln > 0) return;
@@ -2561,8 +2590,11 @@ function updateSky() {
   const a = clamp((clock - 0.25) / 0.5, -0.2, 1.2) * Math.PI;
   sun.position.set(H.x + Math.cos(a) * 7, H.y + 6 + Math.sin(Math.max(0, a)) * 6, H.z + 8);
   sun.target.position.set(H.x, H.y, H.z);
-  heroLight.intensity = (1 - d) * 1.5;
-  heroLight.position.set(H.x, H.y + 1.6, H.z);
+  // on the line from the hero to the camera, a little toward it and raised, so the side you see is lit
+  heroLight.intensity = HERO_LIGHT.day + (HERO_LIGHT.night - HERO_LIGHT.day) * (1 - d);
+  heroLight.distance = HERO_LIGHT.range; heroLight.decay = HERO_LIGHT.decay; heroLight.color.set(HERO_LIGHT.color);
+  const along = HERO_LIGHT.toward, flat = along * Math.cos(Math.PI / 6);
+  heroLight.position.set(H.x + Math.sin(yaw) * flat, H.y + along * 0.5 + HERO_LIGHT.height, H.z + Math.cos(yaw) * flat);
   const night = d < 0.35;
   if (night !== wasNight) {
     if (night) toast('Night falls. The wilds grow bold.', '');
@@ -2645,6 +2677,7 @@ function update(dt) {
         if (H.lungeHit.has(f) || Math.hypot(f.x - H.x, f.z - H.z) > 1.0 + f.def.rad) continue;
         H.lungeHit.add(f); hurtFoe(f, 26, H.x - Math.sin(H.face), H.z - Math.cos(H.face), 4.5);
       }
+      propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
     } else if (m) {
       const slow = H.swing >= 0 ? 0.45 : 1;
@@ -2676,6 +2709,7 @@ function update(dt) {
       if (H.whirlTick <= 0) {
         H.whirlTick = 0.25; ringT = 0;
         for (const f of foes.slice()) if (Math.hypot(f.x - H.x, f.z - H.z) < 1.75 + f.def.rad && Math.abs(f.y - H.y) < 1.2) hurtFoe(f, 9, H.x, H.z, 3.5);
+        propsNear(1.75, (i, c, r, dx, dz) => strikeProp(i, c, r, dx, dz, 9));
       }
       if (H.whirl > 1.0) { H.whirl = -1; H.face = Math.atan2(aim.x, aim.z); }
     }
@@ -2878,7 +2912,7 @@ const camTarget = new THREE.Vector3();
 let texel = 0.03, pxScale = 3;
 const MOBILE = matchMedia('(pointer: coarse)').matches;
 // Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 to size it from the screen
-const PIXEL = { size: 4, autoDiv: 260 };
+const PIXEL = { size: 3, autoDiv: 260 };
 const pixelBase = () => PIXEL.size >= 1 ? Math.round(PIXEL.size) : Math.max(2, Math.round(Math.min(innerWidth, innerHeight) / PIXEL.autoDiv));
 // the mosaic follows the zoom: full size at standard zoom and closer, smaller (down to 2) zoomed out;
 // phones get half the desktop mosaic
@@ -3064,6 +3098,15 @@ const TUNING = [
   ['Pixels', [
     [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto; shrinks to 2 zoomed out)', 0, 10, 1],
     [PIXEL, 'autoDiv', 'Auto: screen px per mosaic px', 120, 520, 10],
+  ]],
+  ['Hero light', [
+    [HERO_LIGHT, 'night', 'Strength at night', 0, 6, 0.05],
+    [HERO_LIGHT, 'day', 'Strength by day', 0, 6, 0.05],
+    [HERO_LIGHT, 'range', 'Reach (tiles, 0 = endless)', 0, 30, 0.5],
+    [HERO_LIGHT, 'decay', 'Falloff', 0, 3, 0.05],
+    [HERO_LIGHT, 'toward', 'Distance toward the camera (tiles)', 0, 6, 0.05],
+    [HERO_LIGHT, 'height', 'Height above that (tiles)', -1, 6, 0.05],
+    [HERO_LIGHT, 'color', 'Colour', 'color'],
   ]],
   ['Outline', [
     [OUTLINE, 'on', 'Edge outline (0 off, 1 on)', 0, 1, 1],

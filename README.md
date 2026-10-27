@@ -14,12 +14,12 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 - **Move:** WASD (W always walks up the screen).
 - **Attack:** left click, aimed at the cursor. Hold to keep swinging; the third swing of a combo is a heavy overhead. Hitting trees and rocks gathers wood and stone.
-- **Q** whirlwind, **E** lunge, **Space** dash.
+- **Q** whirlwind, **E** lunge, **Space** dash. The whirlwind and the lunge also cut and break trees and rocks they reach, and every blow gathers wood or stone in proportion to its damage.
 - **F** open and close doors.
 - **Camera:** hold the right mouse button and drag to turn it freely (the middle button works too). The tilt always stays at 30°. **Z** / **C** turn it a quarter at a time, and the mouse wheel zooms.
 - **B** build mode: **1** floor, **2** wall, **3** door. Left click places, and a right click (without dragging) removes a piece for a full refund. Walls and doors snap to the tile side nearest the cursor.
 - **M** map.
-- **T** tuning panel: the mosaic pixel size, and an optional black edge outline (how far back the ground behind an edge must be, and how many mosaic pixels thick).
+- **T** tuning panel: the mosaic pixel size, the hero's light (strength by night and day, reach, colour, and how far toward the camera and how high it hangs, so the side you see stays lit), and the black edge outline (how far back the ground behind an edge must be, and how many mosaic pixels thick).
 
 ## The world
 
@@ -31,7 +31,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 
 ## Building
 
-Floors need flat ground that no slope reaches into. Floors cost 2 wood, walls 2 wood and 2 stone, doors 5 wood. Close in a room with walls and doors (any shape, up to about 200 tiles) and a hipped roof goes up over it. The roof hides while you stand inside, and every roof hides in build mode. Inside, the walls between you and the camera drop to their stone footing so you can see in. You heal faster under a roof, and monsters can't get through walls or closed doors.
+Floors need flat ground that no slope reaches into. Floors cost 2 wood, walls 2 wood and 2 stone, doors 5 wood. Close in a room with walls and doors (any shape, up to about 200 tiles) and a hipped roof goes up over it. The roof hides while you stand inside, and every roof hides in build mode. Inside, the room's walls that face the camera, and every wall nearby that sits lower on the screen than you, drop to their stone footing so you can see in. Doors always stand full height. You heal faster under a roof, and monsters can't get through walls or closed doors.
 
 ## How it renders
 
