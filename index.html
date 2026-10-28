@@ -73,6 +73,24 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #prompt .glyph { height: 18px; width: auto; margin-right: 8px; }
 .maprow .glyph { height: 13px; width: auto; }
 body.pad .kb-only, body:not(.pad) .pad-only { display: none !important; }
+body.touch:not(.pad) .kb-only, body:not(.touch) .touch-only, body.pad .touch-only { display: none !important; }
+body.touch, body.touch #stage canvas { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+body.touch .slot .key { display: none; }
+body.touch #prompt, body.touch #jumpHint { pointer-events: auto; cursor: pointer; padding: 10px; }
+#touchUI { position: fixed; inset: 0; pointer-events: none; z-index: 3; }
+#stick { position: absolute; left: calc(env(safe-area-inset-left, 0px) + 28px); bottom: calc(env(safe-area-inset-bottom, 0px) + 28px); width: 132px; height: 132px; border-radius: 50%; background: rgba(18, 14, 26, 0.45); border: 3px solid rgba(239, 228, 200, 0.2); pointer-events: auto; touch-action: none; }
+#stickKnob { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -31px 0 0 -31px; border-radius: 50%; background: rgba(239, 228, 200, 0.5); border: 3px solid rgba(0, 0, 0, 0.5); pointer-events: none; }
+#touchBtns { position: absolute; right: calc(env(safe-area-inset-right, 0px) + 22px); bottom: calc(env(safe-area-inset-bottom, 0px) + 22px); width: 230px; height: 230px; pointer-events: none; }
+.tbtn { position: absolute; width: 62px; height: 62px; box-sizing: border-box; border-radius: 50%; background: rgba(18, 14, 26, 0.6); border: 3px solid var(--panel-edge); box-shadow: 3px 3px 0 #000; pointer-events: auto; touch-action: none; overflow: hidden; }
+.tbtn .ic { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; z-index: 1; }
+.tbtn svg { width: 50%; height: 50%; image-rendering: pixelated; }
+.tbtn.atk { width: 92px; height: 92px; right: 0; bottom: 0; }
+.tbtn.q { right: 112px; bottom: 4px; }
+.tbtn.e { right: 90px; bottom: 90px; }
+.tbtn.dash { right: 4px; bottom: 112px; }
+.tbtn.held { border-color: var(--gold); }
+.tbtn.locked { opacity: 0.4; }
+.tbtn .cd { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(5, 4, 9, 0.72); pointer-events: none; }
 body.pad canvas { cursor: none; }
 #padCursor { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid var(--gold); box-shadow: 0 0 0 1px #000; pointer-events: none; transform: rotate(45deg); }
 .slot .name { font-family: var(--display); font-size: 7px; letter-spacing: 0.04em; color: var(--bone); white-space: nowrap; }
@@ -227,6 +245,10 @@ button:disabled { opacity: 0.45; cursor: default; }
 <div id="target" hidden><div class="tname"></div><div class="meter"><b></b><i></i></div></div>
 <div id="toast" hidden></div>
 <div id="padCursor" hidden></div>
+<div id="touchUI" hidden>
+  <div id="stick"><div id="stickKnob"></div></div>
+  <div id="touchBtns"></div>
+</div>
 <div id="inv" class="plate" hidden>
   <div class="invBar" id="invBar"><span class="card-title">INVENTORY</span><button id="invClose" title="Close (Tab)" aria-label="Close">X</button></div>
   <div class="invBody">
@@ -255,6 +277,7 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
       <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
+      <li class="touch-only"><span>The stick at the bottom left walks. The big button attacks: hold it to keep swinging, and drag it to aim. Drag an ability (whirlwind, lunge, dash) to aim it and let go to use it, or just tap it. Tap the prompts over doors, loot and the tanning table, pinch to zoom, and use the bar at the bottom for your pack, build mode and the map.</span></li>
       <li class="pad-only"><span><g-p>RB</g-p> gear and pack: the D-pad picks a square, <g-p>A</g-p> puts on or takes off, <g-p>B</g-p> closes. Your weapon gives your attack and your <g-p>X</g-p> and <g-p>Y</g-p>; bare-handed you punch.</span></li>
       <li class="pad-only"><span><g-p>MENU</g-p> build mode: <g-p>X</g-p> floors, <g-p>Y</g-p> walls, <g-p>A</g-p> doors (press again for the next kind), <g-p>RB</g-p> hearth. <g-p>RS</g-p> moves the build cursor, <g-p>RT</g-p> places (hold and move to lay a row), <g-p>LT</g-p> removes, <g-p>B</g-p> done.</span></li>
       <li>Close a room with walls and doors and a roof goes up (rooms that meet across a wall share one roof). It hides while you are inside, and you heal faster under it.</li>
@@ -299,6 +322,14 @@ const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+// a phone or tablet (?touch=1 or ?touch=0 in the address forces it either way): touch controls, and the
+// costliest lighting off
+const MOBILE = (() => {
+  const q = new URLSearchParams(location.search).get('touch');
+  if (q === '1' || q === '0') return q === '1';
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && matchMedia('(pointer: coarse)').matches);
+})();
+document.body.classList.toggle('touch', MOBILE);
 
 // ---------- The world grid ----------
 // A strict square grid, as in Dungeon Golf: every tile is a whole height level plus a shape,
@@ -2021,6 +2052,8 @@ const GROUND_HAZE = { on: 1, amount: 0.99, density: 3.49, height: 0.25, slices: 
   windSpeed: 0, settle: 0, swirl: 41.5, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 20, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
   swamp: 1, swampColor: '#3eaf18', grave: 0.44, graveColor: '#ababab', wastes: 1, wastesColor: '#ff6600'};
+// on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T)
+if (MOBILE) { GI.on = 0; HAZE.on = 0; GROUND_HAZE.on = 0; EYE.on = 0; BLOOM.strength = 0; }
 const groundHaze = new GFX.GroundHaze(renderer);
 groundHaze.mesh.layers.set(1);   // drawn after the hero, so it swirls round their feet
 scene.add(groundHaze.mesh);
@@ -5082,7 +5115,8 @@ function renderBar() {
   const bar = $('bar'), sub = $('sub');
   bar.innerHTML = ''; sub.innerHTML = '';
   if (mode !== 'build') subOpen = null;
-  slotEls = (mode === 'play' ? playSlots() : SLOTS[mode]).map(s => slotEl(s, bar));
+  slotEls = (mode === 'play' ? playSlots().filter(s => !TOUCH.on || !TOUCH_IDS.includes(s.id)) : SLOTS[mode]).map(s => slotEl(s, bar));
+  renderTouch();
   // on the controller the group's own button steps through its row
   const catPad = { floors: 'X', walls: 'Y', doors: 'A' };
   if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), pad: catPad[subOpen], name: KIND_SLOT[k].name, icon: KIND_SLOT[k].icon, cost: k }, sub)));
@@ -5111,6 +5145,7 @@ function slotAction(id) {
   else { setBuildKind(id); if (subOpen) { subOpen = null; renderBar(); } }   // a kind, the hearth, remove
 }
 function updateBar() {
+  for (const { s, cd } of touchEls) if (s.cd) cd.style.height = clamp(s.cd(), 0, 1) * 100 + '%';
   for (const slot of slotEls) {
     const { s, el, cd, cdn } = slot;
     if (s.cd) {
@@ -5629,6 +5664,7 @@ function syncButtons(e) {
 cv.addEventListener('pointerdown', e => {
   setPadMode(false);
   if (!started) return;
+  if (e.pointerType === 'touch' && touchPress(e)) return;
   audioOn();
   mouse.x = e.clientX; mouse.y = e.clientY;
   if (e.button === 1) e.preventDefault();
@@ -5636,6 +5672,7 @@ cv.addEventListener('pointerdown', e => {
   cv.setPointerCapture(e.pointerId);
 });
 cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'touch' && touchPinch(e)) return;
   if (PAD.on && Math.hypot(e.movementX || 0, e.movementY || 0) < 3) return;   // the controller is steering the cursor
   setPadMode(false);
   mouse.x = e.clientX; mouse.y = e.clientY;
@@ -5645,11 +5682,109 @@ cv.addEventListener('pointermove', e => {
   if ((mouse.right && mouse.turned) || mouse.mid) { yawGoal -= (e.clientX - mouse.lastX) * 0.008; yaw = yawGoal; }
   mouse.lastX = e.clientX;
 });
-cv.addEventListener('pointerup', e => { if (started) syncButtons(e); });
-cv.addEventListener('pointercancel', e => { mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; drag = null; });
+cv.addEventListener('pointerup', e => { touchLift(e); if (started) syncButtons(e); });
+cv.addEventListener('pointercancel', e => { touchLift(e); mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; drag = null; });
 cv.addEventListener('auxclick', e => e.preventDefault());
 cv.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoom * (e.deltaY > 0 ? 0.9 : 1.1)); }, { passive: false });
 $('mini').addEventListener('click', () => toggleMap());
+
+// ---------- Touch controls ----------
+// On a phone or tablet: a stick at the bottom left walks, and the buttons at the bottom right fight. The
+// attack button swings while held and aims the way it's dragged; an ability aims the way it's dragged and goes
+// off when let go (or at once, tapped). Two fingers on the world pinch to zoom; prompts are tapped.
+const TOUCH = { on: MOBILE, move: null, aim: null, attack: false, force: null };
+const TOUCH_IDS = ['atk', 'q', 'e', 'dash'];
+let touchEls = [];
+// a drag on the screen, turned to the ground (as the right stick is)
+const screenWorld = (dx, dy) => { const l = Math.hypot(dx, dy), [x, z] = padWorld([dx / l, dy / l]), k = Math.hypot(x, z) || 1; return [x / k, z / k]; };
+function renderTouch() {
+  if (!TOUCH.on) return;
+  const box = $('touchBtns'), slots = playSlots();
+  box.hidden = mode !== 'play';
+  box.innerHTML = ''; touchEls = [];
+  for (const id of TOUCH_IDS) {
+    const s = slots.find(x => x.id === id), el = document.createElement('div');
+    el.className = 'tbtn ' + id + (s.locked ? ' locked' : '');
+    el.innerHTML = `<div class="ic">${ICON[s.icon]}</div>` + (s.cd ? '<div class="cd"></div>' : '');
+    box.appendChild(el);
+    touchEls.push({ s, el, cd: el.querySelector('.cd') });
+    aimButton(el, id);
+  }
+}
+function aimButton(el, id) {
+  let st = null;
+  const ic = el.firstChild;
+  el.addEventListener('pointerdown', e => {
+    if (!started || st) return;
+    e.preventDefault(); audioOn();
+    el.setPointerCapture(e.pointerId);
+    st = { p: e.pointerId, x0: e.clientX, y0: e.clientY, dir: null };
+    el.classList.add('held');
+    if (id === 'atk') TOUCH.attack = true;
+  });
+  el.addEventListener('pointermove', e => {
+    if (!st || e.pointerId !== st.p) return;
+    const dx = e.clientX - st.x0, dy = e.clientY - st.y0, l = Math.hypot(dx, dy), r = Math.min(l, 32);
+    ic.style.transform = l > 1 ? `translate(${dx / l * r}px, ${dy / l * r}px)` : '';
+    if (l > 14) TOUCH.aim = st.dir = screenWorld(dx, dy);
+  });
+  const end = fire => e => {
+    if (!st || e.pointerId !== st.p) return;
+    const dir = st.dir;
+    st = null; el.classList.remove('held'); ic.style.transform = '';
+    TOUCH.aim = null;
+    if (id === 'atk') { TOUCH.attack = false; return; }
+    if (!fire) return;
+    if (dir) { aim.x = dir[0]; aim.z = dir[1]; }
+    if (id === 'dash') { TOUCH.force = dir; castDash(); TOUCH.force = null; }
+    else useAbility(id);
+  };
+  el.addEventListener('pointerup', end(true));
+  el.addEventListener('pointercancel', end(false));
+}
+{
+  const base = $('stick'), knob = $('stickKnob'), R = 52;
+  let p = null, cx = 0, cy = 0;
+  const move = e => {
+    if (e.pointerId !== p) return;
+    let dx = e.clientX - cx, dy = e.clientY - cy;
+    const l = Math.hypot(dx, dy);
+    if (l > R) { dx *= R / l; dy *= R / l; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    TOUCH.move = l > 10 ? [dx / R, dy / R] : null;
+  };
+  base.addEventListener('pointerdown', e => {
+    if (p !== null) return;
+    e.preventDefault(); audioOn();
+    p = e.pointerId; base.setPointerCapture(p);
+    const r = base.getBoundingClientRect(); cx = r.left + r.width / 2; cy = r.top + r.height / 2;
+    move(e);
+  });
+  base.addEventListener('pointermove', move);
+  const up = e => { if (e.pointerId !== p) return; p = null; knob.style.transform = ''; TOUCH.move = null; };
+  base.addEventListener('pointerup', up); base.addEventListener('pointercancel', up);
+  $('prompt').addEventListener('click', () => { if (TOUCH.on) useAction(); });
+  $('jumpHint').addEventListener('click', () => { if (TOUCH.on) castJump(); });
+}
+// fingers on the world: two pinch to zoom; in play one does nothing (the buttons fight), in build mode it
+// places as the mouse does
+const pinch = new Map();
+let pinchD = 0;
+const pinchSpan = () => { const [a, b] = [...pinch.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]) || 1; };
+function touchPress(e) {
+  pinch.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pinch.size === 2) { pinchD = pinchSpan(); drag = null; mouse.down = false; mouse.mask = 0; }
+  return mode === 'play' || pinch.size > 1;
+}
+function touchPinch(e) {
+  if (!pinch.has(e.pointerId)) return false;
+  pinch.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pinch.size < 2) return mode === 'play';
+  const d = pinchSpan();
+  setZoom(zoom * d / pinchD); pinchD = d;
+  return true;
+}
+function touchLift(e) { pinch.delete(e.pointerId); }
 
 // ---------- Xbox controller ----------
 // The Gamepad API's standard layout. Pressing anything on a controller switches the game into controller
@@ -5832,6 +5967,16 @@ function wallUnder(x, y, z) {
 }
 let cursor = null, aim = { x: 0, z: 1 };
 function updateAim() {
+  if (TOUCH.on && !PAD.on) {
+    // a dragged button aims (and turns you to face it while you stand), else the way you're walking
+    const m = moveInput();
+    if (TOUCH.aim) {
+      aim.x = TOUCH.aim[0]; aim.z = TOUCH.aim[1];
+      if (!m && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip) H.face = Math.atan2(aim.x, aim.z);
+    } else if (m) { aim.x = m[0]; aim.z = m[1]; }
+    else { aim.x = Math.sin(H.face); aim.z = Math.cos(H.face); }
+    return;
+  }
   if (PAD.on) {
     // the right stick aims (in build mode, the cursor it steers), else the way you're walking
     const m = moveInput();
@@ -6012,19 +6157,21 @@ function showJumpHint() {
   if (!H.canJump || !started) { el.hidden = true; return; }
   v3.set(H.x, H.y + 1.75, H.z).project(camera);
   const rect = cv.getBoundingClientRect();
-  el.textContent = PAD.on ? 'A TO JUMP' : 'SHIFT TO JUMP';
+  el.textContent = PAD.on ? 'A TO JUMP' : TOUCH.on ? 'TAP TO JUMP' : 'SHIFT TO JUMP';
   el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
   el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
   el.hidden = false;
 }
 // WASD, turned so W always walks up the screen
 function moveInput() {
+  if (TOUCH.force) return TOUCH.force;
   let f = 0, s = 0;
   if (keys.has('KeyW') || keys.has('ArrowUp')) f++;
   if (keys.has('KeyS') || keys.has('ArrowDown')) f--;
   if (keys.has('KeyD') || keys.has('ArrowRight')) s++;
   if (keys.has('KeyA') || keys.has('ArrowLeft')) s--;
   if (!f && !s && PAD.on && (PAD.ls[0] || PAD.ls[1])) { s = PAD.ls[0]; f = -PAD.ls[1]; }
+  if (!f && !s && TOUCH.move) { s = TOUCH.move[0]; f = -TOUCH.move[1]; }
   if (!f && !s) return null;
   const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
   let x = fx * f + rx * s, z = fz * f + rz * s;
@@ -6687,7 +6834,7 @@ function update(dt) {
     if (!H.flip) H.y = surfaceY(H.x, H.z);
 
     // attacks
-    if (mode === 'play' && (mouse.down || PAD.attack) && H.swing < 0) startSwing();
+    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0) startSwing();
     if (H.swing >= 0) {
       H.swing += dt;
       const len = swingTime();
@@ -6806,7 +6953,7 @@ function update(dt) {
   const act = actionHere(), nd = act && act.kind === 'door' ? act.door : null;
   const pr = $('prompt');
   if (act) {
-    const key = PAD.on ? padGlyph('A') : '<b>F</b>';
+    const key = PAD.on ? padGlyph('A') : TOUCH.on ? '<b>TAP</b>' : '<b>F</b>';
     if (act.kind === 'loot') {
       const h = act.drops[0];
       pr.innerHTML = key + lootLabel(act.drops);
@@ -7015,7 +7162,6 @@ function posePlant(f, sq) {
 let yaw = Math.PI / 4, yawGoal = yaw, zoom = 1;
 const camTarget = new GFX.Vector3();
 let texel = 0.03, pxScale = 3;
-const MOBILE = matchMedia('(pointer: coarse)').matches;
 // Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 to size it from the screen
 // antiAlias: the scene is drawn this many times finer each way and averaged into each mosaic pixel, so thin
 // lines and edges come out as blended colours instead of broken runs of pixels (1 = off)
@@ -7302,6 +7448,7 @@ $('plotsBtn').onclick = togglePlots;
 function begin() {
   if (started) return;
   started = true;
+  $('touchUI').hidden = !TOUCH.on;
   audioOn();
   $('intro').hidden = true;
   toast('You set out from ' + titleCase(towns[0].name) + '. Night comes quickly; gather wood and stone.', 'calm');

@@ -131,3 +131,7 @@ Crafting and Conquest's water surface. Fresnel blends the sky's reflection with 
 ## Day, night and clouds
 
 The day and night follow Crafting and Conquest's sky without drawing it: the sun is placed by the hour, latitude, season and north; its light reddens and dims through the air at a low sun (Rayleigh and haze extinction over the air mass); the sky's light shades from night through dusk to day; the moon, running the sun's own arc twelve hours behind (so it climbs as high by night as the sun by day), lights the night; and the exposure opens up as the light fails. Cloud shadows are a tiling noise laid over the world and slowly scrolled, dimming only the sun's or moon's light in every lit material's shader, so lamps and the torch are untouched.
+
+## Phones and tablets
+
+On a phone or tablet (or with `?touch=1` in the address; `?touch=0` turns it off) the game shows touch controls: a stick at the bottom left walks, and at the bottom right the big attack button swings while held and aims the way you drag it, with whirlwind, lunge and dash around it (drag one to aim, let go to use it, or just tap). Tap the prompts over doors, loot and the tanning table (and TAP TO JUMP), pinch to zoom, and the bar keeps the pack, build mode and the map. Probe lighting, lit haze, ground haze, eye adaptation and bloom start off there; they can be turned back on in T.
