@@ -99,6 +99,26 @@ export class Mesh extends Object3D {
 }
 Mesh.prototype.isMesh = true;
 
+// one mesh drawn many times in a single call: copy i placed by matrix i (after the mesh's own), the first `count`
+// of them. Set the matrices with setMatrixAt, then needsUpdate. Never culled: its copies may be anywhere.
+export class InstancedMesh extends Mesh {
+  constructor(geometry, material, max = 16) {
+    super(geometry, material);
+    this.count = 0; this.instanceMatrix = new Float32Array(Math.max(1, max) * 16); this.instanceVersion = 0;
+    this.frustumCulled = false;
+  }
+  get max() { return this.instanceMatrix.length / 16; }
+  // room for at least n copies, keeping those set
+  reserve(n) {
+    if (n <= this.max) return;
+    let m = this.max; while (m < n) m *= 2;
+    const a = new Float32Array(m * 16); a.set(this.instanceMatrix); this.instanceMatrix = a;
+  }
+  setMatrixAt(i, m) { this.instanceMatrix.set(m.elements, i * 16); }
+  set needsUpdate(v) { if (v) this.instanceVersion++; }
+}
+InstancedMesh.prototype.isInstancedMesh = true;
+
 // distance haze: none nearer than `near`, all of it past `far` (eased between)
 export class Fog {
   constructor(color, near = 1, far = 1000) { this.color = new Color(color); this.near = near; this.far = far; }

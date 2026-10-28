@@ -302,18 +302,21 @@ fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N
 }
 `;
 
-// the built-in materials, with or without a colour per vertex
-export function builtinCode(kind, hasColor) {
-  const vin = `struct VIn { @location(0) position: vec3f, ${hasColor ? '@location(1) color: vec3f,' : ''} }`;
+// the built-in materials, with or without a colour per vertex, and drawn once or as copies (inst: each copy placed
+// by its own matrix, after the object's)
+const INST_IN = '@location(8) i0: vec4f, @location(9) i1: vec4f, @location(10) i2: vec4f, @location(11) i3: vec4f,';
+export function builtinCode(kind, hasColor, inst = false) {
+  const vin = `struct VIn { @location(0) position: vec3f, ${hasColor ? '@location(1) color: vec3f,' : ''} ${inst ? INST_IN : ''} }`;
   const col = hasColor ? 'v.color' : 'vec3f(1.0)';
+  const model = inst ? '(O.model * mat4x4f(v.i0, v.i1, v.i2, v.i3))' : 'O.model';
   if (kind === 'shadow') return PRELUDE_SHADOW + `
-struct VIn { @location(0) position: vec3f }
-@vertex fn vs(v: VIn) -> @builtin(position) vec4f { return F.viewProj * (O.model * vec4f(v.position, 1.0)); }`;
+struct VIn { @location(0) position: vec3f, ${inst ? INST_IN : ''} }
+@vertex fn vs(v: VIn) -> @builtin(position) vec4f { return F.viewProj * (${model} * vec4f(v.position, 1.0)); }`;
   if (kind === 'normal') return PRELUDE + `
 ${vin}
 struct VOut { @builtin(position) pos: vec4f, @location(0) vp: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
-  let mv = F.view * (O.model * vec4f(v.position, 1.0));
+  let mv = F.view * (${model} * vec4f(v.position, 1.0));
   return VOut(F.proj * mv, mv.xyz);
 }
 // the surface's normal in view space, as a colour
@@ -327,7 +330,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) vp: vec3f }
 ${vin}
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
-  let w = O.model * vec4f(v.position, 1.0);
+  let w = ${model} * vec4f(v.position, 1.0);
   return VOut(F.viewProj * w, w.xyz, ${col}, w.xyz - F.camPos.xyz);
 }`;
   if (kind === 'basic') return head + `

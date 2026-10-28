@@ -2059,8 +2059,9 @@ function updateGroundHaze(dt) {
     brightness: G.brightness });
 }
 setInterval(() => {
-  if ($('tuning').hidden || EYE.on < 0.5) return;
-  eye.read(); EYE_READ.brightness = eye.brightness; EYE_READ.exposure = eye.exposure; tuning.tick();
+  if ($('tuning').hidden) return;
+  if (EYE.on > 0.5) { eye.read(); EYE_READ.brightness = eye.brightness; EYE_READ.exposure = eye.exposure; }
+  tuning.tick();
 }, 400);
 
 // ---------- Options (O) ----------
@@ -2165,6 +2166,7 @@ function updateGI() {
   }));
 }
 function renderWorld() {
+  drawCrowds();
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
   const on = depthOn || sobelOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
@@ -4440,20 +4442,117 @@ const CD = { Q: 8, E: 7 };
 const TUMBLE = { time: 0.5, speed: 9.5, endSpeed: 9.5, turn: 10, boost: 0.5, boostTime: 1, cooldown: 5 };
 
 // ---------- Foes ----------
+// Foes are drawn in crowds, so a horde costs about what one foe does. A kind's build (FOE[kind].make) is made once
+// and cut into pieces: the parts that move together under one joint (the root, or something the pose turns or
+// stretches on its own: a pivot, a jaw, a flame), merged by material into that joint's space. Each piece is one
+// instanced mesh, a copy a foe, placed by that foe's joint. A foe keeps only its joints, bare objects the pose
+// code turns as it always has; drawCrowds() copies their places into the pieces before each frame is drawn.
 let foes = [];
-const foeShadows = [];
+const crowds = new Map();
+function crowdOf(kind) {
+  let C = crowds.get(kind);
+  if (C) return C;
+  const rig = FOE[kind].make(), g = shadowy(rig.g);
+  g.updateMatrixWorld();
+  // what the pose moves on its own, besides the groups the build hangs from
+  const moved = new Set(), isObj = v => v instanceof GFX.Object3D;
+  for (const [k, v] of Object.entries(rig)) {
+    if (k === 'parts' || !v || typeof v !== 'object') continue;
+    for (const o of isObj(v) ? [v] : Object.values(v)) if (isObj(o)) moved.add(o);
+  }
+  const joints = [];
+  g.traverse(o => { if (o === g || !o.isMesh || moved.has(o)) joints.push(o); });
+  const jointOf = o => { while (!joints.includes(o)) o = o.parent; return joints.indexOf(o); };
+  const inv = new GFX.Matrix4(), byKey = new Map(), shards = [];
+  g.traverse(o => {
+    if (!o.isMesh) return;
+    const j = jointOf(o), local = new GFX.Matrix4().multiplyMatrices(inv.copy(joints[j].matrixWorld).invert(), o.matrixWorld);
+    shards.push({ geo: o.geometry, mat: o.material, joint: j, local, cast: o.castShadow, take: o.receiveShadow, order: o.renderOrder });
+    const key = j + ':' + o.material.id;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(shards[shards.length - 1]);
+  });
+  const pieces = [...byKey.values()].map(list => {
+    const m = new GFX.InstancedMesh(mergeShards(list), list[0].mat, 16);
+    m.castShadow = list[0].cast; m.receiveShadow = list[0].take; m.renderOrder = Math.max(...list.map(s => s.order));
+    scene.add(m);
+    return { mesh: m, joint: list[0].joint };
+  });
+  C = { rig, joints, parent: joints.map(o => o === g ? -1 : jointOf(o.parent)), pieces, shards, n: 0 };
+  crowds.set(kind, C);
+  return C;
+}
+// a piece's parts as one geometry, each laid where it sits on its joint
+function mergeShards(list) {
+  let nv = 0, ni = 0;
+  for (const s of list) { const p = s.geo.attributes.position; nv += p.count; ni += s.geo.index ? s.geo.index.count : p.count; }
+  const pos = new Float32Array(nv * 3), idx = new (nv > 65535 ? Uint32Array : Uint16Array)(ni), v = new GFX.Vector3();
+  let ov = 0, oi = 0;
+  for (const s of list) {
+    const a = s.geo.attributes.position.array, n = a.length / 3, ix = s.geo.index && s.geo.index.array;
+    for (let k = 0; k < n; k++) { v.set(a[k * 3], a[k * 3 + 1], a[k * 3 + 2]).applyMatrix4(s.local); pos[(ov + k) * 3] = v.x; pos[(ov + k) * 3 + 1] = v.y; pos[(ov + k) * 3 + 2] = v.z; }
+    if (ix) for (let k = 0; k < ix.length; k++) idx[oi++] = ix[k] + ov;
+    else for (let k = 0; k < n; k++) idx[oi++] = k + ov;
+    ov += n;
+  }
+  const geo = new GFX.BufferGeometry();
+  geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
+  geo.setIndex(new GFX.BufferAttribute(idx, 1));
+  return geo;
+}
+// a foe's own joints, set as the build has them, with the build's handles (jaw, flames, legs...) pointing at them
+function rigFor(C) {
+  const js = C.joints.map(t => {
+    const o = new GFX.Object3D();
+    o.position.copy(t.position); o.rotation.copy(t.rotation); o.scale.copy(t.scale); o.userData = { ...t.userData };
+    return o;
+  });
+  js.forEach((o, k) => { if (C.parent[k] >= 0) js[C.parent[k]].add(o); });
+  const map = new Map(C.joints.map((t, k) => [t, js[k]])), out = { joints: js, crowd: C };
+  for (const [k, v] of Object.entries(C.rig)) {
+    if (k === 'parts') continue;
+    if (map.has(v)) out[k] = map.get(v);
+    else if (Array.isArray(v)) out[k] = v.map(o => map.get(o) || o);
+    else if (v && typeof v === 'object' && !(v instanceof GFX.Object3D)) out[k] = Object.fromEntries(Object.entries(v).map(([n, o]) => [n, map.get(o) || o]));
+    else out[k] = v;
+  }
+  return out;
+}
+// every foe's blob shadow, in one draw
+const foeShadows = new GFX.InstancedMesh(shadowGeo, shadowMat, 64);
+scene.add(foeShadows);
+const crowdOrder = [];
+// before each frame is drawn: every shown foe's joints into its kind's pieces, farthest first (so see-through
+// flames, ghosts and slimes over one another blend in order), and every foe's shadow
+function drawCrowds() {
+  const e = camera.matrixWorld.elements, cx = e[12], cy = e[13], cz = e[14], fx = -e[8], fy = -e[9], fz = -e[10];
+  crowdOrder.length = 0;
+  for (const f of foes) { f.depth = (f.x - cx) * fx + (f.y - cy) * fy + (f.z - cz) * fz; crowdOrder.push(f); }
+  crowdOrder.sort((a, b) => b.depth - a.depth);
+  for (const C of crowds.values()) C.n = 0;
+  foeShadows.reserve(foes.length);
+  const sm = foeShadows.instanceMatrix;
+  crowdOrder.forEach((f, i) => {
+    const p = f.shadow.position, o = i * 16;
+    sm.fill(0, o, o + 16); sm[o] = sm[o + 5] = sm[o + 10] = sm[o + 15] = 1; sm[o + 12] = p.x; sm[o + 13] = p.y; sm[o + 14] = p.z;
+    if (!f.g.visible) return;
+    const C = f.crowd, k = C.n++;
+    f.g.updateMatrixWorld();
+    for (const pc of C.pieces) { pc.mesh.reserve(k + 1); pc.mesh.instanceMatrix.set(f.joints[pc.joint].matrixWorld.elements, k * 16); }
+  });
+  foeShadows.count = foes.length; foeShadows.needsUpdate = true;
+  for (const C of crowds.values()) for (const pc of C.pieces) { pc.mesh.count = C.n; pc.mesh.needsUpdate = true; }
+}
 function spawnFoe(kind, x, z) {
-  const d = FOE[kind], f = d.make();
+  const d = FOE[kind], f = rigFor(crowdOf(kind));
   f.g.position.set(x, surfaceY(x, z), z);
-  scene.add(shadowy(f.g));
-  const sh = new GFX.Mesh(shadowGeo, shadowMat); scene.add(sh);
+  const sh = new GFX.Object3D(); sh.position.set(x, surfaceY(x, z) + 0.02, z);
   const foe = Object.assign(f, { kind, def: d, x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
     home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
   foes.push(foe);
   return foe;
 }
 function removeFoe(f) {
-  scene.remove(f.g); scene.remove(f.shadow);
   foes.splice(foes.indexOf(f), 1);
 }
 
@@ -4676,19 +4775,19 @@ function chips(x, y, z, kind, n = 5) {
   }
 }
 const GRAV = 9;
+// a foe's death: every part of its build flies off on its own, from where its pose had it
+const shatterM = new GFX.Matrix4();
 function shatter(f, dir) {
-  f.parts.forEach(p => {
-    p.getWorldPosition(v3);
-    const q = new GFX.Quaternion(); p.getWorldQuaternion(q);
-    const s = new GFX.Vector3(); p.getWorldScale(s);
-    p.parent.remove(p);
-    p.material = p.material.clone(); p.material.transparent = true;
+  f.g.updateMatrixWorld();
+  for (const sh of f.crowd.shards) {
+    const p = new GFX.Mesh(sh.geo, sh.mat.clone()), q = new GFX.Quaternion(), s = new GFX.Vector3();
+    p.material.transparent = true; p.castShadow = sh.cast; p.receiveShadow = sh.take; p.renderOrder = sh.order;
+    shatterM.multiplyMatrices(f.joints[sh.joint].matrixWorld, sh.local).decompose(v3, q, s);
     p.position.copy(v3); p.quaternion.copy(q); p.scale.copy(s);
     scene.add(p);
     debris.push({ m: p, vx: dir.x * 1.5 + (Math.random() - 0.5) * 2.4, vz: dir.z * 1.5 + (Math.random() - 0.5) * 2.4, vy: 1.5 + Math.random() * 2.2,
       ax: (Math.random() - 0.5) * 14, az: (Math.random() - 0.5) * 14, life: 0 });
-  });
-  scene.remove(f.g);
+  }
 }
 const orbMat = new GFX.MeshBasicMaterial({ color: '#ff6a5a' });
 function dropOrb(x, z) {
@@ -4785,7 +4884,6 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
   if (f.hp <= 0) {
     sfx.kill();
     shatter(f, new GFX.Vector3(dx / l, 0, dz / l));
-    scene.remove(f.shadow);
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats(); bump('killPlate');
     if (Math.random() < 0.35) dropOrb(f.x, f.z);
@@ -5790,17 +5888,45 @@ function updateLamps() {
   });
 }
 
+// foes don't stack up on one another. Neighbours are found by tile (no two foes' reaches add up to one), so a
+// horde costs what it holds rather than every foe against every other.
+const foeCells = new Map();
+function separateFoes() {
+  foeCells.clear();
+  foes.forEach((f, i) => {
+    f.sepI = i;
+    const k = Math.floor(f.x) * 8192 + Math.floor(f.z);
+    let l = foeCells.get(k); if (!l) foeCells.set(k, l = []); l.push(f);
+  });
+  for (const A of foes) {
+    const c0 = Math.floor(A.x), r0 = Math.floor(A.z);
+    for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
+      const l = foeCells.get((c0 + dc) * 8192 + r0 + dr);
+      if (l) for (const B of l) {
+        if (B.sepI <= A.sepI) continue;
+        const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = A.def.rad + B.def.rad;
+        if (d < m && d > 1e-4) { const push = (m - d) / 2; moveEntity(A, -dx / d * push, -dz / d * push, A.def.rad, true); moveEntity(B, dx / d * push, dz / d * push, B.def.rad, true); }
+      }
+    }
+  }
+}
+
 // ---------- Spawning ----------
+// Tuning (T > Crowd test): foes kept round you over the usual number (10 by day, 18 by night), to see how a horde
+// runs, and what it costs: foes about, draw calls a frame, frames a second
+const CROWD = { extra: 0 };
+const CROWD_READ = { foes: 0, draws: 0, fps: 0 };
 let spawnT = 0;
 const heroInTown = () => BI[T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1))] === TOWN;
 function spawnTick(dt) {
   spawnT -= dt;
   if (spawnT > 0) return;
-  spawnT = 1.2;
   // the wilds keep their distance from town
-  if (heroInTown()) return;
+  if (heroInTown()) { spawnT = 1.2; return; }
   const night = daylight() < 0.35;
-  const cap = night ? 18 : 10;
+  const cap = (night ? 18 : 10) + Math.round(CROWD.extra);
+  // a crowd test fills up quickly
+  spawnT = CROWD.extra > 0 && foes.length < cap ? 0.02 : 1.2;
   if (foes.length >= cap) return;
   for (let tries = 0; tries < 6; tries++) {
     const a = Math.random() * Math.PI * 2, d = 17 + Math.random() * 12;
@@ -5928,11 +6054,7 @@ function update(dt) {
   // ----- foes -----
   const night = daylight() < 0.35;
   for (const f of foes.slice()) updateFoe(f, dt, night);
-  // foes don't stack up on one another
-  for (let a = 0; a < foes.length; a++) for (let b = a + 1; b < foes.length; b++) {
-    const A = foes[a], B = foes[b], dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = A.def.rad + B.def.rad;
-    if (d < m && d > 1e-4) { const push = (m - d) / 2; moveEntity(A, -dx / d * push, -dz / d * push, A.def.rad, true); moveEntity(B, dx / d * push, dz / d * push, B.def.rad, true); }
-  }
+  separateFoes();
   if (H.alive) spawnTick(dt);
 
   // ----- props, doors, effects -----
@@ -6604,6 +6726,12 @@ const TUNING = [
     [EYE, 'toDark', 'Adjusts to bright this fast (a second)', 0.05, 8, 0.05],
     [EYE, 'toLight', 'Adjusts to dark this fast (a second)', 0.05, 8, 0.05],
   ]],
+  ['Crowd test', [
+    [CROWD, 'extra', 'Extra foes kept round you, over the usual 10 by day and 18 by night', 0, 1000, 10],
+    [CROWD_READ, 'foes', 'Foes about', 'readout', 0, 1],
+    [CROWD_READ, 'draws', 'Draw calls a frame', 'readout', 0, 1],
+    [CROWD_READ, 'fps', 'Frames a second', 'readout', 0, 1],
+  ]],
   ['Ground haze', [
     [GROUND_HAZE, 'on', 'Ground haze (0 off, 1 on)', 0, 1, 1],
     [GROUND_HAZE, 'swamp', 'Swamps: how much', 0, 2, 0.01],
@@ -6859,6 +6987,7 @@ function frame(now) {
   updateGI();
   updateGroundHaze(dt);
   renderWorld();
+  CROWD_READ.foes = foes.length; CROWD_READ.draws = renderer.info.draws; CROWD_READ.fps = fps; renderer.info.draws = 0;
   requestAnimationFrame(frame);
 }
 const genStart = performance.now();
@@ -7004,7 +7133,9 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD },
+  smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
+  crowd: () => ({ foes: foes.length, draws: CROWD_READ.draws, kinds: [...crowds.keys()], pieces: [...crowds.values()].reduce((n, C) => n + C.pieces.length, 0), shown: [...crowds.values()].reduce((n, C) => n + C.n, 0) }),
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
   cutCount: () => cutEdges.size,

@@ -97,12 +97,18 @@ Bloom (`src/gfx/bloom.js`): each frame, after the haze and the eye adaptation, a
 
 The tuning panel's Picture section has all of it.
 
+## Crowds
+
+Foes are drawn in crowds, so a horde costs about what one foe does. Each kind's build is made once and cut into pieces: the parts that move together under one joint (the body, or something the pose moves on its own, such as a jaw, a flame, a leg or the mantrap's stalk), merged by material. Each piece is one instanced draw, with a copy for each foe of that kind, so the draw calls stay the same however many foes there are (about 100 pieces across all 14 kinds, plus one draw for every blob shadow). A foe keeps only its joints, which the pose code moves as before, and their places are copied into the pieces before each frame is drawn, farthest first so see-through foes blend in order. When a foe dies, each part of its build flies off on its own as before. Foes push apart only from neighbours on nearby tiles, rather than every foe checking every other.
+
+T > Crowd test keeps extra foes round you (up to 1,000 over the usual 10 by day and 18 by night) and shows how many there are, the draw calls a frame and the frame rate.
+
 ## The drawing library (src/gfx)
 
 Emberwild draws with raw WebGPU through a small library of its own, shaped like the parts of three.js the game was first written on so the game code reads the same:
 
 - `math.js`: vectors, colours, quaternions, Euler angles, matrices, planes, rays and view frustums.
-- `scene.js`: the scene graph (objects nested in groups, each placed, turned and sized), meshes, haze, orthographic and perspective cameras, and the sky, sun and point lights.
+- `scene.js`: the scene graph (objects nested in groups, each placed, turned and sized), meshes and instanced meshes (one mesh drawn many times in one call, each copy placed by its own matrix), haze, orthographic and perspective cameras, and the sky, sun and point lights.
 - `geometry.js`: vertex buffers and the primitive shapes (boxes, cylinders, cones, the round solids, discs, rings, planes, lathes).
 - `materials.js`: lit (standard), unlit (basic) and normal materials, materials with their own WGSL (`ShaderMaterial`: uniforms, textures and extra vertex attributes), textures and render targets.
 - `shaders.js`: the WGSL every pipeline shares: the frame and object uniform blocks, haze, flat face normals, cloud shadow, the sun's 17-tap PCF shadow and the lighting (sky light, sun, point lights, Lambert plus a GGX specular lobe), and the built-in materials.

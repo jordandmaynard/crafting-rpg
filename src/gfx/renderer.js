@@ -6,6 +6,8 @@
 //
 // Uniforms: one Frame block per pass and one Obj block per object drawn, written into big buffers at
 // 256-byte steps and picked out with dynamic offsets; ShaderMaterials keep their own block and textures.
+// An InstancedMesh (scene.js) draws its first `count` copies in one call, each placed by its matrix in a
+// vertex buffer stepped once a copy (the built-in materials and the shadow pass only).
 // Projections are kept as the scene graph makes them (z from -1 to 1) and squeezed to WebGPU's 0 to 1 here.
 import { Matrix4, Vector3, Frustum, Color } from './math.js';
 import { PRELUDE, builtinCode, MAX_POINTS, FRAME_BYTES, OBJ_BYTES } from './shaders.js';
@@ -26,6 +28,8 @@ const BLEND_FACTOR = {
   [M.OneMinusDstAlphaFactor]: 'one-minus-dst-alpha', [M.DstColorFactor]: 'dst', [M.OneMinusDstColorFactor]: 'one-minus-dst',
 };
 const DEPTH_FUNC = ['never', 'always', 'less', 'less-equal', 'equal', 'greater-equal', 'greater', 'not-equal'];
+// an instanced mesh's matrices: a mat4 a copy, its columns at locations 8 to 11
+const INSTANCE_LAYOUT = { arrayStride: 64, stepMode: 'instance', attributes: [0, 1, 2, 3].map(k => ({ shaderLocation: 8 + k, offset: k * 16, format: 'float32x4' })) };
 const ATTR_FORMAT = { f32: ['float32', 4], vec2f: ['float32x2', 8], vec3f: ['float32x3', 12], vec4f: ['float32x4', 16] };
 
 const texOf = (mat, n) => mat.textures[n] || mat.uniforms[n].value;
@@ -186,15 +190,18 @@ class Renderer {
       const mesh = it.mesh, mat = override || mesh.material;
       if (!mat.colorWrite && !mat.depthWrite) continue;
       const geo = mesh.geometry, kind = override && override.isMeshNormalMaterial ? 'normal' : mat.isShaderMaterial ? 'shader' : mat.isMeshStandardMaterial ? 'std' : 'basic';
-      const hasColor = kind !== 'normal' && mat.vertexColors && !!geo.attributes.color;
-      const pipe = this._pipeline(kind, mat, hasColor, tgt.format);
+      const hasColor = kind !== 'normal' && mat.vertexColors && !!geo.attributes.color, inst = !!mesh.isInstancedMesh;
+      if (inst && kind === 'shader') continue;
+      const pipe = this._pipeline(kind, mat, hasColor, tgt.format, inst);
       if (!pipe) continue;
       if (pipe !== lastPipe) { pass.setPipeline(pipe); lastPipe = pipe; }
       const [bg, off] = this._writeObj(mesh, mat);
       pass.setBindGroup(1, bg, [off]);
       if (kind === 'shader') pass.setBindGroup(2, this._materialBindGroup(mat));
-      if (!this._bindGeometry(pass, geo, kind === 'shader' ? mat : null, hasColor)) continue;
-      this._draw(pass, geo);
+      const slot = this._bindGeometry(pass, geo, kind === 'shader' ? mat : null, hasColor);
+      if (!slot) continue;
+      if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
+      this._draw(pass, geo, inst ? mesh.count : 1);
     }
     pass.end();
     if (!this.target) this.flush();
@@ -380,7 +387,7 @@ class Renderer {
     const opaque = [], clear = [], override = scene.overrideMaterial, vp = this._m, v = this._v;
     const visit = o => {
       if (!o.visible) return;
-      if (o.isMesh && o.layers.test(camera.layers)) {
+      if (o.isMesh && o.layers.test(camera.layers) && !(o.isInstancedMesh && !o.count)) {
         const mat = override || o.material;
         if (mat && mat.visible && (!o.frustumCulled || this._inFrustum(o, fr))) {
           const e = o.matrixWorld.elements;
@@ -418,7 +425,7 @@ class Renderer {
     const casters = [];
     const visit = o => {
       if (!o.visible) return;
-      if (o.isMesh && o.castShadow && o.layers.test(camera.layers) && o.material && (!o.frustumCulled || this._inFrustum(o, fr))) casters.push(o);
+      if (o.isMesh && o.castShadow && o.layers.test(camera.layers) && o.material && !(o.isInstancedMesh && !o.count) && (!o.frustumCulled || this._inFrustum(o, fr))) casters.push(o);
       for (const c of o.children) visit(c);
     };
     visit(scene);
@@ -427,19 +434,37 @@ class Renderer {
     pass.setBindGroup(0, this.frameBGShadow, [slot * FRAME_BYTES]);
     let last = null;
     for (const mesh of casters) {
-      const mat = mesh.material, pipe = this._shadowPipeline(mat.side);
+      const mat = mesh.material, inst = !!mesh.isInstancedMesh, pipe = this._shadowPipeline(mat.side, inst);
       if (pipe !== last) { pass.setPipeline(pipe); last = pipe; }
       const [bg, off] = this._writeObj(mesh, mat);
       pass.setBindGroup(1, bg, [off]);
-      if (!this._bindGeometry(pass, mesh.geometry, null, false, true)) continue;
-      this._draw(pass, mesh.geometry);
+      const slot = this._bindGeometry(pass, mesh.geometry, null, false, true);
+      if (!slot) continue;
+      if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
+      this._draw(pass, mesh.geometry, inst ? mesh.count : 1);
     }
     pass.end();
   }
-  _draw(pass, geo) {
+  _draw(pass, geo, copies = 1) {
     this.info.draws++;
-    if (geo.index) pass.drawIndexed(geo.index.count);
-    else pass.draw(geo.attributes.position.count);
+    if (geo.index) pass.drawIndexed(geo.index.count, copies);
+    else pass.draw(geo.attributes.position.count, copies);
+  }
+  // an instanced mesh's matrices, sent again when they've changed (only the copies drawn)
+  _instanceBuffer(mesh) {
+    let b = this._bufs.get(mesh);
+    const arr = mesh.instanceMatrix;
+    if (!b || b.size < arr.byteLength) {
+      if (b) { this._freed.unregister(b); b.buf.destroy(); }
+      b = { buf: this.device.createBuffer({ size: arr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }), size: arr.byteLength, version: -1, count: -1 };
+      this._bufs.set(mesh, b);
+      this._freed.register(mesh, b.buf, b);
+    }
+    if (b.version !== mesh.instanceVersion || b.count !== mesh.count) {
+      this.device.queue.writeBuffer(b.buf, 0, arr.buffer, arr.byteOffset, Math.min(arr.length, mesh.count * 16) * 4);
+      b.version = mesh.instanceVersion; b.count = mesh.count;
+    }
+    return b.buf;
   }
   // upload (or refresh) a vertex or index array
   _buffer(attr, usage) {
@@ -458,22 +483,23 @@ class Renderer {
     b.version = attr.version; b.length = arr.length;
     return b.buf;
   }
+  // binds a geometry's vertex buffers (and index); gives the next free vertex buffer slot, or 0 for nothing to draw
   _bindGeometry(pass, geo, shaderMat, hasColor, positionOnly = false) {
     if (!geo._onDispose) geo._onDispose = g => this._disposeGeometry(g);
     const pos = geo.attributes.position;
-    if (!pos || !pos.count) return false;
+    if (!pos || !pos.count) return 0;
     pass.setVertexBuffer(0, this._buffer(pos, GPUBufferUsage.VERTEX));
+    let slot = 1;
     if (!positionOnly) {
-      let slot = 1;
       if (hasColor) pass.setVertexBuffer(slot++, this._buffer(geo.attributes.color, GPUBufferUsage.VERTEX));
       if (shaderMat) for (const name in shaderMat.attributes) {
         const a = geo.attributes[name];
-        if (!a) { console.warn('missing attribute', name); return false; }
+        if (!a) { console.warn('missing attribute', name); return 0; }
         pass.setVertexBuffer(slot++, this._buffer(a, GPUBufferUsage.VERTEX));
       }
     }
     if (geo.index) pass.setIndexBuffer(this._buffer(geo.index, GPUBufferUsage.INDEX), geo.index.array instanceof Uint32Array ? 'uint32' : 'uint16');
-    return true;
+    return slot;
   }
   _disposeGeometry(g) {
     for (const k in g.attributes) {
@@ -563,14 +589,14 @@ class Renderer {
     }
     return { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
   }
-  _pipeline(kind, mat, hasColor, format) {
+  _pipeline(kind, mat, hasColor, format, inst = false) {
     const blend = kind === 'normal' ? undefined : this._blend(mat);
     const cull = kind === 'normal' ? 'none' : mat.side === M.DoubleSide ? 'none' : mat.side === M.BackSide ? 'front' : 'back';
     const depthCompare = !mat.depthTest ? 'always' : kind === 'normal' ? 'less-equal' : DEPTH_FUNC[mat.depthFunc] || 'less-equal';
     const depthWrite = kind === 'normal' ? true : !!mat.depthWrite;
     const writeMask = kind === 'normal' || mat.colorWrite ? GPUColorWrite.ALL : 0;
     const prog = kind === 'shader' ? 'shader' + mat.id : kind;
-    const key = [prog, hasColor, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format].join('|');
+    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format].join('|');
     let p = this._pipelines.get(key);
     if (p !== undefined) return p;
     const buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }];
@@ -582,7 +608,8 @@ class Renderer {
       layout = info.layout;
       let loc = 2;
       for (const name in mat.attributes) { const [f, s] = ATTR_FORMAT[mat.attributes[name]]; buffers.push({ arrayStride: s, attributes: [{ shaderLocation: loc++, offset: 0, format: f }] }); }
-    } else code = builtinCode(kind, hasColor);
+    } else code = builtinCode(kind, hasColor, inst);
+    if (inst) buffers.push(INSTANCE_LAYOUT);
     const module = this._module(code);
     try {
       p = this.device.createRenderPipeline({
@@ -596,13 +623,13 @@ class Renderer {
     this._pipelines.set(key, p);
     return p;
   }
-  _shadowPipeline(side) {
-    const cull = side === M.DoubleSide ? 'none' : side === M.BackSide ? 'back' : 'front', key = 'shadow|' + cull;
+  _shadowPipeline(side, inst = false) {
+    const cull = side === M.DoubleSide ? 'none' : side === M.BackSide ? 'back' : 'front', key = 'shadow|' + cull + '|' + inst;
     let p = this._pipelines.get(key);
     if (p) return p;
     p = this.device.createRenderPipeline({
       layout: this.layoutShadow,
-      vertex: { module: this._module(builtinCode('shadow', false)), entryPoint: 'vs', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
+      vertex: { module: this._module(builtinCode('shadow', false, inst)), entryPoint: 'vs', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }].concat(inst ? [INSTANCE_LAYOUT] : []) },
       primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
       depthStencil: { format: SHADOW_FORMAT, depthCompare: 'less-equal', depthWriteEnabled: true },
     });
