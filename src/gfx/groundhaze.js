@@ -59,9 +59,9 @@ struct GH {
   g1: vec4f,   // origin shift since last frame (cells), dt, time
   p0: vec4f,   // resting haze amount, patchiness, patch frequency (a tile), relax rate (a second)
   p1: vec4f,   // wind (tiles a second, x z), air settling rate (a second), swirl
-  p2: vec4f,   // _, flags (1/2: reset detail coordinate set 0/1, 4: fill with resting haze), _, _
+  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (1/2: reset detail coordinate set 0/1, 4: fill with resting haze), _, _
   pl0: vec4f,  // hero position xz, velocity xz
-  pl1: vec4f,  // wake radius (tiles), drag, haze cleared a tile walked, _
+  pl1: vec4f,  // wake radius (tiles), drag, haze cleared a tile walked, the air spun round the hero (tiles a second)
   s0: vec4f,   // site map: first texel x, z, texels across, texels a tile
 }
 struct Cell {
@@ -150,6 +150,12 @@ fn oldCell(cf: vec2f) -> Cell {
     let walked = length(hu.pl0.zw) * dt;
     vel = mix(vel, hu.pl0.zw, clamp(w * hu.pl1.y, 0.0, 1.0));
     h *= exp(-hu.pl1.z * walked * w);
+    // whirling: the air spun round them and the haze swept out, standing still or not
+    if (hu.pl1.w > 0.0) {
+      let r = length(rel);
+      vel = mix(vel, vec2f(-rel.y, rel.x) / max(r, 1e-3) * hu.pl1.w * min(r / max(hu.pl1.x * 0.5, 1e-3), 1.0), clamp(w, 0.0, 1.0));
+      h *= exp(-hu.p2.x * dt * w);
+    }
   }
   let vm = length(vel);
   if (vm > 12.0) { vel *= 12.0 / vm; }
@@ -402,7 +408,8 @@ export class GroundHaze {
   }
 
   // Each frame, before drawing. f: { on, target: [x, z] (the camera's), hero: [x, z], dt, amount, patchiness,
-  // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear,
+  // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear, spin
+  // (tiles a second the air's spun round the hero, whirling), spinClear (haze swept aside round them a second),
   // height, density, slices, brightness, detail, detailSize, detailCycle }
   update(f) {
     this.on = !!f.on && !!this.siteOrigin;
@@ -430,8 +437,8 @@ export class GroundHaze {
     this.device.queue.writeBuffer(this.params, 0, new Float32Array([
       origin[0], origin[1], GRID, GRID, shift[0], shift[1], dt, this.time,
       f.amount, f.patchiness, freq, f.relax, f.wind[0], f.wind[1], f.settle, f.swirl,
-      0, flags, 0, 0, f.hero[0], f.hero[1], vel[0], vel[1],
-      f.wakeRadius, f.wakeDrag, f.wakeClear, 0, so[0], so[1], GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT]));
+      f.spinClear || 0, flags, 0, 0, f.hero[0], f.hero[1], vel[0], vel[1],
+      f.wakeRadius, f.wakeDrag, f.wakeClear, f.spin || 0, so[0], so[1], GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT]));
     const U = this.material.uniforms;
     Object.assign(U.grid.value, { x: origin[0], y: origin[1] });
     Object.assign(U.look.value, { x: f.height, y: f.density, z: slices, w: f.brightness });
