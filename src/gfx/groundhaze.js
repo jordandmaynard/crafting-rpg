@@ -27,7 +27,7 @@ const CELL_BYTES = 32;    // two vec4f
 export const GROUND_HAZE_SITE = 128;   // site map texels across (64 tiles)
 export const GROUND_HAZE_SITE_TPT = 2; // site map texels a tile
 const DRAW_TILES = 56;    // tiles across the drawn slices
-const DRAW_VPT = 2;       // their vertices a tile
+const DRAW_VPT = 4;       // their vertices a tile (fine enough to follow the site map's bends closely)
 
 const NOISE = /* wgsl */ `
 fn ghPcg(v: u32) -> u32 {
@@ -266,12 +266,23 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   // part of it covers this point. The steps start at a fiftieth of a tile and grow, so the shell just past a crest,
   // dropping away steeper than the eye looks down, is caught too (coarser, it showed as a thin streak over the crest).
   // The ray leaves from the slice as laid over the site map, the same surface it's tested against, not from the flat
-  // triangle, which strays from it by more than these steps can tell apart.
+  // triangle, which strays from it by more than these steps can tell apart: from where this pixel's line of sight
+  // crosses that surface, found from the drawn point by a few steps of Newton's method along it. (The point straight
+  // above or below the drawn one left wedge-shaped holes along cliffs, where the triangles cut a bend's corner.)
   let V = toEye(i.world);
   let hs = U.look.x * 2.0 * (i.slice + 0.5) / U.look.z;
+  var s = 0.0;
+  for (var k = 0; k < 4; k++) {
+    let q = i.world + V * s;
+    let f = q.y - siteAt(q.xz).x - hs;
+    let q2 = q + V * 0.02;
+    let d = (q2.y - siteAt(q2.xz).x - hs - f) / 0.02;
+    if (abs(d) < 0.05) { break; }
+    s = clamp(s - f / d, -0.6, 0.6);
+  }
   let hl = length(V.xz);
   if (hl > 1e-3) {
-    let o = vec3f(i.world.x, site.x + hs, i.world.z);
+    let o = i.world + V * s;
     let st = V / hl;
     var t = 0.02;
     for (var k = 0; k < 30; k++) {
