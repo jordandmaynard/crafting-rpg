@@ -2448,12 +2448,12 @@ function buildLava(c0, r0, grid, GW, ch) {
   ch.lava = new GFX.Mesh(g, lavaMat);
 }
 const groundMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
-// Redwood trunks are cut away, as the walls are indoors, where they'd hide you: those below you on the screen
-// and close to its middle. A cut tree snaps to a stump (TRUNK_CUT tiles) with a ragged, broken top, a dark
-// rim, and dark heartwood showing inside. Each tree is judged by its own centre.
+// Redwood trunks are cut away, as the walls are indoors, where they'd hide you: every one nearer the camera
+// than you are. A cut tree snaps to a stump (TRUNK_CUT tiles) with a ragged, broken top, a dark rim, and dark
+// heartwood showing inside. Each tree is judged by its own centre. Its shadow stays whole (the shadow pass
+// has no cut, and the crowns cast from their own unseen mesh).
 const TRUNK_CUT = 1.4;
-const TRUNK_U = { cutC: { value: new GFX.Vector2() }, cutDir: { value: new GFX.Vector2(0, 1) }, cutRight: { value: new GFX.Vector2(1, 0) },
-  cutD: { value: 1e9 }, cutW: { value: 4 }, cutLow: { value: TRUNK_CUT } };
+const TRUNK_U = { cutC: { value: new GFX.Vector2() }, cutDir: { value: new GFX.Vector2(0, 1) }, cutLow: { value: TRUNK_CUT } };
 // lit as the other flat-shaded materials are, the tree's centre and foot given with every vertex
 const trunkMat = new GFX.ShaderMaterial({ uniforms: TRUNK_U, vertexColors: true, side: GFX.DoubleSide, attributes: { tree: 'vec3f' }, lit: true,
   code: /* wgsl */ `
@@ -2464,9 +2464,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }
 @fragment fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
   let N = flatNormal(i.eye);
-  let rel = i.tree.xz - U.cutC;
-  let along = dot(rel, U.cutDir); let lat = abs(dot(rel, U.cutRight));
-  var top = select(200.0, U.cutLow, along > 0.5 && lat < U.cutW);
+  var top = select(200.0, U.cutLow, dot(i.tree.xz - U.cutC, U.cutDir) > 0.5);
   // a broken edge: splintered, higher on some sides than others
   let q = i.world;
   top += 0.3 * sin(q.x * 5.3 + q.z * 2.1 + i.tree.x) + 0.18 * sin(q.x * 2.2 - q.z * 6.1 + i.tree.z) + 0.12 * sin((q.x + q.z) * 14.0);
@@ -2479,17 +2477,9 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
-// where the cut falls: the ground at the bottom middle of the view, measured toward the camera
-const cutRay = new GFX.Ray(), cutPlane = new GFX.Plane(new GFX.Vector3(0, 1, 0), 0), cutHit = new GFX.Vector3();
+// the cut: from the view's centre (the hero) toward the camera
 function updateTrunkCut() {
-  const U = TRUNK_U, sx = Math.sin(yaw), sz = Math.cos(yaw);
-  camera.updateMatrixWorld();
-  // the ray through the bottom middle of the view, from its near plane to its far
-  cutRay.origin.set(0, -1, -1).unproject(camera); cutRay.direction.set(0, -1, 1).unproject(camera).sub(cutRay.origin).normalize();
-  cutPlane.constant = -camTarget.y;
-  U.cutC.value.set(camTarget.x, camTarget.z); U.cutDir.value.set(sx, sz); U.cutRight.value.set(sz, -sx);
-  U.cutD.value = cutRay.intersectPlane(cutPlane, cutHit) ? (cutHit.x - camTarget.x) * sx + (cutHit.z - camTarget.z) * sz : 1e9;
-  U.cutW.value = Math.max(1.6, spanW * 0.09);
+  TRUNK_U.cutC.value.set(camTarget.x, camTarget.z); TRUNK_U.cutDir.value.set(Math.sin(yaw), Math.cos(yaw));
 }
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
 function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
@@ -6562,6 +6552,8 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
+  // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, lavaMat]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
