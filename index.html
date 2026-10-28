@@ -26,6 +26,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #stage { position: fixed; inset: 0; overflow: hidden; }
 #stage canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; cursor: crosshair; }
 #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.hint { position: absolute; font-family: var(--display); font-size: 10px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -100%); white-space: nowrap; }
 .float { position: absolute; font-family: var(--display); font-size: 11px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -50%); animation: rise 0.9s steps(9) forwards; white-space: nowrap; }
 @keyframes rise { to { transform: translate(-50%, -240%); opacity: 0; } }
 
@@ -146,7 +147,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 </style>
 
 <div id="stage"></div>
-<div id="fx"></div>
+<div id="fx"><div id="jumpHint" class="hint" hidden></div></div>
 
 <div class="hud tl">
   <div class="plate hp" id="hpPlate">
@@ -285,30 +286,52 @@ const DEEP_IN = 10;   // tiles of ordinary forest, give or take, ringing a deep 
 const WASTE_AT = 0.46;   // how blasted the land must be to be the wastes
 const craters = [];   // { c, r, R, lava } where the wastes were struck
 const LAVA = new Uint8Array(N * N);
-// lava pools in the wastes: in the floors of some craters, and in blobs of low ground elsewhere, always on
-// flat ground with nothing lower beside it, so they lie in hollows and never spill over a drop
+// Lava pools in the wastes: in the floors of some craters, and in blobs of low ground elsewhere, always on
+// flat ground with nothing lower beside it, so they lie in hollows and never spill over a drop. Each pool sinks
+// like a lake: its tiles go under (LV 0) with a surface at its lowest level and a bed a level or two down, so
+// nothing walks into it. (Lakes and rivers in the wastes run with lava too, and keep their beds and levels.)
 function pourLava() {
   const ok = i => {
     const c = i % N, r = (i - c) / N;
     if (c < 2 || r < 2 || c >= N - 2 || r >= N - 2 || BI[i] !== WASTES || !LV[i] || SH[i] || PATH[i] || TN[i] || BR[i] || WT[i]) return false;
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
       const n = i + dr * N + dc;
-      if (LV[n] < LV[i] || SH[n] || PATH[n]) return false;
+      if (LV[n] < LV[i] || SH[n] || PATH[n] || BR[n]) return false;
     }
     return true;
   };
+  const pick = new Uint8Array(N * N);
   for (const k of craters) {
     if (!k.lava) continue;
     const R = Math.ceil(k.R * 0.6);
     for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
       const c = Math.floor(k.c) + dx, r = Math.floor(k.r) + dz, i = T(c, r);
-      if (Math.hypot(c + 0.5 - k.c, r + 0.5 - k.r) < k.R * (0.45 + fbm(nX, c / 3, r / 3 + 40, 1) * 0.2) && ok(i)) LAVA[i] = 1;
+      if (Math.hypot(c + 0.5 - k.c, r + 0.5 - k.r) < k.R * (0.45 + fbm(nX, c / 3, r / 3 + 40, 1) * 0.2) && ok(i)) pick[i] = 1;
     }
   }
   for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) {
     const i = T(c, r);
-    if (fbm(nX, c / 9 + 500, r / 9 - 220, 2) > 0.44 && ok(i)) LAVA[i] = 1;
+    if (fbm(nX, c / 9 + 500, r / 9 - 220, 2) > 0.44 && ok(i)) pick[i] = 1;
   }
+  // pool by pool: too small a pool is just a pit, and stays ground
+  const seen = new Uint8Array(N * N), q = [];
+  for (let s = 0; s < N * N; s++) {
+    if (!pick[s] || seen[s]) continue;
+    q.length = 0; q.push(s); seen[s] = 1;
+    let level = 99;
+    for (let h = 0; h < q.length; h++) {
+      const i = q[h];
+      level = Math.min(level, LV[i]);
+      for (let d = 0; d < 4; d++) { const n = i + DI[d]; if (pick[n] && !seen[n]) { seen[n] = 1; q.push(n); } }
+    }
+    if (q.length < 5) continue;
+    for (const i of q) {
+      let inner = true;
+      for (let d = 0; d < 4; d++) if (!pick[i + DI[d]]) inner = false;
+      LV[i] = 0; SH[i] = 0; WT[i] = 2; WL[i] = level; DEPTH[i] = inner ? 2 : 1; GL[i] = level - DEPTH[i]; LAVA[i] = 1; OB[i] = 0;
+    }
+  }
+  computeRim();
 }
 const spawn = { x: N / 2 + 0.5, z: N / 2 + 0.5 };
 
@@ -485,11 +508,8 @@ async function generate(progress) {
       if (BI[i] === FOREST && din[i] >= DEEP_IN + fbm(nX, c / 22 + 140, r / 22, 2) * 8) BI[i] = DEEP;
     }
   }
-  // 3c. No water in the wastes: lakes and rivers there run with lava instead, level with their old surface
-  for (let i = 0; i < N * N; i++) {
-    if (BI[i] !== WASTES || WT[i] < 2 || CY[i]) continue;
-    LV[i] = Math.max(1, WL[i]); SH[i] = 0; WT[i] = 0; GL[i] = 0; WL[i] = 0; FX[i] = FZ[i] = 0; LAVA[i] = 1;
-  }
+  // 3c. No water in the wastes: lakes and rivers there run with lava instead
+  for (let i = 0; i < N * N; i++) if (BI[i] === WASTES && WT[i] >= 2 && !CY[i]) LAVA[i] = 1;
 
   // 4. Towns: flat clearings with a plaza, a well, streets and houses
   progress(0.5, 'FOUNDING TOWNS'); await nextFrame();
@@ -540,6 +560,7 @@ async function generate(progress) {
     if (r % 128 === 127) { progress(0.88 + 0.06 * r / N, 'GROWING THE WILDS'); await nextFrame(); }
   }
   for (const w of waystones) OB[T(w.c, w.r)] = O.SHRINE;
+  placeVents();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1549,7 +1570,7 @@ const connectStats = { reached: 0 };
 // solid: radius of a round obstacle; tile: blocks the whole tile; hp/give: what an axe or sword gets out of it
 const O = {
   PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8,
-  ROCK: 10, ICEROCK: 11, SANDROCK: 12, SULPHUR: 13,
+  ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14,
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
@@ -1565,8 +1586,10 @@ def(O.DEAD, { name: 'dead tree', solid: 0.16, hp: 3, give: 'wood', tree: true })
 def(O.SNOWPINE, { name: 'frost pine', solid: 0.22, hp: 4, give: 'wood', tree: true });
 def(O.CACTUS, { name: 'cactus', solid: 0.18, hp: 2, give: 'wood', tree: true });
 def(O.BURNT, { name: 'burned tree', solid: 0.15, hp: 2, give: 'wood', tree: true });
-// a smoking cone of rock crusted with sulphur round its vent
-def(O.SULPHUR, { name: 'sulphur cone', solid: 0.42 });
+// a smoking vent: a hole two tiles across, crusted with sulphur round its lip, that nothing walks into; it's
+// drawn from its north-west tile (VENT), and the other three (VENTX) are just its ground
+def(O.VENT, { name: 'smoking vent', tile: true });
+def(O.VENTX, { name: 'smoking vent', tile: true });
 // the deep forest's redwoods: far too big to fell
 def(O.SEQUOIA, { name: 'redwood', solid: 0.62 });
 def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
@@ -1601,6 +1624,28 @@ function townCell(c, r) {
   return 'yard';
 }
 
+// vents in the wastes: one to some cells of a coarse grid, on a flat, dry 2 x 2 of ash clear of roads,
+// ramps and anything that fills a tile
+function placeVents() {
+  const G2 = 13;
+  for (let gr = 0; gr < N / G2; gr++) for (let gc = 0; gc < N / G2; gc++) {
+    if (hs(gc, gr, 81) > 0.55) continue;
+    // a few tries for a spot in the cell
+    for (let t = 0; t < 6; t++) {
+      const c = Math.floor((gc + 0.1 + hs(gc, gr, 82 + t * 2) * 0.8) * G2), r = Math.floor((gr + 0.1 + hs(gc, gr, 83 + t * 2) * 0.8) * G2);
+      if (c < 3 || r < 3 || c >= N - 4 || r >= N - 4) continue;
+      const L = LV[T(c, r)];
+      let ok = L > 0;
+      for (let dr = -1; dr <= 2 && ok; dr++) for (let dc = -1; dc <= 2; dc++) {
+        const i = T(c + dc, r + dr), core = dr >= 0 && dr <= 1 && dc >= 0 && dc <= 1;
+        if (SH[i] || PATH[i] || (core && (LV[i] !== L || BI[i] !== WASTES || WT[i] || BR[i] || OBJ[OB[i]].tile || OBJ[OB[i]].solid || (RIM[i] & 0xf0f)))) { ok = false; break; }
+      }
+      if (!ok) continue;
+      OB[T(c, r)] = O.VENT; OB[T(c + 1, r)] = OB[T(c, r + 1)] = OB[T(c + 1, r + 1)] = O.VENTX;
+      break;
+    }
+  }
+}
 function placeScenery(c, r) {
   const i = T(c, r);
   if (!LV[i] || SH[i] || FL[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;
@@ -1680,8 +1725,7 @@ function placeScenery(c, r) {
     case WASTES:
       if (LAVA[i]) return;
       if (k < 0.04) OB[i] = O.BURNT;
-      else if (k < 0.052) OB[i] = O.SULPHUR;
-      else if (k < 0.064) OB[i] = O.ROCK;
+      else if (k < 0.052) OB[i] = O.ROCK;
       else if (k < 0.08) OB[i] = O.BONES;
       else if (k < 0.3) OB[i] = O.PUMICE;
       return;
@@ -1921,7 +1965,7 @@ class Buf {
   }
 }
 let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf();
-const bufGround = new Buf(), bufLava = new Buf(), bufWater = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
+const bufGround = new Buf(), bufWater = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
   constructor() { super(); this.b = new Float32Array(this.p.length); }
@@ -2017,7 +2061,7 @@ function groundColor(c, r, i, j) {
     base = (i + j + c + r) % 2 ? q.road : q.roadB;
     return shade(base, 0.92 + hs(c, r, i * 2 + j) * 0.12);
   }
-  if (base === p.a || base === p.b) { if (hs(c, r, i * 2 + j + 9) > 0.94) base = p.speck; }
+  if ((base === p.a || base === p.b) && b !== WASTES) { if (hs(c, r, i * 2 + j + 9) > 0.94) base = p.speck; }
   return shade(base, (0.9 + hs(c, r, i * 2 + j) * 0.18) * (0.93 + LV[t] * 0.014));
 }
 
@@ -2165,17 +2209,17 @@ function roughCell(P, K, Q, flip, lifted) {
 }
 
 function buildGround(cx, cz, ch) {
-  OUT = bufGround; bufGround.n = 0; bufLava.n = 0;
+  OUT = bufGround; bufGround.n = 0;
   const water = bufWater; water.n = 0;
   const c0 = cx * CH, r0 = cz * CH, GW = CH * 2 + 1;
   const grid = new Float32Array(GW * GW);
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) grid[j * GW + k] = pointH(c0 * 2 + k, r0 * 2 + j);
   const P = [], own = [], up = [];
   cliffField(c0, r0, GW);
-  let wet = false;
+  let wet = false, molten = false;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), s = SH[i], pal = PAL[BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
-    if (!L && WL[i]) wet = true;
+    if (!L && WL[i]) { if (LAVA[i]) molten = true; else wet = true; }
     // the tile's 3 x 3 points, and which of them its higher neighbours lift
     for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) {
       const n = j * 3 + k, y = grid[((r - r0) * 2 + j) * GW + (c - c0) * 2 + k];
@@ -2185,8 +2229,10 @@ function buildGround(cx, cz, ch) {
     }
     const strata = 0.9 + hs(c, r, 20) * 0.2;
     // (under water the banks are sand; a canyon's walls fall away into the dark)
-    const rockTop = shade(L || cy ? pal.cliffA : pal.road, strata);
-    const rockLow = cy ? shade(pal.cliffB, strata * 0.3) : shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
+    // (and a lava pool's are scorched black)
+    const scorch = !L && LAVA[i];
+    const rockTop = shade(L || cy || scorch ? pal.cliffA : pal.road, strata * (scorch ? 0.7 : 1));
+    const rockLow = cy ? shade(pal.cliffB, strata * 0.3) : scorch ? shade(pal.cliffB, strata * 1.4) : shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
     for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
       const n00 = b * 3 + a, n10 = n00 + 1, n01 = n00 + 3, n11 = n00 + 4;
       const lifted = up[n00] + up[n10] + up[n01] + up[n11];
@@ -2227,12 +2273,6 @@ function buildGround(cx, cz, ch) {
       if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
       else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
     }
-    if (LAVA[i]) {
-      OUT = bufLava;
-      const y = L * STEP + 0.03, k = C('#ffffff');
-      quad([c, y, r], [c, y, r + 1], [c + 1, y, r + 1], [c + 1, y, r], k);
-      OUT = bufGround;
-    }
     if (L && WT[i] === 1) {
       OUT = water;
       const y = L * STEP + 0.04, k = shade(BOGW, 0.9 + hs(c, r, 5) * 0.15);
@@ -2252,9 +2292,9 @@ function buildGround(cx, cz, ch) {
   }
   ch.ground = bufGround.mesh(groundMat);
   ch.bog = water.mesh(waterMat);
-  ch.lava = bufLava.mesh(lavaMat);
   if (ch.bog) ch.bog.renderOrder = 1;
   if (wet) buildWater(c0, r0, grid, GW, ch);
+  if (molten) buildLava(c0, r0, grid, GW, ch);
 }
 // The open water of a chunk on the same half-tile grid as the ground: each point stands at the highest
 // surface of the water tiles round it (so where a river steps down a level, the lower tile's upper half is a
@@ -2267,7 +2307,7 @@ function waterPoint(x2, z2, out) {
   for (let r = ra; r <= rb; r++) for (let c = ca; c <= cb; c++) {
     if (c < 0 || r < 0 || c >= N || r >= N) continue;
     const i = T(c, r);
-    if ((LV[i] && !BR[i]) || !WL[i]) continue;
+    if ((LV[i] && !BR[i]) || !WL[i] || LAVA[i]) continue;
     hi = Math.max(hi, WL[i]); lo = Math.min(lo, WL[i]);
     fx += FX[i]; fz += FZ[i]; n++;
   }
@@ -2283,7 +2323,7 @@ function buildWater(c0, r0, grid, GW, ch) {
   };
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
-    if ((LV[i] && !BR[i]) || !WL[i]) continue;
+    if ((LV[i] && !BR[i]) || !WL[i] || LAVA[i]) continue;
     for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
       const j = (r - r0) * 2 + b, k = (c - c0) * 2 + a;
       vert(j, k); vert(j + 1, k); vert(j + 1, k + 1);
@@ -2298,6 +2338,40 @@ function buildWater(c0, r0, grid, GW, ch) {
   g.setAttribute('wFall', new THREE.Float32BufferAttribute(wFall, 1));
   ch.water = new THREE.Mesh(g, waterMulMat); ch.water.renderOrder = 2;
   ch.water2 = new THREE.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
+}
+// Lava pools and rivers the same way, on their own: each point at the highest lava surface round it, a little
+// lower in its banks than water stands, with how far it is above the bed there (the shore) and its flow.
+const LAVA_DROP = 0.24;
+function lavaPoint(x2, z2, out) {
+  const ca = x2 & 1 ? x2 >> 1 : (x2 >> 1) - 1, cb = x2 >> 1, ra = z2 & 1 ? z2 >> 1 : (z2 >> 1) - 1, rb = z2 >> 1;
+  let hi = -1, fx = 0, fz = 0, n = 0;
+  for (let r = ra; r <= rb; r++) for (let c = ca; c <= cb; c++) {
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const i = T(c, r);
+    if ((LV[i] && !BR[i]) || !WL[i] || !LAVA[i]) continue;
+    hi = Math.max(hi, WL[i]); fx += FX[i]; fz += FZ[i]; n++;
+  }
+  out[0] = hi * STEP - LAVA_DROP; out[1] = n ? fx / n / 127 : 0; out[2] = n ? fz / n / 127 : 0;
+}
+function buildLava(c0, r0, grid, GW, ch) {
+  const pos = [], dep = [], flow = [], pts = new Float32Array(GW * GW * 3), o = [0, 0, 0];
+  for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) { lavaPoint(c0 * 2 + k, r0 * 2 + j, o); pts.set(o, (j * GW + k) * 3); }
+  const vert = (j, k) => { const q = (j * GW + k) * 3, y = pts[q]; pos.push(c0 + k / 2, y, r0 + j / 2); dep.push(y - grid[j * GW + k]); flow.push(pts[q + 1], pts[q + 2]); };
+  for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+    const i = T(c, r);
+    if ((LV[i] && !BR[i]) || !WL[i] || !LAVA[i]) continue;
+    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+      const j = (r - r0) * 2 + b, k = (c - c0) * 2 + a;
+      vert(j, k); vert(j + 1, k); vert(j + 1, k + 1);
+      vert(j, k); vert(j + 1, k + 1); vert(j, k + 1);
+    }
+  }
+  if (!pos.length) return;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('lDepth', new THREE.Float32BufferAttribute(dep, 1));
+  g.setAttribute('lFlow', new THREE.Float32BufferAttribute(flow, 2));
+  ch.lava = new THREE.Mesh(g, lavaMat);
 }
 const groundMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
 // Redwood trunks are cut away, as the walls are indoors, where they'd hide you: those below you on the screen
@@ -2508,32 +2582,79 @@ const makeWaterMat = add => new THREE.ShaderMaterial({
   blendSrc: add ? THREE.OneFactor : THREE.ZeroFactor, blendDst: add ? THREE.OneFactor : THREE.SrcColorFactor,
 });
 const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
-// Lava: unlit, so it glows by night. A dark crust drifting over the melt, cracked through with bright seams
-// where two slow patterns meet, and the whole pool breathing brighter and dimmer.
-const LAVA_U = Object.assign({ tWave: { value: waveTex }, time: { value: 0 } }, THREE.UniformsUtils.clone(THREE.UniformsLib.fog));
+// Lava (T > Lava): unlit, so it glows by night. A dark crust drifting over the melt (lit a little by the sun),
+// cracked through with bright seams where two slow patterns meet, the whole pool breathing brighter and
+// dimmer, cooling to crust toward the banks, and carried along a lava river's flow. Slow ripples lift the
+// surface itself. Bubbles swell up out of it, a bright ring round each glossy dome, and burst in a flash and
+// a ring of spatter running out.
+const LAVA_FX = { ripple: 0.05, rippleSize: 1.6, rippleSpeed: 0.8, glow: 1, crust: 0.5, cracks: 0.8, pulse: 0.15, flow: 1, pattern: 1,
+  shoreCrust: 0.7, bubbles: 0.45, bubbleRate: 0.35, bubbleSize: 0.22, spatter: 1 };
+const LAVA_U = Object.assign({ tWave: { value: waveTex }, time: { value: 0 }, ripT: { value: 0 }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
+  rippleH: { value: 0 }, rippleLen: { value: 1 }, glow: { value: 1 }, crust: { value: 0.5 }, cracks: { value: 1 }, pulseAmt: { value: 0.15 },
+  flowT: { value: 0 }, pattern: { value: 1 }, shoreCrust: { value: 0.7 }, bubbles: { value: 0.5 }, bubbleT: { value: 0 }, bubbleSize: { value: 0.2 } },
+  THREE.UniformsUtils.clone(THREE.UniformsLib.fog));
 const lavaMat = new THREE.ShaderMaterial({
   uniforms: LAVA_U, fog: true,
   vertexShader: `
-varying vec2 vXZ;
+attribute float lDepth; attribute vec2 lFlow;
+uniform float ripT, rippleH, rippleLen;
+varying vec2 vXZ, vFlow; varying float vDepth, vRip; varying vec3 vN;
 #include <fog_pars_vertex>
 void main() {
-  vec4 w = modelMatrix * vec4(position, 1.0); vXZ = w.xz;
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vec2 p = w.xz / rippleLen;
+  vec2 d1 = vec2(0.8, 0.6) * 1.9, d2 = vec2(-0.45, 0.9) * 2.7, d3 = vec2(0.95, -0.3) * 3.6;
+  float a1 = dot(p, d1) + ripT * 1.1, a2 = dot(p, d2) - ripT * 1.4, a3 = dot(p, d3) + ripT * 1.9;
+  float hgt = (sin(a1) + 0.6 * sin(a2) + 0.35 * sin(a3)) / 1.95;
+  vec2 slope = (cos(a1) * d1 + 0.6 * cos(a2) * d2 + 0.35 * cos(a3) * d3) / (1.95 * rippleLen);
+  float amp = rippleH * smoothstep(0.0, 0.3, lDepth);
+  w.y += amp * hgt;
+  vN = normalize(vec3(-amp * slope.x, 1.0, -amp * slope.y));
+  vXZ = w.xz; vFlow = lFlow; vDepth = lDepth; vRip = hgt;
   vec4 mvPosition = viewMatrix * w;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
 }`,
   fragmentShader: `
-uniform sampler2D tWave; uniform float time;
-varying vec2 vXZ;
+uniform sampler2D tWave; uniform float time, flowT, glow, crust, cracks, pulseAmt, pattern, shoreCrust, bubbles, bubbleT, bubbleSize; uniform vec3 sunDir;
+varying vec2 vXZ, vFlow; varying float vDepth, vRip; varying vec3 vN;
 #include <fog_pars_fragment>
 float h(vec2 uv) { return texture2D(tWave, uv).b; }
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
-  float a = h(vXZ / 6.0 + vec2(0.011, 0.007) * time), b = h(mat2(0.6, -0.8, 0.8, 0.6) * vXZ / 3.4 - vec2(0.008, -0.013) * time);
-  float melt = smoothstep(0.42, 0.72, a), seam = 1.0 - smoothstep(0.0, 0.05, abs(a - b));
-  float pulse = 0.85 + 0.15 * sin(time * 1.3 + a * 9.0);
-  vec3 col = vec3(0.09, 0.03, 0.02);
-  col = mix(col, vec3(0.85, 0.22, 0.04) * pulse, melt * 0.85);
-  col = mix(col, vec3(1.0, 0.72, 0.25), seam * (0.5 + 0.5 * melt));
+  vec2 q = vXZ / pattern - vFlow * flowT * 0.5;
+  float a = h(q / 6.0 + vec2(0.011, 0.007) * flowT), b = h(mat2(0.6, -0.8, 0.8, 0.6) * q / 3.4 - vec2(0.008, -0.013) * flowT);
+  float shore = (1.0 - smoothstep(0.0, 0.4, vDepth)) * shoreCrust;
+  float melt = smoothstep(0.3 + crust * 0.3, 0.55 + crust * 0.3, a) * (1.0 - shore);
+  float seam = (1.0 - smoothstep(0.0, 0.05, abs(a - b))) * (1.0 - shore * 0.6);
+  float pulse = 1.0 + pulseAmt * sin(time * 1.3 + a * 9.0);
+  vec3 col = vec3(0.1, 0.04, 0.03) * (0.5 + 0.8 * max(dot(vN, sunDir), 0.0));
+  col = mix(col, vec3(0.85, 0.22, 0.04) * pulse * glow * (1.0 + vRip * 0.15), melt * 0.85);
+  col = mix(col, vec3(1.0, 0.72, 0.25) * glow, clamp(seam * cracks * (0.5 + 0.5 * melt), 0.0, 1.0));
+  // bubbles: at most one to a cell, each on its own clock; it swells for most of it, then bursts
+  float inside = smoothstep(0.12, 0.45, vDepth), bs = 1.7;
+  vec2 cell0 = floor(vXZ / bs);
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 cell = cell0 + vec2(float(x), float(y));
+    if (hash2(cell) > bubbles) continue;
+    float t = fract(bubbleT * (0.6 + 0.8 * hash2(cell + 3.1)) + hash2(cell + 7.7));
+    vec2 ctr = (cell + 0.25 + 0.5 * vec2(hash2(cell + 1.7), hash2(cell + 5.3))) * bs;
+    float R = bubbleSize * (0.6 + 0.8 * hash2(cell + 9.2)), d = length(vXZ - ctr);
+    if (t < 0.82) {
+      float r = R * sqrt(t / 0.82);
+      if (d < r) {
+        float dome = sqrt(1.0 - d * d / (r * r));
+        vec3 bc = mix(vec3(1.0, 0.7, 0.25), vec3(0.55, 0.12, 0.03), dome) * glow;
+        bc += vec3(1.0, 0.85, 0.6) * pow(max(0.0, 1.0 - length(vXZ - ctr + vec2(0.35, 0.35) * r) / (0.4 * r)), 2.0) * 0.7;
+        col = mix(col, bc, inside);
+      } else col += vec3(1.0, 0.5, 0.1) * glow * exp(-pow((d - r) / (0.03 + 0.12 * r), 2.0)) * 0.45 * inside;
+    } else {
+      float u = (t - 0.82) / 0.18, rr = R * (1.0 + u * 2.2);
+      float ring = exp(-pow((d - rr) / (0.03 + R * 0.15), 2.0)) * (1.0 - u);
+      float flash = (1.0 - u) * (1.0 - smoothstep(0.0, R, d));
+      col += vec3(1.0, 0.7, 0.3) * glow * (ring * 1.2 + flash) * inside;
+    }
+  }
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
 }`,
@@ -2542,12 +2663,20 @@ const wTmp = new THREE.Vector3();
 function updateWater(dt) {
   const U = WATER_U;
   U.time.value = (U.time.value + dt * WATER.waveSpeed) % 4000;
-  LAVA_U.time.value = (LAVA_U.time.value + dt) % 4000;
+  const LU = LAVA_U;
+  LU.time.value = (LU.time.value + dt) % 4000;
+  LU.ripT.value = (LU.ripT.value + dt * LAVA_FX.rippleSpeed) % 4000;
+  LU.flowT.value = (LU.flowT.value + dt * LAVA_FX.flow) % 4000;
+  LU.bubbleT.value = (LU.bubbleT.value + dt * LAVA_FX.bubbleRate) % 4000;
+  LU.rippleH.value = LAVA_FX.ripple; LU.rippleLen.value = Math.max(0.2, LAVA_FX.rippleSize); LU.pattern.value = Math.max(0.2, LAVA_FX.pattern);
+  LU.pulseAmt.value = LAVA_FX.pulse; LU.bubbleSize.value = LAVA_FX.bubbleSize;
+  for (const k of ['glow', 'crust', 'cracks', 'shoreCrust', 'bubbles']) LU[k].value = LAVA_FX[k];
   U.waveAmp.value = WATER.waves; U.flowSpeed.value = WATER.flow; U.glitter.value = WATER.glitter; U.rough.value = Math.max(0.004, WATER.roughness);
   U.foamAmt.value = WATER.foam; U.shoreFoam.value = WATER.shoreFoam;
   U.swellAmp.value = WATER.swell; U.swellLen.value = Math.max(0.2, WATER.swellSize); U.rippleLen.value = Math.max(0.2, WATER.rippleSize);
   for (const k of ['swellShade', 'crests', 'sparkle', 'caustics', 'shallows', 'shoreLine', 'shoreRipples']) U[k].value = WATER[k];
   U.sunDir.value.copy(sun.position).sub(sun.target.position).normalize();
+  LU.sunDir.value.copy(U.sunDir.value);
   U.sunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
   U.skyCol.value.copy(hemi.color).multiplyScalar(hemi.intensity);
   camera.getWorldDirection(U.viewDir.value);
@@ -2609,19 +2738,20 @@ function burntTree(x, z, k) {
     part(G.box, n % 2 ? '#ff6a1a' : '#ffa030', x + Math.sin(a) * 0.08, y + hh, z + Math.cos(a) * 0.08, { sx: 0.03, sy: 0.08, sz: 0.03, ry: a, into: 'glow' });
   }
 }
-// a squat cone of dark rock, streaked and crusted yellow toward a smoking vent (the smoke: see ventSmoke)
-function sulphurCone(x, z, k) {
-  const y = groundAt(x, z), h = 0.55 + k * 0.35, w = 0.95 + k * 0.25;
-  part(G.dodec, shade(CC('#2e2624'), 0.9), x, y + 0.03, z, { sx: w * 1.15, sy: 0.18, sz: w * 1.05, ry: k * 3 });
-  part(G.frust7, shade(CC('#3a302c'), 0.85 + k * 0.2), x, y + h / 2, z, { sx: w, sy: h, sz: w * 0.92, ry: k * 5 });
-  part(G.frust7, shade(CC('#c8b030'), 0.9 + k * 0.15), x, y + h + 0.03, z, { sx: w * 0.56, sy: 0.08, sz: w * 0.52, ry: k * 5 });
-  part(G.cyl6, '#140c0a', x, y + h + 0.06, z, { sx: w * 0.24, sy: 0.04, sz: w * 0.22 });
-  part(G.cyl6, '#ffb040', x, y + h + 0.045, z, { sx: w * 0.14, sy: 0.02, sz: w * 0.12, into: 'glow' });
-  // yellow crust trickling down the flanks, and crystals at the foot
-  for (let n = 0; n < 4; n++) {
-    const a = k * 6 + n * 1.6, rr = w * 0.36;
-    part(G.box, shade(CC('#d8c040'), 0.8 + hash(x, z, n) * 0.3), x + Math.sin(a) * rr, y + h * 0.62, z + Math.cos(a) * rr, { sx: 0.08, sy: h * 0.5, sz: 0.05, ry: a, rx: 0.5 * Math.cos(a), rz: -0.5 * Math.sin(a) });
-    if (n < 3) part(G.oct, shade(CC('#e8d850'), 0.9 + hash(x, z, n + 4) * 0.2), x + Math.sin(a + 0.8) * w * 0.6, y + 0.06, z + Math.cos(a + 0.8) * w * 0.6, { sx: 0.1, sy: 0.16, sz: 0.1, ry: a });
+// a vent: a hole two tiles across in the ash, its throat falling away dark to an ember glow far down, inside
+// a low lip of crusted ash and sulphur (the smoke: see ventSmoke)
+function vent(c, r, k) {
+  const x = c + 1, z = r + 1, y = LV[T(c, r)] * STEP;
+  part(G.cyl8, shade(CC('#241c1a'), 0.9 + k * 0.1), x, y + 0.006, z, { sx: 1.62, sy: 0.012, sz: 1.5, ry: k * 3 });
+  part(G.cyl8, '#120c0b', x, y + 0.012, z, { sx: 1.3, sy: 0.012, sz: 1.2, ry: k * 3 + 0.2 });
+  part(G.cyl8, '#050303', x, y + 0.018, z, { sx: 0.92, sy: 0.012, sz: 0.84, ry: k * 3 + 0.4 });
+  part(G.cyl6, '#5a1e0a', x, y + 0.022, z, { sx: 0.34, sy: 0.006, sz: 0.3, ry: k * 5, into: 'glow' });
+  // the lip: lumps of ash and sulphur crust all round
+  for (let n = 0; n < 11; n++) {
+    const a = n / 11 * Math.PI * 2 + k * 2, rr = 0.76 + hash(x, z, n) * 0.1, s = 0.16 + hash(x, z, n + 20) * 0.1;
+    const yel = hash(x, z, n + 40) < 0.4;
+    part(G.dodec, yel ? shade(CC('#cdb43a'), 0.85 + hash(x, z, n + 60) * 0.25) : shade(CC('#3a302c'), 0.8 + hash(x, z, n + 60) * 0.3),
+      x + Math.sin(a) * rr, y + s * 0.25, z + Math.cos(a) * rr * 0.94, { sx: s * 1.4, sy: s * 0.7, sz: s, ry: a });
   }
 }
 // charred pumice: light, holed stones lying about the ash
@@ -2827,7 +2957,7 @@ function drawObject(o, c, r) {
     case O.DEAD: return deadTree(x, z, k2, BI[T(c, r)] === SWAMP ? '#3a3428' : '#3a3030');
     case O.CACTUS: return cactus(x, z, k2);
     case O.BURNT: return burntTree(x, z, k2);
-    case O.SULPHUR: return sulphurCone(x, z, k2);
+    case O.VENT: return vent(c, r, k2);
     case O.PUMICE: return pumice(x, z, k2);
     case O.ROCK: return rock(x, z, k2, BI[T(c, r)] === WASTES ? '#4a403c' : '#7a7684');
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
@@ -3761,7 +3891,6 @@ function stepOpen(c, r, d, foe) {
   if (!terrainOpen(i, n, d) || OBJ[OB[n]].tile) return false;
   if (foe && BI[n] === TOWN && BI[i] !== TOWN) return false;
   // nothing wild walks into lava (you can, if you must)
-  if (foe && LAVA[n] && !LAVA[i]) return false;
   const w = wallOn(c, r, d);
   if (w && !(isDoorVal(w) && openDoors.has(edgeKey(...edgeOf(c, r, d))))) return false;
   return true;
@@ -3972,7 +4101,7 @@ const H = {
   x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true,
   wood: 0, stone: 0, kills: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
-  whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null,
+  whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
   cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
   kx: 0, kz: 0,
 };
@@ -4416,6 +4545,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyQ') castWhirl();
   if (e.code === 'KeyE') castLunge();
   if (e.code === 'Space') castDash();
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') castJump();
   if (e.code === 'KeyF') useDoor();
   if (e.code === 'KeyZ') turnCam(-1);
   if (e.code === 'KeyC') turnCam(1);
@@ -4540,6 +4670,7 @@ function pollPad(dt) {
     if (hit('X')) castWhirl();
     if (hit('Y')) castLunge();
     if (hit('A')) castDash();
+    if (hit('LB')) castJump();
     if (hit('B')) useDoor();
     $('padCursor').hidden = true;
     return;
@@ -4666,10 +4797,11 @@ function castDash() {
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
 }
-// Dashing off the top of a cliff: a front flip down onto the tile at its foot. Taken when the dash runs
-// mostly straight at a drop to flat, dry, open ground and you're within half a tile of the edge.
-function cliffFlip() {
-  const [dx, dz] = H.dashDir, c = Math.floor(H.x), r = Math.floor(H.z), i = T(c, r);
+// Jumping off the top of a cliff (Shift, or LB on a controller): a front flip down onto the tile at its foot.
+// You can when you're pushing mostly straight at a drop to flat, dry, open ground within half a tile of you,
+// and then a prompt says so over your head. No cooldown.
+function cliffFlip([dx, dz]) {
+  const c = Math.floor(H.x), r = Math.floor(H.z), i = T(c, r);
   if (Math.max(Math.abs(dx), Math.abs(dz)) < 0.6) return null;
   const d = Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0);
   const gap = d === 1 ? c + 1 - H.x : d === 3 ? H.x - c : d === 2 ? r + 1 - H.z : H.z - r;
@@ -4682,6 +4814,27 @@ function cliffFlip() {
   const x1 = d & 1 ? nc + (d === 1 ? into : 1 - into) : nc + across, z1 = d & 1 ? nr + across : nr + (d === 2 ? into : 1 - into);
   const drop = H.y - LV[n] * STEP;
   return { t: 0, dur: 0.5 + 0.06 * drop, x0: H.x, z0: H.z, y0: H.y, x1, z1, y1: LV[n] * STEP, face: [0, Math.PI / 2, Math.PI, -Math.PI / 2][d] };
+}
+function jumpEdge(dir = moveInput()) {
+  if (mode !== 'play' || !H.alive || H.flip || H.dash >= 0 || H.lunge >= 0 || !dir) return null;
+  return cliffFlip(dir);
+}
+function castJump() {
+  const f = H.canJump;
+  if (!f || H.flip) return;
+  H.flip = f; H.canJump = null; H.swing = -1; H.invuln = Math.max(H.invuln, f.dur);
+  sfx.dash();
+}
+// the prompt over your head while you could jump
+function showJumpHint() {
+  const el = $('jumpHint');
+  if (!H.canJump || !started) { el.hidden = true; return; }
+  v3.set(H.x, H.y + 1.75, H.z).project(camera);
+  const rect = cv.getBoundingClientRect();
+  el.textContent = PAD.on ? 'LB TO JUMP' : 'SHIFT TO JUMP';
+  el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
+  el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
+  el.hidden = false;
 }
 // WASD, turned so W always walks up the screen
 function moveInput() {
@@ -4975,7 +5128,7 @@ function putOutHearth(i) {
 }
 // flames that flicker, smoke from the chimney, a crackle close by, and warmth that heals
 let crackleT = 0;
-// the wastes breathe: smoke curling up out of the sulphur cones near you, and now and then a bubble of lava bursting
+// the wastes breathe: smoke curling up out of the vents near you, and now and then a bubble of lava bursting
 let ventT = 0;
 function ventSmoke(dt) {
   ventT -= dt;
@@ -4985,10 +5138,9 @@ function ventSmoke(dt) {
   if (BI[T(clamp(c0, 0, N - 1), clamp(r0, 0, N - 1))] !== WASTES && !nearWastes(c0, r0)) return;
   for (let r = Math.max(1, r0 - R); r <= Math.min(N - 2, r0 + R); r++) for (let c = Math.max(1, c0 - R); c <= Math.min(N - 2, c0 + R); c++) {
     const i = T(c, r);
-    if (OB[i] === O.SULPHUR && Math.random() < 0.55) {
-      const [x, z] = objPos(c, r, O.SULPHUR), k = hs(c, r, 6);
-      wisp(x + (Math.random() - 0.5) * 0.15, groundAt(x, z) + 0.6 + k * 0.35, z + (Math.random() - 0.5) * 0.15, Math.random() < 0.5 ? '#c8c098' : '#a8a49a');
-    } else if (LAVA[i] && Math.random() < 0.012) puff(c + Math.random(), LV[i] * STEP - 0.05, r + Math.random(), '#ff8a30', 2, 0.25);
+    if (OB[i] === O.VENT) {
+      for (let n = 0; n < 2; n++) if (Math.random() < 0.7) wisp(c + 1 + (Math.random() - 0.5) * 0.7, LV[i] * STEP + 0.05, r + 1 + (Math.random() - 0.5) * 0.7, Math.random() < 0.5 ? '#c8c098' : '#a8a49a');
+    } else if (LAVA[i] && !LV[i] && Math.random() < 0.012 * LAVA_FX.spatter) puff(c + Math.random(), WL[i] * STEP - LAVA_DROP, r + Math.random(), Math.random() < 0.5 ? '#ff8a30' : '#ffc040', 2, 0.25);
   }
 }
 // any of the wastes within a screen or so (checked coarsely)
@@ -5234,7 +5386,7 @@ function spawnTick(dt) {
 // the walk (T > Walk): cadence is leg swings per tile walked (radians of the cycle); the rest are swing angles
 const WALK = { cadence: 3.3, stride: 0.85, backStride: 0.55, arms: 0.6, sideOpen: 0.57, bob: 0.03, lean: 0.1 };
 let time = 0, regionName = '', regionT = 0;
-function heroSpeed() { const i = T(Math.floor(H.x), Math.floor(H.z)); return (mode === 'build' ? 4.4 : 4.6) * (WT[i] === 1 ? 0.62 : LAVA[i] ? 0.55 : 1); }
+function heroSpeed() { const i = T(Math.floor(H.x), Math.floor(H.z)); return (mode === 'build' ? 4.4 : 4.6) * (WT[i] === 1 ? 0.62 : 1); }
 function update(dt) {
   time += dt;
   advanceClock(dt);
@@ -5246,7 +5398,7 @@ function update(dt) {
   if (H.alive) {
     const m = moveInput();
     let vx = 0, vz = 0;
-    if (H.dash >= 0 && !H.flip) { const f = cliffFlip(); if (f) { H.flip = f; H.dash = -1; H.invuln = Math.max(H.invuln, f.dur); sfx.dash(); } }
+    H.canJump = jumpEdge(m);
     if (H.flip) {
       // the flip: across and down on an arc, turning over once, then a puff of dust where you land
       const F = H.flip;
@@ -5315,16 +5467,6 @@ function update(dt) {
       }
       if (H.whirl > 1.0) { H.whirl = -1; H.face = Math.atan2(aim.x, aim.z); }
     }
-    // lava burns: a scorch every so often while you wade through it
-    if (LAVA[T(Math.floor(H.x), Math.floor(H.z))] && !H.flip) {
-      H.burnT = (H.burnT || 0) - dt;
-      if (H.burnT <= 0) {
-        H.burnT = 0.35;
-        deathCause = 'Burned up in the lava of ' + titleCase(regionName) + '.';
-        hurtHero(6, H.x, H.z); H.kx = H.kz = 0;
-        puff(H.x, H.y, H.z, '#ff8a30', 3, 0.5);
-      }
-    } else H.burnT = 0;
     // health comes back after a few quiet seconds, faster under a roof
     const sheltered = roomOf.has(T(Math.floor(H.x), Math.floor(H.z)));
     if (time - H.lastHurt > 5 && H.hp < MAX_HP) { H.hp = Math.min(MAX_HP, H.hp + dt * (sheltered ? 8 : 2)); renderHp(); }
@@ -5679,8 +5821,8 @@ function tileRGB(i) {
   const c = i % N, r = (i - c) / N, L = LV[i];
   if (BR[i]) return [150, 108, 62];
   if (CY[i]) return [34, 26, 24];
-  if (!L) return WT[i] === 3 ? [58, 118, 150] : WT[i] === 2 ? [46, 104, 138] : [42 * 0.9 + hs(c, r, 5) * 6, 90, 122];
   if (LAVA[i]) return [232, 92, 30];
+  if (!L) return WT[i] === 3 ? [58, 118, 150] : WT[i] === 2 ? [46, 104, 138] : [42 * 0.9 + hs(c, r, 5) * 6, 90, 122];
   let [R, Gc, B] = MAP_RGB[BI[i]];
   if (BI[i] === TOWN) { const cell = townCell(c, r); if (cell === 'plaza' || cell === 'street') [R, Gc, B] = [160, 148, 128]; }
   if (WT[i]) { R = R * 0.5 + 22; Gc = Gc * 0.5 + 37; B = B * 0.5 + 32; }
@@ -5993,6 +6135,22 @@ const TUNING = [
     [WATER, 'foam', 'Foam', 0, 3, 0.05],
     [WATER, 'shoreFoam', 'Shore foam', 0, 2, 0.05],
   ]],
+  ['Lava', [
+    [LAVA_FX, 'ripple', 'Ripple height (tiles)', 0, 0.3, 0.005],
+    [LAVA_FX, 'rippleSize', 'Ripple length', 0.3, 5, 0.05],
+    [LAVA_FX, 'rippleSpeed', 'Ripple speed', 0, 4, 0.05],
+    [LAVA_FX, 'glow', 'Glow', 0, 3, 0.05],
+    [LAVA_FX, 'crust', 'Crust over the melt', 0, 1, 0.01],
+    [LAVA_FX, 'cracks', 'Glowing cracks', 0, 2, 0.05],
+    [LAVA_FX, 'pulse', 'Breathing (glow rising and falling)', 0, 1, 0.01],
+    [LAVA_FX, 'flow', 'Drift and river flow speed', 0, 5, 0.05],
+    [LAVA_FX, 'pattern', 'Crust pattern size', 0.3, 4, 0.05],
+    [LAVA_FX, 'shoreCrust', 'Cooled crust at the banks', 0, 1, 0.05],
+    [LAVA_FX, 'bubbles', 'Bubbles (how many)', 0, 1, 0.01],
+    [LAVA_FX, 'bubbleRate', 'Bubble speed (how often they burst)', 0, 2, 0.01],
+    [LAVA_FX, 'bubbleSize', 'Bubble size (tiles)', 0.05, 0.6, 0.01],
+    [LAVA_FX, 'spatter', 'Spatter thrown up', 0, 3, 0.05],
+  ]],
   ['Outline', [
     [OUTLINE, 'on', 'Edge outline (0 off, 1 on)', 0, 1, 1],
     [OUTLINE, 'distance', 'Outline where the ground behind an edge is this far back (tiles)', 0.05, 6, 0.05],
@@ -6105,6 +6263,7 @@ function frame(now) {
   if (started && !mapOpen) update(dt);
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
   updateCamera(dt);
+  showJumpHint();
   updateClouds(dt);
   updateWater(dt);
   updateHearths(dt);
@@ -6159,7 +6318,7 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
-  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList }),
+  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
@@ -6216,6 +6375,8 @@ window.GAME = {
   foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp, homing: f.homing, calm: +f.calm.toFixed(1), path: f.path ? f.path.length : -1 })),
   // dash the way you face, and run the whole game for a while, 60 steps a second, with nothing drawn
   dash: () => castDash(),
+  // tests: jump off an edge pushing the given way (as if those keys were held)
+  jump: (dx, dz) => { H.canJump = jumpEdge([dx, dz]); const could = !!H.canJump; castJump(); return could; },
   tick: sec => { for (let t = 0; t < sec; t += 1 / 60) update(1 / 60); return { x: H.x, z: H.z, y: H.y, flip: !!H.flip, rx: hero.g.rotation.x }; },
   isLava: (c, r) => !!LAVA[T(c, r)],
   wastes: () => {
@@ -6224,7 +6385,7 @@ window.GAME = {
       if (LAVA[i]) lava++;
       if (BI[i] !== WASTES) continue;
       n++; if (CY[i]) cy++; lv[LV[i]]++;
-      if (OB[i] === O.BURNT) burnt++; else if (OB[i] === O.SULPHUR) cones++; else if (OB[i] === O.PUMICE) pum++;
+      if (OB[i] === O.BURNT) burnt++; else if (OB[i] === O.VENT) cones++; else if (OB[i] === O.PUMICE) pum++;
     }
     const b = new Array(9).fill(0); for (let i = 0; i < N * N; i++) if (LV[i]) b[BI[i]]++;
     return { n, lava, canyonTiles: cy, burnt, cones, pumice: pum, craters: craters.length, levels: lv, biomes: b, canyons: waterStats.canyons };
