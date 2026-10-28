@@ -2046,8 +2046,8 @@ function updateBloom() {
 // patchSize (tiles): the gaps in it; relax: how fast stirred haze drifts back (a second); windSpeed (tiles a second,
 // the clouds' way), settle, swirl: the air; wakeRadius, wakeDrag, wakeClear: how you stir it as you walk; whirlWake,
 // whirlSpin (tiles a second round you), whirlClear (a second): how your whirlwind stirs it, even standing still.
-// poolAway: in swamps and the Wastes, the share of it left away from water and lava (thickest over them, thinning to
-// this poolReach tiles off).
+// poolAway: in swamps and the Wastes, the share of it left away from water and lava (thickest by them, thinning to
+// this poolReach tiles off). None lies over water (Jordan's ask, v109); lava keeps it.
 const GROUND_HAZE = { on: 1, amount: 0.99, density: 3.49, height: 0.25, slices: 8, patchiness: 1, patchSize: 17.3, relax: 0,
   windSpeed: 0, settle: 0, swirl: 41.5, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 20, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
@@ -2090,14 +2090,17 @@ function groundHazeSite(cx, cz) {
   const col = {}, share = b => b === SWAMP ? G.swamp : b === GRAVE ? G.grave : b === WASTES ? G.wastes : 0;
   for (const [b, k] of [[SWAMP, 'swampColor'], [GRAVE, 'graveColor'], [WASTES, 'wastesColor']]) { tmpC2.set(G[k]); col[b] = [tmpC2.r, tmpC2.g, tmpC2.b]; }
   // each tile's share and colour (times its share), from one tile before the window to one after, then blurred
-  const m = new Float32Array(W * W * 4), t = new Float32Array(W * W * 4), at = (c, r) => (r * W + c) * 4;
+  const m = new Float32Array(W * W * 4), t = new Float32Array(W * W * 4), at = (c, r) => (r * W + c) * 4, land = new Float32Array(W * W);
   for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
     const tc = c0 - GH_BLUR - 1 + c, tr = r0 - GH_BLUR - 1 + r;
     if (tc < 0 || tr < 0 || tc >= N || tr >= N) continue;
     const b = BI[T(tc, tr)], k = at(c, r);
     let s = Math.max(0, share(b));
-    // in swamps and the Wastes, thickest over the water and lava, thinning away from them
+    // in swamps and the Wastes, thickest by the water and over lava, thinning away from them
     if (s > 0 && (b === SWAMP || b === WASTES)) s *= poolNear(tc, tr, b === WASTES);
+    // none over water (lava keeps its haze)
+    const wi = T(tc, tr);
+    if (WT[wi] && !LAVA[wi]) s = 0; else land[c + r * W] = 1;
     if (s > 0) { m[k] = s; m[k + 1] = col[b][0] * s; m[k + 2] = col[b][1] * s; m[k + 3] = col[b][2] * s; }
   }
   for (const [dc, dr] of [[1, 0], [0, 1]]) {
@@ -2119,6 +2122,10 @@ function groundHazeSite(cx, cz) {
     const u = x - (c0 - GH_BLUR - 1) - 0.5, v = z - (r0 - GH_BLUR - 1) - 0.5, a = Math.floor(u), b = Math.floor(v), fu = u - a, fv = v - b;
     const s = [0, 0, 0, 0];
     for (let q = 0; q < 4; q++) s[q] = (m[at(a, b) + q] * (1 - fu) + m[at(a + 1, b) + q] * fu) * (1 - fv) + (m[at(a, b + 1) + q] * (1 - fu) + m[at(a + 1, b + 1) + q] * fu) * fv;
+    // and nothing past the shore: the land share between the tile middles is a half at the water's edge
+    const L = (land[a + b * W] * (1 - fu) + land[a + 1 + b * W] * fu) * (1 - fv) + (land[a + (b + 1) * W] * (1 - fu) + land[a + 1 + (b + 1) * W] * fu) * fv;
+    const dry = clamp((L - 0.5) * 2, 0, 1), shore = dry * dry * (3 - 2 * dry);
+    for (let q = 0; q < 4; q++) s[q] *= shore;
     const y = ghGround(x, z);
     // and the highest of it round the texel (a quarter tile each way), what a line of sight down through the haze
     // meets: between texel middles, the ground alone would round a cliff's top edge off below where it's drawn
