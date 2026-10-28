@@ -261,14 +261,15 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   let wp = i.world.xz;
   let site = siteAt(wp);
   if (site.z < 0.003) { discard; }
-  // each slice is drawn only where the eye first meets it, so it doesn't brighten itself where it folds over (into a
-  // canyon, down a cliff): back toward the eye for six tiles, if the ray dips under this slice's surface, a nearer
-  // part of it covers this point. The steps start at a fiftieth of a tile and grow, so the shell just past a crest,
-  // dropping away steeper than the eye looks down, is caught too (coarser, it showed as a thin streak over the crest).
-  // The ray leaves from the slice as laid over the site map, the same surface it's tested against, not from the flat
-  // triangle, which strays from it by more than these steps can tell apart: from where this pixel's line of sight
-  // crosses that surface, found from the drawn point by a few steps of Newton's method along it. (The point straight
-  // above or below the drawn one left wedge-shaped holes along cliffs, where the triangles cut a bend's corner.)
+  // Each slice's shell is a surface the eye's line of sight can cross more than once where it folds (over a crest, down
+  // into a canyon). Each crossing into the layer is drawn with only the haze between it and where the line of sight
+  // leaves the layer again (or meets the ground), so the haze along a line of sight adds up to what it really goes
+  // through: never doubled where the shell folds over, never missing behind a crest it only clips.
+  //
+  // The tests run from where this pixel's line of sight crosses the slice as laid over the site map, the surface they
+  // test against, not from the flat triangle, which strays from it: found from the drawn point by a few steps of
+  // Newton's method along the line of sight. (The point straight above or below the drawn one left wedge-shaped holes
+  // along cliffs, where the triangles cut a bend's corner.)
   let V = toEye(i.world);
   let hs = U.look.x * 2.0 * (i.slice + 0.5) / U.look.z;
   var s = 0.0;
@@ -281,31 +282,17 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
     s = clamp(s - f / d, -0.6, 0.6);
   }
   let o = i.world + V * s;
-  // There, a line of sight that runs on under the surface toward the eye is meeting it from below: the underside of a
-  // fold, always hidden by the nearer side, however little steeper than the line of sight the fold drops (that much
-  // can be shallower than any margin the march below allows, and drew a faint bright line along crests). Both tests
-  // fade the slice out over a narrow band rather than cutting it off: where the shell runs nearly along the line of
-  // sight a hard cut flips pixel by pixel, and speckles.
+  // A line of sight that runs on under the surface toward the eye is leaving the layer here, not entering it: the
+  // underside of a fold, drawn by nothing. Faded out over a narrow band rather than cut off: where the shell runs
+  // nearly along the line of sight a hard cut flips pixel by pixel, and speckles.
   let o2 = o + V * 0.03;
   let rise = ((o2.y - siteAt(o2.xz).x) - (o.y - siteAt(o.xz).x)) / 0.03;
-  var keep = smoothstep(0.0, 0.1, rise);
-  let hl = length(V.xz);
-  if (hl > 1e-3 && keep > 0.0) {
-    let st = V / hl;
-    var t = 0.02;
-    var under = -1.0;
-    for (var k = 0; k < 30; k++) {
-      let p = o + st * t;
-      under = max(under, siteAt(p.xz).x + hs - p.y);
-      t *= 1.22;
-    }
-    keep *= 1.0 - smoothstep(0.0, 0.04, under);
-  }
+  let keep = smoothstep(0.0, 0.1, rise);
   if (keep < 0.002) { discard; }
-  // how much of the layer the line of sight really goes through: on, away from the eye, as far as it would go down to
-  // the ground under a level layer. Past a cliff's edge it clips only the layer's corner, leaving through the drape
-  // before it's gone far, and taken as the whole layer that corner showed as a solid lip floating over the edge.
-  // (Reaching the ground first, in front of a rise, it's had all the layer there is.)
+  // How much of the layer the line of sight goes through from here: on, away from the eye, as far as it would go down
+  // to the ground under a level layer, or until it leaves the layer. Past a cliff's edge it clips only the layer's
+  // corner, and taken as the whole layer that corner showed as a solid lip floating over the edge. (Reaching the
+  // ground first, in front of a rise, it's had all the layer there is.)
   var through = 1.0;
   let L = hs / max(V.y, 0.25);
   var was = 0.0;
