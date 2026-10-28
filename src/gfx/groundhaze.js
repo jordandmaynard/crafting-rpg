@@ -281,21 +281,27 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
     s = clamp(s - f / d, -0.6, 0.6);
   }
   let o = i.world + V * s;
-  // there, a line of sight that runs on under the surface toward the eye is meeting it from below: the underside of a
+  // There, a line of sight that runs on under the surface toward the eye is meeting it from below: the underside of a
   // fold, always hidden by the nearer side, however little steeper than the line of sight the fold drops (that much
-  // can be shallower than any margin the march below allows, and drew a faint bright line along crests)
-  let o2 = o + V * 0.005;
-  if (o2.y - siteAt(o2.xz).x < o.y - siteAt(o.xz).x) { discard; }
+  // can be shallower than any margin the march below allows, and drew a faint bright line along crests). Both tests
+  // fade the slice out over a narrow band rather than cutting it off: where the shell runs nearly along the line of
+  // sight a hard cut flips pixel by pixel, and speckles.
+  let o2 = o + V * 0.03;
+  let rise = ((o2.y - siteAt(o2.xz).x) - (o.y - siteAt(o.xz).x)) / 0.03;
+  var keep = smoothstep(0.0, 0.1, rise);
   let hl = length(V.xz);
-  if (hl > 1e-3) {
+  if (hl > 1e-3 && keep > 0.0) {
     let st = V / hl;
     var t = 0.02;
+    var under = -1.0;
     for (var k = 0; k < 30; k++) {
       let p = o + st * t;
-      if (p.y < siteAt(p.xz).x + hs - 0.005) { discard; }
+      under = max(under, siteAt(p.xz).x + hs - p.y);
       t *= 1.22;
     }
+    keep *= 1.0 - smoothstep(0.0, 0.04, under);
   }
+  if (keep < 0.002) { discard; }
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
   let uv = (wp * CPM - U.grid.xy) / U.grid.zw;
   let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * U.grid.z / CPM;
@@ -312,7 +318,7 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   // across the tilted shell it grows without bound where the shell turns edge-on (rolling over a crest), and its rim
   // shows as a bright line
   let path = (2.0 * H / U.look.z) / max(V.y, 0.25);
-  let alpha = 1.0 - exp(-sigma * path);
+  let alpha = (1.0 - exp(-sigma * path)) * keep;
   if (alpha < 0.002) { discard; }
   let tint = textureSampleLevel(tintTex, tintTexS, (wp * U.site.w - U.site.xy) / U.site.z, 0.0).rgb;
   let c = shadeLit(tint, vec3f(0.0), 0.0, 1.0, i.world, vec3f(0.0, 1.0, 0.0), true) * U.look.w;
