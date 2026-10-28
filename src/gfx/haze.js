@@ -115,17 +115,50 @@ fn shadowAt(p: vec3f) -> f32 {
   if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) { return 1.0; }
   return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy, s.z + F.shadow.x);
 }
-// the sky's light at p (the GI's where it has probes)
-fn ambientAt(p: vec3f) -> vec3f {
-  var amb = 0.5 * (F.hemiSky.rgb + F.hemiGround.rgb);
-  if (F.giA.x > 0.5) {
-    let g = giGather(p, vec3f(0.0), F.giA.x > 1.5);
-    if (g.w > 1e-6) {
-      let lit = select(F.hemiSky.rgb * g.vis.x + F.hemiGround.rgb * 0.5 * sat(2.0 * g.vis.x), g.light, F.giA.x > 1.5);
-      amb = mix(amb, lit, F.giA.y);
-    }
+// a probe's light in every direction at once (its spherical harmonics' constant term): with sky visibility, the
+// sky's by the share of it seen and the ground's by how open it is; with bounce light, all that arrives
+fn probeLight(c: vec2i, layer: i32, plain: vec3f) -> vec3f {
+  let g = giGrid();
+  let rel = c - g.xy;
+  if (any(rel < vec2i(0)) || any(rel >= vec2i(g.z))) { return plain; }
+  let s = giSlot(c, g.z);
+  let v = giVisAt(vec3i(s.x, layer, s.y));
+  // one that can't be used (inside a crown or a roof, or not lit yet): a fixed, shaded stand-in, never left out,
+  // so the light never jumps where a column changes
+  if (v.x < 0.0) { return 0.3 * (F.hemiSky.rgb + F.hemiGround.rgb); }
+  if (F.giA.x > 1.5) {
+    let li = vec3i(s.x * 3, layer, s.y);
+    return max(vec3f(giLightAt(li).x, giLightAt(li + vec3i(1, 0, 0)).x, giLightAt(li + vec3i(2, 0, 0)).x), vec3f(0.0));
   }
-  return amb;
+  return F.hemiSky.rgb * v.x + F.hemiGround.rgb * 0.5 * sat(2.0 * v.x);
+}
+// the sky's light in the air at p: the probes of the four columns round it, two heights each, blended by
+// nearness alone (no surface to face, no wall to test), so it changes smoothly everywhere
+fn ambientAt(p: vec3f) -> vec3f {
+  let plain = 0.5 * (F.hemiSky.rgb + F.hemiGround.rgb);
+  if (F.giA.x < 0.5) { return plain; }
+  let L = giGrid().w;
+  let gp = p.xz - 0.5;
+  let base = vec2i(floor(gp));
+  let f = gp - floor(gp);
+  var sum = vec3f(0.0);
+  for (var i = 0; i < 4; i++) {
+    let o = vec2i(i & 1, i >> 1);
+    let c = base + o;
+    let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
+    let floorY = giColumnBase(c);
+    if (floorY < -1000.0) { sum += w * plain; continue; }
+    let h = p.y - floorY;
+    let hl = clamp(h, giLayerH(0), giLayerH(L - 1));
+    var l = 0;
+    for (var k = 1; k < L - 1; k++) { if (hl >= giLayerH(k)) { l = k; } }
+    let t = clamp((hl - giLayerH(l)) / (giLayerH(l + 1) - giLayerH(l)), 0.0, 1.0);
+    // a column standing on something taller than p (a trunk, a wall) has its probes up on top, in other light:
+    // the further below them, the more the shaded stand-in takes over
+    let low = smoothstep(-2.0, 0.0, h);
+    sum += w * mix(0.3 * (F.hemiSky.rgb + F.hemiGround.rgb), mix(probeLight(c, l, plain), probeLight(c, l + 1, plain), t), low);
+  }
+  return mix(plain, sum, F.giA.y);
 }
 // lava's glow at p: the blurred map at the ground under it, fading upward
 fn glowAt(p: vec3f) -> vec3f {
@@ -171,13 +204,11 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
     let c = dot(-F.sunDir.xyz, V);
     sunC = F.sunColor.rgb * (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * c, 1e-4), 1.5) * H.light.x;
   }
+  // the sky's light is read every few steps (at knots along the stretch) and blended between
   let useSky = F.hemiSky.w > 0.5 && H.light.z > 0.0;
-  var amb0 = vec3f(0.0); var amb1 = vec3f(0.0); var amb2 = vec3f(0.0);
-  if (useSky) {
-    amb0 = ambientAt(mix(a, b, t0)) * H.light.z;
-    amb1 = ambientAt(mix(a, b, 0.5 * (t0 + t1))) * H.light.z;
-    amb2 = ambientAt(mix(a, b, t1)) * H.light.z;
-  }
+  let K = max(n / 4, 1);
+  var knot = -1;
+  var ambA = vec3f(0.0); var ambB = vec3f(0.0);
   let np = i32(F.cloud2.w);
   var S = vec3f(0.0);
   var T = 1.0;
@@ -186,7 +217,17 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
     let p = mix(a, b, mix(t0, t1, f));
     let k = densityAt(p);
     if (k <= 1e-6) { continue; }
-    var L = select(mix(amb1, amb2, f * 2.0 - 1.0), mix(amb0, amb1, f * 2.0), f < 0.5);
+    var L = vec3f(0.0);
+    if (useSky) {
+      let kf = f * f32(K);
+      let ki = min(i32(floor(kf)), K - 1);
+      if (ki != knot) {
+        if (ki == knot + 1) { ambA = ambB; } else { ambA = ambientAt(mix(a, b, mix(t0, t1, f32(ki) / f32(K)))) * H.light.z; }
+        ambB = ambientAt(mix(a, b, mix(t0, t1, f32(ki + 1) / f32(K)))) * H.light.z;
+        knot = ki;
+      }
+      L = mix(ambA, ambB, kf - f32(ki));
+    }
     if (any(sunC > vec3f(0.0))) { L += sunC * cloudShade(p.xz) * mix(1.0, shadowAt(p), F.cloud2.z); }
     if (H.light.w > 0.0) {
       for (var j = 0; j < ${MAX_POINTS}; j++) {
