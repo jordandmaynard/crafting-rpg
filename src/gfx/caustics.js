@@ -6,8 +6,8 @@
 // for what lands across an edge.
 import { Texture, RepeatWrapping, LinearFilter } from './materials.js';
 
-const SIZE = 256;        // texels a side of the repeating tile
-const CELLS = 96;        // grid cells a side
+const SIZE = 512;        // texels a side of the repeating tile
+const CELLS = 192;       // grid cells a side
 
 const WGSL = /* wgsl */ `
 struct P {
@@ -19,12 +19,27 @@ struct P {
 @group(0) @binding(1) var tWave: texture_2d<f32>;
 @group(0) @binding(2) var tWaveS: sampler;
 struct VOut { @builtin(position) pos: vec4f, @location(0) old: vec2f, @location(1) now: vec2f }
+// the wave texture's slope, smoothly: a cubic B-spline over its texels in four bilinear taps. (Read plainly, the
+// slope bends only at texel edges, and the light it focuses comes out in texel-sized blocks.)
+fn smoothSlope(uv: vec2f) -> vec2f {
+  let size = vec2f(textureDimensions(tWave));
+  let st = uv * size - 0.5;
+  let i = floor(st); let f = st - i;
+  let f2 = f * f; let f3 = f2 * f;
+  let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  let w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+  let w3 = f3 / 6.0;
+  let s0 = w0 + w1; let s1 = w2 + w3;
+  let o0 = (i - 0.5 + w1 / s0) / size; let o1 = (i + 1.5 + w3 / s1) / size;
+  let t = (textureSampleLevel(tWave, tWaveS, vec2f(o0.x, o0.y), 0.0).rg * s0.x + textureSampleLevel(tWave, tWaveS, vec2f(o1.x, o0.y), 0.0).rg * s1.x) * s0.y
+        + (textureSampleLevel(tWave, tWaveS, vec2f(o0.x, o1.y), 0.0).rg * s0.x + textureSampleLevel(tWave, tWaveS, vec2f(o1.x, o1.y), 0.0).rg * s1.x) * s1.y;
+  return t * 2.0 - 1.0;
+}
 // the waves' slope at a point of the tile: the water's two layers of slope noise (here both lined up with the
 // tile, so the pattern repeats with it)
 fn slope(q: vec2f) -> vec2f {
-  let a = textureSampleLevel(tWave, tWaveS, q + p.drift.xy, 0.0).rg * 2.0 - 1.0;
-  let b = textureSampleLevel(tWave, tWaveS, q * 2.0 - p.drift.zw, 0.0).rg * 2.0 - 1.0;
-  return a * 0.6 + b * 0.4;
+  return smoothSlope(q + p.drift.xy) * 0.6 + smoothSlope(q * 2.0 - p.drift.zw) * 0.4;
 }
 // where light through the surface at q lands on the bed, against where it lands through still water
 fn land(q: vec2f) -> vec2f {

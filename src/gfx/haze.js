@@ -23,6 +23,7 @@ import { MAX_POINTS } from './shaders.js';
 
 const PARAM_BYTES = 256;
 const OUT_FORMAT = 'rgba16float';
+const NOISE = 32;   // the wisps' value-noise lattice: a repeating 3D texture of random values this many a side
 
 const COMMON = /* wgsl */ `
 struct HP {
@@ -91,16 +92,14 @@ ${COMMON}
 @group(2) @binding(1) var sceneDepth: texture_depth_2d;
 @group(2) @binding(2) var glowTex: texture_2d<f32>;
 @group(2) @binding(3) var hazeOut: texture_storage_2d<${OUT_FORMAT}, write>;
-fn hash3(p: vec3i) -> f32 {
-  var h = (u32(p.x) * 73856093u) ^ (u32(p.y) * 19349663u) ^ (u32(p.z) * 83492791u);
-  h = (h ^ (h >> 13u)) * 1274126177u;
-  return f32(h & 0xffffu) / 65535.0;
-}
+@group(2) @binding(4) var noiseTex: texture_3d<f32>;
+@group(2) @binding(5) var noiseSamp: sampler;
+// smooth value noise in one lookup: the lattice is the texture, and reading it at the smoothstepped place inside
+// the cell makes the hardware's trilinear blend the smooth one (8 lattice values without 8 hashes)
 fn noise3(p: vec3f) -> f32 {
-  let i = vec3i(floor(p)); let f = p - floor(p); let u = f * f * (3.0 - 2.0 * f);
-  let a = mix(mix(hash3(i), hash3(i + vec3i(1, 0, 0)), u.x), mix(hash3(i + vec3i(0, 1, 0)), hash3(i + vec3i(1, 1, 0)), u.x), u.y);
-  let b = mix(mix(hash3(i + vec3i(0, 0, 1)), hash3(i + vec3i(1, 0, 1)), u.x), mix(hash3(i + vec3i(0, 1, 1)), hash3(i + vec3i(1, 1, 1)), u.x), u.y);
-  return mix(a, b, u.z);
+  let f = p - floor(p);
+  let u = floor(p) + f * f * (3.0 - 2.0 * f) + 0.5;
+  return textureSampleLevel(noiseTex, noiseSamp, u / ${NOISE}.0, 0.0).r;
 }
 // the bare ground under xz, from the ground pass (where the height field reaches)
 fn groundAt(xz: vec2f) -> f32 {
@@ -109,8 +108,9 @@ fn groundAt(xz: vec2f) -> f32 {
   let g = textureSampleLevel(glowTex, linSamp, xz * f32(GI_TPT) / f32(S), 0.0).a;
   return select(g, H.dens.w, g < -1000.0);
 }
-fn densityAt(p: vec3f) -> f32 {
-  let over = max(p.y - groundAt(p.xz), 0.0);
+// how thick the haze is at p, over ground g (groundAt(p.xz))
+fn densityAt(p: vec3f, g: f32) -> f32 {
+  let over = max(p.y - g, 0.0);
   var d = H.dens.x * mix(exp(-over / max(H.dens.y, 0.05)), 1.0, H.dens.z);
   if (H.more.y > 0.0) {
     let q = (p - H.wind.xyz * H.more.w) / max(H.more.z, 0.5);
@@ -172,14 +172,14 @@ fn ambientAt(p: vec3f) -> vec3f {
   }
   return mix(plain, sum, F.giA.y);
 }
-// lava's glow at p: the blurred map at the ground under it, fading upward
-fn glowAt(p: vec3f) -> vec3f {
+// lava's glow at p, over ground g: the blurred map at the ground under it, fading upward
+fn glowAt(p: vec3f, g: f32) -> vec3f {
   let S = giHfSize();
   if (S <= 0) { return vec3f(0.0); }
   let r = vec2i(floor(p.xz * f32(GI_TPT))) - giHfOrigin();
   if (any(r < vec2i(1)) || any(r >= vec2i(S - 1))) { return vec3f(0.0); }
-  let g = textureSampleLevel(glowTex, linSamp, p.xz * f32(GI_TPT) / f32(S), 0.0).rgb;
-  return g * exp(-max(p.y - groundAt(p.xz), 0.0) / max(H.glow.x, 0.1));
+  let c = textureSampleLevel(glowTex, linSamp, p.xz * f32(GI_TPT) / f32(S), 0.0).rgb;
+  return c * exp(-max(p.y - g, 0.0) / max(H.glow.x, 0.1));
 }
 @compute @workgroup_size(8, 8, 1)
 fn march(@builtin(global_invocation_id) id: vec3u) {
@@ -222,12 +222,25 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
   var knot = -1;
   var ambA = vec3f(0.0); var ambB = vec3f(0.0);
   let np = i32(F.cloud2.w);
+  // the lamps whose reach this pixel's stretch of ray passes through (a lamp with a reach and a falloff gives
+  // nothing beyond it), so the steps only add those
+  var lamps = 0u;
+  if (H.light.w > 0.0) {
+    let pa = mix(a, b, t0); let seg = mix(a, b, t1) - pa; let sl = max(dot(seg, seg), 1e-8);
+    for (var j = 0; j < ${MAX_POINTS}; j++) {
+      if (j >= np) { break; }
+      let pl = F.points[j];
+      let h = clamp(dot(pl.pos.xyz - pa, seg) / sl, 0.0, 1.0);
+      if (pl.pos.w <= 0.0 || pl.color.w <= 0.0 || length(pa + seg * h - pl.pos.xyz) < pl.pos.w) { lamps |= 1u << u32(j); }
+    }
+  }
   var S = vec3f(0.0);
   var T = 1.0;
   for (var i = 0; i < n; i++) {
     let f = (f32(i) + 0.5) / f32(n);
     let p = mix(a, b, mix(t0, t1, f));
-    let k = densityAt(p);
+    let g = groundAt(p.xz);
+    let k = densityAt(p, g);
     if (k <= 1e-6) { continue; }
     var L = vec3f(0.0);
     if (useSky) {
@@ -242,9 +255,9 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       if (H.glow.z > 0.0 && F.sunDir.w > 0.5) { L *= mix(1.0, shadowAt(p), H.glow.z); }
     }
     if (any(sunC > vec3f(0.0))) { L += sunC * cloudShade(p.xz) * mix(1.0, shadowAt(p), H.glow.y); }
-    if (H.light.w > 0.0) {
+    if (lamps != 0u) {
       for (var j = 0; j < ${MAX_POINTS}; j++) {
-        if (j >= np) { break; }
+        if (((lamps >> u32(j)) & 1u) == 0u) { continue; }
         let pl = F.points[j];
         let dist = length(pl.pos.xyz - p);
         var att = 1.0;
@@ -252,7 +265,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
         L += pl.color.rgb * att * H.light.w;
       }
     }
-    if (H.more.x > 0.0) { L += glowAt(p) * H.more.x; }
+    if (H.more.x > 0.0) { L += glowAt(p, g) * H.more.x; }
     // what the step scatters toward the camera, less what it loses again before it leaves the step
     let t = exp(-k * ds);
     S += T * H.tint.rgb * L * (1.0 - t);
@@ -278,7 +291,22 @@ export class LitHaze {
       { binding: 1, visibility: C, texture: { sampleType: 'depth' } },
       { binding: 2, visibility: C, texture: { sampleType: 'float' } },
       { binding: 3, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
+      { binding: 4, visibility: C, texture: { sampleType: 'float', viewDimension: '3d' } },
+      { binding: 5, visibility: C, sampler: { type: 'filtering' } },
     ] });
+    // the wisps' noise lattice (repeating)
+    this.noise = device.createTexture({ label: 'haze noise', size: [NOISE, NOISE, NOISE], dimension: '3d', format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const lattice = new Uint8Array(NOISE * NOISE * NOISE);
+    let seed = 0x9e3779b9;
+    for (let i = 0; i < lattice.length; i++) {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      lattice[i] = ((t ^ (t >>> 14)) >>> 0) & 255;
+    }
+    device.queue.writeTexture({ texture: this.noise }, lattice, { bytesPerRow: NOISE, rowsPerImage: NOISE }, [NOISE, NOISE, NOISE]);
+    this.noiseView = this.noise.createView({ dimension: '3d' });
+    this.noiseSamp = device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat', magFilter: 'linear', minFilter: 'linear' });
     const empty = device.createBindGroupLayout({ entries: [] });
     this.emptyBG = device.createBindGroup({ layout: empty, entries: [] });
     const pipe = (code, label, entryPoint, bgl) => {
@@ -354,17 +382,23 @@ export class LitHaze {
       this._marchKey = mk;
       this.marchBG = this.device.createBindGroup({ layout: this.bglMarch, entries: [
         { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.depth.view },
-        { binding: 2, resource: this.glowView }, { binding: 3, resource: this.outView }] });
+        { binding: 2, resource: this.glowView }, { binding: 3, resource: this.outView },
+        { binding: 4, resource: this.noiseView }, { binding: 5, resource: this.noiseSamp }] });
     }
+    // (two passes, so the profiler times the ground and the march apart)
     this.renderer.compute((enc, frameBG, frameOff) => {
-      const pass = enc.beginComputePass({ label: 'lit haze' });
-      pass.setBindGroup(0, frameBG, [frameOff]);
-      pass.setBindGroup(1, this.emptyBG);
       if (ground) {
+        const pass = enc.beginComputePass({ label: 'lit haze ground' });
+        pass.setBindGroup(0, frameBG, [frameOff]);
+        pass.setBindGroup(1, this.emptyBG);
         pass.setPipeline(this.glowPipe);
         pass.setBindGroup(2, this.glowBG);
         pass.dispatchWorkgroups(Math.ceil(S / 8), Math.ceil(S / 8), 1);
+        pass.end();
       }
+      const pass = enc.beginComputePass({ label: 'lit haze march' });
+      pass.setBindGroup(0, frameBG, [frameOff]);
+      pass.setBindGroup(1, this.emptyBG);
       pass.setPipeline(this.marchPipe);
       pass.setBindGroup(2, this.marchBG);
       pass.dispatchWorkgroups(Math.ceil(X / 8), Math.ceil(Y / 8), 1);
