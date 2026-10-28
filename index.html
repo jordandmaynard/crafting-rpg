@@ -276,7 +276,7 @@ const BIOMES = [
   { name: 'THE SUNSCORCH WASTE', foes: ['scorpion', 'skeleton'] },
   { name: 'EMBERBROOK', foes: [] },
   { name: 'THE ELDERWOOD', foes: ['spider', 'spider', 'mantrap'] },
-  { name: 'THE BLASTED WASTES', foes: ['imp', 'imp', 'firespirit'] },
+  { name: 'THE BLASTED WASTES', foes: ['hellhound', 'hellhound', 'firespirit'] },
 ];
 const TOWN_NAMES = ['EMBERBROOK', 'ASHFORD', 'BRAMBLEGATE', 'THORNWICK', 'MILLHAVEN', 'OAKENREST', 'STONEMERE', 'WILLOWDEEP'];
 const towns = [];
@@ -533,14 +533,15 @@ async function generate(progress) {
   await layRoads(rand, progress);
   fenceTowns();
   pourLava();
+  settleWater();
   progress(0.88, 'GROWING THE WILDS'); await nextFrame();
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) placeScenery(c, r);
     if (r % 128 === 127) { progress(0.88 + 0.06 * r / N, 'GROWING THE WILDS'); await nextFrame(); }
   }
   for (const w of waystones) OB[T(w.c, w.r)] = O.SHRINE;
-  // clear the ground right around the spawn
-  for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile) OB[i] = 0; }
+  // clear the ground right around the spawn (the plaza's lamps stay)
+  for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   deepenSea();
   progress(0.93, 'MARKING OUT PLOTS'); await nextFrame();
@@ -550,18 +551,46 @@ async function generate(progress) {
 }
 
 // ---------- Lakes, rivers and canyons ----------
-// Lakes fill noise blobs in the hollows to just under the lowest ground round them, with a shelf round a
-// deeper middle. Rivers rise on the heights (and run out of some lakes) and follow the drainage of a
-// priority flood in from the sea, so they only ever run level or downhill, a level under their banks and
-// wider as they go; they end in the sea, a lake, or another river. Water ends up LV 0 (nothing walks,
-// builds or grows there) with its bed in GL and its surface level in WL.
+// Lakes fill noise blobs in the hollows (ground low for its neighbourhood) to just under the lowest ground
+// round them, with a shelf round a deeper middle. Rivers rise at springs on the heights and wind down to a
+// lake or the sea. Their courses come from a search out from every lake and the sea that only ever climbs
+// (so a river only ever runs level or downhill), cheapest along the winding lines where a warped noise
+// crosses zero (so they meander), and dear along the brink of a drop (so they go over cliffs head on, in
+// falls, instead of running along the top). Rivers that meet join. Each point down a river gets a surface
+// level and each river tile the level of the point nearest it, so the water lies level across the river and
+// only steps down along it; settleWater keeps every surface at or under the ground round it. Water ends up
+// LV 0 (nothing walks, builds or grows there) with its bed in GL and its surface level in WL.
 const waterStats = { lakes: 0, rivers: 0, canyons: 0 };
-const LAKE_MIN = 260, LAKE_MAX = 3200;
+const LAKE_MIN = 260, LAKE_MAX = 3200, SPRINGS = 24;
+const LAKE = new Uint16Array(N * N), DEPTH = new Uint8Array(N * N), NEAR = new Int32Array(N * N).fill(-1);
+const lakeList = [];   // { id, tiles, level }
+const river = { wl: [], runs: [] };   // the surface level of each point down a river; runs: { k0, k1, into, lake }
+const D8C = [0, 1, 1, 1, 0, -1, -1, -1], D8R = [-1, -1, 0, 1, 1, 1, 0, -1];
 async function carveWaters(progress) {
   const rand = mulberry32(SEED ^ 0x51ab5), nL = simplex(rand), nF = simplex(rand);
+  // how low each tile lies for its neighbourhood: the average level within 24 tiles, less its own
+  const avg = new Float32Array(N * N), row = new Float32Array(N), BR_ = 24;
+  for (let pass = 0; pass < 2; pass++) {
+    const st = pass ? N : 1, ln = pass ? 1 : N;
+    for (let a = 0; a < N; a++) {
+      let sum = 0, cnt = 0;
+      for (let k = 0; k < BR_; k++) { sum += pass ? avg[a * ln + k * st] : LV[a * ln + k * st]; cnt++; }
+      for (let k = 0; k < N; k++) {
+        if (k + BR_ < N) { sum += pass ? avg[a * ln + (k + BR_) * st] : LV[a * ln + (k + BR_) * st]; cnt++; }
+        if (k - BR_ - 1 >= 0) { sum -= pass ? avg[a * ln + (k - BR_ - 1) * st] : LV[a * ln + (k - BR_ - 1) * st]; cnt--; }
+        row[k] = sum / cnt;
+      }
+      for (let k = 0; k < N; k++) avg[a * ln + k * st] = row[k];
+    }
+  }
   // lakes
-  const lake = new Int32Array(N * N), cq = new Int32Array(N * N), lakes = [], depth = new Uint8Array(N * N);
-  const inMask = (c, r) => c > 10 && r > 10 && c < N - 11 && r < N - 11 && LV[T(c, r)] >= 2 && fbm(nL, c / 170 + 3.7, r / 170 - 1.2, 3) + fbm(nF, c / 40, r / 40, 2) * 0.12 > 0.36;
+  const cq = new Int32Array(N * N), lake = LAKE;
+  lake.fill(0); NEAR.fill(-1); DEPTH.fill(0); lakeList.length = 0; river.wl.length = river.runs.length = 0;
+  const inMask = (c, r) => {
+    if (c <= 10 || r <= 10 || c >= N - 11 || r >= N - 11) return false;
+    const i = T(c, r);
+    return LV[i] >= 2 && fbm(nL, c / 170 + 3.7, r / 170 - 1.2, 3) + fbm(nF, c / 40, r / 40, 2) * 0.12 + clamp(avg[i] - LV[i], -1.5, 1.5) * 0.1 > 0.36;
+  };
   const tried = new Uint8Array(N * N);
   for (let r = 11; r < N - 11; r += 3) for (let c = 11; c < N - 11; c += 3) {
     const i0 = T(c, r);
@@ -576,7 +605,7 @@ async function carveWaters(progress) {
       }
     }
     if (t < LAKE_MIN || t > LAKE_MAX) continue;
-    const id = lakes.length + 1, tiles = Array.from(cq.subarray(0, t));
+    const id = lakeList.length + 1, tiles = Array.from(cq.subarray(0, t));
     for (const j of tiles) lake[j] = id;
     // the surface sits at the lowest ground round the edge
     let level = 99, coast = false;
@@ -600,139 +629,167 @@ async function carveWaters(progress) {
     }
     for (const j of tiles) {
       const c = j % N, r = (j - c) / N, k = dist.get(j) || 1;
-      depth[j] = k === 1 ? 1 : clamp(Math.round(1 + (k - 1) * 0.5 + fbm(nF, c / 11 + 40, r / 11, 2) * 1.6), 1, 5);
+      DEPTH[j] = k === 1 ? 1 : clamp(Math.round(1 + (k - 1) * 0.5 + fbm(nF, c / 11 + 40, r / 11, 2) * 1.6), 1, 5);
     }
-    lakes.push({ id, tiles, level });
+    lakeList.push({ id, tiles, level });
   }
-  waterStats.lakes = lakes.length;
+  waterStats.lakes = lakeList.length;
   progress(0.38, 'RUNNING THE RIVERS'); await nextFrame();
 
-  // drainage: a priority flood in from the sea, over the levels plus a little noise so the courses wander
-  const parent = new Int32Array(N * N).fill(-1), seen = new Uint8Array(N * N);
-  const hk = new Float32Array(N * N), hv = new Int32Array(N * N);
-  let hn = 0, popK = 0;
+  // what a river pays to run through each tile: least along the winding lines where a warped noise is zero
+  const cost = new Float32Array(N * N);
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r);
+    if (!LV[i] || WT[i] >= 2) continue;
+    const wx = c + 34 * fbm(nL, c / 120 + 9.1, r / 120, 2), wz = r + 34 * fbm(nL, c / 120 - 4.3, r / 120 + 13.7, 2);
+    cost[i] = 0.25 + 3 * Math.abs(fbm(nF, wx / 52 + 70, wz / 52, 2));
+  }
+  // the search, out from the lakes and (a little dearer, so a lake in reach is the likelier end) the sea,
+  // only ever onto ground as high as where it is; par leads each tile a step down its river
+  const lev = i => WT[i] >= 2 ? WL[i] : LV[i];
+  const dist = new Float32Array(N * N).fill(Infinity), par = new Int32Array(N * N).fill(-1), done = new Uint8Array(N * N);
+  let hk = new Float64Array(1 << 20), hv = new Int32Array(1 << 20), hn = 0;
   const push = (k, v) => {
+    if (hn === hk.length) { const k2 = new Float64Array(hn * 2), v2 = new Int32Array(hn * 2); k2.set(hk); v2.set(hv); hk = k2; hv = v2; }
     let i = hn++;
     while (i) { const q = (i - 1) >> 1; if (hk[q] <= k) break; hk[i] = hk[q]; hv[i] = hv[q]; i = q; }
     hk[i] = k; hv[i] = v;
   };
   const pop = () => {
-    const v = hv[0]; popK = hk[0];
-    const k = hk[--hn], vv = hv[hn];
+    const v = hv[0], k = hk[--hn], vv = hv[hn];
     let i = 0;
     for (;;) { let m = 2 * i + 1; if (m >= hn) break; if (m + 1 < hn && hk[m + 1] < hk[m]) m++; if (hk[m] >= k) break; hk[i] = hk[m]; hv[i] = hv[m]; i = m; }
     hk[i] = k; hv[i] = vv;
     return v;
   };
-  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+  const dry = (i, L) => LV[i] >= L && WT[i] < 2 && LV[i] > 0;
+  for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) {
     const i = T(c, r);
-    if (LV[i]) continue;
-    seen[i] = 1;
-    if (LV[i - 1] || LV[i + 1] || LV[i - N] || LV[i + N]) push(0, i);
+    if (WT[i] >= 2) { dist[i] = 0; push(0, i); }
+    else if (!LV[i] && (LV[i - 1] || LV[i + 1] || LV[i - N] || LV[i + N])) { dist[i] = 30; push(30, i); }
   }
   while (hn) {
-    const i = pop(), k = popK, c = i % N, r = (i - c) / N;
-    for (let d = 0; d < 4; d++) {
-      const nc = c + DC[d], nr = r + DR[d];
-      if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) continue;
-      const n = i + DI[d];
-      if (seen[n]) continue;
-      seen[n] = 1; parent[n] = i;
-      push(Math.max(k, LV[n] + 0.45 + 0.45 * fbm(nF, nc / 37, nr / 37, 2)) + 1e-3, n);
+    const i = pop();
+    if (done[i]) continue;
+    done[i] = 1;
+    const c = i % N, r = (i - c) / N, L = lev(i);
+    for (let d = 0; d < 8; d++) {
+      const nc = c + D8C[d], nr = r + D8R[d];
+      if (nc < 2 || nr < 2 || nc >= N - 2 || nr >= N - 2) continue;
+      const n = T(nc, nr);
+      if (done[n] || !dry(n, L)) continue;
+      // a diagonal step only on the level, between two dry tiles as high
+      if ((d & 1) && (LV[n] > L || !dry(T(nc, r), L) || !dry(T(c, nr), L))) continue;
+      let k = cost[n] * (d & 1 ? 1.41 : 1);
+      // the brink of a drop, unless the river goes straight over it here
+      for (let e = 0; e < 4; e++) {
+        const m = n + DI[e];
+        if (m !== i && lev(m) < LV[n]) { k += 4; break; }
+      }
+      const g = dist[i] + k;
+      if (g >= dist[n]) continue;
+      dist[n] = g; par[n] = i; push(g, n);
     }
   }
   progress(0.4, 'RUNNING THE RIVERS'); await nextFrame();
 
-  // where rivers rise: high ground a long way from the sea, and the outlets of some lakes
-  const starts = [];
-  const far = (c, r, m) => starts.every(s => Math.hypot(s.c - c, s.r - r) >= m);
-  // the heights with the longest way down to the sea (through any lakes) go first
+  // springs: the tops of the heights (nothing higher for 8 tiles round), highest and furthest from their end
+  // first, well apart
   const cand = [];
-  for (let k = 0; k < 4000; k++) {
-    const c = 40 + Math.floor(rand() * (N - 80)), r = 40 + Math.floor(rand() * (N - 80)), i = T(c, r);
-    if (LV[i] < 3 || WT[i]) continue;
+  for (let k = 0; k < 8000; k++) {
+    const c = 30 + Math.floor(rand() * (N - 60)), r = 30 + Math.floor(rand() * (N - 60)), i = T(c, r);
+    if (LV[i] < 3 || WT[i] || dist[i] === Infinity) continue;
+    let top = true;
+    for (let dr = -8; dr <= 8 && top; dr += 2) for (let dc = -8; dc <= 8; dc += 2) if (LV[T(c + dc, r + dr)] > LV[i]) { top = false; break; }
+    if (!top) continue;
     let len = 0;
-    for (let j = i; j >= 0 && LV[j] && len < 2000; j = parent[j]) len++;
-    if (len >= 120) cand.push([len + rand() * 80, c, r, i]);
+    for (let j = i; j >= 0 && len < 4000; j = par[j]) len++;
+    if (len >= 60) cand.push([LV[i] * 30 + Math.min(len, 600) * 0.15 + rand() * 40, c, r, i]);
   }
   cand.sort((a, b) => b[0] - a[0]);
+  const springs = [];
   for (const [, c, r, i] of cand) {
-    if (starts.length >= 24) break;
-    if (far(c, r, 75)) starts.push({ c, r, i, bed: LV[i] - 1, w: 0.9 });
+    if (springs.length >= SPRINGS) break;
+    if (springs.every(s => Math.hypot(s.c - c, s.r - r) >= 80)) springs.push({ c, r, i });
   }
-  // and every lake spills over into a river at its lowest edge
-  for (const L of lakes) {
-    let j = L.tiles[0];
-    while (j >= 0 && lake[j] === L.id) j = parent[j];
-    if (j < 0 || !LV[j] || WT[j]) continue;
-    const c = j % N, r = (j - c) / N;
-    starts.push({ c, r, i: j, bed: L.level - 1, w: 1.1 });
-  }
-  // Each point down a river's course gets a bed level, and each river tile the bed of the point nearest it,
-  // so the water lies level across the river and only steps down along it (in rapids).
-  const best = new Float32Array(N * N).fill(99), near = new Int32Array(N * N).fill(-1), bed = [], runs = [];
-  for (const s of starts) {
+  // each river down its course, widening as it goes, into a lake, the sea or another river; it only spreads
+  // over ground as high as its own course there, never down over a drop beside it
+  const best = new Float32Array(N * N).fill(99);
+  for (const s of springs) {
     const path = [];
-    for (let j = s.i; j >= 0 && path.length < 3000; j = parent[j]) {
+    let into = -1, lk = 0;
+    for (let j = s.i; j >= 0; j = par[j]) {
+      if (WT[j] === 3) { into = NEAR[j]; break; }
+      if (WT[j] === 2) { lk = LAKE[j]; break; }
+      if (!LV[j]) break;
       path.push(j);
-      if (!LV[j] || WT[j] >= 2) break;   // the sea, a lake, or another river
     }
     if (path.length < 24) continue;
     waterStats.rivers++; waterStats.riverLen = (waterStats.riverLen || 0) + path.length;
-    let B = s.bed;
-    const k0 = bed.length;
+    const k0 = river.wl.length;
     for (let k = 0; k < path.length; k++) {
-      const j = path[k], c = j % N, r = (j - c) / N;
-      if (WT[j] === 2) break;
-      if (WT[j] === 3) B = Math.min(B, bed[near[j]]);
-      else if (LV[j]) B = Math.max(0, Math.min(B, LV[j] - 1));
-      else B = 0;
-      const p = bed.length;
-      bed.push(B);
+      const j = path[k], c = j % N, r = (j - c) / N, L = LV[j], p = river.wl.length;
+      river.wl.push(L);
       const a = path[Math.max(0, k - 3)], b = path[Math.min(path.length - 1, k + 3)];
       let fx = b % N - a % N, fz = Math.floor(b / N) - Math.floor(a / N);
       const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
-      const R = s.w + Math.min(1.6, k * 0.012), R2 = (R + 0.35) * (R + 0.35);
+      const W = 0.7 + Math.min(1.7, k * 0.013), W2 = (W + 0.35) * (W + 0.35);
       for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) {
         const d2 = dr * dr + dc * dc, cc = c + dc, rr = r + dr;
-        if (d2 > R2 || cc < 2 || rr < 2 || cc >= N - 2 || rr >= N - 2) continue;
+        if (d2 > W2 || cc < 2 || rr < 2 || cc >= N - 2 || rr >= N - 2) continue;
         const t = T(cc, rr);
-        if (!LV[t] || WT[t] === 2) continue;
+        if (!LV[t] || WT[t] === 2 || LV[t] < L || (WT[t] === 3 && NEAR[t] < k0)) continue;
         WT[t] = 3; SH[t] = 0;
-        if (d2 < best[t]) { best[t] = d2; near[t] = p; FX[t] = Math.round(fx * 127); FZ[t] = Math.round(fz * 127); depth[t] = R > 1.4 && d2 < 0.6 ? 2 : 1; }
+        if (d2 < best[t]) { best[t] = d2; NEAR[t] = p; FX[t] = Math.round(fx * 127); FZ[t] = Math.round(fz * 127); DEPTH[t] = W > 1.4 && d2 < 0.6 ? 2 : 1; }
       }
     }
-    runs.push([k0, bed.length]);
+    river.runs.push({ k0, k1: river.wl.length, into, lake: lk });
   }
-  // each point's bed lies a level under the lowest bank along its stretch, and never rises downstream
-  const low = new Int16Array(bed.length).fill(99);
-  for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) {
-    const i = T(c, r);
-    if (WT[i] !== 3) continue;
-    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-      const n = i + dr * N + dc;
-      if (WT[n]) continue;
-      low[near[i]] = Math.min(low[near[i]], LV[n] || 1);
-    }
-  }
-  for (let p = 0; p < bed.length; p++) bed[p] = Math.max(0, Math.min(bed[p], low[p] - 1));
-  for (const [k0, k1] of runs) for (let k = k0 + 1; k < k1; k++) bed[k] = Math.min(bed[k], bed[k - 1]);
-  for (let i = 0; i < N * N; i++) if (WT[i] === 3) WL[i] = bed[near[i]] + 1;
+  settleWater();
   terraceLimit();
+  settleWater();
   // now under water: the bed moves to GL and the tile becomes LV 0
   for (let i = 0; i < N * N; i++) {
-    if (WT[i] >= 2) { GL[i] = WL[i] - depth[i]; LV[i] = 0; }
+    if (WT[i] >= 2) { GL[i] = WL[i] - DEPTH[i]; LV[i] = 0; }
     else if (!LV[i]) WL[i] = 1;
   }
-  // never a surface over the ground beside it
+}
+// Every water surface at or under the ground round it (ramps included): each point down a river no higher
+// than the lowest bank of its tiles or the point above it, a river no lower where it runs into another than
+// that one is there, and every lake no higher than its lowest bank or a river running into it. It only ever
+// lowers water, and the beds go down with it. Run again once the land is finished.
+function settleWater() {
+  const bank = i => {
+    let m = 99;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const n = i + dr * N + dc;
+      if (!LV[n] || WT[n] >= 2 || BR[n]) continue;
+      for (let k = 0; k < 4; k++) { const x = dc + CX[k], z = dr + CZ[k]; if (x >= 0 && x <= 1 && z >= 0 && z <= 1) m = Math.min(m, cornerL(n, k)); }
+    }
+    return Math.floor(m);
+  };
+  const wl = river.wl, low = new Float32Array(wl.length).fill(99), lakeLow = new Float32Array(lakeList.length + 1).fill(99);
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
     const i = T(c, r);
-    if (WT[i] < 2) continue;
-    let m = 99;
-    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const n = i + dr * N + dc; if (LV[n]) m = Math.min(m, LV[n]); }
-    if (m >= WL[i]) continue;
-    if (m > GL[i]) WL[i] = m;
-    else { LV[i] = Math.max(1, GL[i]); GL[i] = 0; WL[i] = 0; WT[i] = 0; }
+    if (WT[i] === 3 && NEAR[i] >= 0) low[NEAR[i]] = Math.min(low[NEAR[i]], bank(i));
+    else if (WT[i] === 2 && LAKE[i]) lakeLow[LAKE[i]] = Math.min(lakeLow[LAKE[i]], bank(i));
+  }
+  for (let p = 0; p < wl.length; p++) wl[p] = Math.max(1, Math.min(wl[p], low[p]));
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = 0;
+    for (const u of river.runs) {
+      for (let k = u.k0 + 1; k < u.k1; k++) if (wl[k] > wl[k - 1]) { wl[k] = wl[k - 1]; changed++; }
+      if (u.into >= 0 && wl[u.into] > wl[u.k1 - 1]) { wl[u.into] = wl[u.k1 - 1]; changed++; }
+    }
+    if (!changed) break;
+  }
+  for (const u of river.runs) if (u.lake) lakeLow[u.lake] = Math.min(lakeLow[u.lake], wl[u.k1 - 1]);
+  for (const L of lakeList) L.level = Math.max(1, Math.min(L.level, lakeLow[L.id]));
+  for (let i = 0; i < N * N; i++) {
+    if (WT[i] === 3 && NEAR[i] >= 0) WL[i] = wl[NEAR[i]];
+    else if (WT[i] === 2 && LAKE[i]) WL[i] = lakeList[LAKE[i] - 1].level;
+    else continue;
+    if (!LV[i] || BR[i]) GL[i] = WL[i] - DEPTH[i];
   }
 }
 
@@ -1057,9 +1114,13 @@ function finishTowns() {
 }
 
 // Roads join the towns and a few waystones in every biome. They follow the walkable ground, so
-// they only change level by ramps, and every street out of a town carries on as a road.
+// they only change level by ramps, and every street out of a town carries on as a road. They go eight ways
+// (a diagonal step is laid as two tiles round a corner, so a road is always joined side to side), turn gently
+// sooner than sharply, and wind round the rougher ground of a slow noise instead of running dead straight.
 const waystones = [];
 const roadG = new Float32Array(N * N), roadFrom = new Int32Array(N * N), roadDir = new Int8Array(N * N), roadSpan = new Uint8Array(N * N);
+const roadVia = new Int32Array(N * N), roadRough = new Float32Array(N * N);
+const TURN = [0, 0.15, 0.6, 2, 3];
 const roadSeen = new Uint32Array(N * N), roadDone = new Uint32Array(N * N);
 let roadRun = 0, heapK = new Float64Array(1 << 16), heapV = new Int32Array(1 << 16);
 function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
@@ -1078,32 +1139,54 @@ function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
     heapK[i] = k; heapV[i] = vv;
     return v;
   };
-  roadSeen[s] = run; roadG[s] = 0; roadFrom[s] = -1; roadDir[s] = -1;
+  roadSeen[s] = run; roadG[s] = 0; roadFrom[s] = -1; roadDir[s] = -1; roadVia[s] = -1;
   push(0, s);
   for (let exp = 0; hn && exp < maxExp; exp++) {
     const i = pop();
     if (roadDone[i] === run) continue;
     roadDone[i] = run;
     if (i === g) {
-      for (let j = g; j >= 0; j = roadFrom[j]) { PATH[j] = 1; if (roadSpan[j]) makeBridge(roadFrom[j], roadDir[j], roadSpan[j]); }
+      for (let j = g; j >= 0; j = roadFrom[j]) { PATH[j] = 1; if (roadVia[j] >= 0) PATH[roadVia[j]] = 1; if (roadSpan[j]) makeBridge(roadFrom[j], roadDir[j] >> 1, roadSpan[j]); }
       return true;
     }
-    const c = i % N, r = (i - c) / N;
-    for (let d = 0; d < 4; d++) {
-      const nc = c + DC[d], nr = r + DR[d];
-      if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) continue;
-      const n = i + DI[d];
-      if (roadDone[n] === run || !terrainOpen(i, n, d) || wallOn(c, r, d) || FL[n] || LAVA[n]) continue;
-      let k = PATH[n] ? 0.45 : 1;
+    const c = i % N, r = (i - c) / N, pd = roadDir[i];
+    // what a road pays to cross a tile
+    const tc = n => {
+      let k = PATH[n] ? 0.45 : 1 + roadRough[n];
       if (RIM[n] & 255) k += 2.5;
       else if (RIM[n]) k += 0.5;
       if (WT[n]) k += 1.5;
-      if (TN[n]) { if (TN[n] === avoidTown) continue; if (townCell(nc, nr) === 'yard') k += 8; }
-      if (roadDir[i] >= 0 && roadDir[i] !== d) k += 0.4;
+      if (TN[n] && townCell(n % N, (n - n % N) / N) === 'yard') k += 8;
+      return k;
+    };
+    const free = n => !FL[n] && !LAVA[n] && !(TN[n] && TN[n] === avoidTown);
+    for (let d = 0; d < 8; d++) {
+      const nc = c + D8C[d], nr = r + D8R[d];
+      if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) continue;
+      const n = T(nc, nr);
+      if (roadDone[n] === run || !free(n)) continue;
+      let k, via = -1;
+      if (d & 1) {
+        // round by whichever tile beside the diagonal the way is open through, the cheaper if both
+        const hd = D8C[d] > 0 ? 1 : 3, vd = D8R[d] < 0 ? 0 : 2;
+        k = Infinity;
+        for (const [o, a, b] of [[T(nc, r), hd, vd], [T(c, nr), vd, hd]]) {
+          const oc = o % N, or = (o - oc) / N;
+          if (!free(o) || !terrainOpen(i, o, a) || wallOn(c, r, a) || !terrainOpen(o, n, b) || wallOn(oc, or, b)) continue;
+          const kk = 0.71 * (tc(o) + tc(n));
+          if (kk < k) { k = kk; via = o; }
+        }
+        if (via < 0) continue;
+      } else {
+        if (!terrainOpen(i, n, d >> 1) || wallOn(c, r, d >> 1)) continue;
+        k = tc(n);
+      }
+      if (pd >= 0) { const t = Math.abs(d - pd); k += TURN[Math.min(t, 8 - t)]; }
       const ng = roadG[i] + k;
       if (roadSeen[n] === run && ng >= roadG[n]) continue;
-      roadSeen[n] = run; roadG[n] = ng; roadFrom[n] = i; roadDir[n] = d; roadSpan[n] = 0;
-      push(ng + (Math.abs(nc - gc) + Math.abs(nr - gr)) * 1.1, n);
+      roadSeen[n] = run; roadG[n] = ng; roadFrom[n] = i; roadDir[n] = d; roadSpan[n] = 0; roadVia[n] = via;
+      const dx = Math.abs(nc - gc), dz = Math.abs(nr - gr);
+      push(ng + (Math.max(dx, dz) + 0.41 * Math.min(dx, dz)) * 1.05, n);
     }
     // a bridge straight over a river or a canyon to flat ground at the same level on the far side
     if (SH[i] || !LV[i] || BR[i]) continue;
@@ -1118,8 +1201,9 @@ function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
       if (LV[n] !== LV[i] || SH[n] || BR[n] || FL[n] || OBJ[OB[n]].tile || roadDone[n] === run) continue;
       const ng = roadG[i] + (CY[i + DI[d]] ? 3 + k : 6 + k * 1.5);
       if (roadSeen[n] === run && ng >= roadG[n]) continue;
-      roadSeen[n] = run; roadG[n] = ng; roadFrom[n] = i; roadDir[n] = d; roadSpan[n] = k - 1;
-      push(ng + (Math.abs(nc - gc) + Math.abs(nr - gr)) * 1.1, n);
+      roadSeen[n] = run; roadG[n] = ng; roadFrom[n] = i; roadDir[n] = d * 2; roadSpan[n] = k - 1; roadVia[n] = -1;
+      const dx = Math.abs(nc - gc), dz = Math.abs(nr - gr);
+      push(ng + (Math.max(dx, dz) + 0.41 * Math.min(dx, dz)) * 1.05, n);
     }
   }
   return false;
@@ -1140,6 +1224,7 @@ function makeBridge(from, d, span) {
   bridges.push({ from, d, span });
 }
 async function layRoads(rand, progress) {
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) roadRough[T(c, r)] = 1.6 * clamp(0.5 + fbm(nX, c / 34 + 900, r / 34 - 300, 2) * 1.8, 0, 1);
   const nodes = towns.map(t => ({ c: t.c, r: t.r, town: t }));
   for (const b of [MEADOW, FOREST, SWAMP, GRAVE, SNOW, DESERT, DEEP, WASTES]) {
     let got = 0;
@@ -3480,34 +3565,33 @@ function makeGoblin() {
   g.scale.setScalar(1.3);
   return { g, parts, topH: 0.62 };
 }
-// a demonic imp: a goblin's build gone red, with horns, bat wings, a barbed tail and burning eyes, and a trident
-function makeImp() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const skin = flatMat({ color: '#a8322a' }), dark = flatMat({ color: '#3a1414' }), horn = flatMat({ color: '#e8d8b0' }), wing = flatMat({ color: '#4a1a1c', side: THREE.DoubleSide });
-  const eye = new THREE.MeshBasicMaterial({ color: '#ffd23a' });
-  add(0.08, 0.18, 0.08, -0.06, 0.09, 0, dark); add(0.08, 0.18, 0.08, 0.06, 0.09, 0, dark);
-  add(0.2, 0.2, 0.13, 0, 0.28, 0, skin);
-  add(0.21, 0.04, 0.14, 0, 0.2, 0, dark);
-  add(0.06, 0.18, 0.06, -0.14, 0.29, 0, skin, 0, 0.15); add(0.06, 0.18, 0.06, 0.14, 0.29, 0.03, skin, -0.4, -0.15);
-  add(0.22, 0.17, 0.19, 0, 0.47, 0, skin);
-  add(0.035, 0.12, 0.035, -0.07, 0.6, -0.01, horn, -0.3, 0.35); add(0.035, 0.12, 0.035, 0.07, 0.6, -0.01, horn, -0.3, -0.35);
-  add(0.1, 0.04, 0.03, -0.15, 0.49, 0, skin, 0, 0.5); add(0.1, 0.04, 0.03, 0.15, 0.49, 0, skin, 0, -0.5);
-  add(0.05, 0.035, 0.02, -0.05, 0.49, 0.096, eye); add(0.05, 0.035, 0.02, 0.05, 0.49, 0.096, eye);
-  add(0.08, 0.025, 0.02, 0, 0.42, 0.096, darkMat);
-  // wings: two leathery panels each side, swept back
-  const wings = [];
-  for (const sd of [-1, 1]) {
-    const w = new THREE.Group(); w.position.set(sd * 0.07, 0.36, -0.07); g.add(w); wings.push(w);
-    const a = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.01), wing); a.position.set(sd * 0.13, 0.04, 0); a.rotation.z = sd * 0.25; w.add(a); parts.push(a);
-    const b = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.26, 0.03), dark); b.position.set(sd * 0.24, 0.1, 0); b.rotation.z = sd * -0.5; w.add(b); parts.push(b);
-    w.rotation.y = sd * 0.5;
-  }
-  add(0.03, 0.03, 0.26, 0, 0.2, -0.18, skin, 0.5); add(0.06, 0.05, 0.05, 0, 0.1, -0.29, dark, 0.8);
-  add(0.03, 0.46, 0.03, 0.17, 0.32, 0.14, flatMat({ color: '#2a2224' }), 0.9);
-  add(0.12, 0.02, 0.02, 0.17, 0.52, 0.31, steelMat, 0.9);
-  for (const o of [-0.05, 0, 0.05]) add(0.015, 0.07, 0.015, 0.17 + o, 0.56, 0.34, steelMat, 0.9);
-  g.scale.setScalar(1.3);
-  return { g, parts, wings, topH: 0.68 };
+// a hellhound: a wolf's build gone to charcoal, cracked through with glowing seams, with horns, burning
+// eyes, a glowing maw, and a mane and tail tip of flickering flame
+function makeHellhound() {
+  const g = new THREE.Group(), parts = [], add = boxer(g, parts), flames = [];
+  const f = flatMat({ color: '#2a2224' }), fd = flatMat({ color: '#171214' }), horn = flatMat({ color: '#d8c8a0' });
+  const glow = new THREE.MeshBasicMaterial({ color: '#ff6a1a' }), eye = new THREE.MeshBasicMaterial({ color: '#ffd23a' });
+  add(0.24, 0.21, 0.46, 0, 0.3, -0.02, f);
+  add(0.25, 0.012, 0.3, 0, 0.405, -0.04, glow);   // a seam glowing along the back
+  add(0.012, 0.12, 0.26, -0.121, 0.3, -0.04, glow); add(0.012, 0.12, 0.26, 0.121, 0.3, -0.04, glow);
+  add(0.26, 0.13, 0.17, 0, 0.42, 0.12, fd);
+  add(0.21, 0.19, 0.19, 0, 0.44, 0.27, f);
+  add(0.12, 0.08, 0.15, 0, 0.39, 0.42, fd);
+  add(0.1, 0.02, 0.12, 0, 0.36, 0.43, glow);   // the maw
+  add(0.04, 0.03, 0.02, 0, 0.42, 0.5, darkMat);
+  add(0.035, 0.12, 0.035, -0.07, 0.57, 0.22, horn, -0.5, 0.25); add(0.035, 0.12, 0.035, 0.07, 0.57, 0.22, horn, -0.5, -0.25);
+  add(0.05, 0.03, 0.02, -0.05, 0.47, 0.366, eye); add(0.05, 0.03, 0.02, 0.05, 0.47, 0.366, eye);
+  for (const [lx, lz] of [[-0.075, 0.14], [0.075, 0.14], [-0.075, -0.17], [0.075, -0.17]]) add(0.065, 0.22, 0.065, lx, 0.11, lz, fd);
+  add(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
+  const flame = (r, h, x, y, z, mat, rx = 0) => { const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); parts.push(m); flames.push(m); };
+  // the mane, along the neck and shoulders, leaning back
+  flame(0.07, 0.2, 0, 0.56, 0.16, flameMats[0], -0.5); flame(0.06, 0.17, 0, 0.53, 0.06, flameMats[1], -0.6);
+  flame(0.05, 0.14, -0.05, 0.52, 0.12, flameMats[0], -0.5); flame(0.05, 0.14, 0.05, 0.52, 0.12, flameMats[0], -0.5);
+  flame(0.04, 0.11, 0, 0.47, -0.04, flameMats[2], -0.7);
+  // and the tail's tip
+  flame(0.05, 0.16, 0, 0.47, -0.42, flameMats[1], -1.0);
+  g.scale.setScalar(1.45);
+  return { g, parts, flames, topH: 0.68 };
 }
 // a fire spirit: a floating flame with a bright heart, its tongues flickering, two dark eyes in the blaze
 const flameMats = ['#ff4a10', '#ff8a20', '#ffd060'].map((c, k) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.9 + k * 0.2, flatShading: true, transparent: true, opacity: 0.8 + k * 0.08, roughness: 1 }));
@@ -3650,7 +3734,7 @@ function makeMantrap() {
 }
 const FOE = {
   goblin: { make: makeGoblin, name: 'Goblin', hp: 30, dmg: 7, speed: 2.7, reach: 0.8, aggro: 8, rad: 0.25 },
-  imp: { make: makeImp, name: 'Demonic imp', hp: 28, dmg: 8, speed: 3.3, reach: 0.85, aggro: 9, rad: 0.25 },
+  hellhound: { make: makeHellhound, name: 'Hellhound', hp: 38, dmg: 10, speed: 4.2, reach: 0.9, aggro: 10, rad: 0.3 },
   firespirit: { make: makeFireSpirit, name: 'Fire spirit', hp: 30, dmg: 10, speed: 2.5, reach: 0.9, aggro: 9, rad: 0.27 },
   wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28 },
   slime: { make: makeSlime, name: 'Bog slime', hp: 26, dmg: 6, speed: 1.8, reach: 0.75, aggro: 6, rad: 0.3 },
@@ -6072,6 +6156,8 @@ window.GAME = {
     forcedPick = null;
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
+  // tests: the world's arrays and helpers, to check them in bulk
+  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
