@@ -27,6 +27,12 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #stage canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; cursor: crosshair; }
 #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
 .hint { position: absolute; font-family: var(--display); font-size: 10px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -100%); white-space: nowrap; }
+.fbar { position: absolute; width: 44px; height: 5px; background: #1a0e10; border: 2px solid #000; transform: translate(-50%, -100%); }
+.fbar i, #target .meter i { display: block; height: 100%; width: 100%; background: #e8b830; box-shadow: inset 0 -2px 0 #a8781a; }
+#target { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translateX(-50%); width: clamp(160px, calc(100vw - 440px), 420px); text-align: center; pointer-events: none; }
+#target .tname { font-family: var(--display); font-size: 11px; color: var(--bone); text-shadow: 2px 2px 0 #000; margin-bottom: 6px; }
+#target .meter { height: 12px; background: #1a0e10; border: 2px solid #000; box-shadow: 3px 3px 0 #000; }
+#target .meter i { box-shadow: inset 0 -3px 0 #a8781a; }
 .float { position: absolute; font-family: var(--display); font-size: 11px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -50%); animation: rise 0.9s steps(9) forwards; white-space: nowrap; }
 @keyframes rise { to { transform: translate(-50%, -240%); opacity: 0; } }
 
@@ -173,6 +179,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 <div id="bar"></div>
 <div id="modeTag" hidden>BUILD MODE</div>
 <div id="prompt" hidden></div>
+<div id="target" hidden><div class="tname"></div><div class="meter"><i></i></div></div>
 <div id="toast" hidden></div>
 <div id="padCursor" hidden></div>
 
@@ -4109,7 +4116,7 @@ const CD = { Q: 8, E: 7 };
 // the dash is a tumble: a forward roll you can steer, untouchable the whole way, and a burst of extra run
 // speed for a moment after you come up out of it
 // speed in tiles a second, turn in radians a second, boost as a share of your run speed (T > Tumble)
-const TUMBLE = { time: 0.5, speed: 9, endSpeed: 6.5, turn: 6, boost: 0.35, boostTime: 0.8, cooldown: 2.4 };
+const TUMBLE = { time: 0.5, speed: 9.5, endSpeed: 9.5, turn: 10, boost: 0.5, boostTime: 1, cooldown: 5 };
 
 // ---------- Foes ----------
 let foes = [];
@@ -4833,6 +4840,64 @@ function castJump() {
   if (!f || H.flip) return;
   H.flip = f; H.canJump = null; H.swing = -1; H.invuln = Math.max(H.invuln, f.dur);
   sfx.dash();
+}
+// Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at)
+// and a bar shows over its head, staying 3 seconds after you look away, while its name and a big bar show at
+// the top of the screen, staying 1 second (another monster you point at takes that over at once).
+const BAR_HOLD = 3, TARGET_HOLD = 1;
+let targetFoe = null, targetT = 0;
+const barFoes = new Set();
+const foeTop = f => f.g.position.y + (f.topH || 0.8) * f.base;
+function pickFoe() {
+  if (!started || mapOpen || !H.alive || mode !== 'play') return null;
+  let best = null, bd = 1e9;
+  if (PAD.on) {
+    for (const f of foes) {
+      const dx = f.x - H.x, dz = f.z - H.z, along = dx * aim.x + dz * aim.z, off = Math.abs(dx * aim.z - dz * aim.x);
+      if (along <= 0 || along > 10 || off > 0.5 + f.def.rad + along * 0.12) continue;
+      if (along < bd) { bd = along; best = f; }
+    }
+    return best;
+  }
+  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  for (const f of foes) {
+    if (Math.abs(f.x - H.x) > 40 || Math.abs(f.z - H.z) > 40) continue;
+    const p = f.g.position;
+    v3.set(p.x, p.y, p.z).project(camera); const fx = sx(v3.x), fy = sy(v3.y);
+    v3.set(p.x, foeTop(f), p.z).project(camera); const hy = sy(v3.y);
+    const w = Math.max(22, (fy - hy) * 0.75), dx = Math.abs(mouse.x - fx);
+    if (dx > w / 2 || mouse.y < hy - 6 || mouse.y > fy + 6) continue;
+    const d = dx + Math.abs(mouse.y - (fy + hy) / 2) * 0.5;
+    if (d < bd) { bd = d; best = f; }
+  }
+  return best;
+}
+function updateFoeBars(dt) {
+  const hov = pickFoe();
+  if (hov) { hov.barT = BAR_HOLD; targetFoe = hov; targetT = TARGET_HOLD; barFoes.add(hov); }
+  else targetT -= dt;
+  const rect = cv.getBoundingClientRect();
+  for (const f of barFoes) {
+    if (f !== hov) f.barT -= dt;
+    const alive = f.hp > 0 && foes.includes(f);
+    if (!alive || f.barT <= 0) {
+      if (f.barEl) f.barEl.hidden = true;
+      if (!alive) { if (f.barEl) f.barEl.remove(); barFoes.delete(f); }
+      continue;
+    }
+    if (!f.barEl) { f.barEl = document.createElement('div'); f.barEl.className = 'fbar'; f.barEl.innerHTML = '<i></i>'; $('fx').appendChild(f.barEl); }
+    const p = f.g.position;
+    v3.set(p.x, foeTop(f) + 0.3, p.z).project(camera);
+    f.barEl.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
+    f.barEl.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
+    f.barEl.firstChild.style.width = clamp(f.hp / f.def.hp, 0, 1) * 100 + '%';
+    f.barEl.hidden = false;
+  }
+  const el = $('target');
+  if (!targetFoe || targetT <= 0 || !foes.includes(targetFoe) && targetFoe.hp > 0) { el.hidden = true; return; }
+  el.querySelector('.tname').textContent = targetFoe.def.name;
+  el.querySelector('.meter i').style.width = clamp(targetFoe.hp / targetFoe.def.hp, 0, 1) * 100 + '%';
+  el.hidden = false;
 }
 // the prompt over your head while you could jump
 function showJumpHint() {
@@ -6308,6 +6373,7 @@ function frame(now) {
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
   updateCamera(dt);
   showJumpHint();
+  updateFoeBars(dt);
   updateClouds(dt);
   updateWater(dt);
   updateHearths(dt);
@@ -6362,7 +6428,7 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
-  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks }),
+  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
