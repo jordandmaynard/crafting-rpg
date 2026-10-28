@@ -277,7 +277,7 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
       <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
-      <li class="touch-only"><span>The stick at the bottom left walks. The big button attacks: hold it to keep swinging, and drag it to aim. Drag an ability (whirlwind, lunge, dash) to aim it and let go to use it, or just tap it. Tap the prompts over doors, loot and the tanning table, pinch to zoom, and use the bar at the bottom for your pack, build mode and the map.</span></li>
+      <li class="touch-only"><span>The stick at the bottom left walks. The big button attacks: hold it to keep swinging, and drag it to aim. Drag an ability (whirlwind, lunge, dash) to aim it and let go to use it, or just tap it. Tap the prompts over doors, loot and the tanning table, swipe left or right on the view to turn the camera, pinch to zoom, and use the bar at the bottom for your pack, build mode and the map.</span></li>
       <li class="pad-only"><span><g-p>RB</g-p> gear and pack: the D-pad picks a square, <g-p>A</g-p> puts on or takes off, <g-p>B</g-p> closes. Your weapon gives your attack and your <g-p>X</g-p> and <g-p>Y</g-p>; bare-handed you punch.</span></li>
       <li class="pad-only"><span><g-p>MENU</g-p> build mode: <g-p>X</g-p> floors, <g-p>Y</g-p> walls, <g-p>A</g-p> doors (press again for the next kind), <g-p>RB</g-p> hearth. <g-p>RS</g-p> moves the build cursor, <g-p>RT</g-p> places (hold and move to lay a row), <g-p>LT</g-p> removes, <g-p>B</g-p> done.</span></li>
       <li>Close a room with walls and doors and a roof goes up (rooms that meet across a wall share one roof). It hides while you are inside, and you heal faster under it.</li>
@@ -5584,6 +5584,7 @@ function die() {
 }
 function respawn() {
   $('dead').hidden = true;
+  if (TOUCH.on) goFullscreen();
   foes.slice().forEach(removeFoe);
   // by your hearth if you have one (on whichever side of it is open), else by the well in the first town
   const h = hearths.values().next().value;
@@ -5766,8 +5767,8 @@ function aimButton(el, id) {
   $('prompt').addEventListener('click', () => { if (TOUCH.on) useAction(); });
   $('jumpHint').addEventListener('click', () => { if (TOUCH.on) castJump(); });
 }
-// fingers on the world: two pinch to zoom; in play one does nothing (the buttons fight), in build mode it
-// places as the mouse does
+// fingers on the world: two pinch to zoom; in play one swipes left or right to turn the camera (the buttons
+// fight), in build mode it places as the mouse does
 const pinch = new Map();
 let pinchD = 0;
 const pinchSpan = () => { const [a, b] = [...pinch.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]) || 1; };
@@ -5778,13 +5779,28 @@ function touchPress(e) {
 }
 function touchPinch(e) {
   if (!pinch.has(e.pointerId)) return false;
+  const was = pinch.get(e.pointerId);
   pinch.set(e.pointerId, [e.clientX, e.clientY]);
-  if (pinch.size < 2) return mode === 'play';
+  if (pinch.size < 2) {
+    if (mode !== 'play') return false;
+    yawGoal -= (e.clientX - was[0]) * 0.008; yaw = yawGoal;
+    return true;
+  }
   const d = pinchSpan();
   setZoom(zoom * d / pinchD); pinchD = d;
   return true;
 }
 function touchLift(e) { pinch.delete(e.pointerId); }
+// phones play full screen; it can only be asked for from a tap, so it's asked on setting out and on rising
+// again after a death
+function goFullscreen() {
+  const el = document.documentElement, req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!req || document.fullscreenElement || document.webkitFullscreenElement) return;
+  try {
+    const p = req.call(el, { navigationUI: 'hide' });
+    if (p && p.catch) p.catch(() => {});
+  } catch (e) {}
+}
 
 // ---------- Xbox controller ----------
 // The Gamepad API's standard layout. Pressing anything on a controller switches the game into controller
@@ -7449,6 +7465,7 @@ function begin() {
   if (started) return;
   started = true;
   $('touchUI').hidden = !TOUCH.on;
+  if (TOUCH.on) goFullscreen();
   audioOn();
   $('intro').hidden = true;
   toast('You set out from ' + titleCase(towns[0].name) + '. Night comes quickly; gather wood and stone.', 'calm');
@@ -7986,6 +8003,7 @@ window.GAME = {
   screenOf: (x, y, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, y, z).project(camera); return [rect.left + (v3.x + 1) / 2 * rect.width, rect.top + (1 - v3.y) / 2 * rect.height]; },
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
+  cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
   tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX },
   gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
