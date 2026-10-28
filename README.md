@@ -67,7 +67,7 @@ There are also sliders for strength, a minimum of the plain light to keep, rays 
 
 ## Lit haze
 
-Lit haze marched per pixel (`src/gfx/haze.js`). The game draws at a low mosaic resolution, so each frame, after the scene is drawn, a compute pass marches a ray through the air for every mosaic pixel. The ray runs from about 14 tiles above you down to just below the ground in view, and stops at what that pixel sees. It takes even steps with no random jitter, so the haze has no grid to show and no dithering, and it never smears across an edge. The haze is thickest on the ground and thins with height over the height field, broken into slow wisps that drift with the clouds. It's lit by:
+Lit haze marched per pixel (`src/gfx/haze.js`). The game draws at a low mosaic resolution, so each frame, after the scene is drawn, a compute pass marches a ray through the air for every mosaic pixel. The ray runs from about 14 tiles above you down to just below the ground in view, and stops at what that pixel sees. It takes even steps with no random jitter, so the haze has no grid to show and no dithering, and it never smears across an edge. The haze is thickest on the bare ground (trunks, walls and rocks don't count, so no column of haze stands on a tall trunk) and thins with height, broken into slow wisps that drift with the clouds. It's lit by:
 
 - the sun or moon through its shadow map, so tall trees and buildings throw shafts through it, scattered more forward than back;
 - the sky, by how much of it the GI probes see from there (with bounce light, all the light arriving there);

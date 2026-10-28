@@ -5,8 +5,10 @@
 // and the steps fall evenly with no random jitter, so there's no dithering. Each frame, after the scene is drawn
 // (so the sun's shadow map is fresh), two compute passes run:
 //
-// - glow: lava's light, blurred over the GI height field window (each texel: what the ground within a few tiles
-//   gives off, falling away with distance), so a step reads it in one lookup;
+// - ground: over the GI height field window, each texel's bare ground (the lowest within three tiles, as the
+//   height field's ground has trunks, walls and rocks standing on it: going by that, a tall trunk would have
+//   ground-thick haze all the way up it) and lava's light, blurred (what the ground within a few tiles gives off,
+//   falling away with distance), so a step reads both in one lookup;
 // - march: for each mosaic pixel, the stretch of its ray between `top` and `bottom` (world y) and nearer than what
 //   it sees, cut into `steps` even steps. At each, how much haze (thickest on the ground under it, thinning with
 //   height, stirred by slow drifting wisps) and the light it scatters toward the camera: the sun's or moon's
@@ -42,7 +44,8 @@ const GLOW_WGSL = /* wgsl */ `
 ${COMMON}
 @group(2) @binding(1) var groundCol: texture_2d<f32>;
 @group(2) @binding(2) var glowOut: texture_storage_2d<${OUT_FORMAT}, write>;
-// each texel of the window: what the ground within four tiles gives off, a tile apart, less with distance
+// each texel of the window: what the ground within four tiles gives off, a tile apart, less with distance; and the
+// lowest ground within three tiles (very low where none is known)
 @compute @workgroup_size(8, 8, 1)
 fn glow(@builtin(global_invocation_id) id: vec3u) {
   let S = giHfSize();
@@ -50,16 +53,24 @@ fn glow(@builtin(global_invocation_id) id: vec3u) {
   let o = giHfOrigin();
   let t = o + (((vec2i(id.xy) - o) % S) + S) % S;   // the world texel in this slot
   var sum = vec3f(0.0);
+  var low = 1e4;
   for (var j = -4; j <= 4; j++) {
     for (var i = -4; i <= 4; i++) {
       let u = t + vec2i(i, j) * GI_TPT;
       let r = u - o;
       if (any(r < vec2i(0)) || any(r >= vec2i(S))) { continue; }
-      let c = textureLoad(groundCol, ((u % S) + S) % S, 0);
-      sum += c.rgb * c.a / (1.0 + f32(i * i + j * j));
+      let q = ((u % S) + S) % S;
+      if (H.more.x > 0.0) {
+        let c = textureLoad(groundCol, q, 0);
+        sum += c.rgb * c.a / (1.0 + f32(i * i + j * j));
+      }
+      if (abs(i) <= 3 && abs(j) <= 3) {
+        let g = giHfRaw(q).x;
+        if (g > -1000.0) { low = min(low, g); }
+      }
     }
   }
-  textureStore(glowOut, vec2i(id.xy), vec4f(sum, 1.0));
+  textureStore(glowOut, vec2i(id.xy), vec4f(sum, select(low, -1e4, low > 9999.0)));
 }
 `;
 
@@ -79,10 +90,11 @@ fn noise3(p: vec3f) -> f32 {
   let b = mix(mix(hash3(i + vec3i(0, 0, 1)), hash3(i + vec3i(1, 0, 1)), u.x), mix(hash3(i + vec3i(0, 1, 1)), hash3(i + vec3i(1, 1, 1)), u.x), u.y);
   return mix(a, b, u.z);
 }
-// the ground under xz, from the GI height field (where it reaches)
+// the bare ground under xz, from the ground pass (where the height field reaches)
 fn groundAt(xz: vec2f) -> f32 {
-  if (giHfSize() <= 0) { return H.dens.w; }
-  let g = giGround(xz);
+  let S = giHfSize();
+  if (S <= 0) { return H.dens.w; }
+  let g = textureSampleLevel(glowTex, linSamp, xz * f32(GI_TPT) / f32(S), 0.0).a;
   return select(g, H.dens.w, g < -1000.0);
 }
 fn densityAt(p: vec3f) -> f32 {
@@ -275,8 +287,8 @@ export class LitHaze {
     d.set([...f.wind, 0], 56);
     d.set([f.lavaHeight, 0, 0, 0], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
-    const lava = f.lava > 0 && !!f.groundColour;
-    if (lava && this._glowKey !== String(this.glowSize)) {
+    const ground = !!f.groundColour;
+    if (ground && this._glowKey !== String(this.glowSize)) {
       this._glowKey = String(this.glowSize);
       this.glowBG = this.device.createBindGroup({ layout: this.bglGlow, entries: [
         { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.groundColour }, { binding: 2, resource: this.glowView }] });
@@ -292,7 +304,7 @@ export class LitHaze {
       const pass = enc.beginComputePass({ label: 'haze' });
       pass.setBindGroup(0, frameBG, [frameOff]);
       pass.setBindGroup(1, this.emptyBG);
-      if (lava) {
+      if (ground) {
         pass.setPipeline(this.glowPipe);
         pass.setBindGroup(2, this.glowBG);
         pass.dispatchWorkgroups(Math.ceil(S / 8), Math.ceil(S / 8), 1);
