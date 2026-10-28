@@ -47,9 +47,19 @@ fn giInsideBand(c: vec2i, y: f32) -> bool {
 }
 fn giSlot(c: vec2i, n: i32) -> vec2i { return ((c % n) + n) % n; }
 
+// the height field's ground at world point xz, bilinear between texel middles, so a wall's or cliff's edge is a
+// short ramp rather than a step
+fn giGround(xz: vec2f) -> f32 {
+  let p = xz * f32(GI_TPT) - 0.5;
+  let t = vec2i(floor(p)); let f = p - floor(p);
+  let a = mix(giHf(t).x, giHf(t + vec2i(1, 0)).x, f.x);
+  let b = mix(giHf(t + vec2i(0, 1)).x, giHf(t + vec2i(1, 1)).x, f.x);
+  return mix(a, b, f.y);
+}
 // The probes' light at q facing n, from the 4 columns round it, two layers each (those either side of q's height
-// over that column's floor): each weighted by nearness, less when it's behind the surface, hardly at all when
-// the column's floor is over q (across a cliff or a wall) or ground lies between them. w = 0 when none is usable.
+// over that column's floor): each weighted by nearness, less when it's behind the surface, and hardly at all
+// when ground lies between them (across a cliff or a wall). Every factor changes smoothly with q, so no column
+// drops out at a line on the ground. w = 0 when none is usable.
 struct GIOut { w: f32, vis: vec4f, light: vec3f }
 fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
   var out: GIOut;
@@ -67,13 +77,14 @@ fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
     if (floorY < -1000.0) { continue; }
     let h = q.y - floorY;
     var wc = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
-    if (h < -0.3) { wc *= 1e-3; }
     let hl = clamp(h, giLayerH(0), giLayerH(g.w - 1));
     let pp = vec3f(f32(c.x) + 0.5, floorY + hl, f32(c.y) + 0.5);
+    var occ = 0.0;
     for (var j = 1; j < 3; j++) {
       let m = mix(q, pp, f32(j) / 3.0);
-      if (giHf(vec2i(floor(m.xz * f32(GI_TPT)))).x > m.y + 0.05) { wc *= 1e-3; break; }
+      occ = max(occ, smoothstep(0.0, 0.4, giGround(m.xz) - m.y));
     }
+    wc *= mix(1.0, 0.005, occ);
     let to = pp - q;
     let wrap = (dot(normalize(to + vec3f(1e-4)), n) + 1.0) * 0.5;
     wc *= wrap * wrap + 0.2;
@@ -84,7 +95,7 @@ fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
     for (var e = 0; e < 2; e++) {
       let layer = l + e;
       let w = wc * select(1.0 - t, t, e == 1);
-      if (w < 1e-7) { continue; }
+      if (w <= 0.0) { continue; }
       let v = giVisAt(vec3i(s.x, layer, s.y));
       if (v.x < 0.0) { continue; }
       if (bounce) {
@@ -166,9 +177,13 @@ fn fogAmount(depth: f32) -> f32 {
 }
 fn applyFog(c: vec3f, depth: f32) -> vec3f { return mix(c, F.fogColor.rgb, fogAmount(depth)); }
 // a face's normal from how its position changes across the screen, turned to face the eye
-fn flatNormal(w: vec3f) -> vec3f {
-  var n = normalize(cross(dpdx(w), dpdy(w)));
-  if (dot(n, toEye(w)) < 0.0) { n = -n; }
+// a flat surface's normal, facing the camera, from e: the point less the camera's position. The world point itself
+// won't do: a thousand tiles out, a float's rounding is a sizeable share of the step between pixels, and the
+// normal comes out speckled
+fn flatNormal(e: vec3f) -> vec3f {
+  var n = normalize(cross(dpdx(e), dpdy(e)));
+  let toward = select(-e, -F.camDir.xyz, F.camPos.w > 0.5);
+  if (dot(n, toward) < 0.0) { n = -n; }
   return n;
 }
 // how much of the sun's light the clouds let through at a point on the ground
@@ -271,10 +286,10 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) vp: vec3f }
 }`;
   const head = PRELUDE + `
 ${vin}
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f }
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = O.model * vec4f(v.position, 1.0);
-  return VOut(F.viewProj * w, w.xyz, ${col});
+  return VOut(F.viewProj * w, w.xyz, ${col}, w.xyz - F.camPos.xyz);
 }`;
   if (kind === 'basic') return head + `
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
@@ -282,7 +297,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }`;
   return head + `
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
-  let N = flatNormal(i.world);
+  let N = flatNormal(i.eye);
   let c = shadeLit(O.color.rgb * i.color, O.emissive.rgb, O.pbr.x, O.pbr.y, i.world, N, O.emissive.w > 0.5);
   return vec4f(applyFog(c, viewDepth(i.world)), O.color.a);
 }`;
