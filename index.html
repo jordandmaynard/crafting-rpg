@@ -82,6 +82,25 @@ body.pad canvas { cursor: none; }
 .slot:hover { border-color: var(--dim); }
 .slot.on { border-color: var(--gold); }
 .slot.poor .cost { color: var(--blood); }
+.slot.locked { opacity: 0.45; }
+
+#inv { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); top: 50%; transform: translateY(-50%); z-index: 5; padding: 10px 12px 12px; -webkit-user-select: none; user-select: none; }
+#inv .invBody { display: flex; gap: 16px; }
+#inv .card-title { margin-bottom: 6px; display: flex; justify-content: space-between; }
+#inv .card-title span { color: var(--dim); }
+#doll, #pack { display: grid; grid-template-columns: repeat(var(--cols), 48px); grid-auto-rows: 48px; gap: 4px; }
+#doll { --cols: 3; grid-template-rows: repeat(4, 48px); }
+#pack { --cols: 5; }
+.cell { position: relative; box-sizing: border-box; border: 3px solid var(--panel-edge); background: rgba(5, 4, 9, 0.45); display: grid; place-items: center; cursor: pointer; touch-action: none; }
+.cell svg { width: 30px; height: 30px; image-rendering: pixelated; pointer-events: none; }
+.cell .lbl { position: absolute; bottom: 2px; left: 0; right: 0; text-align: center; font-family: var(--display); font-size: 6px; color: var(--dim); pointer-events: none; }
+.cell:hover { border-color: var(--dim); }
+.cell.focus, .cell.drop { border-color: var(--gold); }
+.cell.held svg { opacity: 0.3; }
+#invInfo { margin-top: 10px; min-height: 2.3em; max-width: 424px; font: 17px/1.15 var(--body); color: var(--bone); }
+#invInfo b { font-family: var(--display); font-size: 9px; font-weight: normal; color: var(--gold); margin-right: 4px; }
+#dragIcon { position: fixed; z-index: 9; width: 40px; height: 40px; margin: -20px 0 0 -20px; pointer-events: none; }
+#dragIcon svg { width: 100%; height: 100%; image-rendering: pixelated; }
 .slot.wide { width: 76px; }
 #sub { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); transform: translateX(-50%); display: flex; gap: 8px; pointer-events: none; }
 .slot.cat::after { content: ''; position: absolute; top: 3px; right: 4px; border: 4px solid transparent; border-bottom-color: var(--dim); border-top: 0; }
@@ -149,6 +168,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 .maprow { display: flex; gap: 10px; align-items: center; justify-content: space-between; width: 100%; font-family: var(--display); font-size: 8px; color: var(--dim); }
 
 @media (max-width: 720px) {
+  #inv .invBody { flex-direction: column; gap: 10px; }
+  #invInfo { max-width: 256px; }
   .slot { width: 52px; height: 56px; }
   .slot.wide { width: 60px; }
   .slot .name { font-size: 6px; }
@@ -191,6 +212,14 @@ button:disabled { opacity: 0.45; cursor: default; }
 <div id="target" hidden><div class="tname"></div><div class="meter"><b></b><i></i></div></div>
 <div id="toast" hidden></div>
 <div id="padCursor" hidden></div>
+<div id="inv" class="plate" hidden>
+  <div class="invBody">
+    <div><div class="card-title">GEAR</div><div id="doll"></div></div>
+    <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div></div>
+  </div>
+  <div id="invInfo"></div>
+</div>
+<div id="dragIcon" hidden></div>
 
 <div class="modal" id="intro">
   <div class="sheet">
@@ -200,9 +229,11 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li>You are a human adventurer, alone in an untamed land. Fell trees and break rocks for wood and stone, and raise a shelter before night falls.</li>
       <li class="kb-only"><span><kbd>WASD</kbd> move, aim with the mouse, <kbd>LMB</kbd> attack (hold to keep swinging). Hit trees and rocks to gather.</li>
       <li class="kb-only"><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash (a tumble you can steer), <kbd>F</kbd> open and close doors.</span></li>
+      <li class="kb-only"><span><kbd>I</kbd> gear and pack: click to put on or take off, drag to move. Your weapon gives your attack and your <kbd>Q</kbd> and <kbd>E</kbd>; bare-handed you punch.</span></li>
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
       <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
+      <li class="pad-only"><span><g-p>RB</g-p> gear and pack: the D-pad picks a square, <g-p>A</g-p> puts on or takes off, <g-p>B</g-p> closes. Your weapon gives your attack and your <g-p>X</g-p> and <g-p>Y</g-p>; bare-handed you punch.</span></li>
       <li class="pad-only"><span><g-p>MENU</g-p> build mode: <g-p>X</g-p> floors, <g-p>Y</g-p> walls, <g-p>A</g-p> doors (press again for the next kind), <g-p>RB</g-p> hearth. <g-p>RS</g-p> moves the build cursor, <g-p>RT</g-p> places (hold and move to lay a row), <g-p>LT</g-p> removes, <g-p>B</g-p> done.</span></li>
       <li>Close a room with walls and doors and a roof goes up (rooms that meet across a wall share one roof). It hides while you are inside, and you heal faster under it.</li>
       <li>Towns are safe. The wilds grow bolder at night.</li>
@@ -3962,22 +3993,34 @@ function boxer(g, parts) {
 }
 
 // The adventurer: boots, breeches, a blue tunic with a belt, a pack with a bedroll, and a sword.
-// Arms and legs hang from pivots so they can swing.
+// Arms and legs hang from pivots so they can swing. Each piece of clothing (and the skin or shorts under
+// it) is tagged in userData.gear, and dressHero shows the pieces for what is worn.
 const heroSkin = flatMat({ color: '#e0b48a' }), heroTunic = flatMat({ color: '#3f6a8a' });
 function makeHuman() {
   const g = new GFX.Group(), parts = [];
   const pants = flatMat({ color: '#5a4632' }), boots = flatMat({ color: '#3a2a1e' }), hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
   const pack = flatMat({ color: '#7a5434' }), roll = flatMat({ color: '#9a8a5a' }), hood = flatMat({ color: '#2f5a3a' });
+  const shorts = flatMat({ color: '#f4efe6' }), heart = flatMat({ color: '#d8443a' });
   const box = (parent, w, h, d, x, y, z, mat, rx = 0, rz = 0) => { const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.rotation.set(rx, 0, rz); parent.add(m); parts.push(m); return m; };
   const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
+  const wear = (tag, ...ms) => { for (const m of ms) m.userData.gear = tag; };
   const body = pivot(g, 0, 0, 0);
   const legL = pivot(body, 0.07, 0.36, 0), legR = pivot(body, -0.07, 0.36, 0);
-  for (const leg of [legL, legR]) { box(leg, 0.1, 0.24, 0.11, 0, -0.12, 0, pants); box(leg, 0.11, 0.13, 0.15, 0, -0.295, 0.015, boots); }
-  box(body, 0.28, 0.3, 0.16, 0, 0.52, 0, heroTunic);
-  box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, heroTunic);
-  box(body, 0.3, 0.045, 0.175, 0, 0.42, 0, belt);
-  box(body, 0.055, 0.05, 0.02, 0, 0.42, 0.09, goldMat);
-  box(body, 0.32, 0.07, 0.19, 0, 0.665, -0.005, hood);
+  for (const leg of [legL, legR]) {
+    wear('pants', box(leg, 0.1, 0.24, 0.11, 0, -0.12, 0, pants)); wear('skinLegs', box(leg, 0.09, 0.24, 0.1, 0, -0.12, 0, heroSkin));
+    wear('boots', box(leg, 0.11, 0.13, 0.15, 0, -0.295, 0.015, boots)); wear('feet', box(leg, 0.09, 0.12, 0.13, 0, -0.3, 0.015, heroSkin));
+  }
+  wear('shirt', box(body, 0.28, 0.3, 0.16, 0, 0.52, 0, heroTunic), box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, heroTunic));
+  wear('skinTorso', box(body, 0.27, 0.3, 0.15, 0, 0.52, 0, heroSkin));
+  wear('hipPants', box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, pants));
+  // heart boxer shorts: a low row of hearts that shows below the tunic, and a higher one when it's off too
+  wear('boxers', box(body, 0.28, 0.12, 0.16, 0, 0.345, 0, shorts));
+  for (const z of [0.0815, -0.0815]) {
+    for (const x of [-0.085, 0, 0.085]) wear('boxers', box(body, 0.035, 0.035, 0.006, x, 0.302, z, heart, 0, Math.PI / 4));
+    for (const x of [-0.0425, 0.0425]) wear('boxersBare', box(body, 0.035, 0.035, 0.006, x, 0.36, z, heart, 0, Math.PI / 4));
+  }
+  wear('pants', box(body, 0.3, 0.045, 0.175, 0, 0.42, 0, belt), box(body, 0.055, 0.05, 0.02, 0, 0.42, 0.09, goldMat));
+  wear('shirt', box(body, 0.32, 0.07, 0.19, 0, 0.665, -0.005, hood));
   box(body, 0.22, 0.24, 0.1, 0, 0.53, -0.13, pack);
   box(body, 0.3, 0.08, 0.08, 0, 0.68, -0.14, roll);
   const head = pivot(body, 0, 0.7, 0);
@@ -3988,8 +4031,12 @@ function makeHuman() {
   box(head, 0.035, 0.035, 0.01, 0.045, 0.11, 0.092, darkMat);
   const armL = pivot(body, 0.175, 0.64, 0), armR = pivot(body, -0.175, 0.64, 0);
   armL.rotation.order = armR.rotation.order = 'YXZ';
-  for (const arm of [armL, armR]) { box(arm, 0.08, 0.2, 0.09, 0, -0.1, 0, heroTunic); box(arm, 0.07, 0.07, 0.075, 0, -0.235, 0, heroSkin); }
+  for (const arm of [armL, armR]) {
+    wear('shirt', box(arm, 0.08, 0.2, 0.09, 0, -0.1, 0, heroTunic)); wear('skinTorso', box(arm, 0.07, 0.2, 0.08, 0, -0.1, 0, heroSkin));
+    box(arm, 0.07, 0.07, 0.075, 0, -0.235, 0, heroSkin);
+  }
   const sword = pivot(armR, 0, -0.25, 0.02);
+  wear('sword', sword);
   box(sword, 0.035, 0.035, 0.14, 0, 0, 0, hiltMat);
   box(sword, 0.16, 0.03, 0.035, 0, 0, 0.08, goldMat);
   box(sword, 0.045, 0.015, 0.46, 0, 0, 0.32, steelMat);
@@ -4413,14 +4460,14 @@ scene.add(heroRoot);
 const silMat = new GFX.MeshBasicMaterial({ color: '#4fb8b0', depthWrite: false, depthFunc: GFX.GreaterDepth });
 hero.parts.slice().forEach(p => {
   const s = new GFX.Mesh(p.geometry, silMat);
-  s.position.copy(p.position); s.rotation.copy(p.rotation); s.renderOrder = -1;
+  s.position.copy(p.position); s.rotation.copy(p.rotation); s.renderOrder = -1; s.userData.gear = p.userData.gear;
   p.parent.add(s);
 });
 heroRoot.traverse(o => o.layers.set(1));
 // the hero's shadow: a copy of each part on the world layer that draws nothing but casts
 hero.parts.slice().forEach(p => {
   const s = new GFX.Mesh(p.geometry, castOnlyMat);
-  s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true;
+  s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true; s.userData.gear = p.userData.gear;
   p.parent.add(s);
 });
 const shadowMat = new GFX.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.35, depthWrite: false });
@@ -4593,21 +4640,204 @@ const ICON = {
   stonefence: pixelSvg(['.ccc.ccc.', 'ccccccccc', '.GG.gGG.G', 'GggGGgGGg', 'gGGgGGggG', 'GgGGgGGGg'], { c: '#a8a49a', G: '#8e8a80', g: '#6a665e' }),
   gate: pixelSvg(['P.......P', 'PwwwwwwwP', 'Pw.w.w.wP', 'PwLwLw.wP', 'Pw.wLwLwP', 'PwwwwwwwP', 'P.......P'], { P: '#5a3c24', w: '#8a6440', L: '#6a4428' }),
   remove: pixelSvg(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
+  helm: pixelSvg(['...XXX...', '.XXXXXXX.', 'XXXXXXXXX', 'XX.....XX', 'XX.X.X.XX', 'XX.....XX', 'X.......X'], { X: '#8c8a96' }),
+  shirt: pixelSvg(['.TT.c.TT.', 'TTTcccTTT', 'TTTTTTTTT', '.TTTTTTT.', '..TTTTT..', '..TTTTT..', '..ttttt..'], { T: '#3f6a8a', t: '#2f5070', c: '#2f5a3a' }),
+  pants: pixelSvg(['.bbbybbb.', '.PPPPPPP.', '.PPPPPPP.', '.PPP.PPP.', '.PPP.PPP.', '.PPP.PPP.', '.PP...PP.', '.PP...PP.'], { b: '#2a1e16', y: '#f2c14e', P: '#7a5e42' }),
+  boots: pixelSvg(['..BBBB...', '..BBBB...', '..BBBB...', '..BBBB...', '..BBBBBB.', '.BBBBBBBB', '.ssssssss'], { B: '#6a4a32', s: '#2a1e16' }),
+  fist: pixelSvg(['..SSSSS..', '.SsSsSsS.', '.SSSSSSS.', '.SSSSSSS.', '..SSSSSS.', '...SSSS..', '...TTTT..', '...TTTT..'], { S: '#e0b48a', s: '#a8805a', T: '#3f6a8a' }),
+  bag: pixelSvg(['...ddd...', '..d...d..', '.BBBBBBB.', '.BbbbbbB.', '.BBByBBB.', '.BbbbbbB.', '.BBBBBBB.'], { B: '#8a5a32', b: '#5a3a22', d: '#5a3a22', y: '#f2c14e' }),
+  lock: pixelSvg(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
 };
+// an empty gear slot shows what goes there, in shadow
+const dimIcon = svg => svg.replace(/fill="#[0-9a-f]+"/g, 'fill="#3a3150"');
 $('woodIcon').innerHTML = ICON.wood;
 $('stoneIcon').innerHTML = ICON.stone;
 $('skullIcon').innerHTML = ICON.skull;
 
+// ---------- Gear and the pack ----------
+// What you wear goes on the paper doll, one item to a slot; everything else rides in the pack. Your weapon
+// decides your attack (LMB) and the abilities on Q and E: with no weapon you punch and have none.
+const ITEMS = {
+  clothShirt: { name: 'Cloth Shirt', slot: 'chest', icon: 'shirt' },
+  clothPants: { name: 'Cloth Pants', slot: 'legs', icon: 'pants' },
+  clothBoots: { name: 'Cloth Boots', slot: 'boots', icon: 'boots' },
+  basicSword: { name: 'Basic Sword', slot: 'weapon', icon: 'sword', strike: 'slash', q: 'whirl', e: 'lunge' },
+};
+const FISTS = { name: 'Bare Fists', strike: 'punch' };
+const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' } };
+const ABILITY = {
+  whirl: { name: 'WHIRL', icon: 'whirl', cast: () => castWhirl() },
+  lunge: { name: 'LUNGE', icon: 'lunge', cast: () => castLunge() },
+};
+// the doll's slots, where each sits on its 3 x 4 grid, and the icon an empty one shows
+const GEAR_SLOTS = [
+  { slot: 'head', name: 'HEAD', at: [2, 1], icon: 'helm' }, { slot: 'weapon', name: 'WEAPON', at: [1, 2], icon: 'sword' },
+  { slot: 'chest', name: 'CHEST', at: [2, 2], icon: 'shirt' }, { slot: 'legs', name: 'LEGS', at: [2, 3], icon: 'pants' },
+  { slot: 'boots', name: 'BOOTS', at: [2, 4], icon: 'boots' },
+];
+const GEAR = { head: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'basicSword' };
+const PACK = new Array(20).fill(null);
+const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
+function useAbility(key) {
+  const a = weapon()[key];
+  if (a) ABILITY[a].cast();
+  else if (mode === 'play' && H.alive) sfx.nope();
+}
+// which hero pieces show for what's worn
+const DRESS = {
+  shirt: () => GEAR.chest, skinTorso: () => !GEAR.chest,
+  pants: () => GEAR.legs, skinLegs: () => !GEAR.legs, hipPants: () => GEAR.legs && !GEAR.chest,
+  boxers: () => !GEAR.legs, boxersBare: () => !GEAR.legs && !GEAR.chest,
+  boots: () => GEAR.boots, feet: () => !GEAR.boots,
+  sword: () => GEAR.weapon === 'basicSword',
+};
+function dressHero() { heroRoot.traverse(o => { const t = o.userData.gear; if (t) o.visible = !!DRESS[t](); }); }
+dressHero();
+
+// A cell is ['gear', slot] or ['pack', index].
+const cellGet = ([k, i]) => k === 'gear' ? GEAR[i] : PACK[i];
+const cellSet = ([k, i], v) => { if (k === 'gear') GEAR[i] = v; else PACK[i] = v; };
+const fits = ([k, i], id) => !id || k === 'pack' || ITEMS[id].slot === i;
+const sameCell = (a, b) => a && b && a[0] === b[0] && a[1] === b[1];
+// drop what's in one cell on another: they trade places, if each fits where it's going
+function moveItem(from, to) {
+  if (sameCell(from, to)) return false;
+  const a = cellGet(from), b = cellGet(to);
+  if (!a) return false;
+  if (!fits(to, a) || !fits(from, b)) { sfx.nope(); return false; }
+  cellSet(to, a); cellSet(from, b);
+  gearChanged();
+  return true;
+}
+// a click: put on what's in the pack (swapping out what's worn there), take off what's worn
+function clickCell(c) {
+  const id = cellGet(c);
+  if (!id) return false;
+  if (c[0] === 'pack') return moveItem(c, ['gear', ITEMS[id].slot]);
+  const free = PACK.indexOf(null);
+  if (free < 0) { toast('Your pack is full.'); sfx.nope(); return false; }
+  return moveItem(c, ['pack', free]);
+}
+let wornWeapon = GEAR.weapon;
+function gearChanged() {
+  // a new weapon cuts off whatever the old one was doing
+  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.comboT = 0; arcT = 9; }
+  dressHero(); renderBar(); renderInv();
+  sfx.equip();
+}
+
+// The window: the doll on the left, the pack on the right. Click (or right-click) to put on or take off,
+// drag to move; on the controller the D-pad picks a square and A clicks it.
+let invOpen = false, invFocus = ['gear', 'weapon'], invHover = null, invPress = null;
+const cellKey = c => c[0] + ':' + c[1];
+function itemInfo(c) {
+  const id = cellGet(c);
+  if (!id) return c[0] === 'gear' ? `<b>${GEAR_SLOTS.find(g => g.slot === c[1]).name}</b> Nothing worn here.` : '<b>PACK</b> An empty square.';
+  const it = ITEMS[id], abil = it.strike ? ` LMB ${it.strike}${it.q ? ', Q ' + it.q : ''}${it.e ? ', E ' + it.e : ''}.` : '';
+  return `<b>${it.name.toUpperCase()}</b> ${titleCase(it.slot)}.${abil} ${c[0] === 'gear' ? 'Click to take it off.' : 'Click to put it on.'}`;
+}
+function renderInv() {
+  const cell = (parent, c, html, at) => {
+    const el = document.createElement('div');
+    el.className = 'cell' + (sameCell(c, invFocus) && PAD.on ? ' focus' : '') + (cellGet(c) ? ' full' : '');
+    el.dataset.cell = cellKey(c); el.innerHTML = html;
+    if (at) { el.style.gridColumn = at[0]; el.style.gridRow = at[1]; }
+    parent.appendChild(el);
+  };
+  const doll = $('doll'), pack = $('pack');
+  doll.innerHTML = ''; pack.innerHTML = '';
+  for (const g of GEAR_SLOTS) {
+    const id = GEAR[g.slot];
+    cell(doll, ['gear', g.slot], id ? ICON[ITEMS[id].icon] : dimIcon(ICON[g.icon]) + `<span class="lbl">${g.name}</span>`, g.at);
+  }
+  PACK.forEach((id, i) => cell(pack, ['pack', i], id ? ICON[ITEMS[id].icon] : ''));
+  $('packCount').textContent = PACK.filter(Boolean).length + ' / ' + PACK.length;
+  showInfo();
+}
+function showInfo() {
+  const c = PAD.on ? invFocus : invHover;
+  $('invInfo').innerHTML = c ? itemInfo(c) : '<span class="kb-only">Click to put on or take off, drag to move.</span><span class="pad-only">D-pad picks, A puts on or takes off, B closes.</span>';
+}
+const cellOf = el => { const [k, i] = el.dataset.cell.split(':'); return [k, k === 'pack' ? +i : i]; };
+function toggleInv(open = !invOpen) {
+  if (open && mode !== 'play') setMode('play');
+  invOpen = open; $('inv').hidden = !open;
+  if (open) renderInv();
+  else { invPress = null; $('dragIcon').hidden = true; }
+}
+// the D-pad moves to the nearest square that way
+function navInv(dx, dy) {
+  const els = [...document.querySelectorAll('#inv .cell')], cur = els.find(e => e.dataset.cell === cellKey(invFocus));
+  if (!cur) { invFocus = ['gear', 'weapon']; renderInv(); return; }
+  const r0 = cur.getBoundingClientRect(), x0 = r0.left + r0.width / 2, y0 = r0.top + r0.height / 2;
+  let best = null, bs = 1e9;
+  for (const e of els) {
+    if (e === cur) continue;
+    const r = e.getBoundingClientRect(), vx = r.left + r.width / 2 - x0, vy = r.top + r.height / 2 - y0;
+    const along = vx * dx + vy * dy, across = Math.abs(vx * dy - vy * dx);
+    if (along < 8) continue;
+    const sc = along + across * 2;
+    if (sc < bs) { bs = sc; best = e; }
+  }
+  if (best) { invFocus = cellOf(best); renderInv(); }
+}
+{
+  const inv = $('inv'), drag = $('dragIcon');
+  inv.addEventListener('contextmenu', e => e.preventDefault());
+  inv.addEventListener('pointerdown', e => {
+    const el = e.target.closest('.cell');
+    if (!el || (e.button !== 0 && e.button !== 2)) return;
+    audioOn();
+    if (e.button === 2) { clickCell(cellOf(el)); return; }
+    invPress = { c: cellOf(el), x: e.clientX, y: e.clientY, dragging: false };
+    e.preventDefault();
+  });
+  inv.addEventListener('pointerover', e => { const el = e.target.closest('.cell'); invHover = el ? cellOf(el) : null; showInfo(); });
+  inv.addEventListener('pointerleave', () => { invHover = null; showInfo(); });
+  addEventListener('pointermove', e => {
+    if (!invPress) return;
+    if (!invPress.dragging && Math.hypot(e.clientX - invPress.x, e.clientY - invPress.y) > 5 && cellGet(invPress.c)) {
+      invPress.dragging = true;
+      drag.innerHTML = ICON[ITEMS[cellGet(invPress.c)].icon]; drag.hidden = false;
+      inv.querySelector(`[data-cell="${cellKey(invPress.c)}"]`)?.classList.add('held');
+    }
+    if (invPress.dragging) {
+      drag.style.left = e.clientX + 'px'; drag.style.top = e.clientY + 'px';
+      const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('#inv .cell');
+      inv.querySelectorAll('.cell.drop').forEach(c => c.classList.remove('drop'));
+      if (over && fits(cellOf(over), cellGet(invPress.c))) over.classList.add('drop');
+    }
+  });
+  addEventListener('pointerup', e => {
+    const p = invPress;
+    if (!p) return;
+    invPress = null; drag.hidden = true;
+    if (!p.dragging) { clickCell(p.c); return; }
+    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest('#inv .cell');
+    if (!over || !moveItem(p.c, cellOf(over))) renderInv();
+  });
+}
+
 let mode = 'play', buildKind = 'wall';
-const SLOTS = {
-  play: [
-    { id: 'atk', key: 'LMB', pad: 'RT', name: 'SLASH', icon: 'sword' },
-    { id: 'q', key: 'Q', pad: 'X', name: 'WHIRL', icon: 'whirl', cd: () => H.cdQ / CD.Q, left: () => H.cdQ },
-    { id: 'e', key: 'E', pad: 'Y', name: 'LUNGE', icon: 'lunge', cd: () => H.cdE / CD.E, left: () => H.cdE },
+// the play bar follows your weapon: its attack, and its abilities on Q and E (locked with none)
+function playSlots() {
+  const w = weapon(), st = STRIKE[w.strike];
+  const ability = (id, key, pad, cd, CDk) => {
+    const a = ABILITY[w[id]];
+    return a ? { id, key, pad, name: a.name, icon: a.icon, cd: () => H[cd] / CD[CDk], left: () => H[cd] }
+      : { id, key, pad, name: 'NONE', icon: 'lock', locked: true };
+  };
+  return [
+    { id: 'atk', key: 'LMB', pad: 'RT', name: st.name, icon: st.icon },
+    ability('q', 'Q', 'X', 'cdQ', 'Q'),
+    ability('e', 'E', 'Y', 'cdE', 'E'),
     { id: 'dash', key: 'SPC', pad: 'B', name: 'DASH', icon: 'dash', cd: () => H.cdDash / TUMBLE.cooldown, left: () => H.cdDash },
+    { id: 'inv', key: 'I', pad: 'RB', name: 'GEAR', icon: 'bag' },
     { id: 'build', key: 'B', pad: 'MENU', name: 'BUILD', icon: 'hammer' },
     { id: 'map', key: 'M', pad: 'VIEW', name: 'MAP', icon: 'map' },
-  ],
+  ];
+}
+const SLOTS = {
   build: [
     { id: 'cat:floors', key: '1', pad: 'X', name: 'FLOORS', cat: 'floors' },
     { id: 'cat:walls', key: '2', pad: 'Y', name: 'WALLS', cat: 'walls' },
@@ -4633,9 +4863,9 @@ function slotEl(s, parent) {
   // a group's slot shows the kind last picked from it
   const k = s.cat ? catPick[s.cat] : null, icon = k ? KIND_SLOT[k].icon : s.icon, cost = k || s.cost;
   const el = document.createElement('div');
-  el.className = 'plate slot' + (cost ? ' wide' : '') + (s.cat ? ' cat' : '');
+  el.className = 'plate slot' + (cost ? ' wide' : '') + (s.cat ? ' cat' : '') + (s.locked ? ' locked' : '');
   el.innerHTML = `<span class="key">${PAD.on && s.pad ? padGlyph(s.pad) : s.key}</span>${ICON[icon]}<span class="${cost ? 'cost' : 'name'}">${cost ? costText(cost) : s.name}</span>` + (s.cd ? '<div class="cd"></div><div class="cdn"></div>' : '');
-  el.title = s.cat ? s.name + ' (' + KIND_SLOT[k].name.toLowerCase() + ')' : cost ? s.name + ' · ' + costText(cost) : s.name;
+  el.title = s.cat ? s.name + ' (' + KIND_SLOT[k].name.toLowerCase() + ')' : cost ? s.name + ' · ' + costText(cost) : s.locked ? 'No ability: your weapon gives these' : s.name;
   el.addEventListener('click', () => { if (started) slotAction(s.id); });
   parent.appendChild(el);
   return { s, el, cost, cd: el.querySelector('.cd'), cdn: el.querySelector('.cdn') };
@@ -4644,7 +4874,7 @@ function renderBar() {
   const bar = $('bar'), sub = $('sub');
   bar.innerHTML = ''; sub.innerHTML = '';
   if (mode !== 'build') subOpen = null;
-  slotEls = SLOTS[mode].map(s => slotEl(s, bar));
+  slotEls = (mode === 'play' ? playSlots() : SLOTS[mode]).map(s => slotEl(s, bar));
   // on the controller the group's own button steps through its row
   const catPad = { floors: 'X', walls: 'Y', doors: 'A' };
   if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), pad: catPad[subOpen], name: KIND_SLOT[k].name, icon: KIND_SLOT[k].icon, cost: k }, sub)));
@@ -4663,9 +4893,9 @@ function openCat(cat) {
 function slotAction(id) {
   audioOn();
   if (id === 'atk') { if (mode === 'play' && H.alive && H.swing < 0) startSwing(); }
-  else if (id === 'q') castWhirl();
-  else if (id === 'e') castLunge();
+  else if (id === 'q' || id === 'e') useAbility(id);
   else if (id === 'dash') castDash();
+  else if (id === 'inv') toggleInv();
   else if (id === 'build') setMode('build');
   else if (id === 'exit') setMode('play');
   else if (id === 'map') toggleMap();
@@ -4738,6 +4968,8 @@ function beep(freq, dur, { type = 'square', vol = 0.06, slide = 0, at = 0 } = {}
 }
 const sfx = {
   swing: () => beep(520, 0.07, { type: 'triangle', slide: -380, vol: 0.04 }),
+  punch: () => beep(160, 0.05, { type: 'square', vol: 0.05, slide: -60 }),
+  equip: () => { beep(330, 0.05, { type: 'triangle', vol: 0.05 }); beep(494, 0.06, { type: 'triangle', vol: 0.05, at: 0.05 }); },
   whirl: () => [0, 0.12, 0.24].forEach(a => beep(600, 0.1, { type: 'triangle', slide: -420, vol: 0.035, at: a })),
   dash: () => beep(300, 0.14, { type: 'triangle', slide: 500, vol: 0.04 }),
   hit: () => { beep(180, 0.06, { type: 'sawtooth', vol: 0.05, slide: -60 }); beep(90, 0.05, { vol: 0.04, at: 0.02 }); },
@@ -4976,6 +5208,8 @@ addEventListener('keydown', e => {
     return;
   }
   if (mapOpen) return;
+  if (e.code === 'KeyI' && !e.repeat) { toggleInv(); return; }
+  if (e.code === 'Escape' && invOpen) { toggleInv(false); return; }
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'Space') e.preventDefault();
@@ -4988,8 +5222,8 @@ addEventListener('keydown', e => {
     else if (n <= 3) openCat(['floors', 'walls', 'doors'][n - 1]);
     else if (n === 4) slotAction('hearth');
   }
-  if (e.code === 'KeyQ') castWhirl();
-  if (e.code === 'KeyE') castLunge();
+  if (e.code === 'KeyQ') useAbility('q');
+  if (e.code === 'KeyE') useAbility('e');
   if (e.code === 'Space') castDash();
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') castJump();
   if (e.code === 'KeyF') useDoor();
@@ -5041,8 +5275,8 @@ $('mini').addEventListener('click', () => toggleMap());
 // ---------- Xbox controller ----------
 // The Gamepad API's standard layout. Pressing anything on a controller switches the game into controller
 // mode (the bar, prompts, help and map show controller glyphs); a key or the mouse switches it back.
-// Play: LS move, RS aim (holding LT, RS turns the camera), RT attack, X whirl, Y lunge, B dash, A door or
-// jump down. Build: RS moves a cursor round you,
+// Play: LS move, RS aim (holding LT, RS turns the camera), RT attack, X and Y the weapon's abilities, B dash,
+// A door or jump down, RB the gear window (there the D-pad picks a square, A clicks it, B or RB closes). Build: RS moves a cursor round you,
 // RT places (hold and move to drag a row), LT removes, X / Y / A open the floor, wall and door rows (again to
 // step through them), RB hearth, B done. Both: MENU build mode, VIEW map, L3 plots, D-pad up and down zoom, left and right
 // turn to the next 45 degree step.
@@ -5108,21 +5342,35 @@ function pollPad(dt) {
   }
   if (hit('VIEW')) { toggleMap(); return; }
   if (hit('L3')) togglePlots();
-  if (hit('DL')) snapCam(-1);
-  if (hit('DR')) snapCam(1);
-  if (hit('DU')) setZoom(zoom * 1.15);
-  if (hit('DD')) setZoom(zoom / 1.15);
-  if (hit('MENU')) setMode(mode === 'build' ? 'play' : 'build');
+  // with the gear window open the D-pad picks a square, A clicks it, and B or RB closes it
+  const inv = invOpen;
+  if (inv) {
+    if (hit('B') || hit('RB')) toggleInv(false);
+    if (hit('DL')) navInv(-1, 0);
+    if (hit('DR')) navInv(1, 0);
+    if (hit('DU')) navInv(0, -1);
+    if (hit('DD')) navInv(0, 1);
+    if (hit('A')) clickCell(invFocus);
+  } else {
+    if (hit('DL')) snapCam(-1);
+    if (hit('DR')) snapCam(1);
+    if (hit('DU')) setZoom(zoom * 1.15);
+    if (hit('DD')) setZoom(zoom / 1.15);
+  }
+  if (hit('MENU')) { if (inv) toggleInv(false); setMode(mode === 'build' ? 'play' : 'build'); }
   if (mode === 'play') {
     PAD.attack = now[PB.RT];
     // holding LT, the right stick turns the camera instead of aiming
     PAD.cam = now[PB.LT];
     if (PAD.cam && PAD.rs[0]) { yawGoal -= PAD.rs[0] * dt * 2.4; yaw = yawGoal; }
-    if (hit('X')) castWhirl();
-    if (hit('Y')) castLunge();
-    if (hit('B')) castDash();
-    // A jumps off the edge you're pushing at, and otherwise opens or closes the door you're by
-    if (hit('A')) { if (H.canJump) castJump(); else useDoor(); }
+    if (hit('X')) useAbility('q');
+    if (hit('Y')) useAbility('e');
+    if (!inv) {
+      if (hit('RB')) toggleInv(true);
+      if (hit('B')) castDash();
+      // A jumps off the edge you're pushing at, and otherwise opens or closes the door you're by
+      if (hit('A')) { if (H.canJump) castJump(); else useDoor(); }
+    }
     $('padCursor').hidden = true;
     return;
   }
@@ -5220,14 +5468,18 @@ function updateAim() {
 }
 
 // ---------- Abilities ----------
+// the sword's three-stroke combo, or with bare hands a right and a left jab
 function startSwing() {
   if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
-  H.combo = H.comboT > 0 ? (H.combo + 1) % 3 : 0;
+  H.punch = weapon().strike === 'punch';
+  H.combo = H.comboT > 0 ? (H.combo + 1) % (H.punch ? 2 : 3) : 0;
   H.swing = 0; H.hitDone = false; H.comboT = 0.9;
   H.face = Math.atan2(aim.x, aim.z);
-  sfx.swing();
+  if (H.punch) sfx.punch(); else sfx.swing();
 }
 const SWING_T = [0.32, 0.32, 0.46], SWING_DMG = [12, 12, 20];
+const PUNCH = { time: 0.3, dmg: 5, range: 0.95, arc: 1.5 };
+const swingTime = () => H.punch ? PUNCH.time : SWING_T[H.combo];
 function castWhirl() {
   if (mode !== 'play' || !H.alive || H.cdQ > 0 || H.whirl >= 0 || H.lunge >= 0 || H.flip) return;
   H.whirl = 0; H.whirlTick = 0; H.cdQ = CD.Q; H.swing = -1;
@@ -6026,11 +6278,14 @@ function update(dt) {
     if (mode === 'play' && (mouse.down || PAD.attack) && H.swing < 0) startSwing();
     if (H.swing >= 0) {
       H.swing += dt;
-      const len = SWING_T[H.combo];
+      const len = swingTime();
       if (!H.hitDone && H.swing > len * 0.4) {
         H.hitDone = true;
-        swingHit(H.combo === 2 ? 1.5 : 1.35, H.combo === 2 ? 1.6 : 2.1, SWING_DMG[H.combo]);
-        arcT = 0; arcMesh.rotation.y = H.face; arcMesh.scale.set(H.combo === 1 ? -1 : 1, 1, 1);
+        if (H.punch) swingHit(PUNCH.range, PUNCH.arc, PUNCH.dmg);
+        else {
+          swingHit(H.combo === 2 ? 1.5 : 1.35, H.combo === 2 ? 1.6 : 2.1, SWING_DMG[H.combo]);
+          arcT = 0; arcMesh.rotation.y = H.face; arcMesh.scale.set(H.combo === 1 ? -1 : 1, 1, 1);
+        }
       }
       if (H.swing > len) H.swing = -1;
     }
@@ -6176,7 +6431,14 @@ function animateHero(dt) {
   hero.body.rotation.z = on ? -sd * WALK.lean : 0;
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
-  if (H.swing >= 0) {
+  let jab = 0;
+  if (H.swing >= 0 && H.punch) {
+    // a straight jab from the shoulder, the other fist up on guard
+    jab = Math.sin(Math.min(1, H.swing / PUNCH.time) * Math.PI);
+    const out = -0.35 - 1.25 * jab, guard = -0.6;
+    ax = H.combo ? guard : out;
+    hero.armL.rotation.set(H.combo ? out : guard, 0, 0.08);
+  } else if (H.swing >= 0) {
     const len = SWING_T[H.combo], u = smooth(0, 1, Math.min(1, H.swing / (len * 0.62)));
     if (H.combo === 2) { ax = -2.9 + u * 2.3; sx = Math.PI / 2 * 0.2; }
     else {
@@ -6188,7 +6450,7 @@ function animateHero(dt) {
   else if (mode === 'build') { ax = -0.3; }
   hero.armR.rotation.set(ax, ay, -0.08);
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
-  hero.body.rotation.y = H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
+  hero.body.rotation.y = H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
   hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
   hero.g.position.set(0, 0, 0);
@@ -7143,6 +7405,10 @@ window.GAME = {
   yaw: d => turnCam(d),
   camYaw: () => yaw,
   tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD },
+  gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
+  moveItem: (from, to) => moveItem(from, to),
+  clickCell: c => clickCell(c),
+  inv: open => toggleInv(open),
   smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
   crowd: () => ({ foes: foes.length, draws: CROWD_READ.draws, kinds: [...crowds.keys()], pieces: [...crowds.values()].reduce((n, C) => n + C.pieces.length, 0), shown: [...crowds.values()].reduce((n, C) => n + C.n, 0) }),
   options: OPTIONS,
