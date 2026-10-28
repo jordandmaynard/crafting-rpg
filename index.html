@@ -1956,9 +1956,10 @@ const groundHaze = new GFX.GroundHaze(renderer);
 groundHaze.mesh.layers.set(1);   // drawn after the hero, so it swirls round their feet
 scene.add(groundHaze.mesh);
 const GH_N = GFX.GROUND_HAZE_SITE, GH_TPT = GFX.GROUND_HAZE_SITE_TPT, GH_TILES = GH_N / GH_TPT, GH_BLUR = 2;
-// the haze drapes over cliffs as it lies on ramps: its ground never falls faster than this (levels a tile), so off a
-// cliff's lip it slopes down over the rock face instead of stepping down inside it
-const GH_DRAPE = 2, GH_DRAPE_R = 4;
+// the haze drapes over cliffs as it lies on ramps: its ground never falls faster than this (levels a tile), and not
+// at all for the first quarter tile out, so off a cliff's lip it slopes down clear of the rock face, bulges and all,
+// instead of cutting into it
+const GH_DRAPE = 2, GH_DRAPE_R = 5;
 const ghSite = new Float32Array(GH_N * GH_N * 4), ghTint = new Uint8Array(GH_N * GH_N * 4);
 let ghCentre = null, ghKey = '', ghAt = 0, ghAny = false;
 // the site map round tile (cx, cz): the ground's height (the top of water and lava), what's solid, and how much
@@ -1994,7 +1995,7 @@ function groundHazeSite(cx, cz) {
     const u = x - (c0 - GH_BLUR - 1) - 0.5, v = z - (r0 - GH_BLUR - 1) - 0.5, a = Math.floor(u), b = Math.floor(v), fu = u - a, fv = v - b;
     const s = [0, 0, 0, 0];
     for (let q = 0; q < 4; q++) s[q] = (m[at(a, b) + q] * (1 - fu) + m[at(a + 1, b) + q] * fu) * (1 - fv) + (m[at(a, b + 1) + q] * (1 - fu) + m[at(a + 1, b + 1) + q] * fu) * fv;
-    let y = heightAt(x, z);
+    let y = surfH(x, z);   // the ground as drawn: a cliff's face slopes down over the lower tile's first half
     if (!LV[ti]) y = WT[ti] >= 2 ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;
     const o = OBJ[OB[ti]];
     const solid = o.tile || (o.solid >= 0.15 && Math.hypot(x - tc - 0.5, z - tr - 0.5) < o.solid + 0.15) ? 1 : 0;
@@ -2003,8 +2004,8 @@ function groundHazeSite(cx, cz) {
     ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); ghTint[k + 3] = 255;
     if (s[0] > 0.003) ghAny = true;
   }
-  // the drape: each texel at least as high as any within GH_DRAPE_R texels, less GH_DRAPE a tile away from it
-  // (across, then down)
+  // the drape: each texel at least as high as any within GH_DRAPE_R texels, less GH_DRAPE a tile beyond the first
+  // quarter tile (across, then down)
   const y0 = new Float32Array(GH_N * GH_N), y1 = new Float32Array(GH_N * GH_N), fall = GH_DRAPE * STEP / GH_TPT;
   for (let k = 0; k < GH_N * GH_N; k++) y0[k] = ghSite[k * 4];
   for (const [di, dj, from, to] of [[1, 0, y0, y1], [0, 1, y1, y0]]) {
@@ -2012,7 +2013,7 @@ function groundHazeSite(cx, cz) {
       let y = from[j * GH_N + i];
       for (let o = 1; o <= GH_DRAPE_R; o++) for (const sgn of [-1, 1]) {
         const ii = i + di * o * sgn, jj = j + dj * o * sgn;
-        if (ii >= 0 && jj >= 0 && ii < GH_N && jj < GH_N) y = Math.max(y, from[jj * GH_N + ii] - fall * o);
+        if (ii >= 0 && jj >= 0 && ii < GH_N && jj < GH_N) y = Math.max(y, from[jj * GH_N + ii] - fall * Math.max(0, o - 0.5));
       }
       to[j * GH_N + i] = y;
     }
