@@ -186,12 +186,12 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li class="kb-only"><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash, <kbd>F</kbd> open and close doors.</span></li>
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
-      <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>A</g-p> dash, <g-p>B</g-p> open and close doors.</span></li>
+      <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
       <li class="pad-only"><span><g-p>MENU</g-p> build mode: <g-p>X</g-p> floors, <g-p>Y</g-p> walls, <g-p>A</g-p> doors (press again for the next kind), <g-p>RB</g-p> hearth. <g-p>RS</g-p> moves the build cursor, <g-p>RT</g-p> places (hold and move to lay a row), <g-p>LT</g-p> removes, <g-p>B</g-p> done.</span></li>
       <li>Close a room with walls and doors and a roof goes up (rooms that meet across a wall share one roof). It hides while you are inside, and you heal faster under it.</li>
       <li>Towns are safe. The wilds grow bolder at night.</li>
       <li class="kb-only"><span><kbd>M</kbd> map (wheel zooms it and the minimap), <kbd>P</kbd> plot outlines on the maps, wheel to zoom, hold the right mouse button and drag (or <kbd>Z</kbd> / <kbd>C</kbd>) to turn the camera.</span></li>
-      <li class="pad-only"><span><g-p>VIEW</g-p> map, <g-p>L3</g-p> plot outlines, <g-p>DU</g-p> <g-p>DD</g-p> zoom, <g-p>DL</g-p> <g-p>DR</g-p> turn the camera. An Xbox controller works as soon as you press a button on it.</span></li>
+      <li class="pad-only"><span><g-p>VIEW</g-p> map, <g-p>L3</g-p> plot outlines, <g-p>DU</g-p> <g-p>DD</g-p> zoom, <g-p>DL</g-p> <g-p>DR</g-p> turn the camera 45°, hold <g-p>LT</g-p> and move <g-p>RS</g-p> to turn it freely. An Xbox controller works as soon as you press a button on it.</span></li>
     </ul>
     <div class="loading"><span id="loadText">SHAPING THE WORLD</span><span id="seedText"></span></div>
     <div class="loadbar"><i id="loadFill"></i></div>
@@ -4164,7 +4164,7 @@ const SLOTS = {
     { id: 'atk', key: 'LMB', pad: 'RT', name: 'SLASH', icon: 'sword' },
     { id: 'q', key: 'Q', pad: 'X', name: 'WHIRL', icon: 'whirl', cd: () => H.cdQ / CD.Q, left: () => H.cdQ },
     { id: 'e', key: 'E', pad: 'Y', name: 'LUNGE', icon: 'lunge', cd: () => H.cdE / CD.E, left: () => H.cdE },
-    { id: 'dash', key: 'SPC', pad: 'A', name: 'DASH', icon: 'dash', cd: () => H.cdDash / CD.DASH, left: () => H.cdDash },
+    { id: 'dash', key: 'SPC', pad: 'B', name: 'DASH', icon: 'dash', cd: () => H.cdDash / CD.DASH, left: () => H.cdDash },
     { id: 'build', key: 'B', pad: 'MENU', name: 'BUILD', icon: 'hammer' },
     { id: 'map', key: 'M', pad: 'VIEW', name: 'MAP', icon: 'map' },
   ],
@@ -4595,11 +4595,13 @@ $('mini').addEventListener('click', () => toggleMap());
 // ---------- Xbox controller ----------
 // The Gamepad API's standard layout. Pressing anything on a controller switches the game into controller
 // mode (the bar, prompts, help and map show controller glyphs); a key or the mouse switches it back.
-// Play: LS move, RS aim, RT attack, X whirl, Y lunge, A dash, B door. Build: RS moves a cursor round you,
+// Play: LS move, RS aim (holding LT, RS turns the camera), RT attack, X whirl, Y lunge, B dash, A door or
+// jump down. Build: RS moves a cursor round you,
 // RT places (hold and move to drag a row), LT removes, X / Y / A open the floor, wall and door rows (again to
-// step through them), RB hearth, B done. Both: MENU build mode, VIEW map, L3 plots, D-pad zoom and turn.
+// step through them), RB hearth, B done. Both: MENU build mode, VIEW map, L3 plots, D-pad up and down zoom, left and right
+// turn to the next 45 degree step.
 const PB = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, L3: 10, R3: 11, DU: 12, DD: 13, DL: 14, DR: 15 };
-const PAD = { on: false, prev: [], ls: [0, 0], rs: [0, 0], lt: 0, rt: 0, attack: false, cur: { x: 0, z: 2.5 } };
+const PAD = { on: false, prev: [], ls: [0, 0], rs: [0, 0], lt: 0, rt: 0, attack: false, cam: false, cur: { x: 0, z: 2.5 } };
 const PAD_DEAD = 0.2;
 const PAD_FACE = { A: '#6cc04a', B: '#e0443a', X: '#3a8ee0', Y: '#f2c14e' };
 function padGlyph(id) {
@@ -4644,7 +4646,7 @@ function pollPad(dt) {
   if (!PAD.on) { PAD.prev = now; return; }
   const prev = PAD.prev, hit = k => now[PB[k]] && !prev[PB[k]], letGo = k => !now[PB[k]] && prev[PB[k]];
   PAD.prev = now;
-  PAD.attack = false;
+  PAD.attack = false; PAD.cam = false;
   if (!started) { if (hit('A') && !$('start').disabled && !$('intro').hidden) begin(); return; }
   if (!$('dead').hidden) { if (hit('A')) respawn(); return; }
   if (mapOpen) {
@@ -4660,18 +4662,21 @@ function pollPad(dt) {
   }
   if (hit('VIEW')) { toggleMap(); return; }
   if (hit('L3')) togglePlots();
-  if (hit('DL')) turnCam(-1);
-  if (hit('DR')) turnCam(1);
+  if (hit('DL')) snapCam(-1);
+  if (hit('DR')) snapCam(1);
   if (hit('DU')) setZoom(zoom * 1.15);
   if (hit('DD')) setZoom(zoom / 1.15);
   if (hit('MENU')) setMode(mode === 'build' ? 'play' : 'build');
   if (mode === 'play') {
     PAD.attack = now[PB.RT];
+    // holding LT, the right stick turns the camera instead of aiming
+    PAD.cam = now[PB.LT];
+    if (PAD.cam && PAD.rs[0]) { yawGoal -= PAD.rs[0] * dt * 2.4; yaw = yawGoal; }
     if (hit('X')) castWhirl();
     if (hit('Y')) castLunge();
-    if (hit('A')) castDash();
-    if (hit('LB')) castJump();
-    if (hit('B')) useDoor();
+    if (hit('B')) castDash();
+    // A jumps off the edge you're pushing at, and otherwise opens or closes the door you're by
+    if (hit('A')) { if (H.canJump) castJump(); else useDoor(); }
     $('padCursor').hidden = true;
     return;
   }
@@ -4752,7 +4757,7 @@ function updateAim() {
     // the right stick aims (in build mode, the cursor it steers), else the way you're walking
     const m = moveInput();
     const cl = Math.hypot(PAD.cur.x, PAD.cur.z);
-    if (mode === 'play' && (PAD.rs[0] || PAD.rs[1])) { const [x, z] = padWorld(PAD.rs); const l = Math.hypot(x, z); aim.x = x / l; aim.z = z / l; }
+    if (mode === 'play' && !PAD.cam && (PAD.rs[0] || PAD.rs[1])) { const [x, z] = padWorld(PAD.rs); const l = Math.hypot(x, z); aim.x = x / l; aim.z = z / l; }
     else if (mode === 'build' && cl > 0.3) { aim.x = PAD.cur.x / cl; aim.z = PAD.cur.z / cl; }   // toward the build cursor
     else if (m) { aim.x = m[0]; aim.z = m[1]; }
     else { aim.x = Math.sin(H.face); aim.z = Math.cos(H.face); }
@@ -4797,7 +4802,7 @@ function castDash() {
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
 }
-// Jumping off the top of a cliff (Shift, or LB on a controller): a front flip down onto the tile at its foot.
+// Jumping off the top of a cliff (Shift, or A on a controller): a front flip down onto the tile at its foot.
 // You can when you're pushing mostly straight at a drop to flat, dry, open ground within half a tile of you,
 // and then a prompt says so over your head. No cooldown.
 function cliffFlip([dx, dz]) {
@@ -4831,7 +4836,7 @@ function showJumpHint() {
   if (!H.canJump || !started) { el.hidden = true; return; }
   v3.set(H.x, H.y + 1.75, H.z).project(camera);
   const rect = cv.getBoundingClientRect();
-  el.textContent = PAD.on ? 'LB TO JUMP' : 'SHIFT TO JUMP';
+  el.textContent = PAD.on ? 'A TO JUMP' : 'SHIFT TO JUMP';
   el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
   el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
   el.hidden = false;
@@ -5561,7 +5566,7 @@ function update(dt) {
   // door prompt
   const nd = mode === 'play' && H.alive ? nearDoor() : null;
   const pr = $('prompt');
-  if (nd) { pr.innerHTML = (PAD.on ? padGlyph('B') : '<b>F</b>') + (nd.open ? 'CLOSE DOOR' : 'OPEN DOOR'); pr.hidden = false; } else pr.hidden = true;
+  if (nd) { pr.innerHTML = (PAD.on ? padGlyph('A') : '<b>F</b>') + (nd.open ? 'CLOSE DOOR' : 'OPEN DOOR'); pr.hidden = false; } else pr.hidden = true;
 
   // region name
   regionT -= dt;
@@ -5771,6 +5776,8 @@ addEventListener('resize', resize);
 const zoomLimits = () => [Math.min(VIEW.zoomOut, VIEW.zoomIn), Math.max(VIEW.zoomOut, VIEW.zoomIn)];
 const setZoom = z => { const [lo, hi] = zoomLimits(); zoom = Math.min(hi, Math.max(lo, z)); resize(); };
 const turnCam = d => { yawGoal += d * Math.PI / 2; };
+// the D-pad: on to the next 45 degree step either way
+const snapCam = d => { const q = Math.PI / 4; yawGoal = (Math.round(yawGoal / q) + d) * q; };
 const camRight = new THREE.Vector3(), camUp = new THREE.Vector3(), camK = { a: 0, b: 0 };
 const CAM_DIST = 70;
 function updateCamera(dt) {
