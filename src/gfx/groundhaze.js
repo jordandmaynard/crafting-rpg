@@ -455,7 +455,7 @@ export class GroundHaze {
     this.mesh.position.set(snap((origin[0] + GRID / 2) / CPT), 0, snap((origin[1] + GRID / 2) / CPT));
     const n = Math.ceil(GRID / 8);
     this.renderer.compute(enc => {
-      const pass = enc.beginComputePass({ label: 'ground haze' });
+      const pass = enc.beginComputePass({ label: 'ground haze sim' });
       pass.setBindGroup(0, this.simBG);
       const run = name => { pass.setPipeline(this.passes[name]); pass.dispatchWorkgroups(n, n); };
       run('advect'); run('curl'); run('vorticity'); run('divergence');

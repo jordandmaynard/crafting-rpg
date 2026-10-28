@@ -357,7 +357,7 @@ export class LitHaze {
         { binding: 2, resource: this.glowView }, { binding: 3, resource: this.outView }] });
     }
     this.renderer.compute((enc, frameBG, frameOff) => {
-      const pass = enc.beginComputePass({ label: 'haze' });
+      const pass = enc.beginComputePass({ label: 'lit haze' });
       pass.setBindGroup(0, frameBG, [frameOff]);
       pass.setBindGroup(1, this.emptyBG);
       if (ground) {

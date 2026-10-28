@@ -38,10 +38,13 @@ export async function createRenderer() {
   if (!navigator.gpu) throw new Error('This browser has no WebGPU.');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('No WebGPU adapter was found.');
-  const device = await adapter.requestDevice();
+  // timestamp-query, where the browser has it, lets the profiler (G) time each pass
+  const device = await adapter.requestDevice({ requiredFeatures: adapter.features.has('timestamp-query') ? ['timestamp-query'] : [] });
   device.lost.then(info => console.error('WebGPU device lost:', info.message));
   device.addEventListener && device.addEventListener('uncapturederror', e => console.error('WebGPU:', e.error.message));
-  return new Renderer(device);
+  const r = new Renderer(device);
+  r.adapterInfo = adapter.info || null;
+  return r;
 }
 
 class Renderer {
@@ -61,6 +64,8 @@ class Renderer {
     this._frustum = new Frustum(); this._m = new Matrix4(); this._vp = new Matrix4(); this._v = new Vector3(); this._v2 = new Vector3();
     this._pipelines = new Map(); this._modules = new Map();
     this._bufs = new WeakMap(); this._texs = new WeakMap(); this._rts = new WeakMap(); this._mats = new WeakMap(); this._snaps = new WeakMap();
+    this.profiler = null;   // a GpuProfiler: each pass is timed under passName (render), its label (compute) or its kind
+    this.passName = '';
     this._trash = [];       // textures dropped mid-frame, destroyed once the frame that may use them is sent
     this._freed = new FinalizationRegistry(b => b.destroy());
     this._frameNo = 0; this._enc = null; this._pendingClear = null; this._canvasTex = null; this._flushQueued = false;
@@ -157,7 +162,30 @@ class Renderer {
   compute(cb) {
     this._runPendingClear();
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
-    cb(this._enc, this._frameBindGroup(true), this._lastFrameOff);
+    cb(this._timedEncoder(this._enc), this._frameBindGroup(true), this._lastFrameOff);
+  }
+  // the profiler's timestamps for a pass named name, or undefined when it isn't timing
+  _tsw(name) { return this.profiler ? this.profiler.tsw(name) : undefined; }
+  // the encoder, or while profiling, one whose passes each write timestamps under their label
+  _timedEncoder(enc) {
+    if (!this.profiler || !this.profiler.timing) return enc;
+    const r = this;
+    return new Proxy(enc, { get(t, k) {
+      if (k === 'beginRenderPass' || k === 'beginComputePass') return d => t[k](Object.assign({}, d, { timestampWrites: r._tsw(d.label || (k === 'beginRenderPass' ? 'render pass' : 'compute pass')) }));
+      const v = t[k];
+      return typeof v === 'function' ? v.bind(t) : v;
+    } });
+  }
+  // the frame's end: send what's left, then the profiler's timestamps
+  endFrame() {
+    this.flush();
+    this.passName = '';
+    const p = this.profiler;
+    if (!p || !p.names.length) return;
+    const enc = this.device.createCommandEncoder();
+    p.resolve(enc);
+    this.device.queue.submit([enc.finish()]);
+    p.read();
   }
   // a copy of a render target's colour and depth as they stand at this point in the frame, for a later pass to
   // read what lies behind it (the water, the bed under it): { color, depth } textures, kept while the size holds
@@ -202,6 +230,7 @@ class Renderer {
     const pass = this._enc.beginRenderPass({
       colorAttachments: [{ view: tgt.color, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: clear ? clear.color : undefined }],
       depthStencilAttachment: { view: tgt.depth, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store', depthClearValue: 1 },
+      timestampWrites: this._tsw(this.passName || 'scene'),
     });
     this.info.passes++;
     pass.setBindGroup(0, this._frameBindGroup(), [frameOff]);
@@ -282,6 +311,7 @@ class Renderer {
     this._enc.beginRenderPass({
       colorAttachments: [{ view: tgt.color, loadOp: 'clear', storeOp: 'store', clearValue: c.color }],
       depthStencilAttachment: { view: tgt.depth, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
+      timestampWrites: this._tsw('clear'),
     }).end();
     if (!c.target) this.flush(); else this._queueFlush();
   }
@@ -452,7 +482,7 @@ class Renderer {
       for (const c of o.children) visit(c);
     };
     visit(scene);
-    const pass = this._enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.shadowView, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 } });
+    const pass = this._enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.shadowView, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 }, timestampWrites: this._tsw('shadow map') });
     this.info.passes++;
     pass.setBindGroup(0, this.frameBGShadow, [slot * FRAME_BYTES]);
     let last = null;

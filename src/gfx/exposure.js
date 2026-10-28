@@ -141,7 +141,7 @@ export class EyeAdaptation {
         { binding: 2, resource: f.haze ? f.haze.view : this.blank }, { binding: 3, resource: { buffer: this.partial } }] });
     }
     this.renderer.compute(enc => {
-      const pass = enc.beginComputePass({ label: 'eye' });
+      const pass = enc.beginComputePass({ label: 'eye adaptation' });
       pass.setPipeline(this.measurePipe);
       pass.setBindGroup(0, this.measureBG);
       pass.dispatchWorkgroups(gx, gy, 1);

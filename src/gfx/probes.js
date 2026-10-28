@@ -337,7 +337,7 @@ export class HeightProbes {
     f.points.slice(0, MAX_GI_POINTS).forEach((p, i) => F.set([...p.pos, p.distance, ...p.color, p.decay], 44 + MAX_DIRTY * 4 + i * 8));
     q.writeBuffer(this.params, 0, d);
     const enc = this.device.createCommandEncoder({ label: 'gi probes' });
-    const pass = enc.beginComputePass({ label: 'gi probes' });
+    const pass = enc.beginComputePass({ label: 'gi probes', timestampWrites: this.profiler ? this.profiler.tsw('gi probes') : undefined });
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.groups[this.cur]);
     pass.dispatchWorkgroups(Math.ceil(this.N / 4), Math.ceil(L / 4), Math.ceil(this.N / 4));

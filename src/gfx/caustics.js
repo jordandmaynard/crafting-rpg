@@ -97,7 +97,7 @@ export class Caustics {
     d.set([sun[0], sun[1], sun[2], 0, drift[0], drift[1], drift[2], drift[3], strength, depth, 0, 0]);
     this.device.queue.writeBuffer(this.params, 0, d);
     r.compute(enc => {
-      const pass = enc.beginRenderPass({ colorAttachments: [{ view: this.target, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+      const pass = enc.beginRenderPass({ label: 'caustics', colorAttachments: [{ view: this.target, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
       pass.setPipeline(this.pipeline);
       pass.setBindGroup(0, this.bindGroup);
       pass.draw(CELLS * CELLS * 6, 9);

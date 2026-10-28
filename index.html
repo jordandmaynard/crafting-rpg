@@ -174,7 +174,38 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune input[type=color] { grid-column: 1 / 3; width: 100%; height: 22px; padding: 0; border: 2px solid var(--panel-edge); background: none; cursor: pointer; }
 .tune .tune-row { display: flex; gap: 8px; margin-top: 10px; }
 .tune textarea { width: 100%; height: 80px; margin-top: 8px; font: 12px ui-monospace, monospace; background: rgba(0, 0, 0, 0.35); color: var(--bone); border: 2px solid var(--panel-edge); box-sizing: border-box; }
-#tuneBtn, #optsBtn { padding: 6px 8px; font-size: 9px; align-self: flex-end; }
+#tuneBtn, #optsBtn, #gpuBtn { padding: 6px 8px; font-size: 9px; align-self: flex-end; }
+/* the profiler (G), Crafting and Conquest's: frame rate, GPU and CPU time per part of the frame, and spike capture */
+.prof { position: fixed; right: max(330px, calc(env(safe-area-inset-right, 0px) + 330px)); top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 7; min-width: 300px; max-width: min(520px, calc(100% - 32px)); max-height: calc(100% - 100px); overflow: auto; overscroll-behavior: contain; padding: 10px 12px; box-sizing: border-box; background: rgba(18, 14, 26, 0.94); border: 3px solid var(--panel-edge); box-shadow: 4px 4px 0 #000; font: 16px/1.05 var(--body); font-variant-numeric: tabular-nums; color: var(--bone); -webkit-user-select: text; user-select: text; }
+@media (max-width: 860px) { .prof { right: 16px; } }
+.prof .ptitle { font-size: 20px; color: var(--gold); margin-bottom: 4px; }
+.prof .gpu-name { color: var(--wisp); margin-bottom: 4px; }
+.prof table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+.prof th, .prof td { text-align: left; padding: 1px 8px 1px 0; white-space: nowrap; }
+.prof th { color: var(--dim); font-weight: normal; }
+.prof td:nth-child(2) { text-align: right; }
+.prof b { font-weight: normal; color: var(--bone); }
+.prof .ptrack { width: 140px; min-width: 80px; }
+.prof .pbar { display: block; height: 8px; background: var(--gold); opacity: 0.8; }
+.prof .gsum td { color: var(--gold); border-top: 2px solid var(--panel-edge); }
+.prof .gnote { color: var(--dim); margin-top: 6px; white-space: normal; }
+.prof .pspike { margin-top: 10px; border-top: 2px solid var(--panel-edge); padding-top: 8px; }
+.prof .spike-head { display: flex; align-items: center; gap: 8px; color: var(--gold); font-size: 18px; }
+.prof .spike-head b { color: var(--gold); }
+.prof .pspike button { padding: 3px 8px; border: 2px solid var(--panel-edge); background: var(--panel); color: var(--bone); cursor: pointer; font: 15px/1 var(--body); }
+.prof .pspike button.on { border-color: var(--gold); color: var(--gold); }
+.prof .spike-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.prof .spike-tree { margin-top: 6px; }
+.prof .spike-tree details, .prof .spike-tree .sleaf { margin-left: 12px; }
+.prof .spike-tree > details, .prof .spike-tree > .sleaf { margin-left: 0; }
+.prof .spike-tree summary, .prof .spike-tree .sleaf { display: grid; grid-template-columns: 1fr auto 80px; gap: 8px; align-items: center; padding: 1px 0; }
+.prof .spike-tree summary { cursor: pointer; list-style: none; }
+.prof .spike-tree summary::-webkit-details-marker { display: none; }
+.prof .spike-tree summary .sn::before { content: '\25B8 '; color: var(--gold); }
+.prof .spike-tree details[open] > summary .sn::before { content: '\25BE '; }
+.prof .spike-tree .sleaf .sn { padding-left: 12px; }
+.prof .spike-tree .sn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prof .spike-tree .sm { text-align: right; white-space: nowrap; color: var(--dim); }
 .opt { display: grid; gap: 6px; margin: 0 0 16px; font: 17px/1.1 var(--body); color: var(--bone); }
 .opt.check { grid-template-columns: auto 1fr; align-items: start; cursor: pointer; }
 .opt input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: var(--gold); }
@@ -236,8 +267,10 @@ button:disabled { opacity: 0.45; cursor: default; }
   <div class="plate tally" id="killPlate" title="Foes slain"><span id="skullIcon"></span><span id="kills">0</span></div>
   <button id="optsBtn" title="Options (O)">OPTIONS</button>
   <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
+  <button id="gpuBtn" title="Profiler: frame rate, GPU and CPU time per part of the frame, spike capture (G)">GPU</button>
 </div>
 <div id="tuning" class="tune" hidden></div>
+<div id="gpuPanel" class="prof" hidden><div class="plive"></div><div class="pspike"></div></div>
 <div id="sub" hidden></div>
 <div id="bar"></div>
 <div id="modeTag" hidden>BUILD MODE</div>
@@ -2292,13 +2325,16 @@ function renderWorld() {
   renderer.shadowMap.autoUpdate = true;
   updateTrunkCut();
   updateCaustics();
+  renderer.passName = 'world';   // (the profiler's names for each render's pass)
   camera.layers.set(0); renderer.render(scene, camera);
   renderer.shadowMap.autoUpdate = false;
   // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
   const bend = on && WATER.refraction > 0;
   if (bend) { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
   WATER_U.refr.value = bend ? 1 : 0;
+  renderer.passName = 'water';
   camera.layers.set(2); renderer.render(scene, camera);
+  renderer.passName = 'hero, ground haze';
   camera.layers.set(1); renderer.render(scene, camera);
   updateHaze();
   updateEye();
@@ -2309,6 +2345,7 @@ function renderWorld() {
     renderer.setRenderTarget(normRT);
     renderer.setClearColor(0x000000, 0); renderer.clear();
     scene.overrideMaterial = normalMat; tallVisible(false); groundHaze.mesh.visible = false; lootFx.visible = false;
+    renderer.passName = 'normals (Sobel)';
     camera.layers.set(0); renderer.render(scene, camera);
     camera.layers.set(2); renderer.render(scene, camera);
     camera.layers.set(1); renderer.render(scene, camera);
@@ -2326,6 +2363,7 @@ function renderWorld() {
   u.sStrength.value = SOBEL.strength; u.sColor.value.set(SOBEL.color);
   renderer.setRenderTarget(null);
   renderer.clear();
+  renderer.passName = 'outline + post to screen';
   renderer.render(outlineScene, outlineCam);
 }
 
@@ -5654,6 +5692,7 @@ addEventListener('keydown', e => {
   setPadMode(false);
   if (e.target.closest && e.target.closest('.tune') && e.code !== 'KeyT') return;   // sliders keep their own keys
   if (e.code === 'KeyT' && !e.repeat) { tuning.toggle(); return; }
+  if (e.code === 'KeyG' && !e.repeat) { toggleProfiler(); return; }
   if (optsOpen) { if (e.code === 'Escape' || e.code === 'KeyO') { toggleOptions(false); e.preventDefault(); } return; }
   if (e.code === 'KeyO' && !e.repeat && !mapOpen) { keys.clear(); toggleOptions(true); return; }
   if (!started) { if ((e.code === 'Space' || e.code === 'Enter') && !$('start').disabled && !$('intro').hidden) { e.preventDefault(); begin(); } return; }
@@ -6837,6 +6876,7 @@ function update(dt) {
   H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt; H.boost = Math.max(0, (H.boost || 0) - dt);
   updateAim();
 
+  spikes.enter('update: hero');
   // ----- hero -----
   if (H.alive) {
     const m = moveInput();
@@ -6934,12 +6974,14 @@ function update(dt) {
   heroSkin.emissive.copy(heroTunic.emissive); HERO_MAT.leather.emissive.copy(heroTunic.emissive);
   heroShadow.position.set(H.x, (H.flip ? surfaceY(H.x, H.z) : H.y) + 0.02, H.z);
 
+  spikes.exit(); spikes.enter('update: foes');
   // ----- foes -----
   const night = daylight() < 0.35;
   for (const f of foes.slice()) updateFoe(f, dt, night);
   separateFoes();
   if (H.alive) spawnTick(dt);
 
+  spikes.exit(); spikes.enter('update: props, doors, effects');
   // ----- props, doors, effects -----
   for (const d of detached.values()) {
     if (d.falling) continue;
@@ -7000,6 +7042,7 @@ function update(dt) {
     if (d.life > max) { scene.remove(d.m); d.m.material.dispose(); dust.splice(i, 1); }
   }
 
+  spikes.exit(); spikes.enter('update: roofs, sky, lamps, HUD');
   // ----- roofs: hidden over the building you stand in, and all of them while building -----
   const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z))), inBld = inside ? rooms.get(inside).bld : 0;
   for (const b of buildings.values()) b.mesh.visible = mode !== 'build' && b.id !== inBld;
@@ -7047,6 +7090,7 @@ function update(dt) {
     revealFog();
   }
   updateBar();
+  spikes.exit();
 }
 
 function animateHero(dt) {
@@ -7641,6 +7685,12 @@ const TUNING = [
     [LOOT_FX, 'rise', 'Sparkles: how high they drift', 0.2, 4, 0.05],
     [LOOT_FX, 'pool', 'Pool of light on the ground', 0, 3, 0.05],
   ]],
+  ['Spike capture', [
+    [GFX.SPIKE_TUNING, 'ms', 'G panel spike capture: a frame over this many CPU ms is kept', 5, 200, 1],
+    [GFX.SPIKE_TUNING, 'keep', 'Spikes kept', 1, 30, 1],
+    [GFX.SPIKE_TUNING, 'pause', 'Stop the game on a spike (1), or carry on (0)', 0, 1, 1],
+    [GFX.SPIKE_TUNING, 'minMs', 'Calls under this many ms (all together) left out of a spike', 0, 2, 0.01],
+  ]],
   ['Crowd test', [
     [CROWD, 'extra', 'Extra foes kept round you, over the usual 10 by day and 18 by night', 0, 1000, 10],
     [CROWD_READ, 'foes', 'Foes about', 'readout', 0, 1],
@@ -7886,26 +7936,72 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
 const tuning = createTuningPanel($('tuning'), TUNING, 'Tuning');
 $('tuneBtn').addEventListener('click', e => { tuning.toggle(); e.currentTarget.blur(); });
 
+// ---------- Profiler (G) ----------
+// Crafting and Conquest's GPU profiler (src/gfx/profiler.js): while the panel is open, every pass writes GPU
+// timestamps (where the browser has timestamp-query), read back without stalling; with the frame rate and the CPU
+// time of each part of the frame. Under it, spike capture (src/gfx/spikes.js): a frame whose CPU time passes
+// SPIKE_TUNING.ms is kept as a tree of every timed call, and can stop the game on it.
+const prof = new GFX.GpuProfiler(renderer.device, renderer.adapterInfo);
+renderer.profiler = prof; gi.profiler = prof;
+const spikes = new GFX.SpikeRecorder();
+prof.spikes = spikes;
+// the objects whose calls spike capture times (the game's own functions are timed by update's sections)
+spikes.sources = () => [[renderer, 'renderer'], [gi, 'gi probes'], [haze, 'lit haze'], [eye, 'eye'], [bloom, 'bloom'], [groundHaze, 'ground haze'], [caustics, 'caustics']];
+const profPanel = $('gpuPanel'), profLive = profPanel.querySelector('.plive'), spikePanel = profPanel.querySelector('.pspike');
+const clockText = ([day, c]) => { const m = Math.floor(c * 1440); return `day ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+const showSpikes = () => { spikePanel.innerHTML = spikes.html(clockText); };
+spikePanel.addEventListener('click', e => {
+  const b = e.target.closest('[data-spike]');
+  if (!b) return;
+  spikes.click(b);
+  showSpikes();
+});
+function toggleProfiler() {
+  const on = prof.toggle();
+  profPanel.hidden = !on;
+  if (on) { profLive.innerHTML = '<div class="ptitle">Measuring…</div>'; showSpikes(); }
+  else if (spikes.on) spikes.toggle();   // (closed: nothing timed)
+}
+$('gpuBtn').addEventListener('click', e => { toggleProfiler(); e.currentTarget.blur(); });
+
 function frame(now) {
+  const frameStart = performance.now();
+  spikes.begin();
+  prof.lap(null);
   const real = (now - last) / 1000, dt = Math.min(0.05, real); last = now;
   fpsAcc += real; fpsN++; if (fpsAcc > 1) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
   pollPad(dt);
-  if (started && !mapOpen && !optsOpen) update(dt);
+  prof.lap('input');
+  if (started && !mapOpen && !optsOpen && !spikes.holding) update(dt);
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
+  prof.lap('game update (hero, foes, effects)');
   updateCamera(dt);
   showJumpHint();
   updateFoeBars(dt);
+  prof.lap('camera + foe bars');
   updateClouds(dt);
   updateWater(dt);
   updateHearths(dt);
   ventSmoke(dt);
+  prof.lap('clouds, water, hearths, smoke');
   streamChunks(6);
+  prof.lap('chunk streaming');
   drawMini(dt);
+  prof.lap('minimap');
   if (pixelSize() !== pxScale || Math.round(PIXEL.antiAlias) !== ssNow) resize();
   updateGI();
+  prof.lap('GI probes (CPU)');
   updateGroundHaze(dt);
+  prof.lap('ground haze site');
   renderWorld();
+  prof.lap('render (encode)');
+  renderer.endFrame();
+  prof.lap('submit');
   CROWD_READ.foes = foes.length; CROWD_READ.draws = renderer.info.draws; CROWD_READ.fps = fps; renderer.info.draws = 0;
+  prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'}`;
+  prof.frame(frameStart, now, profLive, `World built in ${(genMs / 1000).toFixed(1)} s. GPU rows are each pass's time; "scene" rows by what's drawn.`);
+  spikes.end(performance.now() - frameStart, now, [dayNum, clock]);
+  if (spikes.changed && !profPanel.hidden) showSpikes();
   requestAnimationFrame(frame);
 }
 const genStart = performance.now();
@@ -7928,6 +8024,7 @@ let genMs = 0;
 // test hook
 window.GAME = {
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
+  prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
