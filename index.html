@@ -1849,6 +1849,82 @@ const outlineScene = new GFX.Scene(), outlineCam = new GFX.Camera();
 const outlineQuad = new GFX.Mesh(new GFX.PlaneGeometry(2, 2), outlineMat);
 outlineQuad.frustumCulled = false;
 outlineScene.add(outlineQuad);
+// ---------- Probe lighting (T > Global illumination) ----------
+// Crafting and Conquest's probe lighting, over a height field instead of voxels (src/gfx/probes.js): each chunk
+// gives a block of it (the ground with what stands on it, and one floating layer for tree crowns and roofs), and
+// probes one a tile, at a few heights over the ground, are lit round the camera by rays marched through it. The
+// grid reaches as far as the widest zoom shows; only probes inside the view (as the camera's turned and zoomed now)
+// are traced. Modes (L cycles them): 0 off; 1 sky visibility (the sky's light, less where the ground, walls, roofs
+// or leaves hide the sky); 2 bounce light (all the light arriving: the sky's, and what the ground and things round
+// about give back of the sun, the lamps and the torch, and lava's glow). strength: how much (0 = as without);
+// minimum: the least of the plain sky light anything keeps; bias: tiles off the surface the probes are read at;
+// rays, reach, leaves (light through a tile of leaves): the sky visibility; bounce: how much light things give back;
+// bounceRays; perFrame: probes relit each frame (bounce light changes with the time of day and the lights).
+const GI = { on: 2, strength: 1, minimum: 0.15, bias: 0.3, rays: 24, reach: 20, leaves: 0.5, bounce: 1, bounceRays: 24, perFrame: 3000 };
+const gi = new GFX.HeightProbes(renderer.device);
+renderer.setGI(gi);
+let giVersion = 0;
+// a chunk's block of the height field (worked out when it's first wanted, and again after its meshes change)
+function chunkGI(cx, cz) {
+  if (cx < 0 || cz < 0 || cx >= NC || cz >= NC) return null;
+  const ch = chunks.get(cz * NC + cx);
+  if (!ch) return null;
+  if (ch.gi && !ch.giStale) return ch.gi;
+  const geo = m => m && m.geometry;
+  if (!ch.giGround || ch.giStale === 2) ch.giGround = GFX.rasterGround(cx, cz, [
+    { geo: geo(ch.ground) }, { geo: geo(ch.bog) }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
+    { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }]);
+  // and the roofs over it (each building's is one mesh of its own)
+  const roofs = [];
+  for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
+  ch.gi = GFX.rasterChunk(cx, cz, ch.giGround, [
+    { geo: geo(ch.obj), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
+    { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs], ++giVersion);
+  ch.giStale = 0;
+  return ch.gi;
+}
+// a building's roof went up or came down: the chunks under it work their blocks out again
+function giTouch(tiles) {
+  const seen = new Set();
+  for (const [c, r] of tiles) for (const [dc, dr] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const key = Math.floor((r + dr) / CH) * NC + Math.floor((c + dc) / CH);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const ch = chunks.get(key);
+    if (ch) ch.giStale = Math.max(ch.giStale || 0, 1);
+  }
+}
+// the view over the ground: the screen's corners carried down to a little under the target and a little over it,
+// measured along the way the camera looks and across it
+const giNear = new GFX.Vector3(), giRay = new GFX.Vector3();
+function viewOverGround() {
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  let a0 = 1e9, a1 = -1e9, b0 = 1e9, b1 = -1e9;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) for (const dy of [-2, 6]) {
+    giNear.set(sx, sy, -1).unproject(camera); giRay.set(sx, sy, 1).unproject(camera).sub(giNear);
+    const t = Math.abs(giRay.y) > 1e-6 ? clamp((camTarget.y + dy - giNear.y) / giRay.y, 0, 1) : 0;
+    const x = giNear.x + giRay.x * t - camTarget.x, z = giNear.z + giRay.z * t - camTarget.z;
+    const along = clamp(x * fx + z * fz, -150, 150), across = clamp(x * fz - z * fx, -150, 150);
+    a0 = Math.min(a0, along); a1 = Math.max(a1, along); b0 = Math.min(b0, across); b1 = Math.max(b1, across);
+  }
+  const ma = (a0 + a1) / 2, mb = (b0 + b1) / 2;
+  return { x: camTarget.x + fx * ma + fz * mb, z: camTarget.z + fz * ma - fx * mb, fx, fz, hw: (b1 - b0) / 2 + 2, hd: (a1 - a0) / 2 + 2, off: Math.hypot(ma, mb) };
+}
+function updateGI() {
+  const v = viewOverGround();
+  // how far out the grid must reach: this view's, grown to the widest zoom
+  const radius = Math.min(56, (Math.hypot(v.hw, v.hd) + v.off) * Math.max(1, zoom / zoomLimits()[0]));
+  const lights = [heroLight, ...lampLights].filter(l => l.intensity > 0).map(l => ({
+    pos: [l.position.x, l.position.y, l.position.z], color: [l.color.r * l.intensity, l.color.g * l.intensity, l.color.b * l.intensity], distance: l.distance, decay: l.decay }));
+  const sd = giRay.copy(sun.position).sub(sun.target.position).normalize();
+  gi.update(Object.assign({}, GI, {
+    mode: GI.on, target: [camTarget.x, camTarget.z], radius, view: v, top: MAXL * STEP + 30,
+    sun: { dir: [sd.x, sd.y, sd.z], color: [sun.color.r * sun.intensity, sun.color.g * sun.intensity, sun.color.b * sun.intensity], shadow: sun.castShadow ? CLOUD_U.shadowAmt.value : 0 },
+    sky: [hemi.color.r * hemi.intensity, hemi.color.g * hemi.intensity, hemi.color.b * hemi.intensity],
+    ground: [hemi.groundColor.r * hemi.intensity, hemi.groundColor.g * hemi.intensity, hemi.groundColor.b * hemi.intensity],
+    points: lights, chunk: chunkGI,
+  }));
+}
 function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
   const on = depthOn || sobelOn || ssNow > 1;
@@ -3376,6 +3452,7 @@ function dropBuilding(b) {
   if (!b) return;
   if (b.mesh) { scene.remove(b.mesh); b.mesh.geometry.dispose(); }
   buildings.delete(b.id);
+  giTouch(b.tiles);
   for (const id of b.rooms) { regroup.add(id); const rm = rooms.get(id); if (rm) rm.bld = 0; }
 }
 function dropRoom(id) {
@@ -3416,6 +3493,7 @@ function settleBuildings() {
     buildings.set(b.id, b);
     b.mesh = roofMesh(b);
     scene.add(b.mesh);
+    giTouch(b.tiles);
   }
   regroup.clear();
 }
@@ -3555,6 +3633,7 @@ function buildChunk(cx, cz) {
   return ch;
 }
 function swapMesh(ch, key, m) {
+  ch.giStale = Math.max(ch.giStale || 0, key === 'ground' || key === 'water' || key === 'lava' || key === 'bog' ? 2 : 1);
   if (ch[key]) { scene.remove(ch[key]); ch[key].geometry.dispose(); }
   ch[key] = m;
   if (m) { m.matrixAutoUpdate = false; m.updateMatrix(); scene.add(m); }
@@ -4546,6 +4625,11 @@ addEventListener('keydown', e => {
   if (!$('dead').hidden) { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); respawn(); } return; }
   if (e.code === 'KeyM' || (e.code === 'Escape' && mapOpen)) { toggleMap(); e.preventDefault(); return; }
   if (e.code === 'KeyP' && !e.repeat) { togglePlots(); return; }
+  if (e.code === 'KeyL' && !e.repeat) {
+    GI.on = (Math.round(GI.on) + 1) % 3; tuning.refresh();
+    toast(`Lighting: ${['plain', 'sky visibility', 'bounce light'][GI.on]}`);
+    return;
+  }
   if (mapOpen) return;
   keys.add(e.code);
   if (e.repeat) return;
@@ -6229,6 +6313,18 @@ const TUNING = [
     [SHADOWS, 'lowAngle', 'No shadow with the sun or moon this low (degrees)', 0, 60, 1],
     [SHADOWS, 'fullAngle', 'Full-strength shadow from this high (degrees)', 1, 90, 1],
   ]],
+  ['Global illumination', [
+    [GI, 'on', 'Mode: 0 off, 1 sky visibility, 2 bounce light (L)', 0, 2, 1],
+    [GI, 'strength', 'Strength (0 = as without)', 0, 1, 0.01],
+    [GI, 'minimum', 'The least of the plain sky light anything keeps', 0, 1, 0.01],
+    [GI, 'bias', 'Probes read this far off the surface (tiles)', 0, 1, 0.01],
+    [GI, 'rays', 'Sky visibility: rays per probe', 8, 96, 1],
+    [GI, 'reach', 'Rays reach (tiles)', 4, 40, 1],
+    [GI, 'leaves', 'Light through a tile of leaves', 0, 1, 0.01],
+    [GI, 'bounce', 'Bounce: light things give back', 0, 2, 0.01],
+    [GI, 'bounceRays', 'Bounce: rays per probe', 8, 96, 1],
+    [GI, 'perFrame', 'Bounce: probes relit each frame', 500, 20000, 100],
+  ]],
   ['Haze', [
     [FOG, 'on', 'Distance haze (0 off, 1 on)', 0, 1, 1],
     [FOG, 'start', 'Starts this far beyond the hero (tiles)', 0, 80, 1],
@@ -6421,6 +6517,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
   }
   return {
     toggle() { el.hidden = !el.hidden; if (!el.hidden) build(); },
+    refresh() { if (!el.hidden) build(); },
   };
 }
 const tuning = createTuningPanel($('tuning'), TUNING, 'Tuning');
@@ -6442,6 +6539,7 @@ function frame(now) {
   streamChunks(6);
   drawMini(dt);
   if (pixelSize() !== pxScale || Math.round(PIXEL.antiAlias) !== ssNow) resize();
+  updateGI();
   renderWorld();
   requestAnimationFrame(frame);
 }
@@ -6585,12 +6683,12 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI },
   cutCount: () => cutEdges.size,
   light: () => ({ hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
   // draw a frame and give it back as a PNG data URL
   screenshot: async () => {
-    updateCamera(1); streamChunks(Infinity); updateSky(); updateWater(0);
+    updateCamera(1); streamChunks(Infinity); updateSky(); updateWater(0); updateGI();
     renderWorld();
     const px = await renderer.readPixels(), c = document.createElement('canvas');
     c.width = px.width; c.height = px.height;

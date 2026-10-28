@@ -67,6 +67,9 @@ class Renderer {
       { binding: 2, visibility: S.FRAGMENT, sampler: { type: 'comparison' } },
       { binding: 3, visibility: S.FRAGMENT, texture: { sampleType: 'float' } },
       { binding: 4, visibility: S.FRAGMENT, sampler: { type: 'filtering' } },
+      { binding: 5, visibility: S.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
+      { binding: 6, visibility: S.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
+      { binding: 7, visibility: S.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
     ] });
     this.bglFrameShadow = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: S.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } }] });
@@ -85,6 +88,14 @@ class Renderer {
     this.linSamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
     this.white = device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: this.white }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+    // stand-ins for the probe lighting's textures while there's none
+    const T = GPUTextureUsage;
+    this.noGI = {
+      vis: device.createTexture({ size: [1, 1, 1], dimension: '3d', format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView(),
+      light: device.createTexture({ size: [3, 1, 1], dimension: '3d', format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView(),
+      hf: device.createTexture({ size: [1, 1], format: 'rgba32float', usage: T.TEXTURE_BINDING }).createView(),
+    };
+    this.gi = null;
     this._ensureShadow(512);
     this._frameBG = null; this._frameBGKey = '';
     this.frameBGShadow = device.createBindGroup({ layout: this.bglFrameShadow, entries: [{ binding: 0, resource: { buffer: this.frameBuf, size: FRAME_BYTES } }] });
@@ -102,6 +113,9 @@ class Renderer {
   clear() { this._runPendingClear(); this._pendingClear = { target: this.target, color: [this.clearColor.r, this.clearColor.g, this.clearColor.b, this.clearAlpha] }; }
   // the clouds' texture and settings, as { tCloud, cloudOff, cloudScale, cloudAmt, cloudCover, cloudSoft, shadowAmt } of { value }
   setClouds(u) { this.clouds = u; }
+  // probe lighting (probes.js): something with views() -> { vis, light, hf, key } and uniforms() -> 12 numbers
+  // (the frame's giA, giB, giC), or null
+  setGI(gi) { this.gi = gi; this._frameBGKey = ''; }
 
   render(scene, camera) {
     const dev = this.device;
@@ -215,7 +229,8 @@ class Renderer {
   }
   _frameBindGroup() {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
-    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w');
+    const gv = this.gi ? this.gi.views() : null;
+    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-');
     if (key !== this._frameBGKey) {
       this._frameBGKey = key;
       this._frameBG = this.device.createBindGroup({ layout: this.bglFrame, entries: [
@@ -224,6 +239,9 @@ class Renderer {
         { binding: 2, resource: this.shadowSamp },
         { binding: 3, resource: cloud ? cloud.view : this.white.createView() },
         { binding: 4, resource: this.linSamp },
+        { binding: 5, resource: gv ? gv.vis : this.noGI.vis },
+        { binding: 6, resource: gv ? gv.light : this.noGI.light },
+        { binding: 7, resource: gv ? gv.hf : this.noGI.hf },
       ] });
     }
     return this._frameBG;
@@ -274,6 +292,8 @@ class Renderer {
       d[q] = e[12]; d[q + 1] = e[13]; d[q + 2] = e[14]; d[q + 3] = p.distance;
       d[q + 4] = p.color.r * p.intensity; d[q + 5] = p.color.g * p.intensity; d[q + 6] = p.color.b * p.intensity; d[q + 7] = p.decay;
     }
+    const g = this.gi ? this.gi.uniforms() : null, go = o + 112 + MAX_POINTS * 8;
+    for (let i = 0; i < 12; i++) d[go + i] = g ? g[i] : 0;
     return slot * FRAME_BYTES;
   }
   _writeObj(mesh, mat) {

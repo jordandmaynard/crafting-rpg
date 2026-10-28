@@ -53,6 +53,18 @@ The Dungeon Golf pipeline: a low-resolution buffer scaled up by a whole number, 
 
 The 1024 × 1024 map is split into 32 × 32-tile chunks. Only chunks near the camera are built, nearest first and a few milliseconds' worth per frame, and far ones are let go. Felling a tree or building a wall rebuilds only its chunk.
 
+## Global illumination
+
+Crafting and Conquest's probe lighting, made for a height map instead of voxels (`src/gfx/probes.js`). Every chunk works out a block of a height field, a texel every half tile: the ground with whatever stands on it (rocks, trunks, walls), plus one floating layer above it for tree crowns and roofs, which leaves let some light through and roofs don't. The blocks of the chunks round the camera sit in one texture. Probes stand in columns, one a tile, at four heights over the ground (0.4, 1.4, 3.2 and 7 tiles). The grid follows the camera and is sized to reach as far as the widest zoom shows. Each frame a compute pass traces only the probes inside the current view, as the camera is turned and zoomed, and only those that need it: new to the grid, near ground that changed, or (with bounce light) due a refresh. Rays march through the height field. Lit surfaces blend the probes of the four columns round them, two heights each, and leave out probes across a cliff or a wall.
+
+The tuning panel's Global illumination section has the switch, and `L` cycles it:
+
+- **0, off:** the plain sky light, as before.
+- **1, sky visibility:** the sky's light, less wherever ground, walls, roofs or leaves hide the sky (under trees, in canyons, indoors).
+- **2, bounce light (the default):** all the light arriving, the sky's plus what the ground and things round about give back of the sun or moon (with a shadow ray), the lamps and the torch, and lava's glow. It bounces on through the probes' own light.
+
+There are also sliders for strength, a minimum of the plain light to keep, rays and their reach, light through leaves, bounce strength and rays, and how many probes are relit each frame.
+
 ## The drawing library (src/gfx)
 
 Emberwild draws with raw WebGPU through a small library of its own, shaped like the parts of three.js the game was first written on so the game code reads the same:
@@ -62,6 +74,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `geometry.js`: vertex buffers and the primitive shapes (boxes, cylinders, cones, the round solids, discs, rings, planes, lathes).
 - `materials.js`: lit (standard), unlit (basic) and normal materials, materials with their own WGSL (`ShaderMaterial`: uniforms, textures and extra vertex attributes), textures and render targets.
 - `shaders.js`: the WGSL every pipeline shares: the frame and object uniform blocks, haze, flat face normals, cloud shadow, the sun's 17-tap PCF shadow and the lighting (sky light, sun, point lights, Lambert plus a GGX specular lobe), and the built-in materials.
+- `probes.js`: probe lighting over a height field (see Global illumination).
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.

@@ -7,10 +7,103 @@
 // Lambert diffuse plus a GGX specular lobe; point lights the same way, falling to nothing at their distance;
 // emissive on top; then linear distance haze, eased (smoothstep) between its near and far. Faces are shaded
 // flat, their normal worked out from the screen-space change in position, always facing the camera.
+// With probe lighting on (probes.js), the sky's light comes from the probes round the point instead: how much of
+// the sky they see, or (bounce light) all the light arriving there, the sky's and what the ground and things
+// round about give back.
 
 export const MAX_POINTS = 8;
-export const FRAME_BYTES = 768;   // the Frame struct (704 bytes), padded to the uniform offset alignment
+export const FRAME_BYTES = 768;   // the Frame struct (752 bytes), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
+
+// Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
+// gives the accessors giHfRaw, giHfOrigin, giHfSize, giGrid, giVisAt and giLightAt). The height field holds, a
+// texel every half tile: the ground with whatever stands on it, the bottom and top of one floating layer over it
+// (tree crowns, roofs; bottom > top when there's none) and how much light that lets through (0 none: roofs).
+// Probes stand in columns, one a tile, at GI_LAYERS heights over the highest ground under their tile, kept in a
+// grid round the camera that wraps (a column's slot is its x, z modulo the grid). A probe's sky visibility is
+// order-1 spherical harmonics (a, b: the sky seen that way, facing n, is about a + 2 b·n), its light the same in
+// each colour, three texels across. A probe that's unusable (in the floating layer, or not lit yet) has a < 0.
+export const GI_TPT = 2;                       // height field texels a tile
+export const GI_LAYERS = [0.4, 1.4, 3.2, 7];   // probe heights over the ground
+export const GI_WGSL = /* wgsl */ `
+const GI_TPT = ${GI_TPT};
+fn giLayerH(l: i32) -> f32 { return select(select(select(${GI_LAYERS[3].toFixed(2)}, ${GI_LAYERS[2].toFixed(2)}, l == 2), ${GI_LAYERS[1].toFixed(2)}, l == 1), ${GI_LAYERS[0].toFixed(2)}, l == 0); }
+// the height field at world texel t (outside it: nothing, far below)
+fn giHf(t: vec2i) -> vec4f {
+  let r = t - giHfOrigin();
+  let S = giHfSize();
+  if (any(r < vec2i(0)) || any(r >= vec2i(S))) { return vec4f(-1e4, 1.0, 0.0, 1.0); }
+  return giHfRaw(((t % S) + S) % S);
+}
+// a probe column's floor: the highest ground under its tile
+fn giColumnBase(c: vec2i) -> f32 {
+  let t = c * GI_TPT;
+  return max(max(giHf(t).x, giHf(t + vec2i(1, 0)).x), max(giHf(t + vec2i(0, 1)).x, giHf(t + vec2i(1, 1)).x));
+}
+fn giInBand(s: vec4f, y: f32) -> bool { return y >= s.y && y <= s.z; }
+fn giInsideBand(c: vec2i, y: f32) -> bool {
+  let t = c * GI_TPT;
+  return giInBand(giHf(t), y) || giInBand(giHf(t + vec2i(1, 0)), y) || giInBand(giHf(t + vec2i(0, 1)), y) || giInBand(giHf(t + vec2i(1, 1)), y);
+}
+fn giSlot(c: vec2i, n: i32) -> vec2i { return ((c % n) + n) % n; }
+
+// The probes' light at q facing n, from the 4 columns round it, two layers each (those either side of q's height
+// over that column's floor): each weighted by nearness, less when it's behind the surface, hardly at all when
+// the column's floor is over q (across a cliff or a wall) or ground lies between them. w = 0 when none is usable.
+struct GIOut { w: f32, vis: vec4f, light: vec3f }
+fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
+  var out: GIOut;
+  let g = giGrid();
+  let gp = q.xz - 0.5;
+  let base = vec2i(floor(gp));
+  let f = gp - floor(gp);
+  var wsum = 0.0;
+  for (var i = 0; i < 4; i++) {
+    let o = vec2i(i & 1, i >> 1);
+    let c = base + o;
+    let rel = c - g.xy;
+    if (any(rel < vec2i(0)) || any(rel >= vec2i(g.z))) { continue; }
+    let floorY = giColumnBase(c);
+    if (floorY < -1000.0) { continue; }
+    let h = q.y - floorY;
+    var wc = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
+    if (h < -0.3) { wc *= 1e-3; }
+    let hl = clamp(h, giLayerH(0), giLayerH(g.w - 1));
+    let pp = vec3f(f32(c.x) + 0.5, floorY + hl, f32(c.y) + 0.5);
+    for (var j = 1; j < 3; j++) {
+      let m = mix(q, pp, f32(j) / 3.0);
+      if (giHf(vec2i(floor(m.xz * f32(GI_TPT)))).x > m.y + 0.05) { wc *= 1e-3; break; }
+    }
+    let to = pp - q;
+    let wrap = (dot(normalize(to + vec3f(1e-4)), n) + 1.0) * 0.5;
+    wc *= wrap * wrap + 0.2;
+    var l = 0;
+    for (var k = 1; k < g.w - 1; k++) { if (hl >= giLayerH(k)) { l = k; } }
+    let t = clamp((hl - giLayerH(l)) / (giLayerH(l + 1) - giLayerH(l)), 0.0, 1.0);
+    let s = giSlot(c, g.z);
+    for (var e = 0; e < 2; e++) {
+      let layer = l + e;
+      let w = wc * select(1.0 - t, t, e == 1);
+      if (w < 1e-7) { continue; }
+      let v = giVisAt(vec3i(s.x, layer, s.y));
+      if (v.x < 0.0) { continue; }
+      if (bounce) {
+        let li = vec3i(s.x * 3, layer, s.y);
+        let r = giLightAt(li);
+        let gg = giLightAt(li + vec3i(1, 0, 0));
+        let bb = giLightAt(li + vec3i(2, 0, 0));
+        out.light += w * vec3f(r.x + 2.0 * dot(r.yzw, n), gg.x + 2.0 * dot(gg.yzw, n), bb.x + 2.0 * dot(bb.yzw, n));
+      } else {
+        out.vis += w * v;
+      }
+      wsum += w;
+    }
+  }
+  out.w = wsum;
+  if (wsum > 1e-6) { out.vis /= wsum; out.light = max(out.light / wsum, vec3f(0.0)); }
+  return out;
+}
+`;
 
 export const PRELUDE = /* wgsl */ `
 struct PointL { pos: vec4f, color: vec4f }
@@ -32,6 +125,9 @@ struct Frame {
   cloud2: vec4f,      // cover, softness, shadow strength, point lights
   res: vec4f,         // the target's width and height, and their inverses
   points: array<PointL, ${MAX_POINTS}>,
+  giA: vec4f,         // probe lighting: mode (0 off, 1 sky visibility, 2 bounce light), strength, minimum, bias
+  giB: vec4f,         // the probe grid: its first column x, z (tiles), columns across, layers
+  giC: vec4f,         // the height field: its first texel x, z, texels across
 }
 struct Obj {
   model: mat4x4f,
@@ -44,7 +140,17 @@ struct Obj {
 @group(0) @binding(2) var shadowSamp: sampler_comparison;
 @group(0) @binding(3) var cloudTex: texture_2d<f32>;
 @group(0) @binding(4) var linSamp: sampler;
+@group(0) @binding(5) var giVisTex: texture_3d<f32>;
+@group(0) @binding(6) var giLightTex: texture_3d<f32>;
+@group(0) @binding(7) var giHfTex: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> O: Obj;
+fn giHfRaw(t: vec2i) -> vec4f { return textureLoad(giHfTex, t, 0); }
+fn giHfOrigin() -> vec2i { return vec2i(F.giC.xy); }
+fn giHfSize() -> i32 { return i32(F.giC.z); }
+fn giGrid() -> vec4i { return vec4i(F.giB); }
+fn giVisAt(i: vec3i) -> vec4f { return textureLoad(giVisTex, i, 0); }
+fn giLightAt(i: vec3i) -> vec4f { return textureLoad(giLightTex, i, 0); }
+${GI_WGSL}
 
 const PI = 3.141592653589793;
 fn sat(x: f32) -> f32 { return clamp(x, 0.0, 1.0); }
@@ -105,7 +211,21 @@ fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N
   let f0 = mix(vec3f(0.04), albedo, metal);
   let rough = clamp(max(rough0, 0.0525), 0.0, 1.0);
   var col = emissive;
-  if (F.hemiSky.w > 0.5) { col += mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.5 * N.y + 0.5) * diff; }
+  if (F.hemiSky.w > 0.5) {
+    var amb = mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.5 * N.y + 0.5);
+    if (F.giA.x > 0.5) {
+      let g = giGather(w + N * F.giA.w, N, F.giA.x > 1.5);
+      if (g.w > 1e-6) {
+        // sky visibility: the sky's share by what of it the probes see that way, the ground's by how open they are
+        var lit = g.light;
+        if (F.giA.x < 1.5) {
+          lit = F.hemiSky.rgb * sat(g.vis.x + 2.0 * dot(g.vis.yzw, N)) + F.hemiGround.rgb * (0.5 - 0.5 * N.y) * sat(2.0 * g.vis.x);
+        }
+        amb = max(mix(amb, lit, F.giA.y), amb * F.giA.z);
+      }
+    }
+    col += amb * diff;
+  }
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
     var lc = F.sunColor.rgb * cloudShade(w.xz);

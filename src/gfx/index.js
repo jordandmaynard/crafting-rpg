@@ -5,3 +5,4 @@ export * from './scene.js';
 export * from './geometry.js';
 export * from './materials.js';
 export { createRenderer } from './renderer.js';
+export { HeightProbes, rasterGround, rasterChunk } from './probes.js';

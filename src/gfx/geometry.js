@@ -52,10 +52,11 @@ export class BufferGeometry {
   }
   _transform(fn) {
     const p = this.attributes.position;
-    if (p._shared) { p.array = p.array.slice(); p._shared = false; }
-    const a = p.array, v = new Vector3();
+    // a shape's shared corners (boxes are cached by size) are copied before they're moved
+    if (p._shared) { this.setAttribute('position', new BufferAttribute(p.array.slice(), 3)); if (this.index) this.index = new BufferAttribute(this.index.array.slice(), 1); }
+    const a = this.attributes.position.array, v = new Vector3();
     for (let i = 0; i < a.length; i += 3) { fn(v.set(a[i], a[i + 1], a[i + 2])); a[i] = v.x; a[i + 1] = v.y; a[i + 2] = v.z; }
-    p.needsUpdate = true; this.boundingSphere = null;
+    this.attributes.position.needsUpdate = true; this.boundingSphere = null;
     return this;
   }
   rotateX(t) { const c = Math.cos(t), s = Math.sin(t); return this._transform(v => v.set(v.x, c * v.y - s * v.z, s * v.y + c * v.z)); }
