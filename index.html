@@ -1841,6 +1841,7 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
     }
     col = mix(col, U.color, e * U.strength * haze);
   }
+  col = hazeApply(col, (px + 0.5) / U.res, depthAt(px) + U.near);
   return vec4f(col, 1.0);
 }`,
   depthTest: false, depthWrite: false,
@@ -1863,6 +1864,32 @@ outlineScene.add(outlineQuad);
 const GI = { on: 1, strength: 1, minimum: 0.1, bias: 0.3, rays: 24, reach: 20, leaves: 0.5, bounce: 1, bounceRays: 24, perFrame: 3000 };
 const gi = new GFX.HeightProbes(renderer.device);
 renderer.setGI(gi);
+
+// ---------- Lit haze (T > Lit haze) ----------
+// Froxel haze (src/gfx/haze.js): the air in front of the camera, in cells cell × cell mosaic pixels across and
+// `slices` deep, lit each frame by the sun or moon through its shadow map (so tall trees and buildings throw
+// shafts), the sky by what the GI probes say reaches there, the lamps and the torch, and lava's glow; then laid
+// over the picture by each pixel's depth, after the outlines. It's on top of the distance haze, not instead of it.
+// density: per tile on the ground; height: tiles it thins over; floor: the share left high up; top: tiles over
+// the hero the air starts; sun, sky, lamps, lava: how much each lights it; forward: how much more the sun's light
+// goes on forward than back (0 even, toward 1 a bright ring round the sun); wisps: how patchy (slow drifting
+// noise, wispSize tiles, drifting with the clouds at windSpeed); color: the haze's own.
+const HAZE = { on: 1, density: 0.08, height: 2.5, floor: 0.1, top: 14, sun: 1, forward: 0.35, sky: 1, lamps: 2, lava: 1,
+  wisps: 0.5, wispSize: 7, windSpeed: 0.4, color: '#ffffff', cell: 4, slices: 64 };
+const haze = new GFX.FroxelHaze(renderer);
+renderer.setHaze(haze);
+const hazeTint = new GFX.Color();
+function hazeOn() { return HAZE.on > 0.5 && HAZE.density > 0; }
+// after the scene's drawn, before the outline pass lays it over
+function updateHaze() {
+  const res = outlineMat.uniforms.res.value, a = CLOUDS.direction * Math.PI / 180, cell = Math.max(1, HAZE.cell);
+  hazeTint.set(HAZE.color);
+  haze.update({ on: hazeOn(), camera, cells: [Math.ceil(res.x / cell), Math.ceil(res.y / cell)], slices: HAZE.slices,
+    top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
+    sun: HAZE.sun, forward: HAZE.forward, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava,
+    wisps: HAZE.wisps, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
+    tint: [hazeTint.r, hazeTint.g, hazeTint.b], groundColour: gi.gcolView });
+}
 let giVersion = 0;
 // a chunk's block of the height field (worked out when it's first wanted, and again after its meshes change)
 function chunkGI(cx, cz) {
@@ -1927,7 +1954,7 @@ function updateGI() {
 }
 function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
-  const on = depthOn || sobelOn || ssNow > 1;
+  const on = depthOn || sobelOn || ssNow > 1 || hazeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   // the renderer draws the sun's shadow map anew in every render, keeping only casters on the camera's
@@ -1937,6 +1964,7 @@ function renderWorld() {
   camera.layers.set(0); renderer.render(scene, camera);
   renderer.shadowMap.autoUpdate = false;
   camera.layers.set(1); renderer.render(scene, camera);
+  updateHaze();
   if (!on) return;
   if (sobelOn) {
     // the same view again with every surface drawn as its normal, sky left clear
@@ -6324,6 +6352,24 @@ const TUNING = [
     [FOG, 'dusk', 'At dusk', 'color'],
     [FOG, 'night', 'By night', 'color'],
   ]],
+  ['Lit haze', [
+    [HAZE, 'on', 'Lit haze (0 off, 1 on)', 0, 1, 1],
+    [HAZE, 'density', 'Density on the ground (a tile)', 0, 0.5, 0.005],
+    [HAZE, 'height', 'Thins out over this many tiles up', 0.25, 20, 0.25],
+    [HAZE, 'floor', 'Share left high up', 0, 1, 0.01],
+    [HAZE, 'top', 'Starts this many tiles over the hero', 2, 60, 1],
+    [HAZE, 'sun', 'Sun and moon light in it', 0, 4, 0.05],
+    [HAZE, 'forward', 'Sun scatters forward (0 evenly, 0.9 a tight glow)', 0, 0.95, 0.01],
+    [HAZE, 'sky', 'Sky light in it', 0, 4, 0.05],
+    [HAZE, 'lamps', 'Lamp and torch light in it', 0, 10, 0.1],
+    [HAZE, 'lava', "Lava's glow in it", 0, 10, 0.1],
+    [HAZE, 'wisps', 'Wisps: how patchy', 0, 1, 0.01],
+    [HAZE, 'wispSize', 'Wisps: size (tiles)', 1, 40, 0.5],
+    [HAZE, 'windSpeed', 'Wisps: drift (tiles a second, with the clouds)', 0, 5, 0.05],
+    [HAZE, 'color', 'Colour', 'color'],
+    [HAZE, 'cell', 'Cell size (mosaic pixels)', 2, 16, 1],
+    [HAZE, 'slices', 'Depth slices', 16, 128, 1],
+  ]],
   ['Walk', [
     [WALK, 'cadence', 'Cadence: steps per tile walked', 1, 12, 0.1],
     [WALK, 'stride', 'Forward stride (leg swing)', 0, 1.5, 0.01],
@@ -6675,7 +6721,7 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE },
   cutCount: () => cutEdges.size,
   light: () => ({ hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
   // draw a frame and give it back as a PNG data URL

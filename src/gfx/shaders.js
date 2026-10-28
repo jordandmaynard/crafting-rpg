@@ -12,7 +12,7 @@
 // round about give back.
 
 export const MAX_POINTS = 8;
-export const FRAME_BYTES = 768;   // the Frame struct (752 bytes), padded to the uniform offset alignment
+export const FRAME_BYTES = 1024;  // the Frame struct (784 bytes), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
 // Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
@@ -139,6 +139,8 @@ struct Frame {
   giA: vec4f,         // probe lighting: mode (0 off, 1 sky visibility, 2 bounce light), strength, minimum, bias
   giB: vec4f,         // the probe grid: its first column x, z (tiles), columns across, layers
   giC: vec4f,         // the height field: its first texel x, z, texels across
+  hazeA: vec4f,       // lit haze (haze.js): on, its first and last slice's depth, slices
+  hazeB: vec4f,       // cells across, down
 }
 struct Obj {
   model: mat4x4f,
@@ -154,6 +156,7 @@ struct Obj {
 @group(0) @binding(5) var giVisTex: texture_3d<f32>;
 @group(0) @binding(6) var giLightTex: texture_3d<f32>;
 @group(0) @binding(7) var giHfTex: texture_2d<f32>;
+@group(0) @binding(8) var hazeTex: texture_3d<f32>;
 @group(1) @binding(0) var<uniform> O: Obj;
 fn giHfRaw(t: vec2i) -> vec4f { return textureLoad(giHfTex, t, 0); }
 fn giHfOrigin() -> vec2i { return vec2i(F.giC.xy); }
@@ -187,6 +190,19 @@ fn flatNormal(e: vec3f) -> vec3f {
   return n;
 }
 // how much of the sun's light the clouds let through at a point on the ground
+// lit haze over colour c at a screen point (uv, 0 to 1 from the top left) at view depth d: what gets through of c,
+// plus the light the haze between scatters back
+fn hazeApply(c: vec3f, uv: vec2f, d: f32) -> vec3f {
+  if (F.hazeA.x < 0.5) { return c; }
+  let w = (d - F.hazeA.y) / (F.hazeA.z - F.hazeA.y);
+  if (w <= 0.0) { return c; }
+  // slice k holds the sum to its far side
+  let Z = F.hazeA.w; let k = w * Z;
+  let cell = clamp(uv, 0.5 / F.hazeB.xy, 1.0 - 0.5 / F.hazeB.xy);
+  var h = textureSampleLevel(hazeTex, linSamp, vec3f(cell, clamp(k - 0.5, 0.5, Z - 0.5) / Z), 0.0);
+  if (k < 1.0) { h = mix(vec4f(0.0, 0.0, 0.0, 1.0), h, k); }
+  return c * h.a + h.rgb;
+}
 fn cloudShade(xz: vec2f) -> f32 {
   let n = textureSampleLevel(cloudTex, linSamp, (xz + F.cloud.xy) / F.cloud.z, 0.0).r;
   return 1.0 - F.cloud.w * smoothstep(1.0 - F.cloud2.x - F.cloud2.y, 1.0 - F.cloud2.x + F.cloud2.y, n);

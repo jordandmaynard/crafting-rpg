@@ -65,6 +65,17 @@ The tuning panel's Global illumination section has the switch, and `L` cycles it
 
 There are also sliders for strength, a minimum of the plain light to keep, rays and their reach, light through leaves, bounce strength and rays, and how many probes are relit each frame.
 
+## Lit haze
+
+Froxel haze (`src/gfx/haze.js`): the air in front of the camera is cut into cells, a few mosaic pixels across and 64 slices deep, running from about 14 tiles above you down to just below the ground in view. Each frame, after the scene is drawn, a compute pass lights every cell. The haze is thickest on the ground and thins with height over the height field, broken into slow wisps that drift with the clouds. It's lit by:
+
+- the sun or moon through its shadow map, so tall trees and buildings throw shafts through it, scattered more forward than back;
+- the sky, by how much of it the GI probes see from there (with bounce light, all the light arriving there);
+- the lamps and your torch;
+- lava's glow, from the ground round about.
+
+A second pass adds up each column of cells from the camera out, and the outline pass lays the result over the picture by each pixel's depth. The tuning panel's Lit haze section has the switch and the sliders. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
+
 ## The drawing library (src/gfx)
 
 Emberwild draws with raw WebGPU through a small library of its own, shaped like the parts of three.js the game was first written on so the game code reads the same:
@@ -75,6 +86,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `materials.js`: lit (standard), unlit (basic) and normal materials, materials with their own WGSL (`ShaderMaterial`: uniforms, textures and extra vertex attributes), textures and render targets.
 - `shaders.js`: the WGSL every pipeline shares: the frame and object uniform blocks, haze, flat face normals, cloud shadow, the sun's 17-tap PCF shadow and the lighting (sky light, sun, point lights, Lambert plus a GGX specular lobe), and the built-in materials.
 - `probes.js`: probe lighting over a height field (see Global illumination).
+- `haze.js`: lit froxel haze (see Lit haze).
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.

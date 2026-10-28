@@ -62,14 +62,15 @@ class Renderer {
 
     const U = GPUBufferUsage, S = GPUShaderStage;
     this.bglFrame = device.createBindGroupLayout({ entries: [
-      { binding: 0, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } },
-      { binding: 1, visibility: S.FRAGMENT, texture: { sampleType: 'depth' } },
-      { binding: 2, visibility: S.FRAGMENT, sampler: { type: 'comparison' } },
-      { binding: 3, visibility: S.FRAGMENT, texture: { sampleType: 'float' } },
-      { binding: 4, visibility: S.FRAGMENT, sampler: { type: 'filtering' } },
-      { binding: 5, visibility: S.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
-      { binding: 6, visibility: S.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
-      { binding: 7, visibility: S.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 0, visibility: S.VERTEX | S.FRAGMENT | S.COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } },
+      { binding: 1, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'depth' } },
+      { binding: 2, visibility: S.FRAGMENT | S.COMPUTE, sampler: { type: 'comparison' } },
+      { binding: 3, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
+      { binding: 4, visibility: S.FRAGMENT | S.COMPUTE, sampler: { type: 'filtering' } },
+      { binding: 5, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
+      { binding: 6, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
+      { binding: 7, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 8, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
     ] });
     this.bglFrameShadow = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: S.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } }] });
@@ -95,6 +96,8 @@ class Renderer {
       light: device.createTexture({ size: [3, 1, 1], dimension: '3d', format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView(),
       hf: device.createTexture({ size: [1, 1], format: 'rgba32float', usage: T.TEXTURE_BINDING }).createView(),
     };
+    this.noHaze = device.createTexture({ size: [1, 1, 1], dimension: '3d', format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView();
+    this.haze = null; this._lastFrameOff = 0;
     this.gi = null;
     this._ensureShadow(512);
     this._frameBG = null; this._frameBGKey = '';
@@ -116,6 +119,18 @@ class Renderer {
   // probe lighting (probes.js): something with views() -> { vis, light, hf, key } and uniforms() -> 12 numbers
   // (the frame's giA, giB, giC), or null
   setGI(gi) { this.gi = gi; this._frameBGKey = ''; }
+  // lit haze (haze.js): something with view() -> its summed volume or null, uniforms() -> 8 numbers (the frame's
+  // hazeA, hazeB) and key, or null
+  setHaze(h) { this.haze = h; this._frameBGKey = ''; }
+  // the WGSL every pipeline starts with, for compute passes that read the frame
+  preludeCode() { return PRELUDE; }
+  // record compute work into this frame, after what's been drawn so far: cb(encoder, the frame's bind group, the
+  // offset of the last render's frame in it)
+  compute(cb) {
+    this._runPendingClear();
+    if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
+    cb(this._enc, this._frameBindGroup(), this._lastFrameOff);
+  }
 
   render(scene, camera) {
     const dev = this.device;
@@ -130,6 +145,7 @@ class Renderer {
     }
     const tgt = this._targetViews(this.target);
     const frameOff = this._writeFrame(camera, lights, scene, tgt);
+    this._lastFrameOff = frameOff;
     const list = this._collect(scene, camera);
     const clear = this._pendingClear && this._pendingClear.target === this.target ? this._pendingClear : null;
     this._pendingClear = null;
@@ -230,7 +246,8 @@ class Renderer {
   _frameBindGroup() {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
     const gv = this.gi ? this.gi.views() : null;
-    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-');
+    const hv = this.haze ? this.haze.view() : null;
+    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-');
     if (key !== this._frameBGKey) {
       this._frameBGKey = key;
       this._frameBG = this.device.createBindGroup({ layout: this.bglFrame, entries: [
@@ -242,6 +259,7 @@ class Renderer {
         { binding: 5, resource: gv ? gv.vis : this.noGI.vis },
         { binding: 6, resource: gv ? gv.light : this.noGI.light },
         { binding: 7, resource: gv ? gv.hf : this.noGI.hf },
+        { binding: 8, resource: hv || this.noHaze },
       ] });
     }
     return this._frameBG;
@@ -294,6 +312,8 @@ class Renderer {
     }
     const g = this.gi ? this.gi.uniforms() : null, go = o + 112 + MAX_POINTS * 8;
     for (let i = 0; i < 12; i++) d[go + i] = g ? g[i] : 0;
+    const hz = this.haze && this.haze.view() ? this.haze.uniforms() : null;
+    for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
     return slot * FRAME_BYTES;
   }
   _writeObj(mesh, mat) {

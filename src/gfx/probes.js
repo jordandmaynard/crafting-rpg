@@ -228,6 +228,7 @@ export class HeightProbes {
     const T = GPUTextureUsage;
     this.hf = device.createTexture({ label: 'gi height field', size: [HF, HF], format: 'rgba32float', usage: T.TEXTURE_BINDING | T.COPY_DST });
     this.gcol = device.createTexture({ label: 'gi ground colour', size: [HF, HF], format: 'rgba8unorm', usage: T.TEXTURE_BINDING | T.COPY_DST });
+    this.gcolView = this.gcol.createView();
     this.bcol = device.createTexture({ label: 'gi layer colour', size: [HF, HF], format: 'rgba8unorm', usage: T.TEXTURE_BINDING | T.COPY_DST });
     this.hfView = this.hf.createView();
     this.params = device.createBuffer({ label: 'gi params', size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -266,7 +267,7 @@ export class HeightProbes {
       const A = this.sets[k], B = this.sets[1 - k];
       return dev.createBindGroup({ layout: this.layout, entries: [
         { binding: 0, resource: { buffer: this.params } },
-        { binding: 1, resource: this.hfView }, { binding: 2, resource: this.gcol.createView() }, { binding: 3, resource: this.bcol.createView() },
+        { binding: 1, resource: this.hfView }, { binding: 2, resource: this.gcolView }, { binding: 3, resource: this.bcol.createView() },
         { binding: 4, resource: A.keyV }, { binding: 5, resource: A.visV }, { binding: 6, resource: A.lightV },
         { binding: 7, resource: B.keyV }, { binding: 8, resource: B.visV }, { binding: 9, resource: B.lightV },
       ] });
