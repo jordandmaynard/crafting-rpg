@@ -2910,9 +2910,9 @@ const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 // splatted onto a bed (caustics.js), and the bed is seen bent through the waves: the water draws after a copy
 // of the world under it (renderer.snapshot), reads it a little off where the waves tilt, and checks the copy's
 // depth so nothing standing above the water is pulled into it.
-const WATER = { clarity: 0.86, turbidity: 2.13, waves: 1.05, waveSpeed: 3.55, rippleSize: 1.25, flow: 0.15, glitter: 0.45, roughness: 0.004, foam: 0.25, shoreFoam: 1.25,
-  swell: 0.11, swellSize: 1.5, swellShade: 0.25, crests: 0, sparkle: 0.65, caustics: 0.9, shallows: 0, shoreLine: 0, shoreRipples: 0.65,
-  causticFocus: 1.4, causticDepth: 0.6, refraction: 0.25 };
+const WATER = { clarity: 0.86, turbidity: 2.13, waves: 2, waveSpeed: 3.55, rippleSize: 0.9, flow: 0.15, glitter: 2.4, roughness: 0.004, foam: 0, shoreFoam: 0,
+  swell: 0.11, swellSize: 1.4, swellShade: 0.25, crests: 0, sparkle: 0.65, caustics: 2.95, shallows: 0, shoreLine: 0, shoreRipples: 0.65,
+  causticFocus: 0.4, causticDepth: 0.55, refraction: 1.25 };
 const waveTex = (() => {
   // tileable value noise (lattices whose periods divide the texture): rg its slope, b the height, a foam lace
   const S = 256, rnd = mulberry32(7717), H = new Float32Array(S * S), F = new Float32Array(S * S);
@@ -3001,6 +3001,26 @@ fn swell(p: vec2f) -> vec3f {
 fn wave(uv: vec2f) -> vec4f { return textureSampleLevel(tWave, tWaveS, uv, 0.0); }
 fn slopeAt(uv: vec2f) -> vec2f { return wave(uv).rg * 2.0 - 1.0; }
 fn heightAt(uv: vec2f) -> f32 { return wave(uv).b; }
+// where the view ray through the surface at wp (fragment fp) meets the bed: from the copy's depth when there is
+// one and the bed is behind the surface there, else the depth d straight down, carried along the view's slant
+fn bedPoint(wp: vec3f, fp: vec4f, d: f32) -> vec3f {
+  let toP = wp - F.camPos.xyz;
+  let ortho = F.camPos.w > 0.5;
+  let dir = select(normalize(toP), normalize(F.camDir.xyz), ortho);
+  if (U.refr > 0.5) {
+    let dims = vec2i(textureDimensions(tRefrD));
+    let zb = textureLoad(tRefrD, clamp(vec2i(fp.xy), vec2i(0), dims - 1), 0);
+    if (zb > fp.z) {
+      // the bed's view depth, from its depth-buffer value through the projection
+      let P = F.proj;
+      let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+      let vs = (F.view * vec4f(wp, 1.0)).z;
+      if (ortho) { return wp + dir * (vs - vb); }
+      return F.camPos.xyz + toP * (vb / vs);
+    }
+  }
+  return wp + dir * (d / max(-dir.y, 0.2));
+}
 fn fresnelWater(c: f32) -> f32 { let x = 1.0 - sat(c); let x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
 const ROT_A = mat2x2f(0.8, -0.6, 0.6, 0.8);
 const ROT_B = mat2x2f(0.6, -0.8, 0.8, 0.6);
@@ -3037,10 +3057,17 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   // turquoise shallows: light off a pale bed, coloured by the little water over it
   let shK = smoothstep(0.0, 0.12, d) * (1.0 - smoothstep(0.25, 1.4, d)) * U.shallows;
   body += vec3f(0.05, 0.3, 0.26) * shK * (U.skyCol + sunE * max(L.y, 0.0));
-  // caustics on the bed: the sun the waves gather (caustics.js; 1 is the light still water lets through),
-  // fading as the water deepens
-  let cv = textureSampleLevel(tCaus, tCausS, xz / U.causTile, 0.0).r;
-  let caus = max(cv - 0.9, 0.0) * 0.45 * (1.0 - smoothstep(0.1, 1.1, d)) * smoothstep(0.0, 0.05, d) * U.caustics;
+  // caustics on the bed, where the view ray meets it: the sun the waves gathered on its way down to that point,
+  // so they lie on the slope of the bed and shift with its depth (caustics.js, indexed by where that light came
+  // in at the surface; 1 is what still water lets through). They light the bed (multiplying it), fading as the
+  // water over it deepens.
+  let bp = bedPoint(i.wpos, i.pos, d);
+  let hb = max(i.wpos.y - bp.y, 0.0);
+  let Ld = refract(-L, vec3f(0.0, 1.0, 0.0), 1.0 / 1.333);
+  let entry = bp.xz - Ld.xz / max(-Ld.y, 0.05) * hb;
+  let cv = textureSampleLevel(tCaus, tCausS, entry / U.causTile, 0.0).r;
+  let caus = max(cv - 0.9, 0.0) * 0.45 * (1.0 - smoothstep(0.1, 1.1, hb)) * smoothstep(0.0, 0.05, hb) * U.caustics;
+  let causGain = vec3f(1.0) + sunE * max(L.y, 0.0) * caus;
   // crests: a sheen where the swells stand highest, and sparkles that twinkle mostly on them
   let crest = smoothstep(0.35, 0.95, i.swellH) * U.crests;
   let sp = heightAt(xz / 7.0 + vec2f(0.031, -0.017) * t) + heightAt(ROT_C * xz / 5.0 - vec2f(0.012, 0.027) * t);
@@ -3058,10 +3085,10 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   let foamLit = vec3f(0.82, 0.87, 0.92) * (sunE * max(dot(N, L), 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
   var add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr + spec) * (1.0 - fm) + foamLit * fm;
   let sunK = max(L.y, 0.0);
-  add += (sunE * sunK * 0.5 * caus * Tr + (U.skyCol * 0.5 + sunE * sunK * 0.35) * 0.3 * crest + (sunE * 1.4 + U.skyCol * 0.4) * spark) * (1.0 - fm);
+  add += ((U.skyCol * 0.5 + sunE * sunK * 0.35) * 0.3 * crest + (sunE * 1.4 + U.skyCol * 0.4) * spark) * (1.0 - fm);
   // and the swells a touch lighter or darker as they turn toward the sun or away
   add *= clamp(1.0 + (dot(Nf, L) - L.y) * 6.0 * U.swellShade, 0.55, 1.6);
-  let mul = Tr * (1.0 - Fr) * (1.0 - fm);
+  let mul = Tr * (1.0 - Fr) * (1.0 - fm) * causGain;
   // the waterline: fade in over the first few hundredths so the shore isn't a hard edge
   // and into the haze: the ground under it is already hazed, so the water just fades out over it
   let f = smoothstep(0.0, 0.03, i.depth) * (1.0 - sat((i.fogZ - U.fogNear) / (U.fogFar - U.fogNear)));
