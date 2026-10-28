@@ -302,6 +302,21 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
     keep *= 1.0 - smoothstep(0.0, 0.04, under);
   }
   if (keep < 0.002) { discard; }
+  // how much of the layer the line of sight really goes through: on, away from the eye, as far as it would go down to
+  // the ground under a level layer. Past a cliff's edge it clips only the layer's corner, leaving through the drape
+  // before it's gone far, and taken as the whole layer that corner showed as a solid lip floating over the edge.
+  // (Reaching the ground first, in front of a rise, it's had all the layer there is.)
+  var through = 1.0;
+  let L = hs / max(V.y, 0.25);
+  var was = 0.0;
+  for (var k = 1; k <= 16; k++) {
+    let p = o - V * (L * f32(k) / 16.0);
+    let g = siteAt(p.xz).x;
+    if (p.y < g) { break; }
+    let d = g + hs - p.y;   // how deep in the layer
+    if (d < 0.0) { through = (f32(k - 1) + was / max(was - d, 1e-5)) / 16.0; break; }
+    was = d;
+  }
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
   let uv = (wp * CPM - U.grid.xy) / U.grid.zw;
   let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * U.grid.z / CPM;
@@ -318,7 +333,7 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   // across the tilted shell it grows without bound where the shell turns edge-on (rolling over a crest), and its rim
   // shows as a bright line
   let path = (2.0 * H / U.look.z) / max(V.y, 0.25);
-  let alpha = (1.0 - exp(-sigma * path)) * keep;
+  let alpha = (1.0 - exp(-sigma * path * through)) * keep;
   if (alpha < 0.002) { discard; }
   let tint = textureSampleLevel(tintTex, tintTexS, (wp * U.site.w - U.site.xy) / U.site.z, 0.0).rgb;
   let c = shadeLit(tint, vec3f(0.0), 0.0, 1.0, i.world, vec3f(0.0, 1.0, 0.0), true) * U.look.w;
