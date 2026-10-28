@@ -99,6 +99,21 @@ body.pad canvas { cursor: none; }
 .cell.held svg { opacity: 0.3; }
 #invInfo { margin-top: 10px; min-height: 2.3em; max-width: 424px; font: 17px/1.15 var(--body); color: var(--bone); }
 #invInfo b { font-family: var(--display); font-size: 9px; font-weight: normal; color: var(--gold); margin-right: 4px; }
+.cell .n { position: absolute; right: 3px; bottom: 1px; font-family: var(--display); font-size: 8px; color: var(--bone); text-shadow: 1px 1px 0 #000; pointer-events: none; }
+#craft { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; width: min(400px, calc(100vw - 32px)); box-sizing: border-box; padding: 10px 12px 12px; -webkit-user-select: none; user-select: none; }
+#craft .card-title { display: flex; justify-content: space-between; margin-bottom: 8px; }
+#craft .card-title span { color: var(--dim); }
+.recipe { display: grid; grid-template-columns: 48px 1fr auto auto; align-items: center; gap: 10px; padding: 4px; border: 3px solid transparent; }
+.recipe.focus { border-color: var(--gold); }
+.recipe .cell { width: 48px; height: 48px; cursor: default; }
+.recipe .rtext { display: grid; gap: 4px; }
+.recipe .rtext b { font-family: var(--display); font-size: 9px; font-weight: normal; color: var(--bone); }
+.recipe .rtext span { font: 15px/1 var(--body); color: var(--dim); }
+.recipe .rcost { font-family: var(--display); font-size: 8px; color: var(--gold); white-space: nowrap; }
+.recipe .rcost .short { color: var(--blood); }
+.recipe.poor button { opacity: 0.45; }
+.recipe button { padding: 7px 8px; font-size: 8px; }
+#craft .craftFoot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-family: var(--display); font-size: 7px; color: var(--dim); }
 #dragIcon { position: fixed; z-index: 9; width: 40px; height: 40px; margin: -20px 0 0 -20px; pointer-events: none; }
 #dragIcon svg { width: 100%; height: 100%; image-rendering: pixelated; }
 .slot.wide { width: 76px; }
@@ -214,12 +229,17 @@ button:disabled { opacity: 0.45; cursor: default; }
 <div id="padCursor" hidden></div>
 <div id="inv" class="plate" hidden>
   <div class="invBody">
-    <div><div class="card-title">GEAR</div><div id="doll"></div></div>
+    <div><div class="card-title">GEAR <span id="armorVal"></span></div><div id="doll"></div></div>
     <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div></div>
   </div>
   <div id="invInfo"></div>
 </div>
 <div id="dragIcon" hidden></div>
+<div id="craft" class="plate" hidden>
+  <div class="card-title">TANNING TABLE <span id="craftHave"></span></div>
+  <div id="craftList"></div>
+  <div class="craftFoot"><span class="kb-only">F OR ESC PUTS IT AWAY</span><span class="pad-only">D-PAD PICKS · A CRAFTS · B CLOSES</span><button id="craftClose">DONE</button></div>
+</div>
 
 <div class="modal" id="intro">
   <div class="sheet">
@@ -230,6 +250,7 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li class="kb-only"><span><kbd>WASD</kbd> move, aim with the mouse, <kbd>LMB</kbd> attack (hold to keep swinging). Hit trees and rocks to gather.</li>
       <li class="kb-only"><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash (a tumble you can steer), <kbd>F</kbd> open and close doors.</span></li>
       <li class="kb-only"><span><kbd>I</kbd> gear and pack: click to put on or take off, drag to move. Your weapon gives your attack and your <kbd>Q</kbd> and <kbd>E</kbd>; bare-handed you punch.</span></li>
+      <li>Wolves and boars leave a hide where they fall (<span class="kb-only"><kbd>F</kbd></span><span class="pad-only"><g-p>A</g-p></span> picks it up; hides stack to 100). Every town has a tannery: use its tanning table to make leather armor, pants, boots and a helmet.</li>
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
       <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
@@ -1151,11 +1172,24 @@ function raiseHouses(t, n) {
         const [ec, er, ew] = edgeOf(c, r, d), door = c === dc && r === dr && d === doorD;
         (ew ? WW : WN)[T(ec, er)] = door ? 2 : 1;
         piece(ec, er);
-        if (door) t.houses.push({ tiles, door: [ec, er, ew], color: ROOF_COLORS[Math.floor(hs(t.c + q, t.r, 95) * ROOF_COLORS.length)] });
+        if (door) t.houses.push({ tiles, door: [ec, er, ew], inside: [dc, dr], color: ROOF_COLORS[Math.floor(hs(t.c + q, t.r, 95) * ROOF_COLORS.length)] });
       }
     }
   });
+  // the first house is the tannery: its table stands on the floor tile farthest from the door, along the house
+  const tan = t.houses[0];
+  if (tan) {
+    const [ic, ir] = tan.inside;
+    let best = tan.tiles[0], bd = -1;
+    for (const [c, r] of tan.tiles) { const d = Math.hypot(c - ic, r - ir); if (d > bd) { bd = d; best = [c, r]; } }
+    const cs = tan.tiles.map(p => p[0]), rs = tan.tiles.map(p => p[1]);
+    const wide = Math.max(...cs) - Math.min(...cs) >= Math.max(...rs) - Math.min(...rs);
+    OB[T(best[0], best[1])] = O.TANTABLE;
+    TABLES.push({ c: best[0], r: best[1], x: best[0] + 0.5, z: best[1] + 0.5, ry: wide ? 0 : Math.PI / 2, town: n });
+    tan.color = '#7a5634'; tan.tannery = true; t.tannery = tan;
+  }
 }
+const TABLES = [];
 // Every town is fenced round wherever its edge can be walked across (in wood, or in dry stone), with a gate
 // where each street runs out into a road. A town no road reaches still gets a gate at a street's end.
 function fenceTowns() {
@@ -1629,7 +1663,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50, TANTABLE: 51,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -1657,6 +1691,7 @@ def(O.CRYPT, { tile: true });
 def(O.SHRINE, { tile: true });
 def(O.LAMP, { solid: 0.1 });
 def(O.HEARTH, { solid: 0.44 });
+def(O.TANTABLE, { name: 'tanning table', tile: true });
 [O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG, O.FERN, O.PUMICE].forEach(id => def(id, {}));
 
 // where on its tile an object stands (round ones wander a little off centre)
@@ -3290,6 +3325,21 @@ function house(x, z, k, ry) {
   // chimney
   part(G.box, '#7a6a64', x + Math.cos(ry) * 0.28, y + h + 0.5, z - Math.sin(ry) * 0.28, { sx: 0.13, sy: 0.4, sz: 0.13, ry });
 }
+// the tannery's table: a heavy plank bench with a hide spread on it, a scraping knife and a pot of tannin
+function tanTable(x, z, c, r) {
+  const y = surfaceY(x, z), ry = TABLES.find(t => t.c === c && t.r === r)?.ry || 0, wood = '#7a5232', dark = '#4a3020';
+  const at = (a, b) => [x + Math.cos(ry) * a + Math.sin(ry) * b, z - Math.sin(ry) * a + Math.cos(ry) * b];
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.2); part(G.box, dark, px, y + 0.25, pz, { sx: 0.08, sy: 0.5, sz: 0.08, ry }); }
+  part(G.box, wood, x, y + 0.53, z, { sx: 0.9, sy: 0.07, sz: 0.56, ry });
+  part(G.box, dark, x, y + 0.2, z, { sx: 0.78, sy: 0.05, sz: 0.06, ry });
+  // the hide: a pelt with its four legs splayed, darker down the spine
+  part(G.box, '#b07a4a', x, y + 0.575, z, { sx: 0.5, sy: 0.02, sz: 0.36, ry: ry + 0.12 });
+  part(G.box, '#8a5a34', x, y + 0.588, z, { sx: 0.4, sy: 0.012, sz: 0.1, ry: ry + 0.12 });
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.22, sb * 0.2); part(G.box, '#a8724a', px, y + 0.575, pz, { sx: 0.1, sy: 0.018, sz: 0.08, ry: ry + 0.5 * sa * sb }); }
+  const [kx, kz] = at(0.34, -0.17); part(G.box, '#c8ccd4', kx, y + 0.58, kz, { sx: 0.16, sy: 0.015, sz: 0.04, ry: ry - 0.4 });
+  const [vx, vz] = at(-0.33, -0.16); part(G.cyl8, '#5a4a3a', vx, y + 0.63, vz, { sx: 0.13, sy: 0.14, sz: 0.13 });
+  part(G.cyl8, '#3a2014', vx, y + 0.705, vz, { sx: 0.1, sy: 0.01, sz: 0.1 });
+}
 function well(x, z) {
   const y = groundAt(x, z);
   part(G.cyl8, '#8a8494', x, y + 0.2, z, { sx: 0.84, sy: 0.4, sz: 0.84 });
@@ -3345,6 +3395,7 @@ function drawObject(o, c, r) {
     case O.CRYPT: return crypt(x, z, Math.floor(k * 4) * Math.PI / 2);
     case O.SHRINE: return shrine(x, z, k * 6);
     case O.HEARTH: return hearth(x, z, c, r);
+    case O.TANTABLE: return tanTable(x, z, c, r);
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -3994,12 +4045,17 @@ function boxer(g, parts) {
 
 // The adventurer: boots, breeches, a blue tunic with a belt, a pack with a bedroll, and a sword.
 // Arms and legs hang from pivots so they can swing. Each piece of clothing (and the skin or shorts under
-// it) is tagged in userData.gear, and dressHero shows the pieces for what is worn.
+// it) is tagged in userData.gear, and dressHero shows the pieces for what is worn and colours them in the
+// worn item's materials (HERO_MAT).
 const heroSkin = flatMat({ color: '#e0b48a' }), heroTunic = flatMat({ color: '#3f6a8a' });
+const HERO_MAT = {
+  tunic: heroTunic, hood: flatMat({ color: '#2f5a3a' }), pants: flatMat({ color: '#5a4632' }), boots: flatMat({ color: '#3a2a1e' }),
+  leather: flatMat({ color: '#8a5a34' }), leatherDark: flatMat({ color: '#4e3220' }), leatherPants: flatMat({ color: '#9a6a3e' }), leatherBoots: flatMat({ color: '#6e4426' }),
+};
 function makeHuman() {
   const g = new GFX.Group(), parts = [];
-  const pants = flatMat({ color: '#5a4632' }), boots = flatMat({ color: '#3a2a1e' }), hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
-  const pack = flatMat({ color: '#7a5434' }), roll = flatMat({ color: '#9a8a5a' }), hood = flatMat({ color: '#2f5a3a' });
+  const { pants, boots, hood, leather, leatherDark } = HERO_MAT, hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
+  const pack = flatMat({ color: '#7a5434' }), roll = flatMat({ color: '#9a8a5a' });
   const shorts = flatMat({ color: '#f4efe6' }), heart = flatMat({ color: '#d8443a' });
   const box = (parent, w, h, d, x, y, z, mat, rx = 0, rz = 0) => { const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.rotation.set(rx, 0, rz); parent.add(m); parts.push(m); return m; };
   const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
@@ -4009,6 +4065,7 @@ function makeHuman() {
   for (const leg of [legL, legR]) {
     wear('pants', box(leg, 0.1, 0.24, 0.11, 0, -0.12, 0, pants)); wear('skinLegs', box(leg, 0.09, 0.24, 0.1, 0, -0.12, 0, heroSkin));
     wear('boots', box(leg, 0.11, 0.13, 0.15, 0, -0.295, 0.015, boots)); wear('feet', box(leg, 0.09, 0.12, 0.13, 0, -0.3, 0.015, heroSkin));
+    wear('cuffs', box(leg, 0.125, 0.04, 0.165, 0, -0.235, 0.015, leatherDark));
   }
   wear('shirt', box(body, 0.28, 0.3, 0.16, 0, 0.52, 0, heroTunic), box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, heroTunic));
   wear('skinTorso', box(body, 0.27, 0.3, 0.15, 0, 0.52, 0, heroSkin));
@@ -4019,8 +4076,10 @@ function makeHuman() {
     for (const x of [-0.085, 0, 0.085]) wear('boxers', box(body, 0.035, 0.035, 0.006, x, 0.302, z, heart, 0, Math.PI / 4));
     for (const x of [-0.0425, 0.0425]) wear('boxersBare', box(body, 0.035, 0.035, 0.006, x, 0.36, z, heart, 0, Math.PI / 4));
   }
-  wear('pants', box(body, 0.3, 0.045, 0.175, 0, 0.42, 0, belt), box(body, 0.055, 0.05, 0.02, 0, 0.42, 0.09, goldMat));
-  wear('shirt', box(body, 0.32, 0.07, 0.19, 0, 0.665, -0.005, hood));
+  wear('belt', box(body, 0.3, 0.045, 0.175, 0, 0.42, 0, belt), box(body, 0.055, 0.05, 0.02, 0, 0.42, 0.09, goldMat));
+  wear('hood', box(body, 0.32, 0.07, 0.19, 0, 0.665, -0.005, hood));
+  // the leather armour's strap across the chest (and its shoulder pads, below)
+  wear('pads', box(body, 0.05, 0.34, 0.175, 0, 0.52, 0, leatherDark, 0, 0.6));
   box(body, 0.22, 0.24, 0.1, 0, 0.53, -0.13, pack);
   box(body, 0.3, 0.08, 0.08, 0, 0.68, -0.14, roll);
   const head = pivot(body, 0, 0.7, 0);
@@ -4029,11 +4088,13 @@ function makeHuman() {
   box(head, 0.2, 0.15, 0.05, 0, 0.13, -0.08, hair);
   box(head, 0.035, 0.035, 0.01, -0.045, 0.11, 0.092, darkMat);
   box(head, 0.035, 0.035, 0.01, 0.045, 0.11, 0.092, darkMat);
+  wear('helmet', box(head, 0.215, 0.09, 0.205, 0, 0.235, -0.005, leather), box(head, 0.222, 0.03, 0.212, 0, 0.195, -0.005, leatherDark));
   const armL = pivot(body, 0.175, 0.64, 0), armR = pivot(body, -0.175, 0.64, 0);
   armL.rotation.order = armR.rotation.order = 'YXZ';
   for (const arm of [armL, armR]) {
     wear('shirt', box(arm, 0.08, 0.2, 0.09, 0, -0.1, 0, heroTunic)); wear('skinTorso', box(arm, 0.07, 0.2, 0.08, 0, -0.1, 0, heroSkin));
     box(arm, 0.07, 0.07, 0.075, 0, -0.235, 0, heroSkin);
+    wear('pads', box(arm, 0.11, 0.07, 0.12, 0, -0.005, 0, leatherDark));
   }
   const sword = pivot(armR, 0, -0.25, 0.02);
   wear('sword', sword);
@@ -4254,15 +4315,15 @@ const FOE = {
   goblin: { make: makeGoblin, name: 'Goblin', hp: 30, dmg: 7, speed: 2.7, reach: 0.8, aggro: 8, rad: 0.25 },
   hellhound: { make: makeHellhound, name: 'Hellhound', hp: 38, dmg: 10, speed: 4.2, reach: 0.9, aggro: 10, rad: 0.3 },
   firespirit: { make: makeFireSpirit, name: 'Fire spirit', hp: 30, dmg: 10, speed: 2.5, reach: 0.9, aggro: 9, rad: 0.27 },
-  wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28 },
+  wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28, hide: true },
   slime: { make: makeSlime, name: 'Bog slime', hp: 26, dmg: 6, speed: 1.8, reach: 0.75, aggro: 6, rad: 0.3 },
   ghost: { make: () => makeGhost(), name: 'Wailing ghost', hp: 28, dmg: 9, speed: 2.4, reach: 0.85, aggro: 9, rad: 0.25 },
   zombie: { make: makeZombie, name: 'Zombie', hp: 48, dmg: 11, speed: 1.55, reach: 0.85, aggro: 7, rad: 0.27 },
   skeleton: { make: makeSkeleton, name: 'Skeleton', hp: 34, dmg: 9, speed: 2.5, reach: 0.9, aggro: 8, rad: 0.25 },
-  frostwolf: { make: () => makeWolf('#dfe8f2', '#a8b8cc', '#5ad0ff'), name: 'Frost wolf', hp: 40, dmg: 10, speed: 4.1, reach: 0.85, aggro: 10, rad: 0.28 },
+  frostwolf: { make: () => makeWolf('#dfe8f2', '#a8b8cc', '#5ad0ff'), name: 'Frost wolf', hp: 40, dmg: 10, speed: 4.1, reach: 0.85, aggro: 10, rad: 0.28, hide: true },
   wraith: { make: () => makeGhost('#a8d8ff', '#2a5a9a'), name: 'Ice wraith', hp: 36, dmg: 11, speed: 2.6, reach: 0.9, aggro: 10, rad: 0.25 },
   scorpion: { make: makeScorpion, name: 'Giant scorpion', hp: 36, dmg: 9, speed: 3.1, reach: 0.9, aggro: 8, rad: 0.3 },
-  boar: { make: makeBoar, name: 'Wild boar', hp: 36, dmg: 9, speed: 3.6, reach: 0.85, aggro: 6, rad: 0.3 },
+  boar: { make: makeBoar, name: 'Wild boar', hp: 36, dmg: 9, speed: 3.6, reach: 0.85, aggro: 6, rad: 0.3, hide: true },
   spider: { make: makeSpider, name: 'Giant spider', hp: 24, dmg: 7, speed: 4.4, reach: 0.8, aggro: 9, rad: 0.3 },
   // rooted: never moves, only turns to face you and lunges its head out to bite
   mantrap: { make: makeMantrap, name: 'Mantrap', hp: 44, dmg: 12, speed: 0, reach: 1.55, aggro: 3.4, rad: 0.3, rooted: true },
@@ -4619,6 +4680,12 @@ function pixelSvg(rows, palette) {
   rows.forEach((row, y) => [...row].forEach((ch, x) => { if (palette[ch]) rects += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${palette[ch]}"/>`; }));
   return `<svg viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
 }
+// shapes the cloth and leather pieces share, in their own colours
+const ART = {
+  shirt: ['.TT.c.TT.', 'TTTcccTTT', 'TsTTTTTsT', '.TTTTTTT.', '..TTTTT..', '..TTTTT..', '..ttttt..'],
+  pants: ['.bbbybbb.', '.PPPPPPP.', '.PPPPPPP.', '.PPP.PPP.', '.PPP.PPP.', '.PPP.PPP.', '.PP...PP.', '.PP...PP.'],
+  boots: ['..BBBB...', '..BBBB...', '..BBBB...', '..cccc...', '..BBBBBB.', '.BBBBBBBB', '.ssssssss'],
+};
 const ICON = {
   skull: pixelSvg(['.XXXXX.', 'XXXXXXX', 'XrrXrrX', 'XXXdXXX', '.XXXXX.', '.X.X.X.'], { X: '#efe4c8', r: '#d8443a', d: '#17131f' }),
   wood: pixelSvg(['..BBBBB.', '.BbbbbbB', 'BbBBBBbB', 'BbBrrBbB', 'BbBBBBbB', '.BbbbbbB', '..BBBBB.'], { B: '#8a5a32', b: '#5a3a22', r: '#c89a62' }),
@@ -4641,9 +4708,15 @@ const ICON = {
   gate: pixelSvg(['P.......P', 'PwwwwwwwP', 'Pw.w.w.wP', 'PwLwLw.wP', 'Pw.wLwLwP', 'PwwwwwwwP', 'P.......P'], { P: '#5a3c24', w: '#8a6440', L: '#6a4428' }),
   remove: pixelSvg(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
   helm: pixelSvg(['...XXX...', '.XXXXXXX.', 'XXXXXXXXX', 'XX.....XX', 'XX.X.X.XX', 'XX.....XX', 'X.......X'], { X: '#8c8a96' }),
-  shirt: pixelSvg(['.TT.c.TT.', 'TTTcccTTT', 'TTTTTTTTT', '.TTTTTTT.', '..TTTTT..', '..TTTTT..', '..ttttt..'], { T: '#3f6a8a', t: '#2f5070', c: '#2f5a3a' }),
-  pants: pixelSvg(['.bbbybbb.', '.PPPPPPP.', '.PPPPPPP.', '.PPP.PPP.', '.PPP.PPP.', '.PPP.PPP.', '.PP...PP.', '.PP...PP.'], { b: '#2a1e16', y: '#f2c14e', P: '#7a5e42' }),
-  boots: pixelSvg(['..BBBB...', '..BBBB...', '..BBBB...', '..BBBB...', '..BBBBBB.', '.BBBBBBBB', '.ssssssss'], { B: '#6a4a32', s: '#2a1e16' }),
+  shirt: pixelSvg(ART.shirt, { T: '#3f6a8a', t: '#2f5070', c: '#2f5a3a', s: '#3f6a8a' }),
+  pants: pixelSvg(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#7a5e42' }),
+  boots: pixelSvg(ART.boots, { B: '#6a4a32', s: '#2a1e16', c: '#6a4a32' }),
+  leatherArmor: pixelSvg(ART.shirt, { T: '#9a6638', t: '#5a3820', c: '#5a3820', s: '#5a3820' }),
+  leatherPants: pixelSvg(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#b07a46' }),
+  leatherBoots: pixelSvg(ART.boots, { B: '#8a5430', s: '#3a2416', c: '#4e3220' }),
+  leatherHelmet: pixelSvg(['...LLL...', '.LLLLLLL.', 'LLLLLLLLL', 'LdddddddL', 'LL.....LL', 'L.......L'], { L: '#9a6638', d: '#4e3220' }),
+  hide: pixelSvg(['.H.....H.', 'HHH...HHH', '.HHHHHHH.', '..HhHhH..', '..HHhHH..', '.HHHHHHH.', 'HHH...HHH', '.H.....H.'], { H: '#b07a4a', h: '#7a5434' }),
+  table: pixelSvg(['.........', '..hhhhh..', 'TTTTTTTTT', 'TTTTTTTTT', '.L.....L.', '.L.....L.', '.L.....L.'], { T: '#8a5a32', h: '#b07a4a', L: '#5a3a22' }),
   fist: pixelSvg(['..SSSSS..', '.SsSsSsS.', '.SSSSSSS.', '.SSSSSSS.', '..SSSSSS.', '...SSSS..', '...TTTT..', '...TTTT..'], { S: '#e0b48a', s: '#a8805a', T: '#3f6a8a' }),
   bag: pixelSvg(['...ddd...', '..d...d..', '.BBBBBBB.', '.BbbbbbB.', '.BBByBBB.', '.BbbbbbB.', '.BBBBBBB.'], { B: '#8a5a32', b: '#5a3a22', d: '#5a3a22', y: '#f2c14e' }),
   lock: pixelSvg(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
@@ -4655,14 +4728,23 @@ $('stoneIcon').innerHTML = ICON.stone;
 $('skullIcon').innerHTML = ICON.skull;
 
 // ---------- Gear and the pack ----------
-// What you wear goes on the paper doll, one item to a slot; everything else rides in the pack. Your weapon
-// decides your attack (LMB) and the abilities on Q and E: with no weapon you punch and have none.
+// What you wear goes on the paper doll, one item to a slot; everything else rides in the pack, where
+// materials stack (up to `stack` to a square). Your weapon decides your attack (LMB) and the abilities on Q
+// and E: with no weapon you punch and have none. Armour takes ARMOR_PER of each blow per point worn; mat
+// and trim are the HERO_MAT colours the hero wears it in.
 const ITEMS = {
-  clothShirt: { name: 'Cloth Shirt', slot: 'chest', icon: 'shirt' },
-  clothPants: { name: 'Cloth Pants', slot: 'legs', icon: 'pants' },
-  clothBoots: { name: 'Cloth Boots', slot: 'boots', icon: 'boots' },
+  clothShirt: { name: 'Cloth Shirt', slot: 'chest', icon: 'shirt', armor: 0, mat: 'tunic', trim: 'hood' },
+  clothPants: { name: 'Cloth Pants', slot: 'legs', icon: 'pants', armor: 0, mat: 'pants' },
+  clothBoots: { name: 'Cloth Boots', slot: 'boots', icon: 'boots', armor: 0, mat: 'boots' },
   basicSword: { name: 'Basic Sword', slot: 'weapon', icon: 'sword', strike: 'slash', q: 'whirl', e: 'lunge' },
+  leatherArmor: { name: 'Leather Armor', slot: 'chest', icon: 'leatherArmor', armor: 3, mat: 'leather', trim: 'leatherDark' },
+  leatherPants: { name: 'Leather Pants', slot: 'legs', icon: 'leatherPants', armor: 2, mat: 'leatherPants' },
+  leatherBoots: { name: 'Leather Boots', slot: 'boots', icon: 'leatherBoots', armor: 1, mat: 'leatherBoots' },
+  leatherHelmet: { name: 'Leather Helmet', slot: 'head', icon: 'leatherHelmet', armor: 1 },
+  hide: { name: 'Hide', icon: 'hide', stack: 100, about: 'Taken from wolves and boars. A tanner\'s table works it into leather.' },
 };
+const ARMOR_PER = 0.04;
+const armor = () => Object.values(GEAR).reduce((a, id) => a + (id && ITEMS[id].armor || 0), 0);
 const FISTS = { name: 'Bare Fists', strike: 'punch' };
 const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' } };
 const ABILITY = {
@@ -4676,44 +4758,88 @@ const GEAR_SLOTS = [
   { slot: 'boots', name: 'BOOTS', at: [2, 4], icon: 'boots' },
 ];
 const GEAR = { head: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'basicSword' };
-const PACK = new Array(20).fill(null);
+const PACK = new Array(20).fill(null), PACK_N = new Array(20).fill(0);
 const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
 function useAbility(key) {
   const a = weapon()[key];
   if (a) ABILITY[a].cast();
   else if (mode === 'play' && H.alive) sfx.nope();
 }
-// which hero pieces show for what's worn
+// which hero pieces show for what's worn, and what they're coloured
 const DRESS = {
-  shirt: () => GEAR.chest, skinTorso: () => !GEAR.chest,
-  pants: () => GEAR.legs, skinLegs: () => !GEAR.legs, hipPants: () => GEAR.legs && !GEAR.chest,
+  shirt: () => GEAR.chest, hood: () => GEAR.chest, skinTorso: () => !GEAR.chest, pads: () => GEAR.chest === 'leatherArmor',
+  pants: () => GEAR.legs, belt: () => GEAR.legs, skinLegs: () => !GEAR.legs, hipPants: () => GEAR.legs && !GEAR.chest,
   boxers: () => !GEAR.legs, boxersBare: () => !GEAR.legs && !GEAR.chest,
-  boots: () => GEAR.boots, feet: () => !GEAR.boots,
+  boots: () => GEAR.boots, feet: () => !GEAR.boots, cuffs: () => GEAR.boots === 'leatherBoots',
+  helmet: () => GEAR.head === 'leatherHelmet',
   sword: () => GEAR.weapon === 'basicSword',
 };
-function dressHero() { heroRoot.traverse(o => { const t = o.userData.gear; if (t) o.visible = !!DRESS[t](); }); }
+const DRESS_MAT = {
+  shirt: () => GEAR.chest && ITEMS[GEAR.chest].mat, hood: () => GEAR.chest && ITEMS[GEAR.chest].trim,
+  pants: () => GEAR.legs && ITEMS[GEAR.legs].mat, hipPants: () => GEAR.legs && ITEMS[GEAR.legs].mat,
+  boots: () => GEAR.boots && ITEMS[GEAR.boots].mat,
+};
+// (the silhouette and shadow copies keep their own materials)
+const DRESSABLE = new Set(Object.values(HERO_MAT));
+function dressHero() {
+  heroRoot.traverse(o => {
+    const t = o.userData.gear;
+    if (!t) return;
+    o.visible = !!DRESS[t]();
+    const m = DRESS_MAT[t] && DRESS_MAT[t]();
+    if (m && DRESSABLE.has(o.material)) o.material = HERO_MAT[m];
+  });
+}
 dressHero();
 
-// A cell is ['gear', slot] or ['pack', index].
+// A cell is ['gear', slot] or ['pack', index]; a pack square also counts how many it holds.
 const cellGet = ([k, i]) => k === 'gear' ? GEAR[i] : PACK[i];
-const cellSet = ([k, i], v) => { if (k === 'gear') GEAR[i] = v; else PACK[i] = v; };
+const cellCount = ([k, i]) => k === 'gear' ? (GEAR[i] ? 1 : 0) : PACK_N[i];
+const cellSet = ([k, i], id, n = 1) => { if (k === 'gear') GEAR[i] = id; else { PACK[i] = id; PACK_N[i] = id ? n : 0; } };
 const fits = ([k, i], id) => !id || k === 'pack' || ITEMS[id].slot === i;
 const sameCell = (a, b) => a && b && a[0] === b[0] && a[1] === b[1];
-// drop what's in one cell on another: they trade places, if each fits where it's going
+const stackOf = id => ITEMS[id].stack || 1;
+// drop what's in one cell on another: the same material tops up the stack there, anything else trades
+// places, if each fits where it's going
 function moveItem(from, to) {
   if (sameCell(from, to)) return false;
-  const a = cellGet(from), b = cellGet(to);
+  const a = cellGet(from), b = cellGet(to), na = cellCount(from), nb = cellCount(to);
   if (!a) return false;
-  if (!fits(to, a) || !fits(from, b)) { sfx.nope(); return false; }
-  cellSet(to, a); cellSet(from, b);
+  if (a === b && stackOf(a) > 1 && nb < stackOf(a)) {
+    const n = Math.min(na, stackOf(a) - nb);
+    cellSet(to, a, nb + n); cellSet(from, na - n ? a : null, na - n);
+  } else {
+    if (!fits(to, a) || !fits(from, b)) { sfx.nope(); return false; }
+    cellSet(to, a, na); cellSet(from, b, nb);
+  }
   gearChanged();
+  return true;
+}
+const countItem = id => PACK.reduce((a, p, i) => a + (p === id ? PACK_N[i] : 0), 0);
+// put n of an item in the pack, topping up its stacks before starting new ones; what doesn't fit is returned
+function addItem(id, n = 1) {
+  const top = stackOf(id);
+  for (let pass = 0; pass < 2 && n > 0; pass++) PACK.forEach((p, i) => {
+    if (n <= 0 || (pass === 0 ? p !== id : p !== null)) return;
+    const k = Math.min(n, top - (p ? PACK_N[i] : 0));
+    if (k > 0) { PACK[i] = id; PACK_N[i] += k; n -= k; }
+  });
+  if (invOpen) renderInv();
+  return n;
+}
+// take n of an item out of the pack (from its smallest stacks first), if there are that many
+function takeItem(id, n) {
+  if (countItem(id) < n) return false;
+  const at = PACK.map((p, i) => i).filter(i => PACK[i] === id).sort((a, b) => PACK_N[a] - PACK_N[b]);
+  for (const i of at) { const k = Math.min(n, PACK_N[i]); PACK_N[i] -= k; n -= k; if (!PACK_N[i]) PACK[i] = null; if (!n) break; }
+  if (invOpen) renderInv();
   return true;
 }
 // a click: put on what's in the pack (swapping out what's worn there), take off what's worn
 function clickCell(c) {
   const id = cellGet(c);
   if (!id) return false;
-  if (c[0] === 'pack') return moveItem(c, ['gear', ITEMS[id].slot]);
+  if (c[0] === 'pack') { if (!ITEMS[id].slot) return false; return moveItem(c, ['gear', ITEMS[id].slot]); }
   const free = PACK.indexOf(null);
   if (free < 0) { toast('Your pack is full.'); sfx.nope(); return false; }
   return moveItem(c, ['pack', free]);
@@ -4734,7 +4860,9 @@ function itemInfo(c) {
   const id = cellGet(c);
   if (!id) return c[0] === 'gear' ? `<b>${GEAR_SLOTS.find(g => g.slot === c[1]).name}</b> Nothing worn here.` : '<b>PACK</b> An empty square.';
   const it = ITEMS[id], abil = it.strike ? ` LMB ${it.strike}${it.q ? ', Q ' + it.q : ''}${it.e ? ', E ' + it.e : ''}.` : '';
-  return `<b>${it.name.toUpperCase()}</b> ${titleCase(it.slot)}.${abil} ${c[0] === 'gear' ? 'Click to take it off.' : 'Click to put it on.'}`;
+  if (!it.slot) return `<b>${it.name.toUpperCase()} × ${cellCount(c)}</b> ${it.about} Stacks to ${it.stack}.`;
+  const arm = it.armor ? ` Armor ${it.armor}.` : '';
+  return `<b>${it.name.toUpperCase()}</b> ${titleCase(it.slot)}.${arm}${abil} ${c[0] === 'gear' ? 'Click to take it off.' : 'Click to put it on.'}`;
 }
 function renderInv() {
   const cell = (parent, c, html, at) => {
@@ -4750,8 +4878,9 @@ function renderInv() {
     const id = GEAR[g.slot];
     cell(doll, ['gear', g.slot], id ? ICON[ITEMS[id].icon] : dimIcon(ICON[g.icon]) + `<span class="lbl">${g.name}</span>`, g.at);
   }
-  PACK.forEach((id, i) => cell(pack, ['pack', i], id ? ICON[ITEMS[id].icon] : ''));
+  PACK.forEach((id, i) => cell(pack, ['pack', i], id ? ICON[ITEMS[id].icon] + (stackOf(id) > 1 ? `<span class="n">${PACK_N[i]}</span>` : '') : ''));
   $('packCount').textContent = PACK.filter(Boolean).length + ' / ' + PACK.length;
+  $('armorVal').textContent = 'ARMOR ' + armor();
   showInfo();
 }
 function showInfo() {
@@ -4817,6 +4946,54 @@ function navInv(dx, dy) {
     if (!over || !moveItem(p.c, cellOf(over))) renderInv();
   });
 }
+
+// ---------- Crafting ----------
+// Every town's tannery has a tanning table; using it opens the list of what can be made there, each for so
+// many hides. What you make goes in the pack.
+const RECIPES = [
+  { make: 'leatherArmor', cost: { hide: 5 } }, { make: 'leatherPants', cost: { hide: 4 } },
+  { make: 'leatherBoots', cost: { hide: 2 } }, { make: 'leatherHelmet', cost: { hide: 2 } },
+];
+let craftAt = null, craftFocus = 0;   // the table in use
+const canCraft = rc => Object.entries(rc.cost).every(([id, n]) => countItem(id) >= n);
+function renderCraft() {
+  const list = $('craftList');
+  list.innerHTML = '';
+  RECIPES.forEach((rc, k) => {
+    const it = ITEMS[rc.make], ok = canCraft(rc), row = document.createElement('div');
+    row.className = 'recipe' + (ok ? '' : ' poor') + (PAD.on && k === craftFocus ? ' focus' : '');
+    const cost = Object.entries(rc.cost).map(([id, n]) => `<span class="${countItem(id) >= n ? '' : 'short'}">${n} ${ITEMS[id].name.toUpperCase()}</span>`).join(' ');
+    row.innerHTML = `<div class="cell full">${ICON[it.icon]}</div><div class="rtext"><b>${it.name.toUpperCase()}</b><span>${titleCase(it.slot)} · armor ${it.armor}</span></div><div class="rcost">${cost}</div><button>CRAFT</button>`;
+    row.querySelector('button').addEventListener('click', () => { audioOn(); craftFocus = k; craft(k); });
+    list.appendChild(row);
+  });
+  $('craftHave').textContent = 'YOU HAVE ' + countItem('hide') + ' HIDE';
+}
+function craft(k) {
+  const rc = RECIPES[k], it = ITEMS[rc.make];
+  if (!canCraft(rc)) { toast(`You need ${Object.entries(rc.cost).map(([id, n]) => n + ' ' + ITEMS[id].name.toLowerCase()).join(' and ')} for ${it.name.toLowerCase()}.`); sfx.nope(); return false; }
+  for (const [id, n] of Object.entries(rc.cost)) takeItem(id, n);
+  if (addItem(rc.make)) {
+    for (const [id, n] of Object.entries(rc.cost)) addItem(id, n);
+    toast('Your pack is full.'); sfx.nope(); renderCraft(); return false;
+  }
+  sfx.place(); sfx.coin();
+  toast(`You make ${it.name.toLowerCase()}. It's in your pack.`, 'good');
+  renderCraft();
+  return true;
+}
+function toggleCraft(table) {
+  craftAt = table || null;
+  $('craft').hidden = !craftAt;
+  if (craftAt) {
+    if (mode !== 'play') setMode('play');
+    craftFocus = 0; renderCraft();
+    // with the mouse the pack opens beside it; on the controller the D-pad is the list's
+    if (!PAD.on && !invOpen) toggleInv(true);
+    if (PAD.on && invOpen) toggleInv(false);
+  }
+}
+$('craftClose').addEventListener('click', () => toggleCraft(null));
 
 let mode = 'play', buildKind = 'wall';
 // the play bar follows your weapon: its attack, and its abilities on Q and E (locked with none)
@@ -5036,6 +5213,32 @@ function dropOrb(x, z) {
   m.position.set(x, surfaceY(x, z) + 0.35, z); scene.add(m);
   orbs.push({ m, x, z, t: 0 });
 }
+// a hide left where a wolf or boar fell, lying flat until you pick it up (F / A) or five minutes pass
+let hides = [];
+const hideMat = flatMat({ color: '#b07a4a' }), hideSpine = flatMat({ color: '#8a5a34' });
+const hideGeo = new GFX.BoxGeometry(0.42, 0.025, 0.3), spineGeo = new GFX.BoxGeometry(0.34, 0.015, 0.08), pawGeo = new GFX.BoxGeometry(0.09, 0.02, 0.07);
+function dropHide(x, z) {
+  const g = new GFX.Group();
+  g.add(new GFX.Mesh(hideGeo, hideMat));
+  const sp = new GFX.Mesh(spineGeo, hideSpine); sp.position.y = 0.018; g.add(sp);
+  for (const a of [-1, 1]) for (const b of [-1, 1]) { const p = new GFX.Mesh(pawGeo, hideMat); p.position.set(a * 0.2, 0, b * 0.17); p.rotation.y = 0.5 * a * b; g.add(p); }
+  g.position.set(x, surfaceY(x, z) + 0.02, z); g.rotation.y = Math.random() * 6.28;
+  g.traverse(o => { o.receiveShadow = true; });
+  scene.add(g);
+  hides.push({ m: g, x, z, t: 0 });
+}
+const HIDE_REACH = 1.3;
+const hidesNear = () => hides.filter(h => Math.hypot(h.x - H.x, h.z - H.z) < HIDE_REACH);
+function pickUpHides() {
+  const near = hidesNear();
+  let got = 0;
+  for (const h of near) {
+    if (addItem('hide', 1)) break;
+    scene.remove(h.m); hides.splice(hides.indexOf(h), 1); got++;
+  }
+  if (got) { sfx.coin(); floatText('+' + got + ' HIDE', H.x, H.y + 1.3, H.z, '#e8c08a'); if (craftAt) renderCraft(); }
+  if (got < near.length) { toast('Your pack is full.'); sfx.nope(); }
+}
 // slash arcs: a flat crescent of light in front of the hero
 const arcMat = new GFX.MeshBasicMaterial({ color: '#fff4d8', transparent: true, opacity: 0, depthWrite: false, blending: GFX.AdditiveBlending, side: GFX.DoubleSide });
 const ARC = 2.0;
@@ -5128,6 +5331,7 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats(); bump('killPlate');
     if (Math.random() < 0.35) dropOrb(f.x, f.z);
+    if (f.def.hide) dropHide(f.x, f.z);
   }
 }
 // a sword stroke: foes in the arc, and the one nearest tree or rock in front
@@ -5153,6 +5357,7 @@ function swingHit(range, arc, dmg) {
 }
 function hurtHero(dmg, fromX, fromZ) {
   if (!H.alive || H.invuln > 0) return;
+  dmg = Math.max(1, Math.round(dmg * (1 - armor() * ARMOR_PER)));
   H.hp -= dmg; H.hurtT = 0; H.lastHurt = time;
   const dx = H.x - fromX, dz = H.z - fromZ, l = Math.hypot(dx, dz) || 1;
   H.kx = dx / l * 3.5; H.kz = dz / l * 3.5;
@@ -5209,6 +5414,7 @@ addEventListener('keydown', e => {
   }
   if (mapOpen) return;
   if (e.code === 'KeyI' && !e.repeat) { toggleInv(); return; }
+  if (e.code === 'Escape' && craftAt) { toggleCraft(null); return; }
   if (e.code === 'Escape' && invOpen) { toggleInv(false); return; }
   keys.add(e.code);
   if (e.repeat) return;
@@ -5226,7 +5432,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyE') useAbility('e');
   if (e.code === 'Space') castDash();
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') castJump();
-  if (e.code === 'KeyF') useDoor();
+  if (e.code === 'KeyF') useAction();
   if (e.code === 'KeyZ') turnCam(-1);
   if (e.code === 'KeyC') turnCam(1);
   if (e.key === '+' || e.key === '=') setZoom(zoom * 1.15);
@@ -5343,8 +5549,14 @@ function pollPad(dt) {
   if (hit('VIEW')) { toggleMap(); return; }
   if (hit('L3')) togglePlots();
   // with the gear window open the D-pad picks a square, A clicks it, and B or RB closes it
-  const inv = invOpen;
-  if (inv) {
+  const inv = invOpen || !!craftAt;
+  if (craftAt) {
+    if (hit('B')) toggleCraft(null);
+    if (hit('DU')) { craftFocus = (craftFocus + RECIPES.length - 1) % RECIPES.length; renderCraft(); }
+    if (hit('DD')) { craftFocus = (craftFocus + 1) % RECIPES.length; renderCraft(); }
+    if (hit('A')) craft(craftFocus);
+    if (hit('RB')) { toggleCraft(null); toggleInv(true); }
+  } else if (inv) {
     if (hit('B') || hit('RB')) toggleInv(false);
     if (hit('DL')) navInv(-1, 0);
     if (hit('DR')) navInv(1, 0);
@@ -5357,7 +5569,7 @@ function pollPad(dt) {
     if (hit('DU')) setZoom(zoom * 1.15);
     if (hit('DD')) setZoom(zoom / 1.15);
   }
-  if (hit('MENU')) { if (inv) toggleInv(false); setMode(mode === 'build' ? 'play' : 'build'); }
+  if (hit('MENU')) { if (invOpen) toggleInv(false); if (craftAt) toggleCraft(null); setMode(mode === 'build' ? 'play' : 'build'); }
   if (mode === 'play') {
     PAD.attack = now[PB.RT];
     // holding LT, the right stick turns the camera instead of aiming
@@ -5369,7 +5581,7 @@ function pollPad(dt) {
       if (hit('RB')) toggleInv(true);
       if (hit('B')) castDash();
       // A jumps off the edge you're pushing at, and otherwise opens or closes the door you're by
-      if (hit('A')) { if (H.canJump) castJump(); else useDoor(); }
+      if (hit('A')) { if (H.canJump) castJump(); else useAction(); }
     }
     $('padCursor').hidden = true;
     return;
@@ -5654,6 +5866,25 @@ function nearDoor() {
     if (dist < bd) { bd = dist; best = d; }
   }
   return best;
+}
+const TABLE_REACH = 1.5;
+const nearTable = () => TABLES.find(t => Math.hypot(t.x - H.x, t.z - H.z) < TABLE_REACH && Math.abs(LV[T(t.c, t.r)] * STEP - H.y) < 0.6) || null;
+// what F (A on the controller) does here: pick up hides, use the tanning table, or open or shut a door
+function actionHere() {
+  if (mode !== 'play' || !H.alive) return null;
+  const near = hidesNear();
+  if (near.length) return { kind: 'hide', hides: near };
+  const t = nearTable();
+  if (t) return { kind: 'table', table: t };
+  const d = nearDoor();
+  return d ? { kind: 'door', door: d } : null;
+}
+function useAction() {
+  const a = actionHere();
+  if (!a) return;
+  if (a.kind === 'hide') pickUpHides();
+  else if (a.kind === 'table') toggleCraft(craftAt ? null : a.table);
+  else useDoor();
 }
 function useDoor() {
   const d = nearDoor();
@@ -6312,7 +6543,7 @@ function update(dt) {
   heroRoot.visible = H.alive || Math.floor(time * 8) % 2 === 0;
   H.hurtT += dt;
   heroTunic.emissive.set(H.hurtT < 0.4 && Math.floor(H.hurtT * 12) % 2 === 0 ? '#a01810' : '#000000');
-  heroSkin.emissive.copy(heroTunic.emissive);
+  heroSkin.emissive.copy(heroTunic.emissive); HERO_MAT.leather.emissive.copy(heroTunic.emissive);
   heroShadow.position.set(H.x, (H.flip ? surfaceY(H.x, H.z) : H.y) + 0.02, H.z);
 
   // ----- foes -----
@@ -6350,6 +6581,9 @@ function update(dt) {
       scene.remove(o.m); orbs.splice(k, 1);
     } else if (o.t > 40) { scene.remove(o.m); orbs.splice(k, 1); }
   }
+  for (let k = hides.length - 1; k >= 0; k--) { const h = hides[k]; h.t += dt; if (h.t > 300) { scene.remove(h.m); hides.splice(k, 1); } }
+  // walking off from the tanning table puts it away
+  if (craftAt && Math.hypot(craftAt.x - H.x, craftAt.z - H.z) > 2.6) toggleCraft(null);
   arcT += dt; ringT += dt;
   arcMat.opacity = Math.max(0, 0.75 * (1 - arcT / 0.16));
   arcMesh.position.set(H.x, H.y + 0.45, H.z);
@@ -6386,15 +6620,25 @@ function update(dt) {
   updateSky();
   updateLamps();
 
-  // door prompt
-  const nd = mode === 'play' && H.alive ? nearDoor() : null;
+  // action prompt: over the hides, the table, or the middle of the door (or gate)
+  const act = actionHere(), nd = act && act.kind === 'door' ? act.door : null;
   const pr = $('prompt');
-  if (nd) {
-    pr.innerHTML = (PAD.on ? padGlyph('A') : '<b>F</b>') + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
-    // on the middle of the door (or gate) itself
-    const mx = nd.w ? nd.c : nd.c + 0.5, mz = nd.w ? nd.r + 0.5 : nd.r;
-    const L = Math.max(LV[T(nd.c, nd.r)], LV[nd.w ? T(nd.c - 1, nd.r) : T(nd.c, nd.r - 1)]);
-    v3.set(mx, L * STEP + (nd.gate ? FENCE_H : WALL_H) / 2, mz).project(camera);
+  if (act) {
+    const key = PAD.on ? padGlyph('A') : '<b>F</b>';
+    if (act.kind === 'hide') {
+      const h = act.hides[0];
+      pr.innerHTML = key + 'PICK UP HIDE' + (act.hides.length > 1 ? ' × ' + act.hides.length : '');
+      v3.set(h.x, surfaceY(h.x, h.z) + 0.45, h.z);
+    } else if (act.kind === 'table') {
+      pr.innerHTML = key + (craftAt ? 'PUT AWAY' : 'USE TANNING TABLE');
+      v3.set(act.table.x, LV[T(act.table.c, act.table.r)] * STEP + 1.0, act.table.z);
+    } else {
+      pr.innerHTML = key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
+      const mx = nd.w ? nd.c : nd.c + 0.5, mz = nd.w ? nd.r + 0.5 : nd.r;
+      const L = Math.max(LV[T(nd.c, nd.r)], LV[nd.w ? T(nd.c - 1, nd.r) : T(nd.c, nd.r - 1)]);
+      v3.set(mx, L * STEP + (nd.gate ? FENCE_H : WALL_H) / 2, mz);
+    }
+    v3.project(camera);
     const rect = cv.getBoundingClientRect();
     pr.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
     pr.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
@@ -7409,6 +7653,13 @@ window.GAME = {
   moveItem: (from, to) => moveItem(from, to),
   clickCell: c => clickCell(c),
   inv: open => toggleInv(open),
+  pack: () => PACK.map((id, i) => id && [id, PACK_N[i]]),
+  addItem: (id, n) => addItem(id, n),
+  tables: () => TABLES.map(t => [t.c, t.r, towns[t.town].name]),
+  craftAt: k => { toggleCraft(TABLES[0]); const ok = craft(k); return ok; },
+  dropHide: (x, z) => dropHide(x ?? H.x + 0.5, z ?? H.z),
+  action: () => { const a = actionHere(); useAction(); return a && a.kind; },
+  armor: () => armor(),
   smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
   crowd: () => ({ foes: foes.length, draws: CROWD_READ.draws, kinds: [...crowds.keys()], pieces: [...crowds.values()].reduce((n, C) => n + C.pieces.length, 0), shown: [...crowds.values()].reduce((n, C) => n + C.n, 0) }),
   options: OPTIONS,
