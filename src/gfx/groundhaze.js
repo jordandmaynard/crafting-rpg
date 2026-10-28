@@ -261,6 +261,7 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   return VOut(F.viewProj * vec4f(p, 1.0), p, v.slice);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let sn = normalize(cross(dpdx(i.world), dpdy(i.world)));   // the slice's own slope (it drapes over cliffs)
   let wp = i.world.xz;
   let site = siteAt(wp);
   if (site.z < 0.003) { discard; }
@@ -285,8 +286,9 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   let det = mix(1.0, n * 2.0, U.detail.x);
   let H = max(U.look.x, 0.02);
   let sigma = haze * exp(-(i.world.y - site.x) / H) * det * U.look.y;
+  // the light's path through the slice, across it
   let V = toEye(i.world);
-  let path = (2.0 * H / U.look.z) / max(abs(V.y), 0.25);
+  let path = (2.0 * H / U.look.z) * abs(sn.y) / max(abs(dot(V, sn)), 0.25);
   let alpha = 1.0 - exp(-sigma * path);
   if (alpha < 0.002) { discard; }
   let tint = textureSampleLevel(tintTex, tintTexS, (wp * U.site.w - U.site.xy) / U.site.z, 0.0).rgb;
