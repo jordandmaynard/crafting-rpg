@@ -70,7 +70,7 @@ class Renderer {
       { binding: 5, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
       { binding: 6, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
       { binding: 7, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-      { binding: 8, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
+      { binding: 8, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
     ] });
     this.bglFrameShadow = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: S.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } }] });
@@ -96,7 +96,7 @@ class Renderer {
       light: device.createTexture({ size: [3, 1, 1], dimension: '3d', format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView(),
       hf: device.createTexture({ size: [1, 1], format: 'rgba32float', usage: T.TEXTURE_BINDING }).createView(),
     };
-    this.noHaze = device.createTexture({ size: [1, 1, 1], dimension: '3d', format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView();
+    this.noHaze = device.createTexture({ size: [1, 1], format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView();
     this.haze = null; this._lastFrameOff = 0;
     this.gi = null;
     this._ensureShadow(512);
@@ -119,18 +119,20 @@ class Renderer {
   // probe lighting (probes.js): something with views() -> { vis, light, hf, key } and uniforms() -> 12 numbers
   // (the frame's giA, giB, giC), or null
   setGI(gi) { this.gi = gi; this._frameBGKey = ''; }
-  // lit haze (haze.js): something with view() -> its summed volume or null, uniforms() -> 8 numbers (the frame's
-  // hazeA, hazeB) and key, or null
+  // lit haze (haze.js): something with view() -> its texture (a texel a mosaic pixel) or null, uniforms() -> 8
+  // numbers (the frame's hazeA, hazeB) and key, or null
   setHaze(h) { this.haze = h; this._frameBGKey = ''; }
   // the WGSL every pipeline starts with, for compute passes that read the frame
   preludeCode() { return PRELUDE; }
   // record compute work into this frame, after what's been drawn so far: cb(encoder, the frame's bind group, the
-  // offset of the last render's frame in it)
+  // offset of the last render's frame in it). The bind group leaves the haze out, so a pass can write it.
   compute(cb) {
     this._runPendingClear();
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
-    cb(this._enc, this._frameBindGroup(), this._lastFrameOff);
+    cb(this._enc, this._frameBindGroup(true), this._lastFrameOff);
   }
+  // a texture's GPU view (a render target's too), and an id that changes when the view does
+  textureView(t) { const g = this._texture(t); return { view: g.view, id: g.id }; }
 
   render(scene, camera) {
     const dev = this.device;
@@ -243,14 +245,15 @@ class Renderer {
     this.shadowView = this.shadowTex.createView();
     this._frameBGKey = '';
   }
-  _frameBindGroup() {
+  _frameBindGroup(noHaze = false) {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
     const gv = this.gi ? this.gi.views() : null;
-    const hv = this.haze ? this.haze.view() : null;
+    const hv = this.haze && !noHaze ? this.haze.view() : null;
     const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-');
-    if (key !== this._frameBGKey) {
-      this._frameBGKey = key;
-      this._frameBG = this.device.createBindGroup({ layout: this.bglFrame, entries: [
+    const C = noHaze ? (this._frameBGc = this._frameBGc || { key: '', bg: null }) : null;
+    if (C ? key !== C.key : key !== this._frameBGKey) {
+      if (C) C.key = key; else this._frameBGKey = key;
+      const bg = this.device.createBindGroup({ layout: this.bglFrame, entries: [
         { binding: 0, resource: { buffer: this.frameBuf, size: FRAME_BYTES } },
         { binding: 1, resource: this.shadowView },
         { binding: 2, resource: this.shadowSamp },
@@ -261,8 +264,9 @@ class Renderer {
         { binding: 7, resource: gv ? gv.hf : this.noGI.hf },
         { binding: 8, resource: hv || this.noHaze },
       ] });
+      if (C) C.bg = bg; else this._frameBG = bg;
     }
-    return this._frameBG;
+    return C ? C.bg : this._frameBG;
   }
   _frameSlotAlloc() {
     if (this.frameSlot >= FRAME_SLOTS) this.flush();

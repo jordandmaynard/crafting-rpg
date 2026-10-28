@@ -1841,7 +1841,7 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
     }
     col = mix(col, U.color, e * U.strength * haze);
   }
-  col = hazeApply(col, (px + 0.5) / U.res, depthAt(px) + U.near);
+  col = hazeApply(col, px);
   return vec4f(col, 1.0);
 }`,
   depthTest: false, depthWrite: false,
@@ -1866,29 +1866,30 @@ const gi = new GFX.HeightProbes(renderer.device);
 renderer.setGI(gi);
 
 // ---------- Lit haze (T > Lit haze) ----------
-// Froxel haze (src/gfx/haze.js): the air in front of the camera, in cells cell × cell mosaic pixels across and
-// `slices` deep, lit each frame by the sun or moon through its shadow map (so tall trees and buildings throw
-// shafts), the sky by what the GI probes say reaches there, the lamps and the torch, and lava's glow; then laid
-// over the picture by each pixel's depth, after the outlines. It's on top of the distance haze, not instead of it.
+// Haze marched per mosaic pixel (src/gfx/haze.js): each pixel's ray through the air, out to what it sees, in
+// `steps` even steps, lit by the sun or moon through its shadow map (so tall trees and buildings throw shafts), the
+// sky by what the GI probes say reaches there, the lamps and the torch, and lava's glow; then laid over the picture
+// after the outlines. It's on top of the distance haze, not instead of it.
 // density: per tile on the ground; height: tiles it thins over; floor: the share left high up; top: tiles over
 // the hero the air starts; sun, sky, lamps, lava: how much each lights it; forward: how much more the sun's light
-// goes on forward than back (0 even, toward 1 a bright ring round the sun); wisps: how patchy (slow drifting
-// noise, wispSize tiles, drifting with the clouds at windSpeed); color: the haze's own.
-const HAZE = { on: 1, density: 0.08, height: 2.5, floor: 0.1, top: 14, sun: 1, forward: 0.35, sky: 1, lamps: 2, lava: 1,
-  wisps: 0.5, wispSize: 7, windSpeed: 0.4, color: '#ffffff', cell: 4, slices: 64 };
-const haze = new GFX.FroxelHaze(renderer);
+// goes on forward than back (0 even, toward 1 a bright ring round the sun); lavaHeight: tiles lava's glow fades
+// over, upward; wisps: how patchy (slow drifting noise, wispSize tiles, drifting with the clouds at windSpeed);
+// color: the haze's own.
+const HAZE = { on: 1, density: 0.04, height: 2.5, floor: 0.05, top: 14, sun: 1, forward: 0.35, sky: 1, lamps: 1.5, lava: 1, lavaHeight: 3,
+  wisps: 0.35, wispSize: 6, windSpeed: 0.4, color: '#ffffff', steps: 64 };
+const haze = new GFX.LitHaze(renderer);
 renderer.setHaze(haze);
 const hazeTint = new GFX.Color();
 function hazeOn() { return HAZE.on > 0.5 && HAZE.density > 0; }
 // after the scene's drawn, before the outline pass lays it over
 function updateHaze() {
-  const res = outlineMat.uniforms.res.value, a = CLOUDS.direction * Math.PI / 180, cell = Math.max(1, HAZE.cell);
+  const res = outlineMat.uniforms.res.value, a = CLOUDS.direction * Math.PI / 180;
   hazeTint.set(HAZE.color);
-  haze.update({ on: hazeOn(), camera, cells: [Math.ceil(res.x / cell), Math.ceil(res.y / cell)], slices: HAZE.slices,
+  haze.update({ on: hazeOn(), camera, res: [res.x, res.y], ss: ssNow, depth: renderer.textureView(outlineRT.depthTexture), steps: HAZE.steps,
     top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
-    sun: HAZE.sun, forward: HAZE.forward, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava,
+    sun: HAZE.sun, forward: HAZE.forward, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wisps, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
-    tint: [hazeTint.r, hazeTint.g, hazeTint.b], groundColour: gi.gcolView });
+    tint: [hazeTint.r, hazeTint.g, hazeTint.b], groundColour: gi.gcolView, hfSize: gi.uniforms()[10] });
 }
 let giVersion = 0;
 // a chunk's block of the height field (worked out when it's first wanted, and again after its meshes change)
@@ -6363,12 +6364,12 @@ const TUNING = [
     [HAZE, 'sky', 'Sky light in it', 0, 4, 0.05],
     [HAZE, 'lamps', 'Lamp and torch light in it', 0, 10, 0.1],
     [HAZE, 'lava', "Lava's glow in it", 0, 10, 0.1],
+    [HAZE, 'lavaHeight', "Lava's glow fades over this many tiles up", 0.5, 20, 0.5],
     [HAZE, 'wisps', 'Wisps: how patchy', 0, 1, 0.01],
     [HAZE, 'wispSize', 'Wisps: size (tiles)', 1, 40, 0.5],
     [HAZE, 'windSpeed', 'Wisps: drift (tiles a second, with the clouds)', 0, 5, 0.05],
     [HAZE, 'color', 'Colour', 'color'],
-    [HAZE, 'cell', 'Cell size (mosaic pixels)', 2, 16, 1],
-    [HAZE, 'slices', 'Depth slices', 16, 128, 1],
+    [HAZE, 'steps', 'Steps along each ray (more: smoother shafts, slower)', 16, 256, 1],
   ]],
   ['Walk', [
     [WALK, 'cadence', 'Cadence: steps per tile walked', 1, 12, 0.1],

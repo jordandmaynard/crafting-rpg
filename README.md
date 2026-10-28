@@ -67,14 +67,14 @@ There are also sliders for strength, a minimum of the plain light to keep, rays 
 
 ## Lit haze
 
-Froxel haze (`src/gfx/haze.js`): the air in front of the camera is cut into cells, a few mosaic pixels across and 64 slices deep, running from about 14 tiles above you down to just below the ground in view. Each frame, after the scene is drawn, a compute pass lights every cell. The haze is thickest on the ground and thins with height over the height field, broken into slow wisps that drift with the clouds. It's lit by:
+Lit haze marched per pixel (`src/gfx/haze.js`). The game draws at a low mosaic resolution, so each frame, after the scene is drawn, a compute pass marches a ray through the air for every mosaic pixel. The ray runs from about 14 tiles above you down to just below the ground in view, and stops at what that pixel sees. It takes even steps with no random jitter, so the haze has no grid to show and no dithering, and it never smears across an edge. The haze is thickest on the ground and thins with height over the height field, broken into slow wisps that drift with the clouds. It's lit by:
 
 - the sun or moon through its shadow map, so tall trees and buildings throw shafts through it, scattered more forward than back;
 - the sky, by how much of it the GI probes see from there (with bounce light, all the light arriving there);
 - the lamps and your torch;
-- lava's glow, from the ground round about.
+- lava's glow: a second compute pass blurs what the ground gives off into a glow map each frame, and the glow fades with height.
 
-A second pass adds up each column of cells from the camera out, and the outline pass lays the result over the picture by each pixel's depth. The tuning panel's Lit haze section has the switch and the sliders. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
+The outline pass lays the result over the picture. The tuning panel's Lit haze section has the switch and the sliders, including the number of steps. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
 
 ## The drawing library (src/gfx)
 
@@ -86,7 +86,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `materials.js`: lit (standard), unlit (basic) and normal materials, materials with their own WGSL (`ShaderMaterial`: uniforms, textures and extra vertex attributes), textures and render targets.
 - `shaders.js`: the WGSL every pipeline shares: the frame and object uniform blocks, haze, flat face normals, cloud shadow, the sun's 17-tap PCF shadow and the lighting (sky light, sun, point lights, Lambert plus a GGX specular lobe), and the built-in materials.
 - `probes.js`: probe lighting over a height field (see Global illumination).
-- `haze.js`: lit froxel haze (see Lit haze).
+- `haze.js`: lit haze, marched per pixel (see Lit haze).
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.

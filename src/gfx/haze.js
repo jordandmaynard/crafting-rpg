@@ -1,49 +1,73 @@
-// Lit haze in froxels: the air in front of the camera cut into cells, a grid across the screen by slices of depth.
+// Lit haze, marched per pixel.
 //
-// Each frame, after the scene is drawn (so the sun's shadow map is fresh), two compute passes run. The first
-// lights every cell: how much haze is there (thickest on the ground, thinning with height over it, stirred by slow
-// drifting wisps), and the light it scatters toward the camera: the sun's or moon's through its shadow map (so tall
-// trees and buildings throw shafts through it) and the clouds, mostly forward (Henyey-Greenstein); the sky's, by
-// what the GI probes say reaches that point (all the light arriving there with bounce light), or half the sky and
-// half the ground without them; the point lights' (lamps, the torch), unshadowed; and lava's glow, from the
-// emission in the GI height field's ground colours round the point. The second walks each column of cells from the
-// camera out, adding up the light scattered back and how much gets through, and keeps both at every slice. Drawing
-// then reads that at a pixel's depth (shaders.js, hazeApply): what's behind dims by what gets through and the
-// haze's own light goes on top.
+// The game draws at a low mosaic resolution, so a ray can be marched through the air for every mosaic pixel, out to
+// that pixel's own depth: nothing is shared between neighbouring pixels, so the haze can't smear across an edge,
+// and the steps fall evenly with no random jitter, so there's no dithering. Each frame, after the scene is drawn
+// (so the sun's shadow map is fresh), two compute passes run:
 //
-// Slices run evenly in depth over just the air the view looks through near the ground: from where the view's
-// corners come down through `top` above the target to where they meet `bottom` below it. Nearer than that there's
-// no haze; past it, the last slice's.
+// - glow: lava's light, blurred over the GI height field window (each texel: what the ground within a few tiles
+//   gives off, falling away with distance), so a step reads it in one lookup;
+// - march: for each mosaic pixel, the stretch of its ray between `top` and `bottom` (world y) and nearer than what
+//   it sees, cut into `steps` even steps. At each, how much haze (thickest on the ground under it, thinning with
+//   height, stirred by slow drifting wisps) and the light it scatters toward the camera: the sun's or moon's
+//   through its shadow map (so tall trees and buildings throw shafts) and the clouds, more forward than back
+//   (Henyey-Greenstein); the sky's, by what the GI probes say reaches there (all the light arriving with bounce
+//   light; read at the ends and middle of the stretch and blended between, as it changes slowly), or half the sky
+//   and half the ground without them; the point lights' (lamps, the torch), unshadowed; and lava's glow. It keeps
+//   the light gathered and how much of what's behind gets through, which the outline pass lays over the picture
+//   (shaders.js, hazeApply).
 
 import { MAX_POINTS } from './shaders.js';
 
 const PARAM_BYTES = 256;
-const SCAT_FORMAT = 'rgba16float';
+const OUT_FORMAT = 'rgba16float';
 
 const COMMON = /* wgsl */ `
 struct HP {
   cn: array<vec4f, 4>,  // the view's corners on the near plane: top left, top right, bottom left, bottom right
   cf: array<vec4f, 4>,  // and on the far plane
-  dims: vec4f,          // cells across, down, slices
-  range: vec4f,         // the camera's near and far, the slices' first and last depth
+  dims: vec4f,          // mosaic pixels across, down, scene samples a mosaic pixel (each way), steps
+  range: vec4f,         // the camera's near and far, the top and bottom of the air (world y)
   dens: vec4f,          // density (a tile), height it thins over (tiles), what's left high up, ground where unknown
   light: vec4f,         // sun, forward scattering (g), sky, lamps
   more: vec4f,          // lava, wisps, wisp size (tiles), seconds
   tint: vec4f,          // the haze's colour
   wind: vec4f,          // the wisps' drift (tiles a second)
+  glow: vec4f,          // tiles lava's glow fades over, upward
 }
-fn cellRay(uv: vec2f) -> array<vec3f, 2> {
-  let a = mix(mix(H.cn[0].xyz, H.cn[1].xyz, uv.x), mix(H.cn[2].xyz, H.cn[3].xyz, uv.x), uv.y);
-  let b = mix(mix(H.cf[0].xyz, H.cf[1].xyz, uv.x), mix(H.cf[2].xyz, H.cf[3].xyz, uv.x), uv.y);
-  return array<vec3f, 2>(a, b);
+@group(2) @binding(0) var<uniform> H: HP;
+`;
+
+const GLOW_WGSL = /* wgsl */ `
+${COMMON}
+@group(2) @binding(1) var groundCol: texture_2d<f32>;
+@group(2) @binding(2) var glowOut: texture_storage_2d<${OUT_FORMAT}, write>;
+// each texel of the window: what the ground within four tiles gives off, a tile apart, less with distance
+@compute @workgroup_size(8, 8, 1)
+fn glow(@builtin(global_invocation_id) id: vec3u) {
+  let S = giHfSize();
+  if (S <= 0 || i32(id.x) >= S || i32(id.y) >= S) { return; }
+  let o = giHfOrigin();
+  let t = o + (((vec2i(id.xy) - o) % S) + S) % S;   // the world texel in this slot
+  var sum = vec3f(0.0);
+  for (var j = -4; j <= 4; j++) {
+    for (var i = -4; i <= 4; i++) {
+      let u = t + vec2i(i, j) * GI_TPT;
+      let r = u - o;
+      if (any(r < vec2i(0)) || any(r >= vec2i(S))) { continue; }
+      let c = textureLoad(groundCol, ((u % S) + S) % S, 0);
+      sum += c.rgb * c.a / (1.0 + f32(i * i + j * j));
+    }
+  }
+  textureStore(glowOut, vec2i(id.xy), vec4f(sum, 1.0));
 }
 `;
 
-const LIGHT_WGSL = /* wgsl */ `
-@group(2) @binding(0) var<uniform> H: HP;
-@group(2) @binding(1) var scatOut: texture_storage_3d<${SCAT_FORMAT}, write>;
-@group(2) @binding(2) var groundCol: texture_2d<f32>;
+const MARCH_WGSL = /* wgsl */ `
 ${COMMON}
+@group(2) @binding(1) var sceneDepth: texture_depth_2d;
+@group(2) @binding(2) var glowTex: texture_2d<f32>;
+@group(2) @binding(3) var hazeOut: texture_storage_2d<${OUT_FORMAT}, write>;
 fn hash3(p: vec3i) -> f32 {
   var h = (u32(p.x) * 73856093u) ^ (u32(p.y) * 19349663u) ^ (u32(p.z) * 83492791u);
   h = (h ^ (h >> 13u)) * 1274126177u;
@@ -61,6 +85,16 @@ fn groundAt(xz: vec2f) -> f32 {
   let g = giGround(xz);
   return select(g, H.dens.w, g < -1000.0);
 }
+fn densityAt(p: vec3f) -> f32 {
+  let over = max(p.y - groundAt(p.xz), 0.0);
+  var d = H.dens.x * mix(exp(-over / max(H.dens.y, 0.05)), 1.0, H.dens.z);
+  if (H.more.y > 0.0) {
+    let q = (p - H.wind.xyz * H.more.w) / max(H.more.z, 0.5);
+    let n = 0.65 * noise3(q) + 0.35 * noise3(q * 2.3 + 17.0);
+    d *= max(1.0 - H.more.y + H.more.y * 2.0 * n, 0.0);
+  }
+  return d;
+}
 // the sun's shadow at p: one tap (the comparison sampler's own 2 × 2 filtering), none off the map
 fn shadowAt(p: vec3f) -> f32 {
   if (F.sunColor.w < 0.5) { return 1.0; }
@@ -69,202 +103,202 @@ fn shadowAt(p: vec3f) -> f32 {
   if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) { return 1.0; }
   return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy, s.z + F.shadow.x);
 }
-// lava's glow at p: what the ground round about gives off, falling away with distance
+// the sky's light at p (the GI's where it has probes)
+fn ambientAt(p: vec3f) -> vec3f {
+  var amb = 0.5 * (F.hemiSky.rgb + F.hemiGround.rgb);
+  if (F.giA.x > 0.5) {
+    let g = giGather(p, vec3f(0.0), F.giA.x > 1.5);
+    if (g.w > 1e-6) {
+      let lit = select(F.hemiSky.rgb * g.vis.x + F.hemiGround.rgb * 0.5 * sat(2.0 * g.vis.x), g.light, F.giA.x > 1.5);
+      amb = mix(amb, lit, F.giA.y);
+    }
+  }
+  return amb;
+}
+// lava's glow at p: the blurred map at the ground under it, fading upward
 fn glowAt(p: vec3f) -> vec3f {
   let S = giHfSize();
   if (S <= 0) { return vec3f(0.0); }
-  var sum = vec3f(0.0);
-  for (var j = -2; j <= 2; j++) {
-    for (var i = -2; i <= 2; i++) {
-      let xz = floor(p.xz) + vec2f(f32(i), f32(j)) + 0.5;
-      let t = vec2i(floor(xz * f32(GI_TPT)));
-      let r = t - giHfOrigin();
-      if (any(r < vec2i(0)) || any(r >= vec2i(S))) { continue; }
-      let c = textureLoad(groundCol, ((t % S) + S) % S, 0);
-      if (c.a <= 0.0) { continue; }
-      let d = p - vec3f(xz.x, giHf(t).x, xz.y);
-      sum += c.rgb * c.a / (1.0 + dot(d, d));
-    }
-  }
-  return sum;
+  let r = vec2i(floor(p.xz * f32(GI_TPT))) - giHfOrigin();
+  if (any(r < vec2i(1)) || any(r >= vec2i(S - 1))) { return vec3f(0.0); }
+  let g = textureSampleLevel(glowTex, linSamp, p.xz * f32(GI_TPT) / f32(S), 0.0).rgb;
+  return g * exp(-max(p.y - groundAt(p.xz), 0.0) / max(H.glow.x, 0.1));
 }
-@compute @workgroup_size(4, 4, 4)
-fn light(@builtin(global_invocation_id) id: vec3u) {
-  let D = vec3u(H.dims.xyz);
-  if (any(id >= D)) { return; }
+@compute @workgroup_size(8, 8, 1)
+fn march(@builtin(global_invocation_id) id: vec3u) {
+  let res = vec2u(H.dims.xy);
+  if (id.x >= res.x || id.y >= res.y) { return; }
   let uv = (vec2f(id.xy) + 0.5) / H.dims.xy;
-  let ray = cellRay(uv);
-  let depth = H.range.z + (f32(id.z) + 0.5) * (H.range.w - H.range.z) / H.dims.z;
-  let p = mix(ray[0], ray[1], (depth - H.range.x) / (H.range.y - H.range.x));
-  let V = normalize(ray[0] - ray[1]);
-  // how much haze
-  let over = max(p.y - groundAt(p.xz), 0.0);
-  var dens = H.dens.x * mix(exp(-over / max(H.dens.y, 0.05)), 1.0, H.dens.z);
-  if (H.more.y > 0.0) {
-    let q = (p - H.wind.xyz * H.more.w) / max(H.more.z, 0.5);
-    let n = 0.65 * noise3(q) + 0.35 * noise3(q * 2.3 + 17.0);
-    dens *= max(1.0 - H.more.y + H.more.y * 2.0 * n, 0.0);
+  let a = mix(mix(H.cn[0].xyz, H.cn[1].xyz, uv.x), mix(H.cn[2].xyz, H.cn[3].xyz, uv.x), uv.y);
+  let b = mix(mix(H.cf[0].xyz, H.cf[1].xyz, uv.x), mix(H.cf[2].xyz, H.cf[3].xyz, uv.x), uv.y);
+  let near = H.range.x; let far = H.range.y;
+  // how far along the ray (0 near plane, 1 far) what this pixel sees lies: its middle sample's depth
+  let ss = i32(H.dims.z);
+  let dsz = vec2i(textureDimensions(sceneDepth));
+  let dd = textureLoad(sceneDepth, min(vec2i(id.xy) * ss + ss / 2, dsz - 1), 0);
+  var tS = dd;
+  if (F.camPos.w < 0.5) {
+    let z = dd * 2.0 - 1.0;
+    let D = 2.0 * near * far / (far + near - z * (far - near));
+    tS = (D - near) / (far - near);
   }
-  // the light it scatters toward the camera (phases scaled so even scattering is 1)
-  var L = vec3f(0.0);
+  // the stretch of the ray in the air
+  var t0 = 0.0; var t1 = tS;
+  if (abs(b.y - a.y) > 1e-6) {
+    let tA = (H.range.z - a.y) / (b.y - a.y); let tB = (H.range.w - a.y) / (b.y - a.y);
+    t0 = max(min(tA, tB), 0.0); t1 = min(max(tA, tB), tS);
+  } else if (a.y > H.range.z || a.y < H.range.w) { t1 = 0.0; }
+  if (t1 <= t0) { textureStore(hazeOut, vec2i(id.xy), vec4f(0.0, 0.0, 0.0, 1.0)); return; }
+  let n = max(i32(H.dims.w), 1);
+  let ds = length(b - a) * (t1 - t0) / f32(n);
+  let V = normalize(a - b);
+  // the sun's share, the same all along the ray but for shadow and cloud
+  var sunC = vec3f(0.0);
   if (F.sunDir.w > 0.5 && H.light.x > 0.0) {
     let g = clamp(H.light.y, -0.95, 0.95);
     let c = dot(-F.sunDir.xyz, V);
-    let hg = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * c, 1e-4), 1.5);
-    L += F.sunColor.rgb * cloudShade(p.xz) * mix(1.0, shadowAt(p), F.cloud2.z) * hg * H.light.x;
+    sunC = F.sunColor.rgb * (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * c, 1e-4), 1.5) * H.light.x;
   }
-  if (F.hemiSky.w > 0.5 && H.light.z > 0.0) {
-    var amb = 0.5 * (F.hemiSky.rgb + F.hemiGround.rgb);
-    if (F.giA.x > 0.5) {
-      let gg = giGather(p, vec3f(0.0), F.giA.x > 1.5);
-      if (gg.w > 1e-6) {
-        let lit = select(F.hemiSky.rgb * gg.vis.x + F.hemiGround.rgb * 0.5 * sat(2.0 * gg.vis.x), gg.light, F.giA.x > 1.5);
-        amb = mix(amb, lit, F.giA.y);
-      }
-    }
-    L += amb * H.light.z;
+  let useSky = F.hemiSky.w > 0.5 && H.light.z > 0.0;
+  var amb0 = vec3f(0.0); var amb1 = vec3f(0.0); var amb2 = vec3f(0.0);
+  if (useSky) {
+    amb0 = ambientAt(mix(a, b, t0)) * H.light.z;
+    amb1 = ambientAt(mix(a, b, 0.5 * (t0 + t1))) * H.light.z;
+    amb2 = ambientAt(mix(a, b, t1)) * H.light.z;
   }
-  if (H.light.w > 0.0) {
-    let np = i32(F.cloud2.w);
-    for (var i = 0; i < ${MAX_POINTS}; i++) {
-      if (i >= np) { break; }
-      let pl = F.points[i];
-      let dist = length(pl.pos.xyz - p);
-      var att = 1.0;
-      if (pl.pos.w > 0.0 && pl.color.w > 0.0) { att = pow(sat(1.0 - dist / pl.pos.w), pl.color.w); }
-      L += pl.color.rgb * att * H.light.w;
-    }
-  }
-  if (H.more.x > 0.0) { L += glowAt(p) * H.more.x; }
-  textureStore(scatOut, id, vec4f(H.tint.rgb * L * dens, dens));
-}
-`;
-
-const INTEGRATE_WGSL = /* wgsl */ `
-@group(0) @binding(0) var<uniform> H: HP;
-@group(0) @binding(1) var scatIn: texture_3d<f32>;
-@group(0) @binding(2) var sumOut: texture_storage_3d<${SCAT_FORMAT}, write>;
-${COMMON}
-@compute @workgroup_size(8, 8, 1)
-fn integrate(@builtin(global_invocation_id) id: vec3u) {
-  let D = vec3u(H.dims.xyz);
-  if (id.x >= D.x || id.y >= D.y) { return; }
-  let ray = cellRay((vec2f(id.xy) + 0.5) / H.dims.xy);
-  // world distance a slice spans along this cell's ray
-  let ds = length(ray[1] - ray[0]) / (H.range.y - H.range.x) * (H.range.w - H.range.z) / H.dims.z;
+  let np = i32(F.cloud2.w);
   var S = vec3f(0.0);
   var T = 1.0;
-  for (var z = 0u; z < D.z; z++) {
-    let s = textureLoad(scatIn, vec3u(id.xy, z), 0);
-    let k = max(s.a, 0.0);
+  for (var i = 0; i < n; i++) {
+    let f = (f32(i) + 0.5) / f32(n);
+    let p = mix(a, b, mix(t0, t1, f));
+    let k = densityAt(p);
+    if (k <= 1e-6) { continue; }
+    var L = select(mix(amb1, amb2, f * 2.0 - 1.0), mix(amb0, amb1, f * 2.0), f < 0.5);
+    if (any(sunC > vec3f(0.0))) { L += sunC * cloudShade(p.xz) * mix(1.0, shadowAt(p), F.cloud2.z); }
+    if (H.light.w > 0.0) {
+      for (var j = 0; j < ${MAX_POINTS}; j++) {
+        if (j >= np) { break; }
+        let pl = F.points[j];
+        let dist = length(pl.pos.xyz - p);
+        var att = 1.0;
+        if (pl.pos.w > 0.0 && pl.color.w > 0.0) { att = pow(sat(1.0 - dist / pl.pos.w), pl.color.w); }
+        L += pl.color.rgb * att * H.light.w;
+      }
+    }
+    if (H.more.x > 0.0) { L += glowAt(p) * H.more.x; }
+    // what the step scatters toward the camera, less what it loses again before it leaves the step
     let t = exp(-k * ds);
-    // the light scattered over the slice, less what's lost again before it leaves the slice
-    let part = select(s.rgb * ds, s.rgb * (1.0 - t) / k, k > 1e-5);
-    S += T * part;
+    S += T * H.tint.rgb * L * (1.0 - t);
     T *= t;
-    textureStore(sumOut, vec3u(id.xy, z), vec4f(S, T));
   }
+  textureStore(hazeOut, vec2i(id.xy), vec4f(S, T));
 }
 `;
 
-export class FroxelHaze {
+export class LitHaze {
   // renderer: the gfx renderer; its frame (the camera's, the sun and its shadow map, the lights, the GI) lights it
   constructor(renderer) {
     this.renderer = renderer;
-    const device = this.device = renderer.device, S = GPUShaderStage;
+    const device = this.device = renderer.device, C = GPUShaderStage.COMPUTE;
     this.params = device.createBuffer({ size: PARAM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.bglLight = device.createBindGroupLayout({ entries: [
-      { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-      { binding: 1, visibility: S.COMPUTE, storageTexture: { access: 'write-only', format: SCAT_FORMAT, viewDimension: '3d' } },
-      { binding: 2, visibility: S.COMPUTE, texture: { sampleType: 'float' } },
+    this.bglGlow = device.createBindGroupLayout({ entries: [
+      { binding: 0, visibility: C, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: C, texture: { sampleType: 'float' } },
+      { binding: 2, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
     ] });
-    this.bglSum = device.createBindGroupLayout({ entries: [
-      { binding: 0, visibility: S.COMPUTE, buffer: { type: 'uniform' } },
-      { binding: 1, visibility: S.COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '3d' } },
-      { binding: 2, visibility: S.COMPUTE, storageTexture: { access: 'write-only', format: SCAT_FORMAT, viewDimension: '3d' } },
+    this.bglMarch = device.createBindGroupLayout({ entries: [
+      { binding: 0, visibility: C, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: C, texture: { sampleType: 'depth' } },
+      { binding: 2, visibility: C, texture: { sampleType: 'float' } },
+      { binding: 3, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
     ] });
     const empty = device.createBindGroupLayout({ entries: [] });
     this.emptyBG = device.createBindGroup({ layout: empty, entries: [] });
-    const mod = (code, label) => {
-      const m = device.createShaderModule({ code, label });
-      if (m.getCompilationInfo) m.getCompilationInfo().then(info => {
+    const pipe = (code, label, entryPoint, bgl) => {
+      code = renderer.preludeCode() + code;
+      const module = device.createShaderModule({ code, label });
+      if (module.getCompilationInfo) module.getCompilationInfo().then(info => {
         for (const e of info.messages) if (e.type === 'error') console.error(`${label} WGSL ${e.lineNum}:${e.linePos} ${e.message}\n` + code.split('\n')[e.lineNum - 1]);
       });
-      return m;
+      return device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [renderer.bglFrame, empty, bgl] }), compute: { module, entryPoint } });
     };
-    this.lightPipe = device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [renderer.bglFrame, empty, this.bglLight] }),
-      compute: { module: mod(renderer.preludeCode() + LIGHT_WGSL, 'haze light'), entryPoint: 'light' } });
-    this.sumPipe = device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [this.bglSum] }),
-      compute: { module: mod(INTEGRATE_WGSL, 'haze sum'), entryPoint: 'integrate' } });
-    this.dims = [0, 0, 0];
-    this.on = false; this.z0 = 1; this.z1 = 2; this.key = 0;
-    this._lightBG = null; this._lightKey = '';
-    this._v = [0, 1, 2, 3, 4, 5, 6, 7].map(() => null);
+    this.glowPipe = pipe(GLOW_WGSL, 'haze glow', 'glow', this.bglGlow);
+    this.marchPipe = pipe(MARCH_WGSL, 'haze march', 'march', this.bglMarch);
+    this.dims = [0, 0]; this.glowSize = 0;
+    this.on = false; this.key = 0;
+    this._marchKey = ''; this._glowKey = '';
+    this._v = [];
   }
 
-  _allocate(X, Y, Z) {
-    if (this.scat) { this.scat.destroy(); this.sum.destroy(); }
-    const T = GPUTextureUsage, dev = this.device, size = [X, Y, Z];
-    this.scat = dev.createTexture({ label: 'haze light', size, dimension: '3d', format: SCAT_FORMAT, usage: T.STORAGE_BINDING | T.TEXTURE_BINDING });
-    this.sum = dev.createTexture({ label: 'haze sum', size, dimension: '3d', format: SCAT_FORMAT, usage: T.STORAGE_BINDING | T.TEXTURE_BINDING });
-    this.sumView = this.sum.createView();
-    this.sumBG = dev.createBindGroup({ layout: this.bglSum, entries: [
-      { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: this.scat.createView() }, { binding: 2, resource: this.sumView }] });
-    this.scatView = this.scat.createView();
-    this.dims = [X, Y, Z]; this.key++; this._lightKey = '';
+  _allocate(X, Y) {
+    if (this.out) this.out.destroy();
+    this.out = this.device.createTexture({ label: 'haze', size: [X, Y], format: OUT_FORMAT, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
+    this.outView = this.out.createView();
+    this.dims = [X, Y]; this.key++; this._marchKey = '';
   }
-  // what drawing reads: the summed volume (or null with the haze off) and the frame's hazeA, hazeB
-  view() { return this.on ? this.sumView : null; }
-  uniforms() { return [this.on ? 1 : 0, this.z0, this.z1, this.dims[2], this.dims[0], this.dims[1], 0, 0]; }
+  _allocateGlow(S) {
+    if (this.glowTex) this.glowTex.destroy();
+    this.glowTex = this.device.createTexture({ label: 'haze glow', size: [S, S], format: OUT_FORMAT, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
+    this.glowView = this.glowTex.createView();
+    this.glowSize = S; this._marchKey = ''; this._glowKey = '';
+  }
+  // what drawing reads: the haze a mosaic pixel (or null with it off) and the frame's hazeA, hazeB
+  view() { return this.on ? this.outView : null; }
+  uniforms() { return [this.on ? 1 : 0, 0, 0, 0, this.dims[0], this.dims[1], 0, 0]; }
 
-  // Each frame, after the scene is drawn and before what reads it. f: { on, camera, cells: [across, down],
-  // slices, top, bottom (world y the slices run between), density, height, floor, ground (y where the height
-  // field doesn't reach), sun, forward, sky, lamps, lava, wisps, wispSize, wind: [x, y, z], tint: [r, g, b],
-  // groundColour (the GI's ground colour view, or null) }
+  // Each frame, after the scene is drawn and before what reads it. f: { on, camera, res: [x, y] (mosaic pixels),
+  // ss (scene samples a mosaic pixel, each way), depth ({ view, id }: the scene's depth), steps, top, bottom (world
+  // y the air runs between), density, height, floor, ground (y where the height field doesn't reach), sun,
+  // forward, sky, lamps, lava, lavaHeight, wisps, wispSize, wind: [x, y, z], tint: [r, g, b], groundColour (the
+  // GI's ground colour view, or null), hfSize (its texels across) }
   update(f) {
     this.on = !!f.on;
     if (!this.on) return;
-    const X = Math.max(1, Math.min(256, f.cells[0] | 0)), Y = Math.max(1, Math.min(256, f.cells[1] | 0)), Z = Math.max(8, Math.min(128, f.slices | 0));
-    if (X !== this.dims[0] || Y !== this.dims[1] || Z !== this.dims[2]) this._allocate(X, Y, Z);
+    const X = Math.max(1, f.res[0] | 0), Y = Math.max(1, f.res[1] | 0);
+    if (X !== this.dims[0] || Y !== this.dims[1]) this._allocate(X, Y);
+    const S = Math.max(1, f.hfSize | 0);
+    if (S !== this.glowSize) this._allocateGlow(S);
     const cam = f.camera, d = new Float32Array(PARAM_BYTES / 4);
     cam.updateMatrixWorld();
-    const near = cam.near, far = cam.far, corners = [[-1, 1], [1, 1], [-1, -1], [1, -1]];
-    let z0 = far, z1 = near;
-    corners.forEach(([x, y], i) => {
+    [[-1, 1], [1, 1], [-1, -1], [1, -1]].forEach(([x, y], i) => {
       const a = (this._v[i] = this._v[i] || cam.position.clone()).set(x, y, -1).unproject(cam);
       const b = (this._v[i + 4] = this._v[i + 4] || cam.position.clone()).set(x, y, 1).unproject(cam);
       d.set([a.x, a.y, a.z, 0], i * 4); d.set([b.x, b.y, b.z, 0], 16 + i * 4);
-      // where this corner's ray comes down through the top and the bottom, as depths
-      const at = yy => Math.abs(b.y - a.y) < 1e-6 ? (a.y > yy ? 1 : 0) : Math.min(Math.max((yy - a.y) / (b.y - a.y), 0), 1);
-      z0 = Math.min(z0, near + at(f.top) * (far - near));
-      z1 = Math.max(z1, near + at(f.bottom) * (far - near));
     });
-    if (z1 < z0 + 1) z1 = z0 + 1;
-    this.z0 = z0; this.z1 = z1;
-    d.set([X, Y, Z, 0], 32);
-    d.set([near, far, z0, z1], 36);
+    d.set([X, Y, Math.max(1, Math.round(f.ss)), Math.max(1, Math.round(f.steps))], 32);
+    d.set([cam.near, cam.far, f.top, f.bottom], 36);
     d.set([f.density, f.height, f.floor, f.ground], 40);
     d.set([f.sun, f.forward, f.sky, f.lamps], 44);
     d.set([f.lava, f.wisps, f.wispSize, performance.now() / 1000], 48);
     d.set([...f.tint, 0], 52);
     d.set([...f.wind, 0], 56);
+    d.set([f.lavaHeight, 0, 0, 0], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
-    const gk = this.key + ':' + (f.groundColour ? f.groundColourKey || 'g' : 'w');
-    if (this._lightKey !== gk) {
-      this._lightKey = gk;
-      const gc = f.groundColour || this.renderer.white.createView();
-      this._lightBG = this.device.createBindGroup({ layout: this.bglLight, entries: [
-        { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: this.scatView }, { binding: 2, resource: gc }] });
+    const lava = f.lava > 0 && !!f.groundColour;
+    if (lava && this._glowKey !== String(this.glowSize)) {
+      this._glowKey = String(this.glowSize);
+      this.glowBG = this.device.createBindGroup({ layout: this.bglGlow, entries: [
+        { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.groundColour }, { binding: 2, resource: this.glowView }] });
+    }
+    const mk = this.key + ':' + this.glowSize + ':' + f.depth.id;
+    if (this._marchKey !== mk) {
+      this._marchKey = mk;
+      this.marchBG = this.device.createBindGroup({ layout: this.bglMarch, entries: [
+        { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.depth.view },
+        { binding: 2, resource: this.glowView }, { binding: 3, resource: this.outView }] });
     }
     this.renderer.compute((enc, frameBG, frameOff) => {
       const pass = enc.beginComputePass({ label: 'haze' });
-      pass.setPipeline(this.lightPipe);
       pass.setBindGroup(0, frameBG, [frameOff]);
       pass.setBindGroup(1, this.emptyBG);
-      pass.setBindGroup(2, this._lightBG);
-      pass.dispatchWorkgroups(Math.ceil(X / 4), Math.ceil(Y / 4), Math.ceil(Z / 4));
-      pass.setPipeline(this.sumPipe);
-      pass.setBindGroup(0, this.sumBG);
+      if (lava) {
+        pass.setPipeline(this.glowPipe);
+        pass.setBindGroup(2, this.glowBG);
+        pass.dispatchWorkgroups(Math.ceil(S / 8), Math.ceil(S / 8), 1);
+      }
+      pass.setPipeline(this.marchPipe);
+      pass.setBindGroup(2, this.marchBG);
       pass.dispatchWorkgroups(Math.ceil(X / 8), Math.ceil(Y / 8), 1);
       pass.end();
     });
