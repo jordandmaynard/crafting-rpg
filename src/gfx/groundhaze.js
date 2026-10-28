@@ -281,25 +281,29 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
     if (abs(d) < 0.05) { break; }
     s = clamp(s - f / d, -0.6, 0.6);
   }
-  let o = i.world + V * s;
+  var o = i.world + V * s;
+  // (where it didn't settle, running nearly along the surface, the drawn point will do: a wild one speckled)
+  if (abs(o.y - siteAt(o.xz).x - hs) > 0.03) { o = i.world; }
   // A line of sight that runs on under the surface toward the eye is leaving the layer here, not entering it: the
   // underside of a fold, drawn by nothing. Faded out over a narrow band rather than cut off: where the shell runs
   // nearly along the line of sight a hard cut flips pixel by pixel, and speckles.
-  let o2 = o + V * 0.03;
-  let rise = ((o2.y - siteAt(o2.xz).x) - (o.y - siteAt(o.xz).x)) / 0.03;
+  let oa = o + V * 0.03; let ob = o - V * 0.03;
+  let rise = ((oa.y - siteAt(oa.xz).x) - (ob.y - siteAt(ob.xz).x)) / 0.06;
   let keep = smoothstep(0.0, 0.1, rise);
   if (keep < 0.002) { discard; }
   // How much of the layer the line of sight goes through from here: on, away from the eye, as far as it would go down
   // to the ground under a level layer, or until it leaves the layer. Past a cliff's edge it clips only the layer's
   // corner, and taken as the whole layer that corner showed as a solid lip floating over the edge. (Reaching the
-  // ground first, in front of a rise, it's had all the layer there is.)
+  // ground first, in front of a rise, it's had all the layer there is. That's the ground as drawn, the site map's w,
+  // not the layer's own floor, which drapes down past cliff edges: against that, a line of sight meeting the ground
+  // just short of an edge seemed to slip out over it, and a dark band ran along in front of crests.)
   var through = 1.0;
   let L = hs / max(V.y, 0.25);
   var was = 0.0;
   for (var k = 1; k <= 16; k++) {
     let p = o - V * (L * f32(k) / 16.0);
-    let g = siteAt(p.xz).x;
-    if (p.y < g) { break; }
+    let sp = siteAt(p.xz); let g = sp.x;
+    if (p.y < max(g, sp.w)) { break; }
     let d = g + hs - p.y;   // how deep in the layer
     if (d < 0.0) { through = (f32(k - 1) + was / max(was - d, 1e-5)) / 16.0; break; }
     was = d;
@@ -401,8 +405,8 @@ export class GroundHaze {
     this.mesh.geometry = g;
   }
   // The site map round the camera, from the game (on moving on, or when what's there changed). origin: its first
-  // texel [x, z] (GROUND_HAZE_SITE_TPT a tile); site: Float32Array of GROUND_HAZE_SITE² × 4 (ground y, solid 0/1,
-  // resting share 0-1, _); tint: Uint8Array of GROUND_HAZE_SITE² × 4 (the haze's colour)
+  // texel [x, z] (GROUND_HAZE_SITE_TPT a tile); site: Float32Array of GROUND_HAZE_SITE² × 4 (the haze's floor y,
+  // draped past cliff edges; solid 0/1; resting share 0-1; the ground as drawn, its highest round the texel); tint: Uint8Array of GROUND_HAZE_SITE² × 4 (the haze's colour)
   setSite(origin, site, tint) {
     const n = GROUND_HAZE_SITE, half = new Uint16Array(n * n * 4);
     for (let k = 0; k < half.length; k++) half[k] = toHalf(site[k]);

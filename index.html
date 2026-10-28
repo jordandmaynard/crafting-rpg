@@ -1979,6 +1979,12 @@ function poolNear(c, r, lava) {
   const t = 1 - d / R;
   return G.poolAway + (1 - G.poolAway) * t * t * (3 - 2 * t);
 }
+// the ground as drawn (a cliff's face slopes down over the lower tile's first half), or the water or lava's surface
+function ghGround(x, z) {
+  const ti = T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1));
+  if (!LV[ti]) return WT[ti] >= 2 ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;
+  return surfH(x, z);
+}
 function groundHazeSite(cx, cz) {
   const G = GROUND_HAZE, c0 = cx - GH_TILES / 2, r0 = cz - GH_TILES / 2, W = GH_TILES + 2 * GH_BLUR + 2;
   const col = {}, share = b => b === SWAMP ? G.swamp : b === GRAVE ? G.grave : b === WASTES ? G.wastes : 0;
@@ -2013,11 +2019,14 @@ function groundHazeSite(cx, cz) {
     const u = x - (c0 - GH_BLUR - 1) - 0.5, v = z - (r0 - GH_BLUR - 1) - 0.5, a = Math.floor(u), b = Math.floor(v), fu = u - a, fv = v - b;
     const s = [0, 0, 0, 0];
     for (let q = 0; q < 4; q++) s[q] = (m[at(a, b) + q] * (1 - fu) + m[at(a + 1, b) + q] * fu) * (1 - fv) + (m[at(a, b + 1) + q] * (1 - fu) + m[at(a + 1, b + 1) + q] * fu) * fv;
-    let y = surfH(x, z);   // the ground as drawn: a cliff's face slopes down over the lower tile's first half
-    if (!LV[ti]) y = WT[ti] >= 2 ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;
+    const y = ghGround(x, z);
+    // and the highest of it round the texel (a quarter tile each way), what a line of sight down through the haze
+    // meets: between texel middles, the ground alone would round a cliff's top edge off below where it's drawn
+    let top = y;
+    for (const [ox, oz] of [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]]) top = Math.max(top, ghGround(x + ox, z + oz));
     const o = OBJ[OB[ti]];
     const solid = o.tile || (o.solid >= 0.15 && Math.hypot(x - tc - 0.5, z - tr - 0.5) < o.solid + 0.15) ? 1 : 0;
-    ghSite[k] = y; ghSite[k + 1] = solid; ghSite[k + 2] = s[0]; ghSite[k + 3] = 0;
+    ghSite[k] = y; ghSite[k + 1] = solid; ghSite[k + 2] = s[0]; ghSite[k + 3] = top;
     const w = s[0] > 1e-4 ? 255 / s[0] : 0;
     ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); ghTint[k + 3] = 255;
     if (s[0] > 0.003) ghAny = true;
