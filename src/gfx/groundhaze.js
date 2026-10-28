@@ -280,14 +280,19 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
     if (abs(d) < 0.05) { break; }
     s = clamp(s - f / d, -0.6, 0.6);
   }
+  let o = i.world + V * s;
+  // there, a line of sight that runs on under the surface toward the eye is meeting it from below: the underside of a
+  // fold, always hidden by the nearer side, however little steeper than the line of sight the fold drops (that much
+  // can be shallower than any margin the march below allows, and drew a faint bright line along crests)
+  let o2 = o + V * 0.005;
+  if (o2.y - siteAt(o2.xz).x < o.y - siteAt(o.xz).x) { discard; }
   let hl = length(V.xz);
   if (hl > 1e-3) {
-    let o = i.world + V * s;
     let st = V / hl;
     var t = 0.02;
     for (var k = 0; k < 30; k++) {
       let p = o + st * t;
-      if (p.y < siteAt(p.xz).x + hs - 0.01) { discard; }
+      if (p.y < siteAt(p.xz).x + hs - 0.005) { discard; }
       t *= 1.22;
     }
   }
