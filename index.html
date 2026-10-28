@@ -27,13 +27,13 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #stage canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; cursor: crosshair; }
 #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
 .hint { position: absolute; font-family: var(--display); font-size: 10px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -100%); white-space: nowrap; }
-.fbar { position: absolute; width: 44px; height: 5px; background: #1a0e10; border: 2px solid #000; transform: translate(-50%, -100%); }
-.fbar i, #target .meter i { position: relative; display: block; height: 100%; width: 100%; background: #e8b830; box-shadow: inset 0 -2px 0 #a8781a; }
+.fbar { position: absolute; width: var(--hb-w, 44px); height: var(--hb-h, 5px); background: var(--hb-back, #1a0e10); border: 2px solid #000; transform: translate(-50%, -100%); opacity: var(--hb-op, 1); }
+.fbar i, #target .meter i { position: relative; display: block; height: 100%; width: 100%; background: var(--hb-fill, #e8b830); box-shadow: inset 0 -2px 0 var(--hb-fillDark, #a8781a); }
 .fbar b, #target .meter b { position: absolute; top: 0; bottom: 0; left: 0; width: 0; }
-#target { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translateX(-50%); width: clamp(160px, calc(100vw - 440px), 420px); text-align: center; pointer-events: none; }
-#target .tname { font-family: var(--display); font-size: 11px; color: var(--bone); text-shadow: 2px 2px 0 #000; margin-bottom: 6px; }
-#target .meter { position: relative; height: 12px; background: #1a0e10; border: 2px solid #000; box-shadow: 3px 3px 0 #000; }
-#target .meter i { box-shadow: inset 0 -3px 0 #a8781a; }
+#target { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translateX(-50%); width: clamp(160px, calc(100vw - 440px), var(--hb-bigW, 420px)); text-align: center; pointer-events: none; opacity: var(--hb-op, 1); }
+#target .tname { font-family: var(--display); font-size: var(--hb-name, 11px); color: var(--bone); text-shadow: 2px 2px 0 #000; margin-bottom: 6px; }
+#target .meter { position: relative; height: var(--hb-bigH, 12px); background: var(--hb-back, #1a0e10); border: 2px solid #000; box-shadow: 3px 3px 0 #000; }
+#target .meter i { box-shadow: inset 0 -3px 0 var(--hb-fillDark, #a8781a); }
 .float { position: absolute; font-family: var(--display); font-size: 11px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -50%); animation: rise 0.9s steps(9) forwards; white-space: nowrap; }
 @keyframes rise { to { transform: translate(-50%, -240%); opacity: 0; } }
 
@@ -1782,7 +1782,7 @@ const SOBEL = { on: 0, angle: 40, thickness: 1, strength: 0.5, color: '#000000' 
 // it and dark where anything's shadow falls through it, so shadows cut through the haze and leave shafts of
 // light between them. Drawn in the pass after the scene: each pixel's view ray is stepped back up from the
 // ground through the layer, testing the sun's shadow map (and the cloud shadows) at each step.
-const SHAFTS = { on: 1, density: 0.09, height: 3, rays: 1.1, towardSun: 0.45, shadowHaze: 0.35, steps: 16, clouds: 1 };
+const SHAFTS = { on: 1, density: 0.09, height: 3, rays: 1.1, towardSun: 0.45, shadowHaze: 0.35, steps: 24, soft: 1, dither: 0, clouds: 1 };
 const normRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
 const normalMat = new THREE.MeshNormalMaterial({ flatShading: true, side: THREE.DoubleSide });
 const outlineRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
@@ -1795,26 +1795,34 @@ const outlineMat = new THREE.ShaderMaterial({
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
     useShafts: { value: 0 }, invVP: { value: new THREE.Matrix4() }, shadowMat: { value: new THREE.Matrix4() }, tShadow: { value: null }, hasShadow: { value: 0 },
     shadowBias: { value: 0 }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, hazeCol: { value: new THREE.Color() },
-    shDensity: { value: 0.1 }, shHeight: { value: 3 }, shRays: { value: 1 }, shG: { value: 0.4 }, shShade: { value: 0.4 }, shSteps: { value: 16 }, shClouds: { value: 1 } },
+    shDensity: { value: 0.1 }, shHeight: { value: 3 }, shRays: { value: 1 }, shG: { value: 0.4 }, shShade: { value: 0.4 }, shSteps: { value: 24 }, shSoft: { value: 1 }, shDither: { value: 0 }, shClouds: { value: 1 }, shadowTexel: { value: 1 / 2048 } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     uniform sampler2D tColor, tDepth, tNormal; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
     uniform float useDepth, useSobel, sStep, sTh, sStrength; uniform vec3 sColor;
     uniform float ss, persp, near, far, fogNear, fogFar;
-    uniform float useShafts, hasShadow, shadowBias, shDensity, shHeight, shRays, shG, shShade, shSteps, shClouds;
+    uniform float useShafts, hasShadow, shadowBias, shDensity, shHeight, shRays, shG, shShade, shSteps, shSoft, shDither, shClouds, shadowTexel;
     uniform mat4 invVP, shadowMat; uniform sampler2D tShadow, tCloud; uniform vec3 sunDir, sunCol, hazeCol;
     uniform vec2 cloudOff; uniform float cloudScale, cloudAmt, cloudCover, cloudSoft;
     varying vec2 vUv;
     #include <packing>
-    // the sun's light at a point in the world: 0 in a shadow, 1 out of one (and out past the shadow map)
+    float shadowTap(vec2 uv, float z) { return step(z, unpackRGBAToDepth(texture2D(tShadow, uv))); }
+    // the sun's light at a point in the world: 0 in a shadow, 1 out of one (and out past the shadow map).
+    // Softened, it blends the four nearest shadow-map texels (spread shSoft texels apart), so a shaft's
+    // edge fades across a step instead of jumping, and the steps don't show as bands.
     float sunLit(vec3 w) {
       if (hasShadow < 0.5) return 1.0;
       vec4 sc = shadowMat * vec4(w, 1.0);
       vec3 s = sc.xyz / sc.w;
       if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) return 1.0;
-      return step(s.z + shadowBias, unpackRGBAToDepth(texture2D(tShadow, s.xy)));
+      float z = s.z + shadowBias;
+      if (shSoft <= 0.0) return shadowTap(s.xy, z);
+      float t = shadowTexel * shSoft;
+      vec2 g = s.xy / t - 0.5, f = fract(g), b = (floor(g) + 0.5) * t;
+      return mix(mix(shadowTap(b, z), shadowTap(b + vec2(t, 0.0), z), f.x),
+                 mix(shadowTap(b + vec2(0.0, t), z), shadowTap(b + vec2(t, t), z), f.x), f.y);
     }
-    // a 4 x 4 ordered dither, to stagger where each pixel's steps fall
+    // a 4 x 4 ordered dither, to stagger where each pixel's steps fall (shDither of it; 0 steps evenly)
     float bayer2(vec2 a) { a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
     float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
     // the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
@@ -1869,7 +1877,7 @@ const outlineMat = new THREE.ShaderMaterial({
           vec4 a4 = invVP * vec4(ndc, -1.0, 1.0), b4 = invVP * vec4(ndc, d * 2.0 - 1.0, 1.0);
           vec3 eye = a4.xyz / a4.w, P = b4.xyz / b4.w, dir = normalize(P - eye);
           float len = min(shHeight / max(0.15, -dir.y), length(P - eye));
-          float lit = 0.0, j = bayer4(px);
+          float lit = 0.0, j = mix(0.5, bayer4(px), shDither);
           vec2 drift = sunDir.xz / max(0.08, sunDir.y);
           for (int i = 0; i < 48; i++) {
             if (float(i) >= shSteps) break;
@@ -1938,6 +1946,7 @@ function renderWorld() {
     u.hazeCol.value.copy(scene.fog ? scene.fog.color : hemi.color);
     u.shDensity.value = SHAFTS.density; u.shHeight.value = SHAFTS.height; u.shRays.value = SHAFTS.rays; u.shG.value = clamp(SHAFTS.towardSun, -0.9, 0.9);
     u.shShade.value = SHAFTS.shadowHaze; u.shSteps.value = Math.round(SHAFTS.steps); u.shClouds.value = SHAFTS.clouds;
+    u.shSoft.value = SHAFTS.soft; u.shDither.value = SHAFTS.dither; u.shadowTexel.value = 1 / sun.shadow.mapSize.x;
   }
   renderer.setRenderTarget(null);
   renderer.clear();
@@ -4523,7 +4532,7 @@ function propsNear(reach, fn) {
 const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
 function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
   if (f.hp <= 0) return;
-  f.hp -= dmg; f.hitT = 0; f.squish = 1; f.barHeat = 1; f.aggro = true; f.calm = 0; f.homing = false;
+  f.hp -= dmg; f.hitT = 0; f.squish = 1; f.barHeat = 1; f.barAge = 0; f.aggro = true; f.calm = 0; f.homing = false;
   const dx = f.x - fromX, dz = f.z - fromZ, l = Math.hypot(dx, dz) || 1;
   f.kx = dx / l * knock; f.kz = dz / l * knock;
   floatText(String(dmg), f.x, f.y + 1.1, f.z, '#ffffff');
@@ -4912,8 +4921,21 @@ function castJump() {
 // and a bar shows over its head, staying 3 seconds after you look away, while its name and a big bar show at
 // the top of the screen, staying 1 second (another monster you point at takes that over at once).
 // A hit flashes the bar and leaves the health just lost as a pale part that flares white and shrinks away,
-// as in neon-haze.
-const BAR_HOLD = 3, TARGET_HOLD = 1, BAR_TRAIL_RATE = 4, BAR_HEAT_FADE = 6;
+// as in neon-haze. All of it is in the tuning panel.
+const HPBAR = { hold: 3, targetHold: 1, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
+  width: 44, height: 5, bigWidth: 420, bigHeight: 12, nameSize: 11, opacity: 1,
+  fill: '#e8b830', lost: '#f4e2b8', hot: '#ffffff', back: '#1a0e10' };
+const hbLost = new THREE.Color(), hbHot = new THREE.Color();
+let hbStyle = '';
+// the bars' sizes and colours, as CSS variables, whenever the tuning changes them
+function styleBars() {
+  const B = HPBAR, key = JSON.stringify(B);
+  if (key === hbStyle) return;
+  hbStyle = key;
+  const dark = '#' + new THREE.Color(B.fill).multiplyScalar(0.72).getHexString(), st = document.documentElement.style;
+  for (const [k, v] of [['w', B.width + 'px'], ['h', B.height + 'px'], ['bigW', B.bigWidth + 'px'], ['bigH', B.bigHeight + 'px'],
+    ['name', B.nameSize + 'px'], ['op', B.opacity], ['fill', B.fill], ['fillDark', dark], ['back', B.back]]) st.setProperty('--hb-' + k, v);
+}
 let targetFoe = null, targetT = 0;
 const barFoes = new Set();
 const foeTop = f => f.g.position.y + (f.topH || 0.8) * f.base;
@@ -4945,21 +4967,25 @@ function pickFoe() {
 function drawBar(fill, lost, f) {
   const hp = clamp(f.hp / f.def.hp, 0, 1), shown = Math.max(hp, f.shownHp ?? hp), h = f.barHeat || 0;
   fill.style.width = hp * 100 + '%';
-  fill.style.filter = h > 0.01 ? `brightness(${1 + 1.5 * h})` : '';
+  fill.style.filter = h > 0.01 && HPBAR.flash > 0 ? `brightness(${1 + HPBAR.flash * h})` : '';
   lost.style.left = hp * 100 + '%';
   lost.style.width = (shown - hp) * 100 + '%';
-  lost.style.background = `rgb(${Math.round(244 + 11 * h)}, ${Math.round(226 + 29 * h)}, ${Math.round(184 + 71 * h)})`;
-  lost.style.boxShadow = h > 0.01 ? `0 0 ${Math.round(8 * h)}px rgba(255, 255, 255, ${h})` : '';
+  hbHot.set(HPBAR.hot);
+  lost.style.background = '#' + hbLost.set(HPBAR.lost).lerp(hbHot, h).getHexString();
+  lost.style.boxShadow = h > 0.01 && HPBAR.lostGlow > 0 ? `0 0 ${(HPBAR.lostGlow * h).toFixed(1)}px #${hbHot.getHexString()}` : '';
 }
 function updateFoeBars(dt) {
   // the pale part catches up and the flash cools on every monster, so a bar you point at later is up to date
+  styleBars();
   for (const f of foes) {
     const hp = clamp(f.hp / f.def.hp, 0, 1);
-    f.shownHp = f.shownHp == null || hp > f.shownHp ? hp : f.shownHp + (hp - f.shownHp) * (1 - Math.exp(-BAR_TRAIL_RATE * dt));
-    if (f.barHeat) f.barHeat *= Math.exp(-BAR_HEAT_FADE * dt);
+    f.barAge = (f.barAge ?? 1e9) + dt;
+    if (f.shownHp == null || hp > f.shownHp) f.shownHp = hp;
+    else if (f.barAge >= HPBAR.delay) f.shownHp += (hp - f.shownHp) * (1 - Math.exp(-HPBAR.trailRate * dt));
+    if (f.barHeat) f.barHeat *= Math.exp(-HPBAR.flashFade * dt);
   }
   const hov = pickFoe();
-  if (hov) { hov.barT = BAR_HOLD; targetFoe = hov; targetT = TARGET_HOLD; barFoes.add(hov); }
+  if (hov) { hov.barT = HPBAR.hold; targetFoe = hov; targetT = HPBAR.targetHold; barFoes.add(hov); }
   else targetT -= dt;
   const rect = cv.getBoundingClientRect();
   for (const f of barFoes) {
@@ -4972,7 +4998,7 @@ function updateFoeBars(dt) {
     }
     if (!f.barEl) { f.barEl = document.createElement('div'); f.barEl.className = 'fbar'; f.barEl.innerHTML = '<b></b><i></i>'; $('fx').appendChild(f.barEl); }
     const p = f.g.position;
-    v3.set(p.x, foeTop(f) + 0.3, p.z).project(camera);
+    v3.set(p.x, foeTop(f) + HPBAR.raise, p.z).project(camera);
     f.barEl.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
     f.barEl.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
     drawBar(f.barEl.lastChild, f.barEl.firstChild, f);
@@ -6281,6 +6307,8 @@ const TUNING = [
     [SHAFTS, 'towardSun', 'Brighter looking toward the sun (0 even)', 0, 0.9, 0.01],
     [SHAFTS, 'shadowHaze', 'Haze over everything (shadows show as darker haze)', 0, 1, 0.01],
     [SHAFTS, 'steps', 'Steps (quality against speed)', 1, 48, 1],
+    [SHAFTS, 'soft', 'Shaft edge softness (shadow-map texels; 0 hard)', 0, 6, 0.1],
+    [SHAFTS, 'dither', 'Dither: staggers steps to hide bands, but shows as a pattern (0 none)', 0, 1, 0.01],
     [SHAFTS, 'clouds', 'Cloud shadows cut shafts too', 0, 1, 0.01],
   ]],
   ['Haze', [
@@ -6329,6 +6357,26 @@ const TUNING = [
     [WATER, 'roughness', 'Glitter spread', 0.004, 0.2, 0.001],
     [WATER, 'foam', 'Foam', 0, 3, 0.05],
     [WATER, 'shoreFoam', 'Shore foam', 0, 2, 0.05],
+  ]],
+  ['Health bars', [
+    [HPBAR, 'hold', 'Bar over the head stays this long after you look away (seconds)', 0, 10, 0.1],
+    [HPBAR, 'targetHold', 'Big bar at the top stays this long (seconds)', 0, 10, 0.1],
+    [HPBAR, 'delay', 'Health just lost waits this long before it shrinks (seconds)', 0, 2, 0.05],
+    [HPBAR, 'trailRate', 'How fast the health just lost shrinks', 0.2, 20, 0.1],
+    [HPBAR, 'flash', 'Hit flash: how much the bar brightens (0 none)', 0, 5, 0.05],
+    [HPBAR, 'flashFade', 'How fast the flash and the white-hot fade', 0.5, 30, 0.1],
+    [HPBAR, 'lostGlow', 'Glow round the health just lost when hit (pixels)', 0, 24, 0.5],
+    [HPBAR, 'raise', 'Bar height over the head (tiles)', -0.5, 2, 0.05],
+    [HPBAR, 'width', 'Bar over the head: width (pixels)', 16, 160, 1],
+    [HPBAR, 'height', 'Bar over the head: thickness (pixels)', 2, 24, 1],
+    [HPBAR, 'bigWidth', 'Big bar: widest (pixels)', 120, 900, 5],
+    [HPBAR, 'bigHeight', 'Big bar: thickness (pixels)', 4, 40, 1],
+    [HPBAR, 'nameSize', 'Big bar: name size (pixels)', 6, 32, 1],
+    [HPBAR, 'opacity', 'Opacity', 0.1, 1, 0.01],
+    [HPBAR, 'fill', 'Health', 'color'],
+    [HPBAR, 'lost', 'Health just lost', 'color'],
+    [HPBAR, 'hot', 'Health just lost when hit (white-hot)', 'color'],
+    [HPBAR, 'back', 'Empty bar', 'color'],
   ]],
   ['Tumble', [
     [TUMBLE, 'time', 'How long the tumble lasts (seconds)', 0.15, 1.5, 0.01],
