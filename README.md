@@ -60,8 +60,8 @@ Crafting and Conquest's probe lighting, made for a height map instead of voxels 
 The tuning panel's Global illumination section has the switch, and `L` cycles it:
 
 - **0, off:** the plain sky light, as before.
-- **1, sky visibility:** the sky's light, less wherever ground, walls, roofs or leaves hide the sky (under trees, in canyons, indoors).
-- **2, bounce light (the default):** all the light arriving, the sky's plus what the ground and things round about give back of the sun or moon (with a shadow ray), the lamps and the torch, and lava's glow. It bounces on through the probes' own light.
+- **1, sky visibility (the default):** the sky's light, less wherever ground, walls, roofs or leaves hide the sky (under trees, in canyons, indoors).
+- **2, bounce light:** all the light arriving, the sky's plus what the ground and things round about give back of the sun or moon (with a shadow ray), the lamps and the torch, and lava's glow. It bounces on through the probes' own light.
 
 There are also sliders for strength, a minimum of the plain light to keep, rays and their reach, light through leaves, bounce strength and rays, and how many probes are relit each frame.
 
