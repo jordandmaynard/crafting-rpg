@@ -183,7 +183,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     <ul>
       <li>You are a human adventurer, alone in an untamed land. Fell trees and break rocks for wood and stone, and raise a shelter before night falls.</li>
       <li class="kb-only"><span><kbd>WASD</kbd> move, aim with the mouse, <kbd>LMB</kbd> attack (hold to keep swinging). Hit trees and rocks to gather.</li>
-      <li class="kb-only"><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash, <kbd>F</kbd> open and close doors.</span></li>
+      <li class="kb-only"><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash (a tumble you can steer), <kbd>F</kbd> open and close doors.</span></li>
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
       <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
@@ -4106,6 +4106,9 @@ const H = {
   kx: 0, kz: 0,
 };
 const CD = { Q: 8, E: 7, DASH: 2.4 };
+// the dash is a tumble: a forward roll you can steer, untouchable the whole way, and a burst of extra run
+// speed for a moment after you come up out of it
+const TUMBLE_T = 0.5, TUMBLE_TURN = 6, BOOST_T = 0.8, BOOST = 0.35;
 
 // ---------- Foes ----------
 let foes = [];
@@ -4798,7 +4801,7 @@ function castDash() {
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
-  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = CD.DASH; H.invuln = Math.max(H.invuln, 0.25); H.swing = -1;
+  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = CD.DASH; H.invuln = Math.max(H.invuln, TUMBLE_T); H.swing = -1; H.boost = 0;
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
 }
@@ -5396,7 +5399,7 @@ function update(dt) {
   time += dt;
   advanceClock(dt);
   H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt);
-  H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt;
+  H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt; H.boost = Math.max(0, (H.boost || 0) - dt);
   updateAim();
 
   // ----- hero -----
@@ -5415,10 +5418,15 @@ function update(dt) {
       if (u >= 1) { H.flip = null; H.y = surfaceY(H.x, H.z); puff(H.x, H.y, H.z, '#c8bca0', 8, 0.7); }
     } else if (H.dash >= 0) {
       H.dash += dt;
-      const sp = 17 * (1 - H.dash / 0.22);
+      // steer: the roll's heading swings round toward the way you push
+      if (m) {
+        const a = Math.atan2(H.dashDir[0], H.dashDir[1]), d = angDiff(Math.atan2(m[0], m[1]), a), t = a + clamp(d, -TUMBLE_TURN * dt, TUMBLE_TURN * dt);
+        H.dashDir = [Math.sin(t), Math.cos(t)];
+      }
+      const sp = 9 - 2.5 * H.dash / TUMBLE_T;
       vx = H.dashDir[0] * sp; vz = H.dashDir[1] * sp;
       H.face = Math.atan2(H.dashDir[0], H.dashDir[1]);
-      if (H.dash > 0.22) H.dash = -1;
+      if (H.dash > TUMBLE_T) { H.dash = -1; H.boost = BOOST_T; }
     } else if (H.lunge >= 0) {
       H.lunge += dt;
       const sp = H.lunge < 0.24 ? 14 : 0;
@@ -5430,7 +5438,7 @@ function update(dt) {
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
     } else if (m) {
-      const slow = H.swing >= 0 ? 0.45 : 1;
+      const slow = (H.swing >= 0 ? 0.45 : 1) * (1 + BOOST * Math.max(0, H.boost) / BOOST_T);
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
       // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
       if (H.swing < 0 && H.whirl < 0) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
@@ -5612,8 +5620,17 @@ function animateHero(dt) {
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
   hero.body.rotation.y = H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
-  hero.g.rotation.x = H.dash >= 0 ? 0.35 : H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
+  hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
   hero.g.position.set(0, 0, 0);
+  if (H.dash >= 0) {
+    // the tumble: tucked, rolling forward over once about the middle of the body, low to the ground
+    const u = Math.min(1, H.dash / TUMBLE_T), th = Math.PI * 2 * smooth(0.02, 0.95, u), hc = 0.5;
+    hero.g.rotation.x = th;
+    hero.g.position.set(0, hc * (1 - Math.cos(th)), -hc * Math.sin(th));
+    const tuck = Math.sin(u * Math.PI);
+    hero.legL.rotation.set(-1.7 * tuck, 0, 0); hero.legR.rotation.set(-1.7 * tuck, 0, 0);
+    hero.armL.rotation.set(-1.3 * tuck, 0, 0.1); hero.armR.rotation.set(-1.3 * tuck, 0, -0.08);
+  }
   if (H.flip) {
     // tucked, turning head over heels about the middle of the body (not the feet)
     const u = Math.min(1, H.flip.t / H.flip.dur), th = Math.PI * 2 * smooth(0.05, 0.92, u), hc = 0.55;
