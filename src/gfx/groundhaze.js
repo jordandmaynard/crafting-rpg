@@ -268,6 +268,19 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
                            siteAt(wp - vec2f(0.0, e)).x - siteAt(wp + vec2f(0.0, e)).x));
   let site = siteAt(wp);
   if (site.z < 0.003) { discard; }
+  // each slice is drawn only where the eye first meets it, so it doesn't brighten itself where it folds over (into a
+  // canyon, down a cliff): back toward the eye, a quarter tile at a time for six tiles, if the ray dips under this
+  // slice's surface, a nearer part of it covers this point
+  let V = toEye(i.world);
+  let hs = U.look.x * 2.0 * (i.slice + 0.5) / U.look.z;
+  let hl = length(V.xz);
+  if (hl > 1e-3) {
+    let st = V * (0.25 / hl);
+    for (var k = 1; k <= 24; k++) {
+      let p = i.world + st * f32(k);
+      if (p.y < siteAt(p.xz).x + hs - 0.05) { discard; }
+    }
+  }
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
   let uv = (wp * CPM - U.grid.xy) / U.grid.zw;
   let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * U.grid.z / CPM;
@@ -291,7 +304,6 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
   let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * det * U.look.y;
   // the light's path through the slice, across it
-  let V = toEye(i.world);
   let path = (2.0 * H / U.look.z) * abs(sn.y) / max(abs(dot(V, sn)), 0.25);
   let alpha = 1.0 - exp(-sigma * path);
   if (alpha < 0.002) { discard; }
