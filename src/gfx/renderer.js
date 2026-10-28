@@ -60,7 +60,8 @@ class Renderer {
     this._time0 = performance.now();
     this._frustum = new Frustum(); this._m = new Matrix4(); this._vp = new Matrix4(); this._v = new Vector3(); this._v2 = new Vector3();
     this._pipelines = new Map(); this._modules = new Map();
-    this._bufs = new WeakMap(); this._texs = new WeakMap(); this._rts = new WeakMap(); this._mats = new WeakMap();
+    this._bufs = new WeakMap(); this._texs = new WeakMap(); this._rts = new WeakMap(); this._mats = new WeakMap(); this._snaps = new WeakMap();
+    this._trash = [];       // textures dropped mid-frame, destroyed once the frame that may use them is sent
     this._freed = new FinalizationRegistry(b => b.destroy());
     this._frameNo = 0; this._enc = null; this._pendingClear = null; this._canvasTex = null; this._flushQueued = false;
 
@@ -158,6 +159,26 @@ class Renderer {
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
     cb(this._enc, this._frameBindGroup(true), this._lastFrameOff);
   }
+  // a copy of a render target's colour and depth as they stand at this point in the frame, for a later pass to
+  // read what lies behind it (the water, the bed under it): { color, depth } textures, kept while the size holds
+  snapshot(rt) {
+    this._targetViews(rt);
+    const g = this._rts.get(rt), w = Math.max(1, rt.width | 0), h = Math.max(1, rt.height | 0), T = GPUTextureUsage;
+    let s = this._snaps.get(rt);
+    if (!s || s.src !== g) {
+      if (s) this._trash.push(s.colorT, s.depthT);
+      const colorT = this.device.createTexture({ size: [w, h], format: COLOR_RT, usage: T.TEXTURE_BINDING | T.COPY_DST });
+      const depthT = this.device.createTexture({ size: [w, h], format: DEPTH, usage: T.TEXTURE_BINDING | T.COPY_DST });
+      const tex = (t, depth) => { const x = new M.Texture(); x.isViewTexture = true; x.isDepthTexture = depth; x.view = t.createView(); return x; };
+      s = { src: g, colorT, depthT, color: tex(colorT, false), depth: tex(depthT, true) };
+      this._snaps.set(rt, s);
+    }
+    this._runPendingClear();
+    if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
+    this._enc.copyTextureToTexture({ texture: g.color }, { texture: s.colorT }, [w, h]);
+    this._enc.copyTextureToTexture({ texture: g.depth }, { texture: s.depthT }, [w, h]);
+    return s;
+  }
   // a texture's GPU view (a render target's too), and an id that changes when the view does
   textureView(t) { const g = this._texture(t); return { view: g.view, id: g.id }; }
 
@@ -216,6 +237,8 @@ class Renderer {
     if (this.frameSlot) q.writeBuffer(this.frameBuf, 0, this.frameData, 0, this.frameSlot * FRAME_BYTES / 4);
     for (const p of this.objPages) if (p.used) { q.writeBuffer(p.buf, 0, p.data, 0, p.used * OBJ_BYTES / 4); p.used = 0; }
     q.submit([this._enc.finish()]);
+    for (const t of this._trash) t.destroy();
+    this._trash.length = 0;
     this._enc = null; this.frameSlot = 0; this.objSlot = 0; this._canvasTex = null;
   }
   // the canvas's pixels as RGBA bytes (for tests), after drawing a frame into it
@@ -525,10 +548,10 @@ class Renderer {
     }
     let g = this._rts.get(rt);
     if (!g || g.version !== rt.version) {
-      if (g) { g.color.destroy(); g.depth.destroy(); }
+      if (g) this._trash.push(g.color, g.depth);
       const w = Math.max(1, rt.width | 0), h = Math.max(1, rt.height | 0), T = GPUTextureUsage;
       const color = dev.createTexture({ size: [w, h], format: COLOR_RT, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_SRC });
-      const depth = dev.createTexture({ size: [w, h], format: DEPTH, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING });
+      const depth = dev.createTexture({ size: [w, h], format: DEPTH, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_SRC });
       g = { color, depth, colorView: color.createView(), depthView: depth.createView(), version: rt.version, id: Math.random() };
       this._rts.set(rt, g);
     }
