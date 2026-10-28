@@ -259,10 +259,6 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let wp = i.world.xz;
-  // the slice's own slope (it drapes over cliffs), smooth: from the ground it lies on, a quarter tile either way
-  let e = 0.25;
-  let sn = normalize(vec3f(siteAt(wp - vec2f(e, 0.0)).x - siteAt(wp + vec2f(e, 0.0)).x, 2.0 * e,
-                           siteAt(wp - vec2f(0.0, e)).x - siteAt(wp + vec2f(0.0, e)).x));
   let site = siteAt(wp);
   if (site.z < 0.003) { discard; }
   // each slice is drawn only where the eye first meets it, so it doesn't brighten itself where it folds over (into a
@@ -290,11 +286,11 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   let H = max(U.look.x, 0.02);
   // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
   let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * U.look.y;
-  // the light's path through the slice, across it
-  let path = (2.0 * H / U.look.z) * abs(sn.y) / max(abs(dot(V, sn)), 0.25);
-  // and fading out as the slice turns edge-on and then away (over a cliff's lip, down the far side of a rise), so
-  // its rim doesn't show as a hard line
-  let alpha = (1.0 - exp(-sigma * path)) * smoothstep(0.0, max(U.wind.w, 1e-3), dot(V, sn));
+  // the eye's path through the slice, taken as a level layer over the ground whatever the slice's own tilt: measured
+  // across the tilted shell it grows without bound where the shell turns edge-on (rolling over a crest), and its rim
+  // shows as a bright line
+  let path = (2.0 * H / U.look.z) / max(V.y, 0.25);
+  let alpha = 1.0 - exp(-sigma * path);
   if (alpha < 0.002) { discard; }
   let tint = textureSampleLevel(tintTex, tintTexS, (wp * U.site.w - U.site.xy) / U.site.z, 0.0).rgb;
   let c = shadeLit(tint, vec3f(0.0), 0.0, 1.0, i.world, vec3f(0.0, 1.0, 0.0), true) * U.look.w;
@@ -345,7 +341,7 @@ export class GroundHaze {
         site: { value: V2(0, 0, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT) },   // site map first texel x, z, texels across, a tile
         look: { value: V2(0.2, 1, 4, 1) },              // height, density, slices, brightness
         rest: { value: V2(1, 0.4, 0.25, 3) },           // resting amount, patchiness, patch frequency, grid edge blend (tiles)
-        wind: { value: V2(0, 0, 0, 0.3) },              // wind xz, seconds, edge fade
+        wind: { value: V2(0, 0, 0, 0) },                // wind xz, seconds
       },
       attributes: { slice: 'f32' }, code: DRAW_WGSL,
       transparent: true, blending: NormalBlending, depthWrite: false, side: DoubleSide,
@@ -390,7 +386,7 @@ export class GroundHaze {
   // Each frame, before drawing. f: { on, target: [x, z] (the camera's), hero: [x, z], dt, amount, patchiness,
   // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear, spin
   // (tiles a second the air's spun round the hero, whirling), spinClear (haze swept aside round them a second),
-  // height, density, slices, brightness, edgeFade (the facing toward the eye over which it fades in from edge-on) }
+  // height, density, slices, brightness }
   update(f) {
     this.on = !!f.on && !!this.siteOrigin;
     this.mesh.visible = this.on;
@@ -418,7 +414,7 @@ export class GroundHaze {
     Object.assign(U.grid.value, { x: origin[0], y: origin[1] });
     Object.assign(U.look.value, { x: f.height, y: f.density, z: slices, w: f.brightness });
     Object.assign(U.rest.value, { x: f.amount, y: f.patchiness, z: freq });
-    Object.assign(U.wind.value, { x: f.wind[0], y: f.wind[1], z: this.time, w: f.edgeFade ?? 0.3 });
+    Object.assign(U.wind.value, { x: f.wind[0], y: f.wind[1], z: this.time });
     // the slices' vertices stay put in the world (whole steps of their spacing), so their shape doesn't shift as the
     // grid moves on
     const snap = v => Math.round(v * DRAW_VPT) / DRAW_VPT;
