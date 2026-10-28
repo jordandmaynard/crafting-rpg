@@ -25,6 +25,7 @@ html, body { height: 100%; }
 body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: var(--void); color: var(--bone); font-family: var(--body); font-size: 20px; overflow: hidden; -webkit-user-select: none; user-select: none; }
 #stage { position: fixed; inset: 0; overflow: hidden; }
 #stage canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; cursor: crosshair; }
+.nogpu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; white-space: pre-line; color: #e8dcc8; font: 15px/1.6 sans-serif; }
 #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
 .hint { position: absolute; font-family: var(--display); font-size: 10px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -100%); white-space: nowrap; }
 .fbar { position: absolute; width: var(--hb-w, 44px); height: var(--hb-h, 5px); background: var(--hb-back, #1a0e10); border: 2px solid #000; transform: translate(-50%, -100%); opacity: var(--hb-op, 1); }
@@ -222,10 +223,9 @@ button:disabled { opacity: 0.45; cursor: default; }
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-(() => {
-'use strict';
+<script type="module">
+import * as GFX from './src/gfx/index.js';
+await (async () => {
 const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -1051,7 +1051,7 @@ function plotFill(pl) {
   return (pl.fill = cv2);
 }
 // and in the world, under the cursor in build mode: the plot's ground washed white (blue once claimed)
-const plotHoverMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const plotHoverMat = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.2, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 let plotHover = { id: 0, claimed: false, mesh: null };
 function showPlotHover(id) {
   const claimed = id ? plots[id].claimed : false;
@@ -1067,10 +1067,10 @@ function showPlotHover(id) {
       p(x2, z2); p(x2, z2 + 1); p(x2 + 1, z2 + 1); p(x2, z2); p(x2 + 1, z2 + 1); p(x2 + 1, z2);
     }
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
   plotHoverMat.color.set(claimed ? PLOT_BLUE : '#ffffff');
-  plotHover.mesh = new THREE.Mesh(g, plotHoverMat);
+  plotHover.mesh = new GFX.Mesh(g, plotHoverMat);
   plotHover.mesh.renderOrder = 5;
   scene.add(plotHover.mesh);
 }
@@ -1746,28 +1746,29 @@ function placeScenery(c, r) {
   }
 }
 
-// ---------- Three.js setup (the Dungeon Golf pipeline) ----------
+// ---------- WebGPU setup (src/gfx: a small scene graph and renderer) ----------
 const stage = $('stage');
-const renderer = new THREE.WebGLRenderer({ antialias: false });
-renderer.setPixelRatio(1);
+const renderer = await GFX.createRenderer().catch(err => {
+  stage.insertAdjacentHTML('beforeend', `<div class="nogpu">Emberwild draws with WebGPU, which this browser doesn't offer (${err.message})
+    Try a current Chrome, Edge or Safari, or Firefox with WebGPU turned on.</div>`);
+  throw err;
+});
 renderer.autoClear = false;
+// the sun's shadow: percentage-closer filtering, 17 taps spread by the shadow's radius (T > Shadows > Edge softness)
 renderer.shadowMap.enabled = true;
-// plain PCF: its 17 taps spread by the shadow's radius, so T > Shadows > Edge softness works (three's
-// PCFSoft ignores the radius)
-renderer.shadowMap.type = THREE.PCFShadowMap;
 stage.appendChild(renderer.domElement);
 const cv = renderer.domElement;
-const scene = new THREE.Scene();
+const scene = new GFX.Scene();
 // distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
 const FOG = { on: 1, start: 0, end: 31, amount: 0.8, day: '#b8c4d8', dusk: '#d8a890', night: '#020203' };
-scene.fog = new THREE.Fog('#b8c4d8', 1e5, 1e5 + 1);
+scene.fog = new GFX.Fog('#b8c4d8', 1e5, 1e5 + 1);
 // no scene.background: it would force a clear before the hero's second pass
 renderer.setClearColor('#0b0912', 1);
 // the view (T > Camera): the pixel-true orthographic camera, or a perspective one with a settable field of view
 // zoomIn / zoomOut: how far the wheel, +/- or the d-pad can zoom, as a multiple of the standard view
 const VIEW = { perspective: 1, fov: 15, zoomIn: 2.5, zoomOut: 0.9 };
-const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
-const perspCam = new THREE.PerspectiveCamera(VIEW.fov, 1, 1, 400);
+const orthoCam = new GFX.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
+const perspCam = new GFX.PerspectiveCamera(VIEW.fov, 1, 1, 400);
 let camera = orthoCam;
 
 // ---------- Outlines (T > Outline) ----------
@@ -1778,79 +1779,83 @@ const OUTLINE = { on: 1, distance: 0.4, thickness: 1, strength: 0.73, color: '#0
 // The second outline (T > Crease outline), Crafting and Conquest's Sobel strokes on normals: a stroke
 // wherever the surface turns by more than `angle` degrees across a 3 × 3 kernel of mosaic pixels.
 const SOBEL = { on: 0, angle: 40, thickness: 1, strength: 0.5, color: '#000000' };
-const normRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
-const normalMat = new THREE.MeshNormalMaterial({ flatShading: true, side: THREE.DoubleSide });
-const outlineRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
-outlineRT.depthTexture = new THREE.DepthTexture(1, 1);
-outlineRT.depthTexture.type = THREE.UnsignedIntType;
-const outlineMat = new THREE.ShaderMaterial({
-  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new THREE.Vector2(1, 1) },
-    useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new THREE.Color() },
-    span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() },
+const normRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
+const normalMat = new GFX.MeshNormalMaterial({ flatShading: true, side: GFX.DoubleSide });
+const outlineRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
+outlineRT.depthTexture = new GFX.DepthTexture(1, 1);
+outlineRT.depthTexture.type = GFX.UnsignedIntType;
+const outlineMat = new GFX.ShaderMaterial({
+  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new GFX.Vector2(1, 1) },
+    useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new GFX.Color() },
+    span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 } },
-  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
-  fragmentShader: `
-    uniform sampler2D tColor, tDepth, tNormal; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
-    uniform float useDepth, useSobel, sStep, sTh, sStrength; uniform vec3 sColor;
-    uniform float ss, persp, near, far, fogNear, fogFar;
-    varying vec2 vUv;
-    // the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
-    // samples, and its depth and normal are read at its middle sample
-    vec2 mid(vec2 px) { return ((clamp(px, vec2(0.0), res - 1.0) * ss + floor(ss * 0.5)) + 0.5) / (res * ss); }
-    // depth back from the near plane in world units (empty sky reads as far): linear for the orthographic
-    // camera, unprojected for the perspective one
-    float depthAt(vec2 px) {
-      float d = texture2D(tDepth, mid(px)).x;
-      if (persp < 0.5) return d * span;
-      float z = d * 2.0 - 1.0;
-      return 2.0 * near * far / (far + near - z * (far - near)) - near;
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f }
+@vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
+// the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
+// samples, and its depth and normal are read at its middle sample
+fn mid(px: vec2f) -> vec2i { return vec2i(clamp(px, vec2f(0.0), U.res - 1.0) * U.ss + floor(U.ss * 0.5)); }
+// depth back from the near plane in world units (empty sky reads as far): linear for the orthographic
+// camera, unprojected for the perspective one
+fn depthAt(px: vec2f) -> f32 {
+  let d = textureLoad(tDepth, mid(px), 0);
+  if (U.persp < 0.5) { return d * U.span; }
+  let z = d * 2.0 - 1.0;
+  return 2.0 * U.near * U.far / (U.far + U.near - z * (U.far - U.near)) - U.near;
+}
+// the view-space normal there (empty sky counts as the centre's, so it never strokes)
+fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px), 0); return select(g.rgb * 2.0 - 1.0, n0, g.a < 0.5); }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let px = floor(i.pos.xy);
+  // strokes fade into the haze with the ground they outline
+  let haze = 1.0 - sat((depthAt(px) + U.near - U.fogNear) / (U.fogFar - U.fogNear));
+  var col = vec3f(0.0);
+  for (var j = 0; j < 4; j++) {
+    for (var k = 0; k < 4; k++) {
+      if (f32(k) >= U.ss || f32(j) >= U.ss) { continue; }
+      col += textureLoad(tColor, vec2i(px * U.ss + vec2f(f32(k), f32(j))), 0).rgb;
     }
-    // the view-space normal there (empty sky counts as the centre's, so it never strokes)
-    vec3 normalAt(vec2 px, vec3 n0) { vec4 g = texture2D(tNormal, mid(px)); return g.a < 0.5 ? n0 : g.rgb * 2.0 - 1.0; }
-    void main() {
-      vec2 px = floor(vUv * res);
-      // strokes fade into the haze with the ground they outline
-      float haze = 1.0 - clamp((depthAt(px) + near - fogNear) / (fogFar - fogNear), 0.0, 1.0);
-      vec3 col = vec3(0.0);
-      for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
-        if (float(i) >= ss || float(j) >= ss) continue;
-        col += texture2D(tColor, (px * ss + vec2(float(i), float(j)) + 0.5) / (res * ss)).rgb;
+  }
+  col /= U.ss * U.ss;
+  if (U.useSobel > 0.5) {
+    let g0 = textureLoad(tNormal, mid(px), 0);
+    if (g0.a > 0.5) {
+      let n0 = g0.rgb * 2.0 - 1.0; let s = U.sStep;
+      let a = normalAt(px + vec2f(-s, -s), n0); let b = normalAt(px + vec2f(0.0, -s), n0); let c = normalAt(px + vec2f(s, -s), n0);
+      let d = normalAt(px + vec2f(-s, 0.0), n0); let f = normalAt(px + vec2f(s, 0.0), n0);
+      let g = normalAt(px + vec2f(-s, s), n0); let h = normalAt(px + vec2f(0.0, s), n0); let k = normalAt(px + vec2f(s, s), n0);
+      let nx = (c + 2.0 * f + k) - (a + 2.0 * d + g); let ny = (g + 2.0 * h + k) - (a + 2.0 * b + c);
+      let e2 = smoothstep(U.sTh, U.sTh * 1.3, sqrt(dot(nx, nx) + dot(ny, ny)) * 0.25);
+      col = mix(col, U.sColor, e2 * U.sStrength * haze);
+    }
+  }
+  if (U.useDepth > 0.5) {
+    let t = depthAt(px); let r2 = (U.thick + 0.5) * (U.thick + 0.5);
+    var e = 0.0;
+    for (var dy = -6; dy <= 6; dy++) {
+      for (var dx = -6; dx <= 6; dx++) {
+        let o = vec2f(f32(dx), f32(dy));
+        if (abs(o.x) > U.thick || abs(o.y) > U.thick || dot(o, o) > r2) { continue; }
+        if (depthAt(px + o) - t > U.dist) { e = 1.0; }
       }
-      col /= ss * ss;
-      if (useSobel > 0.5) {
-        vec4 g0 = texture2D(tNormal, mid(px));
-        if (g0.a > 0.5) {
-          vec3 n0 = g0.rgb * 2.0 - 1.0; float s = sStep;
-          vec3 a = normalAt(px + vec2(-s, -s), n0), b = normalAt(px + vec2(0.0, -s), n0), c = normalAt(px + vec2(s, -s), n0);
-          vec3 d = normalAt(px + vec2(-s, 0.0), n0), f = normalAt(px + vec2(s, 0.0), n0);
-          vec3 g = normalAt(px + vec2(-s, s), n0), h = normalAt(px + vec2(0.0, s), n0), k = normalAt(px + vec2(s, s), n0);
-          vec3 nx = (c + 2.0 * f + k) - (a + 2.0 * d + g), ny = (g + 2.0 * h + k) - (a + 2.0 * b + c);
-          float e2 = smoothstep(sTh, sTh * 1.3, sqrt(dot(nx, nx) + dot(ny, ny)) * 0.25);
-          col = mix(col, sColor, e2 * sStrength * haze);
-        }
-      }
-      if (useDepth > 0.5) {
-        float t = depthAt(px), e = 0.0, r2 = (thick + 0.5) * (thick + 0.5);
-        for (int dy = -6; dy <= 6; dy++) for (int dx = -6; dx <= 6; dx++) {
-          vec2 o = vec2(float(dx), float(dy));
-          if (abs(o.x) > thick || abs(o.y) > thick || dot(o, o) > r2) continue;
-          if (depthAt(px + o) - t > dist) e = 1.0;
-        }
-        col = mix(col, color, e * strength * haze);
-      }
-      gl_FragColor = vec4(col, 1.0);
-    }`,
+    }
+    col = mix(col, U.color, e * U.strength * haze);
+  }
+  return vec4f(col, 1.0);
+}`,
   depthTest: false, depthWrite: false,
 });
-const outlineScene = new THREE.Scene(), outlineCam = new THREE.Camera();
-outlineScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), outlineMat));
+const outlineScene = new GFX.Scene(), outlineCam = new GFX.Camera();
+const outlineQuad = new GFX.Mesh(new GFX.PlaneGeometry(2, 2), outlineMat);
+outlineQuad.frustumCulled = false;
+outlineScene.add(outlineQuad);
 function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
   const on = depthOn || sobelOn || ssNow > 1;
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
-  // three draws the sun's shadow map anew in every render, keeping only casters on the camera's layers:
-  // draw it once, in the world pass (the hero casts there through a stand-in), and reuse it after
+  // the renderer draws the sun's shadow map anew in every render, keeping only casters on the camera's
+  // layers: draw it once, in the world pass (the hero casts there through a stand-in), and reuse it after
   renderer.shadowMap.autoUpdate = true;
   updateTrunkCut();
   camera.layers.set(0); renderer.render(scene, camera);
@@ -1881,17 +1886,17 @@ function renderWorld() {
   renderer.render(outlineScene, outlineCam);
 }
 
-const hemi = new THREE.HemisphereLight('#b4bce8', '#3a2a44', 0.72);
-const sun = new THREE.DirectionalLight('#ffe6c4', 0.95);
+const hemi = new GFX.HemisphereLight('#b4bce8', '#3a2a44', 0.72);
+const sun = new GFX.DirectionalLight('#ffe6c4', 0.95);
 scene.add(hemi, sun, sun.target);
 const lights = [hemi, sun];
 const addLight = l => { lights.push(l); scene.add(l); return l; };
 
-const C = h => new THREE.Color(h);
+const C = h => new GFX.Color(h);
 const colorCache = new Map();
 const CC = h => { let k = colorCache.get(h); if (!k) { k = C(h); colorCache.set(h, k); } return k; };
 const shade = (c, f) => c.clone().multiplyScalar(f);
-const flatMat = opts => new THREE.MeshStandardMaterial(Object.assign({ flatShading: true, roughness: 1, metalness: 0 }, opts));
+const flatMat = opts => new GFX.MeshStandardMaterial(Object.assign({ flatShading: true, roughness: 1, metalness: 0 }, opts));
 
 // ---------- Cloud shadows (T > Cloud shadows) ----------
 // A tiling noise texture laid over the world by position and slowly scrolled; where it's dense, the sun's
@@ -1913,30 +1918,14 @@ const cloudTex = (() => {
     const k = (y * S + x) * 4, b = Math.round(v / tot * 255);
     data[k] = data[k + 1] = data[k + 2] = b; data[k + 3] = 255;
   }
-  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = t.minFilter = THREE.LinearFilter; t.needsUpdate = true;
+  const t = new GFX.DataTexture(data, S, S, GFX.RGBAFormat);
+  t.wrapS = t.wrapT = GFX.RepeatWrapping; t.magFilter = t.minFilter = GFX.LinearFilter; t.needsUpdate = true;
   return t;
 })();
-const CLOUD_U = { tCloud: { value: cloudTex }, cloudOff: { value: new THREE.Vector2() }, cloudScale: { value: 56 },
+const CLOUD_U = { tCloud: { value: cloudTex }, cloudOff: { value: new GFX.Vector2() }, cloudScale: { value: 56 },
   cloudAmt: { value: 0.4 }, cloudCover: { value: 0.45 }, cloudSoft: { value: 0.16 }, shadowAmt: { value: 0.8 } };
-const CLOUD_GLSL = `uniform sampler2D tCloud; uniform vec2 cloudOff; uniform float cloudScale, cloudAmt, cloudCover, cloudSoft, shadowAmt;
-varying vec2 vCloudXZ;
-float cloudShade() {
-  float n = texture2D(tCloud, (vCloudXZ + cloudOff) / cloudScale).r;
-  return 1.0 - cloudAmt * smoothstep(1.0 - cloudCover - cloudSoft, 1.0 - cloudCover + cloudSoft, n);
-}
-`;
-THREE.MeshStandardMaterial.prototype.onBeforeCompile = function (shader) {
-  Object.assign(shader.uniforms, CLOUD_U);
-  shader.vertexShader = 'varying vec2 vCloudXZ;\n' + shader.vertexShader.replace('#include <project_vertex>',
-    '#include <project_vertex>\n  vCloudXZ = (modelMatrix * vec4(transformed, 1.0)).xz;');
-  shader.fragmentShader = CLOUD_GLSL + shader.fragmentShader.replace('#include <lights_fragment_begin>',
-    THREE.ShaderChunk.lights_fragment_begin.replace('getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );',
-      'getDirectionalDirectLightIrradiance( directionalLight, geometry, directLight );\n\t\tdirectLight.color *= cloudShade();')
-      // the sun's shadow only takes away shadowAmt of its light (T > Shadows)
-      .replace('? getShadow( directionalShadowMap[ i ]', '? mix( 1.0, getShadow( directionalShadowMap[ i ]')
-      .replace('vDirectionalShadowCoord[ i ] ) : 1.0;', 'vDirectionalShadowCoord[ i ] ), shadowAmt ) : 1.0;'));
-};
+// every lit surface (and the water) reads these: the renderer passes them to its shaders
+renderer.setClouds(CLOUD_U);
 function updateClouds(dt) {
   const a = CLOUDS.direction * Math.PI / 180, o = CLOUD_U.cloudOff.value, S = CLOUDS.scale;
   o.x = (o.x - Math.cos(a) * CLOUDS.speed * dt) % (S * 64); o.y = (o.y - Math.sin(a) * CLOUDS.speed * dt) % (S * 64);
@@ -1947,9 +1936,9 @@ function updateClouds(dt) {
 // everything lit by the sun (not the glows, the water or the hero's see-through silhouette) casts and takes
 // the sun's shadow
 // draws nothing, but casts: the hero's stand-in on the world layer, and the redwoods' crowns up out of sight
-const castOnlyMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+const castOnlyMat = new GFX.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
 function shadowy(obj) {
-  obj.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial && !o.material.transparent) o.castShadow = o.receiveShadow = true; });
+  obj.traverse(o => { if (o.isMesh && o.material && (o.material.isMeshStandardMaterial || o.material.lit) && !o.material.transparent) o.castShadow = o.receiveShadow = true; });
   return obj;
 }
 // Growable vertex buffers: every chunk writes its triangles here, then copies them into a mesh.
@@ -1964,13 +1953,13 @@ class Buf {
   }
   mesh(mat) {
     if (!this.n) return null;
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(this.p.slice(0, this.n), 3));
-    g.setAttribute('color', new THREE.BufferAttribute(this.c.slice(0, this.n), 3));
+    const g = new GFX.BufferGeometry();
+    g.setAttribute('position', new GFX.BufferAttribute(this.p.slice(0, this.n), 3));
+    g.setAttribute('color', new GFX.BufferAttribute(this.c.slice(0, this.n), 3));
     // flat shading doesn't need normals to draw, but the shadow lookup nudges each point out along its
     // normal (normalBias), and with none every lookup misses and nothing is shadowed
     g.computeVertexNormals();
-    return shadowy(new THREE.Mesh(g, mat));
+    return shadowy(new GFX.Mesh(g, mat));
   }
 }
 let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf();
@@ -1982,7 +1971,7 @@ class TreeBuf extends Buf {
   tag(from, x, y, z) { for (let i = from; i < this.n; i += 3) { this.b[i] = x; this.b[i + 1] = y; this.b[i + 2] = z; } }
   mesh(mat) {
     const m = super.mesh(mat);
-    if (m) m.geometry.setAttribute('tree', new THREE.BufferAttribute(this.b.slice(0, this.n), 3));
+    if (m) m.geometry.setAttribute('tree', new GFX.BufferAttribute(this.b.slice(0, this.n), 3));
     return m;
   }
 }
@@ -1996,17 +1985,17 @@ function tri(a, b, c, ca, cb = ca, cc = ca) {
   B.n = n;
 }
 function quad(a, b, c, d, ca, cb = ca, cc = cb, cd = ca) { tri(a, b, c, ca, cb, cc); tri(a, c, d, ca, cc, cd); }
-const dummy = new THREE.Object3D();
+const dummy = new GFX.Object3D();
 const G = {
-  box: new THREE.BoxGeometry(1, 1, 1),
-  cone4: new THREE.ConeGeometry(0.5, 1, 4),
-  cone6: new THREE.ConeGeometry(0.5, 1, 6),
-  cyl6: new THREE.CylinderGeometry(0.5, 0.5, 1, 6),
-  cyl8: new THREE.CylinderGeometry(0.5, 0.5, 1, 8),
-  ico: new THREE.IcosahedronGeometry(0.5, 0),
-  dodec: new THREE.DodecahedronGeometry(0.5, 0),
-  oct: new THREE.OctahedronGeometry(0.5, 0),
-  frust7: new THREE.CylinderGeometry(0.26, 0.5, 1, 7),
+  box: new GFX.BoxGeometry(1, 1, 1),
+  cone4: new GFX.ConeGeometry(0.5, 1, 4),
+  cone6: new GFX.ConeGeometry(0.5, 1, 6),
+  cyl6: new GFX.CylinderGeometry(0.5, 0.5, 1, 6),
+  cyl8: new GFX.CylinderGeometry(0.5, 0.5, 1, 8),
+  ico: new GFX.IcosahedronGeometry(0.5, 0),
+  dodec: new GFX.DodecahedronGeometry(0.5, 0),
+  oct: new GFX.OctahedronGeometry(0.5, 0),
+  frust7: new GFX.CylinderGeometry(0.26, 0.5, 1, 7),
 };
 // each primitive's triangles, unrolled once, so dropping thousands of them into a chunk stays cheap
 const GP = new Map();
@@ -2340,13 +2329,13 @@ function buildWater(c0, r0, grid, GW, ch) {
     }
   }
   if (!wPos.length) return;
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(wPos, 3));
-  g.setAttribute('wDepth', new THREE.Float32BufferAttribute(wDepth, 1));
-  g.setAttribute('wFlow', new THREE.Float32BufferAttribute(wFlow, 2));
-  g.setAttribute('wFall', new THREE.Float32BufferAttribute(wFall, 1));
-  ch.water = new THREE.Mesh(g, waterMulMat); ch.water.renderOrder = 2;
-  ch.water2 = new THREE.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(wPos, 3));
+  g.setAttribute('wDepth', new GFX.Float32BufferAttribute(wDepth, 1));
+  g.setAttribute('wFlow', new GFX.Float32BufferAttribute(wFlow, 2));
+  g.setAttribute('wFall', new GFX.Float32BufferAttribute(wFall, 1));
+  ch.water = new GFX.Mesh(g, waterMulMat); ch.water.renderOrder = 2;
+  ch.water2 = new GFX.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
 }
 // Lava pools and rivers the same way, on their own: each point at the highest lava surface round it, a little
 // lower in its banks than water stands, with how far it is above the bed there (the shore) and its flow.
@@ -2376,57 +2365,63 @@ function buildLava(c0, r0, grid, GW, ch) {
     }
   }
   if (!pos.length) return;
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('lDepth', new THREE.Float32BufferAttribute(dep, 1));
-  g.setAttribute('lFlow', new THREE.Float32BufferAttribute(flow, 2));
-  ch.lava = new THREE.Mesh(g, lavaMat);
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('lDepth', new GFX.Float32BufferAttribute(dep, 1));
+  g.setAttribute('lFlow', new GFX.Float32BufferAttribute(flow, 2));
+  ch.lava = new GFX.Mesh(g, lavaMat);
 }
-const groundMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
+const groundMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
 // Redwood trunks are cut away, as the walls are indoors, where they'd hide you: those below you on the screen
 // and close to its middle. A cut tree snaps to a stump (TRUNK_CUT tiles) with a ragged, broken top, a dark
 // rim, and dark heartwood showing inside. Each tree is judged by its own centre.
 const TRUNK_CUT = 1.4;
-const TRUNK_U = { cutC: { value: new THREE.Vector2() }, cutDir: { value: new THREE.Vector2(0, 1) }, cutRight: { value: new THREE.Vector2(1, 0) },
+const TRUNK_U = { cutC: { value: new GFX.Vector2() }, cutDir: { value: new GFX.Vector2(0, 1) }, cutRight: { value: new GFX.Vector2(1, 0) },
   cutD: { value: 1e9 }, cutW: { value: 4 }, cutLow: { value: TRUNK_CUT } };
-const trunkMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
-trunkMat.onBeforeCompile = function (shader) {
-  THREE.MeshStandardMaterial.prototype.onBeforeCompile.call(this, shader);
-  Object.assign(shader.uniforms, TRUNK_U);
-  shader.vertexShader = 'attribute vec3 tree;\nvarying vec3 vTree, vTrunkW;\n' + shader.vertexShader.replace('#include <project_vertex>',
-    '#include <project_vertex>\n  vTrunkW = (modelMatrix * vec4(transformed, 1.0)).xyz; vTree = tree;');
-  shader.fragmentShader = 'uniform vec2 cutC, cutDir, cutRight; uniform float cutD, cutW, cutLow; varying vec3 vTree, vTrunkW;\n' + shader.fragmentShader
-    .replace('void main() {', `void main() {
-  vec2 rel = vTree.xz - cutC;
-  float along = dot(rel, cutDir), lat = abs(dot(rel, cutRight));
-  float top = along > 0.5 && lat < cutW ? cutLow : 200.0;
+// lit as the other flat-shaded materials are, the tree's centre and foot given with every vertex
+const trunkMat = new GFX.ShaderMaterial({ uniforms: TRUNK_U, vertexColors: true, side: GFX.DoubleSide, attributes: { tree: 'vec3f' }, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) tree: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = O.model * vec4f(v.position, 1.0);
+  return VOut(F.viewProj * w, w.xyz, v.color, v.tree);
+}
+@fragment fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
+  let N = flatNormal(i.world);
+  let rel = i.tree.xz - U.cutC;
+  let along = dot(rel, U.cutDir); let lat = abs(dot(rel, U.cutRight));
+  var top = select(200.0, U.cutLow, along > 0.5 && lat < U.cutW);
   // a broken edge: splintered, higher on some sides than others
-  vec3 q = vTrunkW;
-  top += 0.3 * sin(q.x * 5.3 + q.z * 2.1 + vTree.x) + 0.18 * sin(q.x * 2.2 - q.z * 6.1 + vTree.z) + 0.12 * sin((q.x + q.z) * 14.0);
-  float hgt = vTrunkW.y - vTree.y;
-  if (hgt > top) discard;`)
-    .replace('#include <color_fragment>', `#include <color_fragment>
-  if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.2, 0.09, 0.05);
-  else diffuseColor.rgb *= mix(1.0, 0.5, smoothstep(top - 0.22, top, hgt));`);
-};
-trunkMat.customProgramCacheKey = () => 'trunk';
+  let q = i.world;
+  top += 0.3 * sin(q.x * 5.3 + q.z * 2.1 + i.tree.x) + 0.18 * sin(q.x * 2.2 - q.z * 6.1 + i.tree.z) + 0.12 * sin((q.x + q.z) * 14.0);
+  let hgt = q.y - i.tree.y;
+  if (hgt > top) { discard; }
+  // dark heartwood inside, a dark rim round the break
+  var albedo = vec3f(0.2, 0.09, 0.05);
+  if (front) { albedo = i.color * mix(1.0, 0.5, smoothstep(top - 0.22, top, hgt)); }
+  let c = shadeLit(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
 // where the cut falls: the ground at the bottom middle of the view, measured toward the camera
-const cutRay = new THREE.Raycaster(), cutPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), cutHit = new THREE.Vector3(), NDC_LOW = new THREE.Vector2(0, -1);
+const cutRay = new GFX.Ray(), cutPlane = new GFX.Plane(new GFX.Vector3(0, 1, 0), 0), cutHit = new GFX.Vector3();
 function updateTrunkCut() {
   const U = TRUNK_U, sx = Math.sin(yaw), sz = Math.cos(yaw);
   camera.updateMatrixWorld();
-  cutRay.setFromCamera(NDC_LOW, camera); cutPlane.constant = -camTarget.y;
+  // the ray through the bottom middle of the view, from its near plane to its far
+  cutRay.origin.set(0, -1, -1).unproject(camera); cutRay.direction.set(0, -1, 1).unproject(camera).sub(cutRay.origin).normalize();
+  cutPlane.constant = -camTarget.y;
   U.cutC.value.set(camTarget.x, camTarget.z); U.cutDir.value.set(sx, sz); U.cutRight.value.set(sz, -sx);
-  U.cutD.value = cutRay.ray.intersectPlane(cutPlane, cutHit) ? (cutHit.x - camTarget.x) * sx + (cutHit.z - camTarget.z) * sz : 1e9;
+  U.cutD.value = cutRay.intersectPlane(cutPlane, cutHit) ? (cutHit.x - camTarget.x) * sx + (cutHit.z - camTarget.z) * sz : 1e9;
   U.cutW.value = Math.max(1.6, spanW * 0.09);
 }
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
 function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
-const waterMat = new THREE.MeshStandardMaterial({ vertexColors: true, emissive: '#0c2228', roughness: 0.55, metalness: 0, flatShading: true, transparent: true, opacity: 0.74, depthWrite: false });
-const glowMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+const waterMat = new GFX.MeshStandardMaterial({ vertexColors: true, emissive: '#0c2228', roughness: 0.55, metalness: 0, flatShading: true, transparent: true, opacity: 0.74, depthWrite: false });
+const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 
 // ---------- Water (T > Water) ----------
-// Crafting and Conquest's water surface, brought down to WebGL: Fresnel (Schlick, n = 1.333) between the
+// Crafting and Conquest's water surface: Fresnel (Schlick, n = 1.333) between the
 // sky's reflection and the water body (light scattered back up out of it), sun glitter off the wave slopes,
 // what's under the surface seen through the water it lies under (each colour absorbed at its own rate, red
 // first), and a lace of foam along the shore that the water washes in and out. The waves are scrolling slope
@@ -2476,119 +2471,129 @@ const waveTex = (() => {
     data[k * 4 + 2] = Math.round(H[k] * 255);
     data[k * 4 + 3] = Math.round((F[k] - flo) / (fhi - flo) * 255);
   }
-  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.magFilter = t.minFilter = THREE.LinearFilter; t.needsUpdate = true;
+  const t = new GFX.DataTexture(data, S, S, GFX.RGBAFormat);
+  t.wrapS = t.wrapT = GFX.RepeatWrapping; t.magFilter = t.minFilter = GFX.LinearFilter; t.needsUpdate = true;
   return t;
 })();
-const WATER_U = Object.assign({
+const WATER_U = {
   tWave: { value: waveTex }, time: { value: 0 }, waveAmp: { value: 1 }, flowSpeed: { value: 1 }, glitter: { value: 1 }, rough: { value: 0.03 },
-  foamAmt: { value: 1 }, shoreFoam: { value: 0.6 }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() },
-  skyCol: { value: new THREE.Color() }, viewDir: { value: new THREE.Vector3(0, -1, 0) }, waterCol: { value: new THREE.Vector3() },
-  absorb: { value: new THREE.Vector3() }, lampPos: { value: new THREE.Vector3() }, lampCol: { value: new THREE.Color() }, lampRange: { value: 9 },
+  foamAmt: { value: 1 }, shoreFoam: { value: 0.6 }, sunDir: { value: new GFX.Vector3(0, 1, 0) }, sunCol: { value: new GFX.Color() },
+  skyCol: { value: new GFX.Color() }, viewDir: { value: new GFX.Vector3(0, -1, 0) }, waterCol: { value: new GFX.Vector3() },
+  absorb: { value: new GFX.Vector3() }, lampPos: { value: new GFX.Vector3() }, lampCol: { value: new GFX.Color() }, lampRange: { value: 9 },
   fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
   swellAmp: { value: 0.11 }, swellLen: { value: 1.5 }, rippleLen: { value: 1 }, swellShade: { value: 0 }, crests: { value: 1 }, sparkle: { value: 1 },
   caustics: { value: 1 }, shallows: { value: 1 }, shoreLine: { value: 1 }, shoreRipples: { value: 1 },
-}, CLOUD_U);
-const WATER_VS = `
-attribute float wDepth, wFall; attribute vec2 wFlow;
-uniform float time, swellAmp, swellLen;
-varying vec3 vPos, vSwellN; varying float vDepth, vFall, vFogZ, vSwell; varying vec2 vFlow, vCloudXZ;
-// three long swells crossing (tiles per wave: 6, 3.9, 2.7): their height, -1 .. 1, and its slope in xz
-vec2 swellSlope;
-float swell(vec2 p) {
-  const float TAU = 6.2832;
-  vec2 d0 = vec2(0.83, 0.56), d1 = vec2(-0.45, 0.89), d2 = vec2(0.98, -0.2);
-  float k0 = TAU / (6.0 * swellLen), k1 = TAU / (3.9 * swellLen), k2 = TAU / (2.7 * swellLen);
-  float a0 = dot(p, d0) * k0 + time * 0.9, a1 = dot(p, d1) * k1 + time * 1.15 + 1.7, a2 = dot(p, d2) * k2 + time * 1.4 + 4.1;
-  swellSlope = 0.5 * k0 * cos(a0) * d0 + 0.3 * k1 * cos(a1) * d1 + 0.2 * k2 * cos(a2) * d2;
-  return 0.5 * sin(a0) + 0.3 * sin(a1) + 0.2 * sin(a2);
+};
+const WATER_WGSL = /* wgsl */ `
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) wpos: vec3f,
+  @location(1) swellN: vec3f,
+  @location(2) depth: f32,
+  @location(3) fall: f32,
+  @location(4) fogZ: f32,
+  @location(5) swellH: f32,
+  @location(6) flow: vec2f,
 }
-void main() {
-  vec4 w = modelMatrix * vec4(position, 1.0);
+// three long swells crossing (tiles per wave: 6, 3.9, 2.7): their height, -1 .. 1, then its slope in xz
+fn swell(p: vec2f) -> vec3f {
+  let TAU = 6.2832;
+  let d0 = vec2f(0.83, 0.56); let d1 = vec2f(-0.45, 0.89); let d2 = vec2f(0.98, -0.2);
+  let k0 = TAU / (6.0 * U.swellLen); let k1 = TAU / (3.9 * U.swellLen); let k2 = TAU / (2.7 * U.swellLen);
+  let a0 = dot(p, d0) * k0 + U.time * 0.9; let a1 = dot(p, d1) * k1 + U.time * 1.15 + 1.7; let a2 = dot(p, d2) * k2 + U.time * 1.4 + 4.1;
+  let slope = 0.5 * k0 * cos(a0) * d0 + 0.3 * k1 * cos(a1) * d1 + 0.2 * k2 * cos(a2) * d2;
+  return vec3f(0.5 * sin(a0) + 0.3 * sin(a1) + 0.2 * sin(a2), slope);
+}
+@vertex fn vs(v: VIn) -> VOut {
+  var w = O.model * vec4f(v.position, 1.0);
   // running water and falls don't swell
-  vSwell = swell(w.xz);
-  float amp = swellAmp * (1.0 - clamp(length(wFlow) * 1.4, 0.0, 0.85)) * (1.0 - clamp(wFall, 0.0, 1.0)), h = amp * vSwell;
-  // smooth shaded: the swells' own normal, from their slope
-  vSwellN = normalize(vec3(-swellSlope.x * amp, 1.0, -swellSlope.y * amp));
+  let sw = swell(w.xz);
+  let amp = U.swellAmp * (1.0 - clamp(length(v.wFlow) * 1.4, 0.0, 0.85)) * (1.0 - sat(v.wFall));
+  let h = amp * sw.x;
   w.y += h;
-  vec4 v = viewMatrix * w;
-  vPos = w.xyz; vDepth = wDepth + h; vFall = wFall; vFlow = wFlow; vCloudXZ = w.xz; vFogZ = -v.z;
-  gl_Position = projectionMatrix * v;
-}`;
-const WATER_FS = CLOUD_GLSL + `
-uniform sampler2D tWave; uniform float time, waveAmp, flowSpeed, glitter, rough, foamAmt, shoreFoam, lampRange, passAdd, fogNear, fogFar;
-uniform float rippleLen, swellShade, crests, sparkle, caustics, shallows, shoreLine, shoreRipples;
-varying float vFogZ, vSwell; varying vec3 vSwellN;
-uniform vec3 sunDir, sunCol, skyCol, viewDir, waterCol, absorb, lampPos, lampCol;
-varying vec3 vPos; varying float vDepth, vFall; varying vec2 vFlow;
-vec2 slopeAt(vec2 uv) { return texture2D(tWave, uv).rg * 2.0 - 1.0; }
-float heightAt(vec2 uv) { return texture2D(tWave, uv).b; }
-float fresnelWater(float c) { float x = 1.0 - clamp(c, 0.0, 1.0), x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
-void main() {
-  vec2 xz = vPos.xz;
-  float d = max(vDepth, 0.0), spd = length(vFlow);
+  var o: VOut;
+  o.pos = F.viewProj * w;
+  o.wpos = w.xyz;
+  // smooth shaded: the swells' own normal, from their slope
+  o.swellN = normalize(vec3f(-sw.y * amp, 1.0, -sw.z * amp));
+  o.depth = v.wDepth + h; o.fall = v.wFall; o.flow = v.wFlow; o.swellH = sw.x;
+  o.fogZ = viewDepth(w.xyz);
+  return o;
+}
+fn wave(uv: vec2f) -> vec4f { return textureSampleLevel(tWave, tWaveS, uv, 0.0); }
+fn slopeAt(uv: vec2f) -> vec2f { return wave(uv).rg * 2.0 - 1.0; }
+fn heightAt(uv: vec2f) -> f32 { return wave(uv).b; }
+fn fresnelWater(c: f32) -> f32 { let x = 1.0 - sat(c); let x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
+const ROT_A = mat2x2f(0.8, -0.6, 0.6, 0.8);
+const ROT_B = mat2x2f(0.6, -0.8, 0.8, 0.6);
+const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let t = U.time;
+  let xz = i.wpos.xz;
+  let d = max(i.depth, 0.0); let spd = length(i.flow);
   // wind waves: two layers of slope noise crossing
-  vec2 s = slopeAt(xz / (9.0 * rippleLen) + vec2(0.021, 0.013) * time) * 0.6 + slopeAt(mat2(0.8, -0.6, 0.6, 0.8) * xz / (4.5 * rippleLen) - vec2(0.017, -0.029) * time) * 0.4;
+  var s = slopeAt(xz / (9.0 * U.rippleLen) + vec2f(0.021, 0.013) * t) * 0.6 + slopeAt(ROT_A * xz / (4.5 * U.rippleLen) - vec2f(0.017, -0.029) * t) * 0.4;
   // rivers: the flow map's two phases
-  float ph0 = fract(time * 0.3), ph1 = fract(time * 0.3 + 0.5), wb = abs(ph0 * 2.0 - 1.0);
-  vec2 fl = vFlow * flowSpeed * 1.6;
-  vec2 fs = mix(slopeAt(xz / (4.0 * rippleLen) - fl * ph0), slopeAt(xz / (4.0 * rippleLen) - fl * ph1 + 0.37), wb);
-  s = mix(s, fs, clamp(spd * 1.4, 0.0, 0.85)) * waveAmp * (0.22 + spd * 0.3 + vFall * 0.5);
-  vec3 Nf = normalize(vSwellN);
-  vec3 N = normalize(Nf + vec3(-s.x, 0.0, -s.y)), V = -viewDir, L = normalize(sunDir);
-  vec3 sunE = sunCol * cloudShade();
+  let ph0 = fract(t * 0.3); let ph1 = fract(t * 0.3 + 0.5); let wb = abs(ph0 * 2.0 - 1.0);
+  let fl = i.flow * U.flowSpeed * 1.6;
+  let fsl = mix(slopeAt(xz / (4.0 * U.rippleLen) - fl * ph0), slopeAt(xz / (4.0 * U.rippleLen) - fl * ph1 + 0.37), wb);
+  s = mix(s, fsl, clamp(spd * 1.4, 0.0, 0.85)) * U.waveAmp * (0.22 + spd * 0.3 + i.fall * 0.5);
+  let Nf = normalize(i.swellN);
+  let N = normalize(Nf + vec3f(-s.x, 0.0, -s.y)); let V = -U.viewDir; let L = normalize(U.sunDir);
+  let sunE = U.sunCol * cloudShade(xz);
   // the sky in it, Fresnel from a partly smoothed normal
-  vec3 R = reflect(-V, N);
-  vec3 refl = mix(skyCol * 1.3, skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y)));
-  float Fr = fresnelWater(max(dot(normalize(mix(N, vec3(0.0, 1.0, 0.0), 0.45)), V), 0.0));
+  let R = reflect(-V, N);
+  let refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y)));
+  let Fr = fresnelWater(max(dot(normalize(mix(N, vec3f(0.0, 1.0, 0.0), 0.45)), V), 0.0));
   // sun glitter: a Beckmann lobe over the wave slopes
-  vec3 Hv = normalize(V + L);
-  float ch = max(Hv.y, 1e-3), nh = max(dot(N, Hv), 1e-3), t2 = (1.0 - nh * nh) / (nh * nh);
-  float D = exp(-t2 / rough) / (3.14159 * rough * nh * nh * nh * nh);
-  vec3 spec = sunE * glitter * fresnelWater(dot(V, Hv)) * D / (4.0 * max(V.y, 0.05)) * step(0.0, L.y);
+  let Hv = normalize(V + L);
+  let nh = max(dot(N, Hv), 1e-3); let t2 = (1.0 - nh * nh) / (nh * nh);
+  let D = exp(-t2 / U.rough) / (PI * U.rough * nh * nh * nh * nh);
+  let spec = sunE * U.glitter * fresnelWater(dot(V, Hv)) * D / (4.0 * max(V.y, 0.05)) * step(0.0, L.y);
   // the water body: light scattered back up out of it, from the sky, the sun and the hero's torch
-  vec3 toLamp = lampPos - vPos; float ld = length(toLamp);
-  float lampK = pow(clamp(1.0 - ld / lampRange, 0.0, 1.0), 2.0);
-  vec3 body = waterCol * (skyCol * 1.6 + sunE * max(L.y, 0.0) * 0.8 + lampCol * lampK * 1.5);
+  let ld = length(U.lampPos - i.wpos);
+  let lampK = pow(sat(1.0 - ld / U.lampRange), 2.0);
+  var body = U.waterCol * (U.skyCol * 1.6 + sunE * max(L.y, 0.0) * 0.8 + U.lampCol * lampK * 1.5);
   // what's under: through the water above it, slanting down the view (a 30 degree view: twice the depth)
-  vec3 Tr = exp(-absorb * d * 3.0);
+  let Tr = exp(-U.absorb * d * 3.0);
   // turquoise shallows: light off a pale bed, coloured by the little water over it
-  float shK = smoothstep(0.0, 0.12, d) * (1.0 - smoothstep(0.25, 1.4, d)) * shallows;
-  body += vec3(0.05, 0.3, 0.26) * shK * (skyCol + sunE * max(L.y, 0.0));
+  let shK = smoothstep(0.0, 0.12, d) * (1.0 - smoothstep(0.25, 1.4, d)) * U.shallows;
+  body += vec3f(0.05, 0.3, 0.26) * shK * (U.skyCol + sunE * max(L.y, 0.0));
   // caustics on the bed: bright threads where two drifting patterns meet, fading as the water deepens
-  vec2 cz = xz + s * 0.6;
-  float c1 = heightAt(cz / 3.2 + vec2(0.013, 0.021) * time), c2 = heightAt(mat2(0.6, -0.8, 0.8, 0.6) * cz / 2.6 - vec2(0.019, -0.011) * time);
-  float caus = (1.0 - smoothstep(0.0, 0.035, abs(c1 - c2))) * (1.0 - smoothstep(0.1, 1.1, d)) * smoothstep(0.0, 0.05, d) * caustics;
+  let cz = xz + s * 0.6;
+  let c1 = heightAt(cz / 3.2 + vec2f(0.013, 0.021) * t); let c2 = heightAt(ROT_B * cz / 2.6 - vec2f(0.019, -0.011) * t);
+  let caus = (1.0 - smoothstep(0.0, 0.035, abs(c1 - c2))) * (1.0 - smoothstep(0.1, 1.1, d)) * smoothstep(0.0, 0.05, d) * U.caustics;
   // crests: a sheen where the swells stand highest, and sparkles that twinkle mostly on them
-  float crest = smoothstep(0.35, 0.95, vSwell) * crests;
-  float sp = heightAt(xz / 7.0 + vec2(0.031, -0.017) * time) + heightAt(mat2(0.8, 0.6, -0.6, 0.8) * xz / 5.0 - vec2(0.012, 0.027) * time);
-  float spark = smoothstep(0.71, 0.75, sp * 0.5 + vSwell * 0.04) * sparkle;
+  let crest = smoothstep(0.35, 0.95, i.swellH) * U.crests;
+  let sp = heightAt(xz / 7.0 + vec2f(0.031, -0.017) * t) + heightAt(ROT_C * xz / 5.0 - vec2f(0.012, 0.027) * t);
+  let spark = smoothstep(0.71, 0.75, sp * 0.5 + i.swellH * 0.04) * U.sparkle;
   // foam: the lace along the shore, streaks on running water, white where it falls
-  float fp = mix(texture2D(tWave, xz / 1.9 - fl * ph0 * 0.8).a, texture2D(tWave, xz / 1.9 - fl * ph1 * 0.8 + 0.5).a, wb);
-  float wash = 0.5 + 0.5 * sin(d * 14.0 - time * 1.6 + fp * 4.0);
-  float cover = max((1.0 - smoothstep(0.0, 0.02 + 0.07 * wash, d)) * shoreFoam, spd * 0.12 + vFall * 0.7) * foamAmt;
-  float fm = smoothstep(1.0 - cover - 0.07, 1.0 - cover + 0.07, fp) * smoothstep(0.0, 0.25, cover);
+  let fp = mix(wave(xz / 1.9 - fl * ph0 * 0.8).a, wave(xz / 1.9 - fl * ph1 * 0.8 + 0.5).a, wb);
+  let wash = 0.5 + 0.5 * sin(d * 14.0 - t * 1.6 + fp * 4.0);
+  let cover = max((1.0 - smoothstep(0.0, 0.02 + 0.07 * wash, d)) * U.shoreFoam, spd * 0.12 + i.fall * 0.7) * U.foamAmt;
+  var fm = smoothstep(1.0 - cover - 0.07, 1.0 - cover + 0.07, fp) * smoothstep(0.0, 0.25, cover);
   // a crisp line of foam right at the waterline, and thin ripples running out from it, broken up and fading
-  float line = (1.0 - smoothstep(0.012, 0.018, d)) * shoreLine;
-  float rp = fract(d * 7.0 - time * 0.32 + fp * 0.6);
-  float ring = step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05, 0.3, d)) * smoothstep(0.02, 0.04, d) * shoreRipples * 0.8;
-  fm = clamp(max(fm, max(line, ring)), 0.0, 1.0);
-  vec3 foamLit = vec3(0.82, 0.87, 0.92) * (sunE * max(dot(N, L), 0.0) * 0.9 + skyCol * 0.9 + lampCol * lampK);
-  vec3 add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr + spec) * (1.0 - fm) + foamLit * fm;
-  float sunK = max(L.y, 0.0);
-  add += (sunE * sunK * 0.5 * caus * Tr + (skyCol * 0.5 + sunE * sunK * 0.35) * 0.3 * crest + (sunE * 1.4 + skyCol * 0.4) * spark) * (1.0 - fm);
+  let line = (1.0 - smoothstep(0.012, 0.018, d)) * U.shoreLine;
+  let rp = fract(d * 7.0 - t * 0.32 + fp * 0.6);
+  let ring = step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05, 0.3, d)) * smoothstep(0.02, 0.04, d) * U.shoreRipples * 0.8;
+  fm = sat(max(fm, max(line, ring)));
+  let foamLit = vec3f(0.82, 0.87, 0.92) * (sunE * max(dot(N, L), 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
+  var add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr + spec) * (1.0 - fm) + foamLit * fm;
+  let sunK = max(L.y, 0.0);
+  add += (sunE * sunK * 0.5 * caus * Tr + (U.skyCol * 0.5 + sunE * sunK * 0.35) * 0.3 * crest + (sunE * 1.4 + U.skyCol * 0.4) * spark) * (1.0 - fm);
   // and the swells a touch lighter or darker as they turn toward the sun or away
-  add *= clamp(1.0 + (dot(Nf, L) - L.y) * 6.0 * swellShade, 0.55, 1.6);
-  vec3 mul = Tr * (1.0 - Fr) * (1.0 - fm);
+  add *= clamp(1.0 + (dot(Nf, L) - L.y) * 6.0 * U.swellShade, 0.55, 1.6);
+  let mul = Tr * (1.0 - Fr) * (1.0 - fm);
   // the waterline: fade in over the first few hundredths so the shore isn't a hard edge
   // and into the haze: the ground under it is already hazed, so the water just fades out over it
-  float f = smoothstep(0.0, 0.03, vDepth) * (1.0 - clamp((vFogZ - fogNear) / (fogFar - fogNear), 0.0, 1.0));
-  gl_FragColor = passAdd > 0.5 ? vec4(add * f, 1.0) : vec4(mix(vec3(1.0), mul, f), 1.0);
+  let f = smoothstep(0.0, 0.03, i.depth) * (1.0 - sat((i.fogZ - U.fogNear) / (U.fogFar - U.fogNear)));
+  if (U.passAdd > 0.5) { return vec4f(add * f, 1.0); }
+  return vec4f(mix(vec3f(1.0), mul, f), 1.0);
 }`;
-const makeWaterMat = add => new THREE.ShaderMaterial({
-  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), vertexShader: WATER_VS, fragmentShader: WATER_FS,
-  transparent: true, depthWrite: add, side: THREE.DoubleSide, blending: THREE.CustomBlending, blendEquation: THREE.AddEquation, extensions: { derivatives: true },
-  blendSrc: add ? THREE.OneFactor : THREE.ZeroFactor, blendDst: add ? THREE.OneFactor : THREE.SrcColorFactor,
+const makeWaterMat = add => new GFX.ShaderMaterial({
+  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32' }, code: WATER_WGSL,
+  transparent: true, depthWrite: add, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+  blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
 });
 const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
 // Lava (T > Lava): unlit, so it glows by night. A dark crust drifting over the melt (lit a little by the sun),
@@ -2598,77 +2603,76 @@ const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
 // a ring of spatter running out.
 const LAVA_FX = { ripple: 0.19, rippleSize: 1.2, rippleSpeed: 1.65, glow: 3, crust: 0, cracks: 0.15, pulse: 1, flow: 1.15, pattern: 1.35,
   shoreCrust: 0, bubbles: 0.77, bubbleRate: 0.45, bubbleSize: 0.15, spatter: 1.85 };
-const LAVA_U = Object.assign({ tWave: { value: waveTex }, time: { value: 0 }, ripT: { value: 0 }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
+const LAVA_U = Object.assign({ tWave: { value: waveTex }, time: { value: 0 }, ripT: { value: 0 }, sunDir: { value: new GFX.Vector3(0, 1, 0) },
   rippleH: { value: 0 }, rippleLen: { value: 1 }, glow: { value: 1 }, crust: { value: 0.5 }, cracks: { value: 1 }, pulseAmt: { value: 0.15 },
-  flowT: { value: 0 }, pattern: { value: 1 }, shoreCrust: { value: 0.7 }, bubbles: { value: 0.5 }, bubbleT: { value: 0 }, bubbleSize: { value: 0.2 } },
-  THREE.UniformsUtils.clone(THREE.UniformsLib.fog));
-const lavaMat = new THREE.ShaderMaterial({
-  uniforms: LAVA_U, fog: true,
-  vertexShader: `
-attribute float lDepth; attribute vec2 lFlow;
-uniform float ripT, rippleH, rippleLen;
-varying vec2 vXZ, vFlow; varying float vDepth, vRip; varying vec3 vN;
-#include <fog_pars_vertex>
-void main() {
-  vec4 w = modelMatrix * vec4(position, 1.0);
-  vec2 p = w.xz / rippleLen;
-  vec2 d1 = vec2(0.8, 0.6) * 1.9, d2 = vec2(-0.45, 0.9) * 2.7, d3 = vec2(0.95, -0.3) * 3.6;
-  float a1 = dot(p, d1) + ripT * 1.1, a2 = dot(p, d2) - ripT * 1.4, a3 = dot(p, d3) + ripT * 1.9;
-  float hgt = (sin(a1) + 0.6 * sin(a2) + 0.35 * sin(a3)) / 1.95;
-  vec2 slope = (cos(a1) * d1 + 0.6 * cos(a2) * d2 + 0.35 * cos(a3) * d3) / (1.95 * rippleLen);
-  float amp = rippleH * smoothstep(0.0, 0.3, lDepth);
+  flowT: { value: 0 }, pattern: { value: 1 }, shoreCrust: { value: 0.7 }, bubbles: { value: 0.5 }, bubbleT: { value: 0 }, bubbleSize: { value: 0.2 } });
+const lavaMat = new GFX.ShaderMaterial({
+  uniforms: LAVA_U, attributes: { lDepth: 'f32', lFlow: 'vec2f' },
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) n: vec3f, @location(2) flow: vec2f, @location(3) depth: f32, @location(4) rip: f32 }
+@vertex fn vs(v: VIn) -> VOut {
+  var w = O.model * vec4f(v.position, 1.0);
+  let p = w.xz / U.rippleLen;
+  let d1 = vec2f(0.8, 0.6) * 1.9; let d2 = vec2f(-0.45, 0.9) * 2.7; let d3 = vec2f(0.95, -0.3) * 3.6;
+  let a1 = dot(p, d1) + U.ripT * 1.1; let a2 = dot(p, d2) - U.ripT * 1.4; let a3 = dot(p, d3) + U.ripT * 1.9;
+  let hgt = (sin(a1) + 0.6 * sin(a2) + 0.35 * sin(a3)) / 1.95;
+  let slope = (cos(a1) * d1 + 0.6 * cos(a2) * d2 + 0.35 * cos(a3) * d3) / (1.95 * U.rippleLen);
+  let amp = U.rippleH * smoothstep(0.0, 0.3, v.lDepth);
   w.y += amp * hgt;
-  vN = normalize(vec3(-amp * slope.x, 1.0, -amp * slope.y));
-  vXZ = w.xz; vFlow = lFlow; vDepth = lDepth; vRip = hgt;
-  vec4 mvPosition = viewMatrix * w;
-  gl_Position = projectionMatrix * mvPosition;
-  #include <fog_vertex>
-}`,
-  fragmentShader: `
-uniform sampler2D tWave; uniform float time, flowT, glow, crust, cracks, pulseAmt, pattern, shoreCrust, bubbles, bubbleT, bubbleSize; uniform vec3 sunDir;
-varying vec2 vXZ, vFlow; varying float vDepth, vRip; varying vec3 vN;
-#include <fog_pars_fragment>
-float h(vec2 uv) { return texture2D(tWave, uv).b; }
-float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-void main() {
-  vec2 q = vXZ / pattern - vFlow * flowT * 0.5;
-  float a = h(q / 6.0 + vec2(0.011, 0.007) * flowT), b = h(mat2(0.6, -0.8, 0.8, 0.6) * q / 3.4 - vec2(0.008, -0.013) * flowT);
-  float shore = (1.0 - smoothstep(0.0, 0.4, vDepth)) * shoreCrust;
-  float melt = smoothstep(0.3 + crust * 0.3, 0.55 + crust * 0.3, a) * (1.0 - shore);
-  float seam = (1.0 - smoothstep(0.0, 0.05, abs(a - b))) * (1.0 - shore * 0.6);
-  float pulse = 1.0 + pulseAmt * sin(time * 1.3 + a * 9.0);
-  vec3 col = vec3(0.1, 0.04, 0.03) * (0.5 + 0.8 * max(dot(vN, sunDir), 0.0));
-  col = mix(col, vec3(0.85, 0.22, 0.04) * pulse * glow * (1.0 + vRip * 0.15), melt * 0.85);
-  col = mix(col, vec3(1.0, 0.72, 0.25) * glow, clamp(seam * cracks * (0.5 + 0.5 * melt), 0.0, 1.0));
+  var o: VOut;
+  o.pos = F.viewProj * w; o.wpos = w.xyz;
+  o.n = normalize(vec3f(-amp * slope.x, 1.0, -amp * slope.y));
+  o.flow = v.lFlow; o.depth = v.lDepth; o.rip = hgt;
+  return o;
+}
+fn hgtAt(uv: vec2f) -> f32 { return textureSampleLevel(tWave, tWaveS, uv, 0.0).b; }
+fn hash2(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+const ROT_B = mat2x2f(0.6, -0.8, 0.8, 0.6);
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let xz = i.wpos.xz;
+  let q = xz / U.pattern - i.flow * U.flowT * 0.5;
+  let a = hgtAt(q / 6.0 + vec2f(0.011, 0.007) * U.flowT); let b = hgtAt(ROT_B * q / 3.4 - vec2f(0.008, -0.013) * U.flowT);
+  let shore = (1.0 - smoothstep(0.0, 0.4, i.depth)) * U.shoreCrust;
+  let melt = smoothstep(0.3 + U.crust * 0.3, 0.55 + U.crust * 0.3, a) * (1.0 - shore);
+  let seam = (1.0 - smoothstep(0.0, 0.05, abs(a - b))) * (1.0 - shore * 0.6);
+  let pulse = 1.0 + U.pulseAmt * sin(U.time * 1.3 + a * 9.0);
+  var col = vec3f(0.1, 0.04, 0.03) * (0.5 + 0.8 * max(dot(i.n, U.sunDir), 0.0));
+  col = mix(col, vec3f(0.85, 0.22, 0.04) * pulse * U.glow * (1.0 + i.rip * 0.15), melt * 0.85);
+  col = mix(col, vec3f(1.0, 0.72, 0.25) * U.glow, sat(seam * U.cracks * (0.5 + 0.5 * melt)));
   // bubbles: at most one to a cell, each on its own clock; it swells for most of it, then bursts
-  float inside = smoothstep(0.12, 0.45, vDepth), bs = 1.7;
-  vec2 cell0 = floor(vXZ / bs);
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
-    vec2 cell = cell0 + vec2(float(x), float(y));
-    if (hash2(cell) > bubbles) continue;
-    float t = fract(bubbleT * (0.6 + 0.8 * hash2(cell + 3.1)) + hash2(cell + 7.7));
-    vec2 ctr = (cell + 0.25 + 0.5 * vec2(hash2(cell + 1.7), hash2(cell + 5.3))) * bs;
-    float R = bubbleSize * (0.6 + 0.8 * hash2(cell + 9.2)), d = length(vXZ - ctr);
-    if (t < 0.82) {
-      float r = R * sqrt(t / 0.82);
-      if (d < r) {
-        float dome = sqrt(1.0 - d * d / (r * r));
-        vec3 bc = mix(vec3(1.0, 0.7, 0.25), vec3(0.55, 0.12, 0.03), dome) * glow;
-        bc += vec3(1.0, 0.85, 0.6) * pow(max(0.0, 1.0 - length(vXZ - ctr + vec2(0.35, 0.35) * r) / (0.4 * r)), 2.0) * 0.7;
-        col = mix(col, bc, inside);
-      } else col += vec3(1.0, 0.5, 0.1) * glow * exp(-pow((d - r) / (0.03 + 0.12 * r), 2.0)) * 0.45 * inside;
-    } else {
-      float u = (t - 0.82) / 0.18, rr = R * (1.0 + u * 2.2);
-      float ring = exp(-pow((d - rr) / (0.03 + R * 0.15), 2.0)) * (1.0 - u);
-      float flash = (1.0 - u) * (1.0 - smoothstep(0.0, R, d));
-      col += vec3(1.0, 0.7, 0.3) * glow * (ring * 1.2 + flash) * inside;
+  let inside = smoothstep(0.12, 0.45, i.depth); let bs = 1.7;
+  let cell0 = floor(xz / bs);
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      let cell = cell0 + vec2f(f32(x), f32(y));
+      if (hash2(cell) > U.bubbles) { continue; }
+      let t = fract(U.bubbleT * (0.6 + 0.8 * hash2(cell + 3.1)) + hash2(cell + 7.7));
+      let ctr = (cell + 0.25 + 0.5 * vec2f(hash2(cell + 1.7), hash2(cell + 5.3))) * bs;
+      let R = U.bubbleSize * (0.6 + 0.8 * hash2(cell + 9.2)); let d = length(xz - ctr);
+      if (t < 0.82) {
+        let r = R * sqrt(t / 0.82);
+        if (d < r) {
+          let dome = sqrt(1.0 - d * d / (r * r));
+          var bc = mix(vec3f(1.0, 0.7, 0.25), vec3f(0.55, 0.12, 0.03), dome) * U.glow;
+          bc += vec3f(1.0, 0.85, 0.6) * pow(max(0.0, 1.0 - length(xz - ctr + vec2f(0.35, 0.35) * r) / (0.4 * r)), 2.0) * 0.7;
+          col = mix(col, bc, inside);
+        } else {
+          let z = (d - r) / (0.03 + 0.12 * r);
+          col += vec3f(1.0, 0.5, 0.1) * U.glow * exp(-z * z) * 0.45 * inside;
+        }
+      } else {
+        let u = (t - 0.82) / 0.18; let rr = R * (1.0 + u * 2.2);
+        let z = (d - rr) / (0.03 + R * 0.15);
+        let ring = exp(-z * z) * (1.0 - u);
+        let flash = (1.0 - u) * (1.0 - smoothstep(0.0, R, d));
+        col += vec3f(1.0, 0.7, 0.3) * U.glow * (ring * 1.2 + flash) * inside;
+      }
     }
   }
-  gl_FragColor = vec4(col, 1.0);
-  #include <fog_fragment>
+  return vec4f(applyFog(col, viewDepth(i.wpos)), 1.0);
 }`,
 });
-const wTmp = new THREE.Vector3();
+const wTmp = new GFX.Vector3();
 function updateWater(dt) {
   const U = WATER_U;
   U.time.value = (U.time.value + dt * WATER.waveSpeed) % 4000;
@@ -3313,23 +3317,23 @@ function buildPieces(cx, cz, ch) {
 // door leaves swing on their own meshes
 const doors = new Map();   // edge key -> { pivot, open, t, side }
 const doorWood = flatMat({ color: '#6a4428' }), doorIron = flatMat({ color: '#2a2630', roughness: 0.5, metalness: 0.5 });
-const gatePicket = new THREE.BoxGeometry(0.13, FENCE_H - 0.16, 0.05), gateRail = new THREE.BoxGeometry(0.84, 0.07, 0.04), gateBrace = new THREE.BoxGeometry(0.84, 0.06, 0.035);
+const gatePicket = new GFX.BoxGeometry(0.13, FENCE_H - 0.16, 0.05), gateRail = new GFX.BoxGeometry(0.84, 0.07, 0.04), gateBrace = new GFX.BoxGeometry(0.84, 0.06, 0.035);
 function makeDoor(c, r, w, gate = false) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP;
-  const pivot = new THREE.Group();
+  const pivot = new GFX.Group();
   pivot.position.set(w ? c : c + 0.08, y, w ? r + 0.08 : r);
   pivot.rotation.y = w ? -Math.PI / 2 : 0;
-  const leaf = new THREE.Group();
+  const leaf = new GFX.Group();
   if (gate) {
     // a picket gate: boards on two rails, braced corner to corner
-    for (let k = 0; k < 5; k++) { const b = new THREE.Mesh(gatePicket, doorWood); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
-    for (const yy of [0.22, FENCE_H - 0.22]) { const b = new THREE.Mesh(gateRail, doorWood); b.position.set(0.42, yy, 0.045); leaf.add(b); }
-    const brace = new THREE.Mesh(gateBrace, doorWood); brace.position.set(0.42, FENCE_H / 2, 0.05); brace.rotation.z = Math.atan2(FENCE_H - 0.44, 0.8); leaf.add(brace);
+    for (let k = 0; k < 5; k++) { const b = new GFX.Mesh(gatePicket, doorWood); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
+    for (const yy of [0.22, FENCE_H - 0.22]) { const b = new GFX.Mesh(gateRail, doorWood); b.position.set(0.42, yy, 0.045); leaf.add(b); }
+    const brace = new GFX.Mesh(gateBrace, doorWood); brace.position.set(0.42, FENCE_H / 2, 0.05); brace.rotation.z = Math.atan2(FENCE_H - 0.44, 0.8); leaf.add(brace);
   } else {
-    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.84, WALL_H - 0.42, 0.08), doorWood);
+    const plank = new GFX.Mesh(new GFX.BoxGeometry(0.84, WALL_H - 0.42, 0.08), doorWood);
     plank.position.set(0.42, (WALL_H - 0.42) / 2, 0); leaf.add(plank);
-    for (const yy of [0.25, 0.85]) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
-    const ring = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
+    for (const yy of [0.25, 0.85]) { const b = new GFX.Mesh(new GFX.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
+    const ring = new GFX.Mesh(new GFX.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
   }
   pivot.add(leaf);
   scene.add(shadowy(pivot));
@@ -3349,7 +3353,7 @@ const roomOf = new Map();    // tile -> room id
 const buildings = new Map(); // id -> { id, rooms, tiles, set, color, mesh, roofY }
 let roomSeq = 1, bldSeq = 1;
 const bldOf = i => { const rm = rooms.get(roomOf.get(i)); return rm ? buildings.get(rm.bld) : null; };
-const roofMat = flatMat({ vertexColors: true, side: THREE.DoubleSide });
+const roofMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
 function findRoom(c0, r0) {
   const seen = new Set([T(c0, r0)]), q = [[c0, r0]];
   for (let h = 0; h < q.length; h++) {
@@ -3618,7 +3622,7 @@ function streamChunks(budgetMs) {
 const boneMat = flatMat({ color: '#e8e0c8' });
 const BONE = boneMat;
 const darkMat = flatMat({ color: '#141018' });
-const eyeMat = new THREE.MeshBasicMaterial({ color: '#ff4a3a' });
+const eyeMat = new GFX.MeshBasicMaterial({ color: '#ff4a3a' });
 const rustMat = flatMat({ color: '#8a8f99', roughness: 0.5, metalness: 0.5 });
 const steelMat = flatMat({ color: '#d8dce8', roughness: 0.35, metalness: 0.55 });
 const hiltMat = flatMat({ color: '#5a3a22' });
@@ -3626,7 +3630,7 @@ const goldMat = flatMat({ color: '#f2c14e', emissive: '#6a4a10', metalness: 0.4,
 
 function boxer(g, parts) {
   return (w, h, d, px, py, pz, mat, rx = 0, rz = 0, ry = 0) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), mat);
     m.position.set(px, py, pz); m.rotation.set(rx, ry, rz); g.add(m); parts.push(m); return m;
   };
 }
@@ -3635,11 +3639,11 @@ function boxer(g, parts) {
 // Arms and legs hang from pivots so they can swing.
 const heroSkin = flatMat({ color: '#e0b48a' }), heroTunic = flatMat({ color: '#3f6a8a' });
 function makeHuman() {
-  const g = new THREE.Group(), parts = [];
+  const g = new GFX.Group(), parts = [];
   const pants = flatMat({ color: '#5a4632' }), boots = flatMat({ color: '#3a2a1e' }), hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
   const pack = flatMat({ color: '#7a5434' }), roll = flatMat({ color: '#9a8a5a' }), hood = flatMat({ color: '#2f5a3a' });
-  const box = (parent, w, h, d, x, y, z, mat, rx = 0, rz = 0) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.rotation.set(rx, 0, rz); parent.add(m); parts.push(m); return m; };
-  const pivot = (parent, x, y, z) => { const p = new THREE.Group(); p.position.set(x, y, z); parent.add(p); return p; };
+  const box = (parent, w, h, d, x, y, z, mat, rx = 0, rz = 0) => { const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.rotation.set(rx, 0, rz); parent.add(m); parts.push(m); return m; };
+  const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
   const body = pivot(g, 0, 0, 0);
   const legL = pivot(body, 0.07, 0.36, 0), legR = pivot(body, -0.07, 0.36, 0);
   for (const leg of [legL, legR]) { box(leg, 0.1, 0.24, 0.11, 0, -0.12, 0, pants); box(leg, 0.11, 0.13, 0.15, 0, -0.295, 0.015, boots); }
@@ -3670,7 +3674,7 @@ function makeHuman() {
 
 // the Bone Road skeleton, box for box
 function makeSkeleton() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
   add(0.07, 0.3, 0.07, -0.07, 0.15, 0, BONE);
   add(0.07, 0.3, 0.07, 0.07, 0.15, 0, BONE);
   add(0.22, 0.06, 0.1, 0, 0.32, 0, BONE);
@@ -3690,8 +3694,8 @@ function makeSkeleton() {
   return { g, parts, jaw, topH: 0.9 };
 }
 function makeGoblin() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const skin = flatMat({ color: '#6f9a3a' }), tunic = flatMat({ color: '#6a4a2a' }), yel = new THREE.MeshBasicMaterial({ color: '#ffe04a' });
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const skin = flatMat({ color: '#6f9a3a' }), tunic = flatMat({ color: '#6a4a2a' }), yel = new GFX.MeshBasicMaterial({ color: '#ffe04a' });
   add(0.08, 0.18, 0.08, -0.06, 0.09, 0, skin); add(0.08, 0.18, 0.08, 0.06, 0.09, 0, skin);
   add(0.22, 0.2, 0.14, 0, 0.28, 0, tunic);
   add(0.23, 0.04, 0.15, 0, 0.21, 0, hiltMat);
@@ -3707,9 +3711,9 @@ function makeGoblin() {
 // a hellhound: a wolf's build gone to charcoal, with horns, burning eyes, a glowing maw, and a mane, tail
 // tip and paws of flickering flame
 function makeHellhound() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts), flames = [];
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts), flames = [];
   const f = flatMat({ color: '#2a2224' }), fd = flatMat({ color: '#171214' }), horn = flatMat({ color: '#d8c8a0' });
-  const glow = new THREE.MeshBasicMaterial({ color: '#ff6a1a' }), eye = new THREE.MeshBasicMaterial({ color: '#ffd23a' });
+  const glow = new GFX.MeshBasicMaterial({ color: '#ff6a1a' }), eye = new GFX.MeshBasicMaterial({ color: '#ffd23a' });
   add(0.24, 0.21, 0.46, 0, 0.3, -0.02, f);
   add(0.26, 0.13, 0.17, 0, 0.42, 0.12, fd);
   add(0.21, 0.19, 0.19, 0, 0.44, 0.27, f);
@@ -3720,7 +3724,7 @@ function makeHellhound() {
   add(0.05, 0.03, 0.02, -0.05, 0.47, 0.366, eye); add(0.05, 0.03, 0.02, 0.05, 0.47, 0.366, eye);
   for (const [lx, lz] of [[-0.075, 0.14], [0.075, 0.14], [-0.075, -0.17], [0.075, -0.17]]) add(0.065, 0.22, 0.065, lx, 0.11, lz, fd);
   add(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
-  const flame = (r, h, x, y, z, mat, rx = 0) => { const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5), mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); parts.push(m); flames.push(m); };
+  const flame = (r, h, x, y, z, mat, rx = 0) => { const m = new GFX.Mesh(new GFX.ConeGeometry(r, h, 5), mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); parts.push(m); flames.push(m); };
   // the mane, along the neck and shoulders, leaning back
   flame(0.07, 0.2, 0, 0.56, 0.16, flameMats[0], -0.5); flame(0.06, 0.17, 0, 0.53, 0.06, flameMats[1], -0.6);
   flame(0.05, 0.14, -0.05, 0.52, 0.12, flameMats[0], -0.5); flame(0.05, 0.14, 0.05, 0.52, 0.12, flameMats[0], -0.5);
@@ -3735,21 +3739,21 @@ function makeHellhound() {
   return { g, parts, flames, topH: 0.68 };
 }
 // a fire spirit: a floating flame with a bright heart, its tongues flickering, two dark eyes in the blaze
-const flameMats = ['#ff4a10', '#ff8a20', '#ffd060'].map((c, k) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.9 + k * 0.2, flatShading: true, transparent: true, opacity: 0.8 + k * 0.08, roughness: 1 }));
+const flameMats = ['#ff4a10', '#ff8a20', '#ffd060'].map((c, k) => new GFX.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.9 + k * 0.2, flatShading: true, transparent: true, opacity: 0.8 + k * 0.08, roughness: 1 }));
 function makeFireSpirit() {
-  const g = new THREE.Group(), parts = [], flames = [];
-  const flame = (r, h, y, x, z, mat) => { const m = new THREE.Mesh(new THREE.ConeGeometry(r, h, 6), mat); m.position.set(x, y + h / 2, z); g.add(m); parts.push(m); flames.push(m); return m; };
+  const g = new GFX.Group(), parts = [], flames = [];
+  const flame = (r, h, y, x, z, mat) => { const m = new GFX.Mesh(new GFX.ConeGeometry(r, h, 6), mat); m.position.set(x, y + h / 2, z); g.add(m); parts.push(m); flames.push(m); return m; };
   flame(0.24, 0.62, 0.12, 0, 0, flameMats[0]);
   flame(0.12, 0.36, 0.2, 0.14, 0.03, flameMats[0]); flame(0.11, 0.32, 0.2, -0.14, -0.02, flameMats[0]);
   flame(0.16, 0.46, 0.16, 0, 0.04, flameMats[1]);
   flame(0.09, 0.26, 0.22, 0, 0.07, flameMats[2]);
-  for (const ex of [-0.06, 0.06]) { const e = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.07, 0.02), darkMat); e.position.set(ex, 0.42, 0.17); g.add(e); parts.push(e); }
+  for (const ex of [-0.06, 0.06]) { const e = new GFX.Mesh(new GFX.BoxGeometry(0.05, 0.07, 0.02), darkMat); e.position.set(ex, 0.42, 0.17); g.add(e); parts.push(e); }
   g.scale.setScalar(1.25);
   return { g, parts, flames, ghost: true, topH: 0.9 };
 }
 function makeWolf(fur = '#6c6a78', furD = '#4c4a58', eye = '#ff4a3a') {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const f = flatMat({ color: fur }), fd = flatMat({ color: furD }), red = new THREE.MeshBasicMaterial({ color: eye });
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const f = flatMat({ color: fur }), fd = flatMat({ color: furD }), red = new GFX.MeshBasicMaterial({ color: eye });
   add(0.22, 0.2, 0.44, 0, 0.3, -0.02, f);
   add(0.24, 0.12, 0.16, 0, 0.42, 0.12, fd);
   add(0.2, 0.18, 0.18, 0, 0.44, 0.27, f);
@@ -3762,22 +3766,22 @@ function makeWolf(fur = '#6c6a78', furD = '#4c4a58', eye = '#ff4a3a') {
   g.scale.setScalar(1.35);
   return { g, parts, topH: 0.62 };
 }
-const SLIME_PROFILE = [[0.3, 0.01], [0.34, 0.05], [0.33, 0.14], [0.27, 0.25], [0.17, 0.33], [0.07, 0.37], [0, 0.375]].map(([r, y]) => new THREE.Vector2(r, y));
-const slimeMat = new THREE.MeshStandardMaterial({ color: '#5fe36a', emissive: '#1b6b22', roughness: 0.25, metalness: 0, flatShading: true, transparent: true, opacity: 0.62, side: THREE.DoubleSide });
-const slimeCoreMat = new THREE.MeshStandardMaterial({ color: '#2f9a3a', emissive: '#0f3a14', roughness: 0.5, flatShading: true, transparent: true, opacity: 0.7 });
+const SLIME_PROFILE = [[0.3, 0.01], [0.34, 0.05], [0.33, 0.14], [0.27, 0.25], [0.17, 0.33], [0.07, 0.37], [0, 0.375]].map(([r, y]) => new GFX.Vector2(r, y));
+const slimeMat = new GFX.MeshStandardMaterial({ color: '#5fe36a', emissive: '#1b6b22', roughness: 0.25, metalness: 0, flatShading: true, transparent: true, opacity: 0.62, side: GFX.DoubleSide });
+const slimeCoreMat = new GFX.MeshStandardMaterial({ color: '#2f9a3a', emissive: '#0f3a14', roughness: 0.5, flatShading: true, transparent: true, opacity: 0.7 });
 function makeSlime() {
-  const g = new THREE.Group(), parts = [];
-  const jelly = new THREE.Mesh(new THREE.LatheGeometry(SLIME_PROFILE, 8), slimeMat); jelly.renderOrder = 2; g.add(jelly); parts.push(jelly);
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.12, 0), slimeCoreMat); core.position.y = 0.13; g.add(core); parts.push(core);
-  [-0.075, 0.075].forEach(ex => { const e = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.07, 0.03), darkMat); e.position.set(ex, 0.2, 0.27); e.rotation.x = -0.35; g.add(e); parts.push(e); });
+  const g = new GFX.Group(), parts = [];
+  const jelly = new GFX.Mesh(new GFX.LatheGeometry(SLIME_PROFILE, 8), slimeMat); jelly.renderOrder = 2; g.add(jelly); parts.push(jelly);
+  const core = new GFX.Mesh(new GFX.IcosahedronGeometry(0.12, 0), slimeCoreMat); core.position.y = 0.13; g.add(core); parts.push(core);
+  [-0.075, 0.075].forEach(ex => { const e = new GFX.Mesh(new GFX.BoxGeometry(0.045, 0.07, 0.03), darkMat); e.position.set(ex, 0.2, 0.27); e.rotation.x = -0.35; g.add(e); parts.push(e); });
   g.scale.setScalar(1.5);
   return { g, parts, slime: true, topH: 0.48 };
 }
 function makeGhost(color = '#d8ecff', glow = '#3a5a7a') {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const sheet = new THREE.MeshStandardMaterial({ color, emissive: glow, flatShading: true, transparent: true, opacity: 0.78, roughness: 0.6 });
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.24, 0.46, 6), sheet); body.position.y = 0.38; g.add(body); parts.push(body);
-  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.17, 0), sheet); head.position.y = 0.68; g.add(head); parts.push(head);
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const sheet = new GFX.MeshStandardMaterial({ color, emissive: glow, flatShading: true, transparent: true, opacity: 0.78, roughness: 0.6 });
+  const body = new GFX.Mesh(new GFX.CylinderGeometry(0.15, 0.24, 0.46, 6), sheet); body.position.y = 0.38; g.add(body); parts.push(body);
+  const head = new GFX.Mesh(new GFX.IcosahedronGeometry(0.17, 0), sheet); head.position.y = 0.68; g.add(head); parts.push(head);
   add(0.06, 0.2, 0.06, -0.19, 0.46, 0.05, sheet, -0.6, 0.5); add(0.06, 0.2, 0.06, 0.19, 0.46, 0.05, sheet, -0.6, -0.5);
   add(0.05, 0.07, 0.02, -0.055, 0.7, 0.15, darkMat); add(0.05, 0.07, 0.02, 0.055, 0.7, 0.15, darkMat);
   add(0.06, 0.08, 0.02, 0, 0.6, 0.155, darkMat);
@@ -3785,8 +3789,8 @@ function makeGhost(color = '#d8ecff', glow = '#3a5a7a') {
   return { g, parts, ghost: true, topH: 0.95 };
 }
 function makeZombie() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const skin = flatMat({ color: '#8aa27a' }), shirt = flatMat({ color: '#5a6a4a' }), pants = flatMat({ color: '#3a3a5a' }), eye = new THREE.MeshBasicMaterial({ color: '#f0f0a0' });
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const skin = flatMat({ color: '#8aa27a' }), shirt = flatMat({ color: '#5a6a4a' }), pants = flatMat({ color: '#3a3a5a' }), eye = new GFX.MeshBasicMaterial({ color: '#f0f0a0' });
   add(0.08, 0.3, 0.08, -0.07, 0.15, 0, pants); add(0.08, 0.3, 0.08, 0.07, 0.15, 0.02, pants);
   add(0.26, 0.28, 0.15, 0, 0.44, 0, shirt);
   add(0.06, 0.06, 0.26, -0.16, 0.54, 0.12, skin, 0.1); add(0.06, 0.06, 0.26, 0.16, 0.52, 0.12, skin, -0.1);
@@ -3798,8 +3802,8 @@ function makeZombie() {
   return { g, parts, topH: 0.88 };
 }
 function makeScorpion() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const shell = flatMat({ color: '#a8642a' }), dark = flatMat({ color: '#6a3a1a' }), eye = new THREE.MeshBasicMaterial({ color: '#ffe04a' });
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const shell = flatMat({ color: '#a8642a' }), dark = flatMat({ color: '#6a3a1a' }), eye = new GFX.MeshBasicMaterial({ color: '#ffe04a' });
   add(0.26, 0.12, 0.34, 0, 0.14, 0, shell);
   add(0.2, 0.1, 0.12, 0, 0.15, 0.22, dark);
   add(0.03, 0.03, 0.02, -0.04, 0.2, 0.285, eye); add(0.03, 0.03, 0.02, 0.04, 0.2, 0.285, eye);
@@ -3816,8 +3820,8 @@ function makeScorpion() {
   return { g, parts, topH: 0.6 };
 }
 function makeBoar() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
-  const hide = flatMat({ color: '#6a4a34' }), dark = flatMat({ color: '#4a3424' }), snout = flatMat({ color: '#c8908a' }), tusk = flatMat({ color: '#f0ead8' }), red = new THREE.MeshBasicMaterial({ color: '#ff4a3a' });
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const hide = flatMat({ color: '#6a4a34' }), dark = flatMat({ color: '#4a3424' }), snout = flatMat({ color: '#c8908a' }), tusk = flatMat({ color: '#f0ead8' }), red = new GFX.MeshBasicMaterial({ color: '#ff4a3a' });
   add(0.28, 0.24, 0.46, 0, 0.3, -0.02, hide);
   add(0.06, 0.08, 0.36, 0, 0.45, -0.02, dark);
   add(0.22, 0.2, 0.16, 0, 0.3, 0.27, hide);
@@ -3831,15 +3835,15 @@ function makeBoar() {
 }
 // a giant spider: low and quick on eight jointed legs, which scuttle as it runs
 function makeSpider() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts), legs = [];
-  const hide = flatMat({ color: '#2e2620' }), hideL = flatMat({ color: '#4a3c30' }), mark = flatMat({ color: '#9a2e1e' }), eye = new THREE.MeshBasicMaterial({ color: '#ff3a2a' });
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts), legs = [];
+  const hide = flatMat({ color: '#2e2620' }), hideL = flatMat({ color: '#4a3c30' }), mark = flatMat({ color: '#9a2e1e' }), eye = new GFX.MeshBasicMaterial({ color: '#ff3a2a' });
   add(0.3, 0.22, 0.34, 0, 0.26, -0.18, hide);
   add(0.1, 0.03, 0.18, 0, 0.375, -0.18, mark);
   add(0.2, 0.13, 0.2, 0, 0.21, 0.07, hideL);
   for (const [ex, ey] of [[-0.04, 0.25], [0.04, 0.25], [-0.07, 0.235], [0.07, 0.235]]) add(0.03, 0.03, 0.02, ex, ey, 0.175, eye);
   add(0.03, 0.07, 0.03, -0.035, 0.13, 0.17, mark, 0.3); add(0.03, 0.07, 0.03, 0.035, 0.13, 0.17, mark, 0.3);
   for (const sd of [-1, 1]) for (let k = 0; k < 4; k++) {
-    const p = new THREE.Group(), leg = boxer(p, parts);
+    const p = new GFX.Group(), leg = boxer(p, parts);
     p.position.set(sd * 0.08, 0.21, 0.13 - k * 0.075); p.rotation.y = sd * (k - 1.5) * 0.38; p.userData.ry = p.rotation.y;
     g.add(p); legs.push(p);
     leg(0.27, 0.035, 0.035, sd * 0.11, 0.08, 0, hideL, 0, sd * 0.62);
@@ -3850,14 +3854,14 @@ function makeSpider() {
 }
 // a mantrap: a rooted snapper in a rosette of leaves. It can't walk, but its stalk lunges the head out to bite.
 function makeMantrap() {
-  const g = new THREE.Group(), parts = [], add = boxer(g, parts);
+  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
   const leaf = flatMat({ color: '#3e6a2a' }), leafD = flatMat({ color: '#2e5020' }), stemM = flatMat({ color: '#4f7e32' }), skin = flatMat({ color: '#5a8a34' });
   const maw = flatMat({ color: '#b8324a' }), tooth = flatMat({ color: '#f0ead0' }), spot = flatMat({ color: '#c8d860' });
   for (let k = 0; k < 7; k++) {
     const a = k * 0.898;
     add(0.38, 0.03, 0.15, Math.cos(a) * 0.22, 0.05, Math.sin(a) * 0.22, k % 2 ? leaf : leafD, 0, 0.3, -a);
   }
-  const pivot = (parent, x, y, z) => { const p = new THREE.Group(); p.position.set(x, y, z); parent.add(p); return p; };
+  const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
   const stalk = pivot(g, 0, 0.04, 0), neck = pivot(stalk, 0, 0.36, 0), head = pivot(neck, 0, 0.3, 0);
   boxer(stalk, parts)(0.08, 0.38, 0.08, 0, 0.18, 0, stemM);
   boxer(neck, parts)(0.065, 0.32, 0.065, 0, 0.15, 0, stemM);
@@ -4077,32 +4081,32 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // The hero draws in a second pass on its own layer, so wherever scenery or walls hide it a flat
 // silhouette shows through instead.
 const hero = makeHuman();
-const heroRoot = new THREE.Group();
+const heroRoot = new GFX.Group();
 heroRoot.add(shadowy(hero.g));
 scene.add(heroRoot);
-const silMat = new THREE.MeshBasicMaterial({ color: '#4fb8b0', depthWrite: false, depthFunc: THREE.GreaterDepth });
+const silMat = new GFX.MeshBasicMaterial({ color: '#4fb8b0', depthWrite: false, depthFunc: GFX.GreaterDepth });
 hero.parts.slice().forEach(p => {
-  const s = new THREE.Mesh(p.geometry, silMat);
+  const s = new GFX.Mesh(p.geometry, silMat);
   s.position.copy(p.position); s.rotation.copy(p.rotation); s.renderOrder = -1;
   p.parent.add(s);
 });
 heroRoot.traverse(o => o.layers.set(1));
 // the hero's shadow: a copy of each part on the world layer that draws nothing but casts
 hero.parts.slice().forEach(p => {
-  const s = new THREE.Mesh(p.geometry, castOnlyMat);
+  const s = new GFX.Mesh(p.geometry, castOnlyMat);
   s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true;
   p.parent.add(s);
 });
-const shadowMat = new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.35, depthWrite: false });
-const shadowGeo = new THREE.CircleGeometry(0.26, 8).rotateX(-Math.PI / 2);
-const heroShadow = new THREE.Mesh(shadowGeo, shadowMat);
+const shadowMat = new GFX.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.35, depthWrite: false });
+const shadowGeo = new GFX.CircleGeometry(0.26, 8).rotateX(-Math.PI / 2);
+const heroShadow = new GFX.Mesh(shadowGeo, shadowMat);
 scene.add(heroShadow);
 // Tuning (T > Hero light): strength by night and by day, reach, falloff, colour, and where it hangs:
 // `toward` tiles from the hero along the line to the camera, then `height` above that
 const HERO_LIGHT = { night: 1.5, day: 0, range: 9, decay: 1.6, toward: 1.2, height: 1.0, color: '#ffb060' };
-const heroLight = addLight(new THREE.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.range, HERO_LIGHT.decay));
+const heroLight = addLight(new GFX.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.range, HERO_LIGHT.decay));
 // a few lamp lights shared out to whichever town lamps are nearest
-const lampLights = [0, 1, 2, 3].map(() => addLight(new THREE.PointLight('#ffb060', 0, 4.5, 2)));
+const lampLights = [0, 1, 2, 3].map(() => addLight(new GFX.PointLight('#ffb060', 0, 4.5, 2)));
 lights.forEach(l => l.layers.enableAll());
 
 const MAX_HP = 100;
@@ -4127,7 +4131,7 @@ function spawnFoe(kind, x, z) {
   const d = FOE[kind], f = d.make();
   f.g.position.set(x, surfaceY(x, z), z);
   scene.add(shadowy(f.g));
-  const sh = new THREE.Mesh(shadowGeo, shadowMat); scene.add(sh);
+  const sh = new GFX.Mesh(shadowGeo, shadowMat); scene.add(sh);
   const foe = Object.assign(f, { kind, def: d, x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
     home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
   foes.push(foe);
@@ -4282,7 +4286,7 @@ function toast(msg, tone = '') {
     toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
   }, wait);
 }
-const v3 = new THREE.Vector3();
+const v3 = new GFX.Vector3();
 let floatCount = 0;
 function floatText(text, x, y, z, color) {
   if (floatCount > 24) return;
@@ -4331,11 +4335,11 @@ const sfx = {
 
 // ---------- Effects ----------
 let debris = [], dust = [], orbs = [], fallers = [];
-const dustGeo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
-const chipGeo = new THREE.BoxGeometry(0.07, 0.05, 0.07);
+const dustGeo = new GFX.BoxGeometry(0.09, 0.09, 0.09);
+const chipGeo = new GFX.BoxGeometry(0.07, 0.05, 0.07);
 function puff(x, y, z, color = '#c8bca0', n = 8, spread = 0.9) {
   for (let i = 0; i < n; i++) {
-    const m = new THREE.Mesh(dustGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }));
+    const m = new GFX.Mesh(dustGeo, new GFX.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }));
     m.position.set(x, y + 0.1, z); scene.add(m);
     const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
     dust.push({ m, vx: Math.cos(a) * spread, vz: Math.sin(a) * spread, vy: 0.6 + Math.random() * 0.6, life: 0 });
@@ -4343,7 +4347,7 @@ function puff(x, y, z, color = '#c8bca0', n = 8, spread = 0.9) {
 }
 // a slow wisp of smoke: drifts up and spreads for a couple of seconds
 function wisp(x, y, z, color) {
-  const m = new THREE.Mesh(dustGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
+  const m = new GFX.Mesh(dustGeo, new GFX.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
   m.position.set(x, y, z); m.rotation.set(Math.random() * 3, Math.random() * 3, 0); scene.add(m);
   dust.push({ m, vx: 0.15 + (Math.random() - 0.5) * 0.2, vz: (Math.random() - 0.5) * 0.2, vy: 0.45 + Math.random() * 0.25, life: 0, max: 2.4, grow: 1.6, op: 0.6 });
 }
@@ -4351,7 +4355,7 @@ function wisp(x, y, z, color) {
 const chipMats = { wood: flatMat({ color: '#8a5a32' }), stone: flatMat({ color: '#8c8a96' }) };
 function chips(x, y, z, kind, n = 5) {
   for (let i = 0; i < n; i++) {
-    const m = new THREE.Mesh(chipGeo, chipMats[kind].clone()); m.material.transparent = true;
+    const m = new GFX.Mesh(chipGeo, chipMats[kind].clone()); m.material.transparent = true;
     m.position.set(x, y, z); scene.add(m);
     debris.push({ m, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 2, ax: (Math.random() - 0.5) * 14, az: (Math.random() - 0.5) * 14, life: 0.8 });
   }
@@ -4360,8 +4364,8 @@ const GRAV = 9;
 function shatter(f, dir) {
   f.parts.forEach(p => {
     p.getWorldPosition(v3);
-    const q = new THREE.Quaternion(); p.getWorldQuaternion(q);
-    const s = new THREE.Vector3(); p.getWorldScale(s);
+    const q = new GFX.Quaternion(); p.getWorldQuaternion(q);
+    const s = new GFX.Vector3(); p.getWorldScale(s);
     p.parent.remove(p);
     p.material = p.material.clone(); p.material.transparent = true;
     p.position.copy(v3); p.quaternion.copy(q); p.scale.copy(s);
@@ -4371,17 +4375,17 @@ function shatter(f, dir) {
   });
   scene.remove(f.g);
 }
-const orbMat = new THREE.MeshBasicMaterial({ color: '#ff6a5a' });
+const orbMat = new GFX.MeshBasicMaterial({ color: '#ff6a5a' });
 function dropOrb(x, z) {
-  const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.11, 0), orbMat);
+  const m = new GFX.Mesh(new GFX.OctahedronGeometry(0.11, 0), orbMat);
   m.position.set(x, surfaceY(x, z) + 0.35, z); scene.add(m);
   orbs.push({ m, x, z, t: 0 });
 }
 // slash arcs: a flat crescent of light in front of the hero
-const arcMat = new THREE.MeshBasicMaterial({ color: '#fff4d8', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+const arcMat = new GFX.MeshBasicMaterial({ color: '#fff4d8', transparent: true, opacity: 0, depthWrite: false, blending: GFX.AdditiveBlending, side: GFX.DoubleSide });
 const ARC = 2.0;
-const arcMesh = new THREE.Mesh(new THREE.RingGeometry(0.45, 1.45, 14, 1, -Math.PI / 2 - ARC / 2, ARC).rotateX(-Math.PI / 2), arcMat);
-const ringMesh = new THREE.Mesh(new THREE.RingGeometry(0.5, 1.75, 24, 1).rotateX(-Math.PI / 2), arcMat.clone());
+const arcMesh = new GFX.Mesh(new GFX.RingGeometry(0.45, 1.45, 14, 1, -Math.PI / 2 - ARC / 2, ARC).rotateX(-Math.PI / 2), arcMat);
+const ringMesh = new GFX.Mesh(new GFX.RingGeometry(0.5, 1.75, 24, 1).rotateX(-Math.PI / 2), arcMat.clone());
 arcMesh.renderOrder = ringMesh.renderOrder = 3;
 scene.add(arcMesh, ringMesh);
 let arcT = 9, ringT = 9;
@@ -4397,7 +4401,7 @@ function detach(i, c, r) {
   const [x, z] = objPos(c, r, o), y = LV[i] * STEP;
   // recentre on the trunk so it can shake and topple about its foot
   for (let k = 0; k < bufTmp.n; k += 3) { bufTmp.p[k] -= x; bufTmp.p[k + 1] -= y; bufTmp.p[k + 2] -= z; }
-  const g = new THREE.Group();
+  const g = new GFX.Group();
   const m = bufTmp.mesh(groundMat); if (m) g.add(m);
   g.position.set(x, y, z);
   scene.add(g);
@@ -4429,7 +4433,7 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
     paintMapTile(c, r);
     if (od.tree) {
       // timber: tip over away from the swing, then sink away
-      d.falling = true; d.fallT = 0; d.axis = new THREE.Vector3(dirz, 0, -dirx).normalize();
+      d.falling = true; d.fallT = 0; d.axis = new GFX.Vector3(dirz, 0, -dirx).normalize();
       fallers.push(d);
       sfx.fell();
     } else {
@@ -4465,7 +4469,7 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
   sfx.hit();
   if (f.hp <= 0) {
     sfx.kill();
-    shatter(f, new THREE.Vector3(dx / l, 0, dz / l));
+    shatter(f, new GFX.Vector3(dx / l, 0, dz / l));
     scene.remove(f.shadow);
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats(); bump('killPlate');
@@ -4719,7 +4723,7 @@ function pollPad(dt) {
 }
 
 // the point on the ground under the cursor: march the view ray down until it meets the terrain
-const ray = new THREE.Vector3(), rayDir = new THREE.Vector3();
+const ray = new GFX.Vector3(), rayDir = new GFX.Vector3();
 let forcedPick = null;   // set by the test hook to stand in for the cursor
 // the ray from the camera through a point on the screen (-1..1 each way), for either camera
 function viewRay(nx, ny) {
@@ -4851,14 +4855,14 @@ function castJump() {
 const HPBAR = { hold: 3, targetHold: 1, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
   width: 44, height: 5, bigWidth: 420, bigHeight: 12, nameSize: 11, opacity: 1,
   fill: '#e8b830', lost: '#f4e2b8', hot: '#ffffff', back: '#1a0e10' };
-const hbLost = new THREE.Color(), hbHot = new THREE.Color();
+const hbLost = new GFX.Color(), hbHot = new GFX.Color();
 let hbStyle = '';
 // the bars' sizes and colours, as CSS variables, whenever the tuning changes them
 function styleBars() {
   const B = HPBAR, key = JSON.stringify(B);
   if (key === hbStyle) return;
   hbStyle = key;
-  const dark = '#' + new THREE.Color(B.fill).multiplyScalar(0.72).getHexString(), st = document.documentElement.style;
+  const dark = '#' + new GFX.Color(B.fill).multiplyScalar(0.72).getHexString(), st = document.documentElement.style;
   for (const [k, v] of [['w', B.width + 'px'], ['h', B.height + 'px'], ['bigW', B.bigWidth + 'px'], ['bigH', B.bigHeight + 'px'],
     ['name', B.nameSize + 'px'], ['op', B.opacity], ['fill', B.fill], ['fillDark', dark], ['back', B.back]]) st.setProperty('--hb-' + k, v);
 }
@@ -4993,15 +4997,15 @@ function useDoor() {
 // into a rectangle and walls into a straight run along whichever way you drag; each piece in it is checked
 // on its own, and as many are built as you can pay for.
 let ghostOk = false, ghostSpot = null, drag = null, lastPick = null;
-const ghostMat = new THREE.MeshBasicMaterial({ color: '#7aff9a', transparent: true, opacity: 0.4, depthWrite: false });
-const ghostBad = new THREE.MeshBasicMaterial({ color: '#ff6a5a', transparent: true, opacity: 0.4, depthWrite: false });
-const ghostGeo = { floor: new THREE.BoxGeometry(1, 0.08, 1), wall: new THREE.BoxGeometry(1, WALL_H, 0.22), door: new THREE.BoxGeometry(1, WALL_H, 0.12) };
-ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new THREE.BoxGeometry(1, WALL_H, 0.32);
-ghostGeo.hearth = new THREE.CylinderGeometry(0.5, 0.5, 0.7, 8);
-ghostGeo.fence = new THREE.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new THREE.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new THREE.BoxGeometry(1, FENCE_H, 0.42);
+const ghostMat = new GFX.MeshBasicMaterial({ color: '#7aff9a', transparent: true, opacity: 0.4, depthWrite: false });
+const ghostBad = new GFX.MeshBasicMaterial({ color: '#ff6a5a', transparent: true, opacity: 0.4, depthWrite: false });
+const ghostGeo = { floor: new GFX.BoxGeometry(1, 0.08, 1), wall: new GFX.BoxGeometry(1, WALL_H, 0.22), door: new GFX.BoxGeometry(1, WALL_H, 0.12) };
+ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new GFX.BoxGeometry(1, WALL_H, 0.32);
+ghostGeo.hearth = new GFX.CylinderGeometry(0.5, 0.5, 0.7, 8);
+ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
 const ghosts = [];
 function showGhosts(spots) {
-  while (ghosts.length < spots.length) { const g = new THREE.Mesh(ghostGeo.wall, ghostMat); g.renderOrder = 4; scene.add(g); ghosts.push(g); }
+  while (ghosts.length < spots.length) { const g = new GFX.Mesh(ghostGeo.wall, ghostMat); g.renderOrder = 4; scene.add(g); ghosts.push(g); }
   ghostMat.opacity = ghostBad.opacity = 0.32 + Math.sin(time * 6) * 0.08;
   ghosts.forEach((g, k) => {
     const s = spots[k];
@@ -5188,15 +5192,15 @@ function releaseBuild() {
 }
 // ---------- Hearths ----------
 const hearths = new Map();   // tile -> { c, r, plot, fire }
-const fireMats = ['#ff7a2a', '#ffb43a', '#ffe68a'].map(c => new THREE.MeshBasicMaterial({ color: c }));
-const flameGeo = new THREE.ConeGeometry(0.1, 0.34, 5);
+const fireMats = ['#ff7a2a', '#ffb43a', '#ffe68a'].map(c => new GFX.MeshBasicMaterial({ color: c }));
+const flameGeo = new GFX.ConeGeometry(0.1, 0.34, 5);
 function lightHearth(c, r) {
   const i = T(c, r), pl = plots[PLOT[i]];
   OB[i] = 0;
   OB[i] = O.HEARTH; markObj(c, r);
-  const fire = new THREE.Group();
+  const fire = new GFX.Group();
   for (let k = 0; k < 5; k++) {
-    const m = new THREE.Mesh(flameGeo, fireMats[k % 3]);
+    const m = new GFX.Mesh(flameGeo, fireMats[k % 3]);
     const a = k / 5 * Math.PI * 2;
     m.position.set(k ? Math.sin(a) * 0.12 : 0, 0.17, k ? Math.cos(a) * 0.12 : 0);
     m.userData.k = k;
@@ -5360,7 +5364,7 @@ function sunTransmittance(y) {
   return RAY_S.map(b => Math.exp(-(b * 8 + MIE_E * 1.2 * SKY.haze) * mass));
 }
 const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const tmpC = new THREE.Color(), tmpC2 = new THREE.Color();
+const tmpC = new GFX.Color(), tmpC2 = new GFX.Color();
 const normC = c => { const m = Math.max(c.r, c.g, c.b, 1e-4); return c.multiplyScalar(1 / m); };
 let sunDir = sunDirection(), clock = SKY.timeOfDay / 24, dayNum = 1, wasNight = false, exposure = 1;
 const daylight = () => smoothstep(-0.1, 0.15, sunDir[1]);
@@ -5370,7 +5374,7 @@ function advanceClock(dt) {
   if (SKY.timeOfDay < 0) SKY.timeOfDay += 24;
   clock = SKY.timeOfDay / 24;
 }
-// three's fog runs from none at near to all at far; `amount` < 1 is had by setting far past where it's reached
+// the haze runs from none at near to all at far; `amount` < 1 is had by setting far past where it's reached
 function updateFog(dusk, day) {
   const d = camera.position.distanceTo(camTarget), on = FOG.on > 0.5 && FOG.amount > 0;
   const near = d + FOG.start, full = d + Math.max(FOG.start + 1, FOG.end);
@@ -5386,7 +5390,7 @@ function updateFog(dusk, day) {
 const SHADOWS = { on: 1, strength: 1, range: 23, softness: 0.5, lowAngle: 50, fullAngle: 60 };
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
-const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3(), shC = new THREE.Vector3();
+const shX = new GFX.Vector3(), shY = new GFX.Vector3(), shZ = new GFX.Vector3(), shC = new GFX.Vector3();
 function placeSun(dx, dy, dz) {
   const R = SHADOWS.range, cam = sun.shadow.camera;
   sun.castShadow = SHADOWS.on > 0.5 && dy > 0.02;
@@ -5868,7 +5872,7 @@ function posePlant(f, sq) {
 
 // ---------- Camera (as in Dungeon Golf) ----------
 let yaw = Math.PI / 4, yawGoal = yaw, zoom = 1;
-const camTarget = new THREE.Vector3();
+const camTarget = new GFX.Vector3();
 let texel = 0.03, pxScale = 3;
 const MOBILE = matchMedia('(pointer: coarse)').matches;
 // Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 to size it from the screen
@@ -5908,13 +5912,13 @@ const setZoom = z => { const [lo, hi] = zoomLimits(); zoom = Math.min(hi, Math.m
 const turnCam = d => { yawGoal += d * Math.PI / 2; };
 // the D-pad: on to the next 45 degree step either way
 const snapCam = d => { const q = Math.PI / 4; yawGoal = (Math.round(yawGoal / q) + d) * q; };
-const camRight = new THREE.Vector3(), camUp = new THREE.Vector3(), camK = { a: 0, b: 0 };
+const camRight = new GFX.Vector3(), camUp = new GFX.Vector3(), camK = { a: 0, b: 0 };
 const CAM_DIST = 70;
 function updateCamera(dt) {
   { const [lo, hi] = zoomLimits(); if (zoom < lo || zoom > hi) setZoom(zoom); }   // the limits were just changed
   yaw += (yawGoal - yaw) * Math.min(1, dt * 8);
   if (Math.abs(yawGoal - yaw) < 1e-3) yaw = yawGoal;
-  const want = new THREE.Vector3(H.x, H.y, H.z);
+  const want = new GFX.Vector3(H.x, H.y, H.z);
   camTarget.lerp(want, Math.min(1, dt * 7));
   if (camTarget.distanceToSquared(want) < 1e-8) camTarget.copy(want);
   if (VIEW.perspective > 0.5) {
@@ -6584,11 +6588,20 @@ window.GAME = {
   tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS },
   cutCount: () => cutEdges.size,
   light: () => ({ hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
-  // draw a frame and count near-black pixels in it (to check the outline without looking)
-  darkPixels: () => {
+  // draw a frame and give it back as a PNG data URL
+  screenshot: async () => {
+    updateCamera(1); streamChunks(Infinity); updateSky(); updateWater(0);
     renderWorld();
-    const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, d = new Uint8Array(w * h * 4);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, d);
+    const px = await renderer.readPixels(), c = document.createElement('canvas');
+    c.width = px.width; c.height = px.height;
+    const g = c.getContext('2d'), im = g.createImageData(px.width, px.height);
+    im.data.set(px.data); g.putImageData(im, 0, 0);
+    return c.toDataURL();
+  },
+  // draw a frame and count near-black pixels in it (to check the outline without looking)
+  darkPixels: async () => {
+    renderWorld();
+    const { width: w, height: h, data: d } = await renderer.readPixels();
     let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < 6) n++;
     return [n, w * h];
   },

@@ -6,7 +6,7 @@ You are a human adventurer in a wild land that is generated fresh every time: 10
 
 ## Play
 
-Open `index.html` in a browser. It is a single file; Three.js r128 loads from cdnjs. Generating the world takes a couple of seconds.
+Serve the folder and open `index.html` in a browser with WebGPU (a current Chrome, Edge or Safari, or Firefox with WebGPU on). The game is in `index.html`; it draws through `src/gfx/`, a small WebGPU library of its own, so it has to be served over http(s) (a `file://` page can't load the modules, and WebGPU needs a secure origin; `localhost` counts). `npx serve` or `python3 -m http.server` in the folder will do. Generating the world takes a couple of seconds.
 
 Every load rolls a new world. To replay one, pin its seed (shown on the title screen and the map): `index.html?seed=12345` or `index.html#seed-12345`.
 
@@ -49,13 +49,26 @@ Floors need flat ground that no slope reaches into. Walls (not doors) can also r
 
 ## How it renders
 
-The Dungeon Golf pipeline: a low-resolution WebGL buffer scaled up by a whole number, an orthographic camera at a fixed 30° tilt (starting at a 45° turn, where tile edges are a clean 2:1 pixel staircase), and a camera snapped to whole big pixels with the leftover slid in CSS. With the outline on, the frame renders to a target with a depth texture, and a pass on the low-res buffer strokes any pixel whose neighbours within the outline's thickness lie more than the outline distance further back, as Crafting and Conquest's toon strokes do, so strokes are whole mosaic pixels. Scenery is merged into vertex-coloured, flat-shaded meshes, and the hero draws in a second pass so a silhouette shows through anything in front.
+The Dungeon Golf pipeline: a low-resolution buffer scaled up by a whole number, an orthographic camera at a fixed 30° tilt (starting at a 45° turn, where tile edges are a clean 2:1 pixel staircase), and a camera snapped to whole big pixels with the leftover slid in CSS. With the outline on, the frame renders to a target with a depth texture, and a pass on the low-res buffer strokes any pixel whose neighbours within the outline's thickness lie more than the outline distance further back, as Crafting and Conquest's toon strokes do, so strokes are whole mosaic pixels. Scenery is merged into vertex-coloured, flat-shaded meshes, and the hero draws in a second pass so a silhouette shows through anything in front.
 
 The 1024 × 1024 map is split into 32 × 32-tile chunks. Only chunks near the camera are built, nearest first and a few milliseconds' worth per frame, and far ones are let go. Felling a tree or building a wall rebuilds only its chunk.
 
+## The drawing library (src/gfx)
+
+Emberwild draws with raw WebGPU through a small library of its own, shaped like the parts of three.js the game was first written on so the game code reads the same:
+
+- `math.js`: vectors, colours, quaternions, Euler angles, matrices, planes, rays and view frustums.
+- `scene.js`: the scene graph (objects nested in groups, each placed, turned and sized), meshes, haze, orthographic and perspective cameras, and the sky, sun and point lights.
+- `geometry.js`: vertex buffers and the primitive shapes (boxes, cylinders, cones, the round solids, discs, rings, planes, lathes).
+- `materials.js`: lit (standard), unlit (basic) and normal materials, materials with their own WGSL (`ShaderMaterial`: uniforms, textures and extra vertex attributes), textures and render targets.
+- `shaders.js`: the WGSL every pipeline shares: the frame and object uniform blocks, haze, flat face normals, cloud shadow, the sun's 17-tap PCF shadow and the lighting (sky light, sun, point lights, Lambert plus a GGX specular lobe), and the built-in materials.
+- `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
+
+The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.
+
 ## Water
 
-Crafting and Conquest's water surface, brought down to WebGL. Fresnel blends the sky's reflection with the water body (light scattered back up out of it), sun glitter comes off the wave slopes, and whatever lies under the surface shows through the water above it, each colour absorbed at its own rate (red first). A lace of foam runs along the shore, and the water washes it in and out. The waves are scrolling slope noise instead of an FFT ocean. Rivers carry the same water along their flow, using a flow map with two phases half a cycle apart so the stretch never builds up, streaked with foam. The surface is drawn in two passes over what's below: one multiplies it by what the water lets through, then the next adds the water's own light. The sea uses it too, and shelves off from the coast. Because the camera looks down from high above, where Fresnel shows little sky and the sun's glitter is mostly off screen, the water also has touches that read from up there. Slow swells lift the surface itself and lap up and down the banks, sparkles twinkle on them, and caustics play over the bed in the shallows. The swells are smooth shaded. The hero's torch lights the water but doesn't glint on it. Each of these has a slider in the tuning panel's Water section, along with ripple size. There are also sliders for light and shade on the swells, a sheen on their crests, turquoise shallows, and a crisp foam line at the shore with ripples running out from it. Those four are off by default.
+Crafting and Conquest's water surface. Fresnel blends the sky's reflection with the water body (light scattered back up out of it), sun glitter comes off the wave slopes, and whatever lies under the surface shows through the water above it, each colour absorbed at its own rate (red first). A lace of foam runs along the shore, and the water washes it in and out. The waves are scrolling slope noise instead of an FFT ocean. Rivers carry the same water along their flow, using a flow map with two phases half a cycle apart so the stretch never builds up, streaked with foam. The surface is drawn in two passes over what's below: one multiplies it by what the water lets through, then the next adds the water's own light. The sea uses it too, and shelves off from the coast. Because the camera looks down from high above, where Fresnel shows little sky and the sun's glitter is mostly off screen, the water also has touches that read from up there. Slow swells lift the surface itself and lap up and down the banks, sparkles twinkle on them, and caustics play over the bed in the shallows. The swells are smooth shaded. The hero's torch lights the water but doesn't glint on it. Each of these has a slider in the tuning panel's Water section, along with ripple size. There are also sliders for light and shade on the swells, a sheen on their crests, turquoise shallows, and a crisp foam line at the shore with ripples running out from it. Those four are off by default.
 
 ## Day, night and clouds
 
