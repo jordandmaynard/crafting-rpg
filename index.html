@@ -1804,7 +1804,8 @@ const outlineMat = new GFX.ShaderMaterial({
   uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new GFX.Vector2(1, 1) },
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new GFX.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
-    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 } },
+    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
+    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -1857,7 +1858,12 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
     }
     col = mix(col, U.color, e * U.strength * haze);
   }
-  col = postOutput(postExpose(hazeApply(col, px)));
+  col = postExpose(hazeApply(col, px)) + bloomAt(px);
+  // the grade (T > Picture): the black point taken out (white kept), contrast round the pivot, saturation
+  col = max(col - U.gBlack, vec3f(0.0)) / max(1.0 - U.gBlack, 0.05);
+  col = max((col - U.gPivot) * U.gContrast + U.gPivot, vec3f(0.0));
+  col = max(mix(vec3f(dot(col, vec3f(0.2126, 0.7152, 0.0722))), col, U.gSat), vec3f(0.0));
+  col = postOutput(col);
   return vec4f(col, 1.0);
 }`,
   depthTest: false, depthWrite: false,
@@ -1891,8 +1897,9 @@ renderer.setGI(gi);
 // goes on forward than back (0 even, toward 1 a bright ring round the sun); shafts: how much of the sun's light
 // shadows take out of it (1 all); shadeSky: how much of the sky's too, for darker gaps between shafts; lavaHeight: tiles lava's glow fades
 // over, upward; wisps: how patchy (slow drifting noise, wispSize tiles, drifting with the clouds at windSpeed);
-// color: the haze's own.
-const HAZE = { on: 1, shafts: 1, shadeSky: 0, density: 0.045, height: 4.5, floor: 0.14, top: 10, sun: 1.35, forward: 0.16, sky: 1, lamps: 1.5, lava: 1, lavaHeight: 3,
+// color: the haze's own; lift: how much of the light it scatters toward you it adds (1 all; less keeps shadows and
+// near things darker, while far things still fade into it).
+const HAZE = { on: 1, lift: 1, shafts: 1, shadeSky: 0, density: 0.045, height: 4.5, floor: 0.14, top: 10, sun: 1.35, forward: 0.16, sky: 1, lamps: 1.5, lava: 10, lavaHeight: 2.5,
   wisps: 0.35, wispSize: 6, windSpeed: 3.6, color: '#ffffff', steps: 150 };
 const haze = new GFX.LitHaze(renderer);
 renderer.setHaze(haze);
@@ -1913,6 +1920,24 @@ function updateEye() {
   eye.update({ on: EYE.on > 0.5, scene: renderer.textureView(outlineRT.texture), haze: hazeOn() ? { view: haze.view(), id: 'h' + haze.key } : null,
     res: [res.x, res.y], ss: ssNow, target: EYE.target, darkest: EYE.darkest, brightest: EYE.brightest, middle: EYE.middle,
     toDark: EYE.toDark, toLight: EYE.toLight });
+}
+
+// ---------- Bloom and the grade (T > Picture) ----------
+// bloom (src/gfx/bloom.js): a soft glow round whatever's brighter than `threshold` (after the haze and the eye's
+// exposure), eased in over `knee`, blurred `size` mosaic pixels wide, `strength` of it added back (0 off).
+// The grade, last of all: black (taken out of every colour, so what the haze lifted goes dark again; white stays
+// white), contrast round `pivot`, saturation (1 as drawn).
+const BLOOM = { strength: 0.3, threshold: 1, knee: 0.25, size: 6 };
+const GRADE = { black: 0, contrast: 1, pivot: 0.45, saturation: 1 };
+const bloom = new GFX.Bloom(renderer);
+renderer.setBloom(bloom);
+const gradeOn = () => GRADE.black > 0 || GRADE.contrast !== 1 || GRADE.saturation !== 1;
+function updateBloom() {
+  const res = outlineMat.uniforms.res.value, U = outlineMat.uniforms;
+  U.gBlack.value = Math.min(0.9, Math.max(0, GRADE.black)); U.gContrast.value = GRADE.contrast; U.gPivot.value = GRADE.pivot; U.gSat.value = GRADE.saturation;
+  bloom.update({ on: BLOOM.strength > 0, scene: renderer.textureView(outlineRT.texture), haze: hazeOn() ? { view: haze.view(), id: 'h' + haze.key } : null,
+    eye: EYE.on > 0.5 ? eye.buffer() : null, res: [res.x, res.y], ss: ssNow, threshold: BLOOM.threshold, knee: BLOOM.knee, size: BLOOM.size,
+    strength: BLOOM.strength });
 }
 setInterval(() => {
   if ($('tuning').hidden || EYE.on < 0.5) return;
@@ -1956,7 +1981,7 @@ function updateHaze() {
     top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
     sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wisps, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
-    tint: [hazeTint.r, hazeTint.g, hazeTint.b], groundColour: gi.gcolView, hfSize: gi.uniforms()[10] });
+    tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10] });
 }
 let giVersion = 0;
 // a chunk's block of the height field (worked out when it's first wanted, and again after its meshes change)
@@ -2022,7 +2047,7 @@ function updateGI() {
 }
 function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
-  const on = depthOn || sobelOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr;
+  const on = depthOn || sobelOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   // the renderer draws the sun's shadow map anew in every render, keeping only casters on the camera's
@@ -2034,6 +2059,7 @@ function renderWorld() {
   camera.layers.set(1); renderer.render(scene, camera);
   updateHaze();
   updateEye();
+  updateBloom();
   if (!on) return;
   if (sobelOn) {
     // the same view again with every surface drawn as its normal, sky left clear
@@ -6445,6 +6471,7 @@ const TUNING = [
     [HAZE, 'wispSize', 'Wisps: size (tiles)', 1, 40, 0.5],
     [HAZE, 'windSpeed', 'Wisps: drift (tiles a second, with the clouds)', 0, 5, 0.05],
     [HAZE, 'color', 'Colour', 'color'],
+    [HAZE, 'lift', 'Light it adds over things (less: darker shadows, more contrast)', 0, 1, 0.01],
     [HAZE, 'steps', 'Steps along each ray (more: smoother shafts, slower)', 16, 256, 1],
   ]],
   ['Eye adaptation', [
@@ -6457,6 +6484,16 @@ const TUNING = [
     [EYE, 'middle', 'Weight toward the middle of the screen', 0, 1, 0.01],
     [EYE, 'toDark', 'Adjusts to bright this fast (a second)', 0.05, 8, 0.05],
     [EYE, 'toLight', 'Adjusts to dark this fast (a second)', 0.05, 8, 0.05],
+  ]],
+  ['Picture', [
+    [BLOOM, 'strength', 'Bloom: how much glow (0 off)', 0, 2, 0.01],
+    [BLOOM, 'threshold', 'Bloom: glows above this brightness', 0, 2, 0.01],
+    [BLOOM, 'knee', 'Bloom: eases in over this much', 0, 1, 0.01],
+    [BLOOM, 'size', 'Bloom: how far it spreads (mosaic pixels)', 1, 30, 0.5],
+    [GRADE, 'black', 'Black point (takes the haze lift back out)', 0, 0.5, 0.005],
+    [GRADE, 'contrast', 'Contrast', 0.5, 2, 0.01],
+    [GRADE, 'pivot', 'Contrast pivots round this brightness', 0, 1, 0.01],
+    [GRADE, 'saturation', 'Saturation', 0, 2, 0.01],
   ]],
   ['Walk', [
     [WALK, 'cadence', 'Cadence: steps per tile walked', 1, 12, 0.1],
@@ -6818,7 +6855,7 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE },
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
   cutCount: () => cutEdges.size,

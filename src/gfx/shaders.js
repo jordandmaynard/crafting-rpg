@@ -12,7 +12,7 @@
 // round about give back.
 
 export const MAX_POINTS = 8;
-export const FRAME_BYTES = 1024;  // the Frame struct (800 bytes), padded to the uniform offset alignment
+export const FRAME_BYTES = 1024;  // the Frame struct (816 bytes), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
 // Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
@@ -151,6 +151,7 @@ struct Frame {
   hazeA: vec4f,       // lit haze (haze.js): on
   hazeB: vec4f,       // its texels (mosaic pixels) across, down
   post: vec4f,        // eye adaptation on (exposure.js), HDR highlights' peak (× white; 0 without HDR)
+  bloom: vec4f,       // bloom (bloom.js): strength (0 off), _, its texture coordinates a mosaic pixel (x, y)
 }
 struct Obj {
   model: mat4x4f,
@@ -168,6 +169,7 @@ struct Obj {
 @group(0) @binding(7) var giHfTex: texture_2d<f32>;
 @group(0) @binding(8) var hazeTex: texture_2d<f32>;
 @group(0) @binding(9) var<storage, read> eyeState: array<f32, 4>;
+@group(0) @binding(10) var bloomTex: texture_2d<f32>;
 @group(1) @binding(0) var<uniform> O: Obj;
 fn giHfRaw(t: vec2i) -> vec4f { return textureLoad(giHfTex, t, 0); }
 fn giHfOrigin() -> vec2i { return vec2i(F.giC.xy); }
@@ -209,6 +211,11 @@ fn hazeApply(c: vec3f, px: vec2f) -> vec3f {
   return c * h.a + h.rgb;
 }
 // the eye's exposure on a colour about to be shown
+// the glow bloom spills over a mosaic pixel (px: its whole coordinates), to add after postExpose
+fn bloomAt(px: vec2f) -> vec3f {
+  if (F.bloom.x <= 0.0) { return vec3f(0.0); }
+  return textureSampleLevel(bloomTex, linSamp, (px + 0.5) * F.bloom.zw, 0.0).rgb * F.bloom.x;
+}
 fn postExpose(c: vec3f) -> vec3f { return select(c, c * eyeState[0], F.post.x > 0.5); }
 // a colour as the screen takes it: without HDR clipped at white (as the canvas would); with it, what's over a
 // little under white eases off toward the peak (its brightness × white's, put back into the sRGB curve the colours

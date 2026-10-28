@@ -72,6 +72,7 @@ class Renderer {
       { binding: 7, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
       { binding: 8, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
       { binding: 9, visibility: S.FRAGMENT | S.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 10, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
     ] });
     this.bglFrameShadow = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: S.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } }] });
@@ -101,7 +102,7 @@ class Renderer {
     this.haze = null; this._lastFrameOff = 0;
     this.noEye = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.noEye, 0, new Float32Array([1, 0, 0, 1]));
-    this.eye = null; this.hdr = false; this.hdrPeak = 0;
+    this.eye = null; this.hdr = false; this.hdrPeak = 0; this.bloom = null;
     this.gi = null;
     this._ensureShadow(512);
     this._frameBG = null; this._frameBGKey = '';
@@ -128,6 +129,9 @@ class Renderer {
   setHaze(h) { this.haze = h; this._frameBGKey = ''; }
   // eye adaptation (exposure.js): something with buffer() -> its state (the exposure first) and on, or null
   setEye(e) { this.eye = e; this._frameBGKey = ''; }
+  // bloom (bloom.js): something with view() -> its glow (or null) and uniforms() -> 4 numbers (the frame's bloom)
+  // and key, or null
+  setBloom(b) { this.bloom = b; this._frameBGKey = ''; }
   // HDR output: on an HDR display, a float canvas whose values above 1 show brighter than white; peak: the
   // brightest highlights, × white's brightness. Off: the usual canvas, everything over white clipped.
   setHDR(on, peak = 3) {
@@ -273,7 +277,9 @@ class Renderer {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
     const gv = this.gi ? this.gi.views() : null;
     const hv = this.haze && !noHaze ? this.haze.view() : null, eb = this.eye && !noHaze ? this.eye.buffer() : null;
-    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-') + ':' + (eb ? 'e' : '-');
+    const bv = this.bloom && !noHaze ? this.bloom.view() : null;
+    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-') + ':' + (eb ? 'e' : '-') +
+      ':' + (bv ? this.bloom.key : '-');
     const C = noHaze ? (this._frameBGc = this._frameBGc || { key: '', bg: null }) : null;
     if (C ? key !== C.key : key !== this._frameBGKey) {
       if (C) C.key = key; else this._frameBGKey = key;
@@ -288,6 +294,7 @@ class Renderer {
         { binding: 7, resource: gv ? gv.hf : this.noGI.hf },
         { binding: 8, resource: hv || this.noHaze },
         { binding: 9, resource: { buffer: eb || this.noEye } },
+        { binding: 10, resource: bv || this.noHaze },
       ] });
       if (C) C.bg = bg; else this._frameBG = bg;
     }
@@ -344,6 +351,8 @@ class Renderer {
     const hz = this.haze && this.haze.view() ? this.haze.uniforms() : null;
     for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
     d[go + 20] = this.eye && this.eye.on ? 1 : 0; d[go + 21] = this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;
+    const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
+    for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
     return slot * FRAME_BYTES;
   }
   _writeObj(mesh, mat) {

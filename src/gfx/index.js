@@ -8,3 +8,4 @@ export { createRenderer } from './renderer.js';
 export { HeightProbes, rasterGround, rasterChunk } from './probes.js';
 export { LitHaze } from './haze.js';
 export { EyeAdaptation } from './exposure.js';
+export { Bloom } from './bloom.js';

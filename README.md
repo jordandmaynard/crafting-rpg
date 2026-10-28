@@ -73,15 +73,25 @@ Lit haze marched per pixel (`src/gfx/haze.js`). The game draws at a low mosaic r
 - the sun or moon through its shadow map, so tall trees and buildings throw shafts through it, scattered more forward than back;
 - the sky, by how much of it the GI probes see from there (with bounce light, all the light arriving there);
 - the lamps and your torch;
-- lava's glow: a second compute pass blurs what the ground gives off into a glow map each frame, and the glow fades with height.
+- lava's glow: a second compute pass blurs what the ground gives off into a glow map each frame, smoothly within a tile as well as across them, and the glow fades with height.
 
-The outline pass lays the result over the picture. The tuning panel's Lit haze section has the switch and the sliders, including the number of steps. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
+The outline pass lays the result over the picture. The tuning panel's Lit haze section has the switch and the sliders, including the number of steps. One of them, "Light it adds over things" (lift), scales only the light the haze adds, not how much it hides. Turned down, it keeps shadows and near things dark while far things still fade. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
 
 ## Eye adaptation and HDR
 
 The scene is drawn into float targets, so light brighter than white survives until the picture is shown. Each frame a compute pass (`src/gfx/exposure.js`) measures how bright the picture is, haze included: the geometric mean of its mosaic pixels, weighted toward the middle of the screen. The exposure then eases toward what brings that to a target, the way your eyes adjust. It darkens quickly when you step out of the deep forest onto a sunlit plain and opens up slowly again, and by default it never goes brighter than the look as tuned. The exposure stays on the GPU, where the outline pass applies it. The tuning panel's Eye adaptation section shows the brightness it measures and the exposure it's using, and has the target, the limits, the speeds and the middle weighting. It sits on top of the day and night auto exposure.
 
 HDR (the options menu, **O**) switches the canvas to float with extended tone mapping. On an HDR display, highlights (the sun on things, lava, lit haze) then ease off above white toward a peak you set, rather than clipping. Off, or on a display without HDR, everything over white clips as before.
+
+## Bloom and the grade
+
+Bloom (`src/gfx/bloom.js`): each frame, after the haze and the eye adaptation, a compute pass keeps whatever is brighter than a threshold at half the mosaic's size, eased in so nothing pops. Two more passes blur it with a Gaussian, and the outline pass adds it back as a soft glow round the sun's ring, lava, lamps and bright shafts. Last of all comes the grade:
+
+- a black point, taken out of every colour (white stays white), so whatever the haze lifted goes dark again;
+- contrast round a pivot brightness;
+- saturation.
+
+The tuning panel's Picture section has all of it.
 
 ## The drawing library (src/gfx)
 
@@ -95,6 +105,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `probes.js`: probe lighting over a height field (see Global illumination).
 - `haze.js`: lit haze, marched per pixel (see Lit haze).
 - `exposure.js`: eye adaptation (see Eye adaptation and HDR).
+- `bloom.js`: bloom (see Bloom and the grade).
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.

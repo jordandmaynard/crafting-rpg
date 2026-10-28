@@ -33,7 +33,7 @@ struct HP {
   dens: vec4f,          // density (a tile), height it thins over (tiles), what's left high up, ground where unknown
   light: vec4f,         // sun, forward scattering (g), sky, lamps
   more: vec4f,          // lava, wisps, wisp size (tiles), seconds
-  tint: vec4f,          // the haze's colour
+  tint: vec4f,          // the haze's colour; w: how much of the light it scatters toward the camera is added (lift)
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
                         // how much of the sky's (for shafts with more contrast)
@@ -45,8 +45,10 @@ const GLOW_WGSL = /* wgsl */ `
 ${COMMON}
 @group(2) @binding(1) var groundCol: texture_2d<f32>;
 @group(2) @binding(2) var glowOut: texture_storage_2d<${OUT_FORMAT}, write>;
-// each texel of the window: what the ground within four tiles gives off, a tile apart, less with distance; and the
-// lowest ground within three tiles (very low where none is known)
+// each texel of the window: what the ground within four and a half tiles gives off, read a tile apart, less with
+// distance (measured from this texel itself, so the glow eases smoothly across a tile rather than stepping at its
+// edges, which showed as stripes rising off lava); and the lowest ground within three tiles (very low where none is
+// known)
 @compute @workgroup_size(8, 8, 1)
 fn glow(@builtin(global_invocation_id) id: vec3u) {
   let S = giHfSize();
@@ -55,19 +57,28 @@ fn glow(@builtin(global_invocation_id) id: vec3u) {
   let t = o + (((vec2i(id.xy) - o) % S) + S) % S;   // the world texel in this slot
   var sum = vec3f(0.0);
   var low = 1e4;
-  for (var j = -4; j <= 4; j++) {
-    for (var i = -4; i <= 4; i++) {
-      let u = t + vec2i(i, j) * GI_TPT;
-      let r = u - o;
-      if (any(r < vec2i(0)) || any(r >= vec2i(S))) { continue; }
-      let q = ((u % S) + S) % S;
+  let here = (vec2f(t) + 0.5) / f32(GI_TPT);
+  let tile = vec2i(floor(here));
+  for (var j = -5; j <= 5; j++) {
+    for (var i = -5; i <= 5; i++) {
       if (H.more.x > 0.0) {
-        let c = textureLoad(groundCol, q, 0);
-        sum += c.rgb * c.a / (1.0 + f32(i * i + j * j));
+        // each tile's middle texel, weighed by a smooth bump 4.5 tiles round this texel (as much in all as before)
+        let u = (tile + vec2i(i, j)) * GI_TPT + GI_TPT / 2;
+        let r = u - o;
+        let d = (vec2f(u) + 0.5) / f32(GI_TPT) - here;
+        let w = max(1.0 - dot(d, d) / 20.25, 0.0);
+        if (w > 0.0 && all(r >= vec2i(0)) && all(r < vec2i(S))) {
+          let c = textureLoad(groundCol, ((u % S) + S) % S, 0);
+          sum += c.rgb * c.a * 0.49 * w * w;
+        }
       }
       if (abs(i) <= 3 && abs(j) <= 3) {
-        let g = giHfRaw(q).x;
-        if (g > -1000.0) { low = min(low, g); }
+        let u = t + vec2i(i, j) * GI_TPT;
+        let r = u - o;
+        if (all(r >= vec2i(0)) && all(r < vec2i(S))) {
+          let g = giHfRaw(((u % S) + S) % S).x;
+          if (g > -1000.0) { low = min(low, g); }
+        }
       }
     }
   }
@@ -247,7 +258,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
     S += T * H.tint.rgb * L * (1.0 - t);
     T *= t;
   }
-  textureStore(hazeOut, vec2i(id.xy), vec4f(S, T));
+  textureStore(hazeOut, vec2i(id.xy), vec4f(S * H.tint.w, T));
 }
 `;
 
@@ -306,8 +317,9 @@ export class LitHaze {
   // ss (scene samples a mosaic pixel, each way), depth ({ view, id }: the scene's depth), steps, top, bottom (world
   // y the air runs between), density, height, floor, ground (y where the height field doesn't reach), sun,
   // forward, sky, lamps, lava, lavaHeight, shafts (how much of the sun's light shadows take out), shadeSky (and
-  // how much of the sky's), wisps, wispSize, wind: [x, y, z], tint: [r, g, b], groundColour (the
-  // GI's ground colour view, or null), hfSize (its texels across) }
+  // how much of the sky's), wisps, wispSize, wind: [x, y, z], tint: [r, g, b], lift (0-1: how much of the
+  // light the haze scatters toward the camera it adds; under 1, shadows stay darker while far things still
+  // fade), groundColour (the GI's ground colour view, or null), hfSize (its texels across) }
   update(f) {
     this.on = !!f.on;
     if (!this.on) return;
@@ -327,7 +339,7 @@ export class LitHaze {
     d.set([f.density, f.height, f.floor, f.ground], 40);
     d.set([f.sun, f.forward, f.sky, f.lamps], 44);
     d.set([f.lava, f.wisps, f.wispSize, performance.now() / 1000], 48);
-    d.set([...f.tint, 0], 52);
+    d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
     d.set([f.lavaHeight, f.shafts, f.shadeSky, 0], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
