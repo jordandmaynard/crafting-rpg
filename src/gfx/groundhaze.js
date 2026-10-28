@@ -261,8 +261,11 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   return VOut(F.viewProj * vec4f(p, 1.0), p, v.slice);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
-  let sn = normalize(cross(dpdx(i.world), dpdy(i.world)));   // the slice's own slope (it drapes over cliffs)
   let wp = i.world.xz;
+  // the slice's own slope (it drapes over cliffs), smooth: from the ground it lies on, a quarter tile either way
+  let e = 0.25;
+  let sn = normalize(vec3f(siteAt(wp - vec2f(e, 0.0)).x - siteAt(wp + vec2f(e, 0.0)).x, 2.0 * e,
+                           siteAt(wp - vec2f(0.0, e)).x - siteAt(wp + vec2f(0.0, e)).x));
   let site = siteAt(wp);
   if (site.z < 0.003) { discard; }
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
@@ -285,7 +288,8 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   let n = mix(ghNoise(dn) * 0.6 + ghNoise(dn * 2.7 + vec2f(5.2, 1.3)) * 0.4, ghNoise(dm) * 0.6 + ghNoise(dm * 2.7 + vec2f(5.2, 1.3)) * 0.4, w0);
   let det = mix(1.0, n * 2.0, U.detail.x);
   let H = max(U.look.x, 0.02);
-  let sigma = haze * exp(-(i.world.y - site.x) / H) * det * U.look.y;
+  // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
+  let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * det * U.look.y;
   // the light's path through the slice, across it
   let V = toEye(i.world);
   let path = (2.0 * H / U.look.z) * abs(sn.y) / max(abs(dot(V, sn)), 0.25);
@@ -422,7 +426,10 @@ export class GroundHaze {
     Object.assign(U.rest.value, { x: f.amount, y: f.patchiness, z: freq });
     Object.assign(U.wind.value, { x: f.wind[0], y: f.wind[1], z: this.time });
     Object.assign(U.detail.value, { x: f.detail, y: 1 / Math.max(f.detailSize, 0.05), z: this.phase });
-    this.mesh.position.set((origin[0] + GRID / 2) / CPT, 0, (origin[1] + GRID / 2) / CPT);
+    // the slices' vertices stay put in the world (whole steps of their spacing), so their shape doesn't shift as the
+    // grid moves on
+    const snap = v => Math.round(v * DRAW_VPT) / DRAW_VPT;
+    this.mesh.position.set(snap((origin[0] + GRID / 2) / CPT), 0, snap((origin[1] + GRID / 2) / CPT));
     const n = Math.ceil(GRID / 8);
     this.renderer.compute(enc => {
       const pass = enc.beginComputePass({ label: 'ground haze' });
