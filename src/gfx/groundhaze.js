@@ -262,16 +262,22 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   let site = siteAt(wp);
   if (site.z < 0.003) { discard; }
   // each slice is drawn only where the eye first meets it, so it doesn't brighten itself where it folds over (into a
-  // canyon, down a cliff): back toward the eye, a quarter tile at a time for six tiles, if the ray dips under this
-  // slice's surface, a nearer part of it covers this point
+  // canyon, down a cliff): back toward the eye for six tiles, if the ray dips under this slice's surface, a nearer
+  // part of it covers this point. The steps start at a fiftieth of a tile and grow, so the shell just past a crest,
+  // dropping away steeper than the eye looks down, is caught too (coarser, it showed as a thin streak over the crest).
+  // The ray leaves from the slice as laid over the site map, the same surface it's tested against, not from the flat
+  // triangle, which strays from it by more than these steps can tell apart.
   let V = toEye(i.world);
   let hs = U.look.x * 2.0 * (i.slice + 0.5) / U.look.z;
   let hl = length(V.xz);
   if (hl > 1e-3) {
-    let st = V * (0.25 / hl);
-    for (var k = 1; k <= 24; k++) {
-      let p = i.world + st * f32(k);
-      if (p.y < siteAt(p.xz).x + hs - 0.05) { discard; }
+    let o = vec3f(i.world.x, site.x + hs, i.world.z);
+    let st = V / hl;
+    var t = 0.02;
+    for (var k = 0; k < 30; k++) {
+      let p = o + st * t;
+      if (p.y < siteAt(p.xz).x + hs - 0.01) { discard; }
+      t *= 1.22;
     }
   }
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
