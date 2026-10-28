@@ -1778,11 +1778,6 @@ const OUTLINE = { on: 1, distance: 0.4, thickness: 1, strength: 0.73, color: '#0
 // The second outline (T > Crease outline), Crafting and Conquest's Sobel strokes on normals: a stroke
 // wherever the surface turns by more than `angle` degrees across a 3 × 3 kernel of mosaic pixels.
 const SOBEL = { on: 0, angle: 40, thickness: 1, strength: 0.5, color: '#000000' };
-// Light shafts (T > Light shafts): a layer of haze hugging the ground, lit where the sun (or moon) reaches
-// it and dark where anything's shadow falls through it, so shadows cut through the haze and leave shafts of
-// light between them. Drawn in the pass after the scene: each pixel's view ray is stepped back up from the
-// ground through the layer, testing the sun's shadow map (and the cloud shadows) at each step.
-const SHAFTS = { on: 1, density: 0.09, height: 3, rays: 1.1, towardSun: 0.45, shadowHaze: 0.35, steps: 24, soft: 1, dither: 0, clouds: 1 };
 const normRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
 const normalMat = new THREE.MeshNormalMaterial({ flatShading: true, side: THREE.DoubleSide });
 const outlineRT = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true });
@@ -1792,39 +1787,13 @@ const outlineMat = new THREE.ShaderMaterial({
   uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new THREE.Vector2(1, 1) },
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new THREE.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new THREE.Color() },
-    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
-    useShafts: { value: 0 }, invVP: { value: new THREE.Matrix4() }, shadowMat: { value: new THREE.Matrix4() }, tShadow: { value: null }, hasShadow: { value: 0 },
-    shadowBias: { value: 0 }, sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunCol: { value: new THREE.Color() }, hazeCol: { value: new THREE.Color() },
-    shDensity: { value: 0.1 }, shHeight: { value: 3 }, shRays: { value: 1 }, shG: { value: 0.4 }, shShade: { value: 0.4 }, shSteps: { value: 24 }, shSoft: { value: 1 }, shDither: { value: 0 }, shClouds: { value: 1 }, shadowTexel: { value: 1 / 2048 } },
+    ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 } },
   vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
   fragmentShader: `
     uniform sampler2D tColor, tDepth, tNormal; uniform vec2 res; uniform float span, dist, thick, strength; uniform vec3 color;
     uniform float useDepth, useSobel, sStep, sTh, sStrength; uniform vec3 sColor;
     uniform float ss, persp, near, far, fogNear, fogFar;
-    uniform float useShafts, hasShadow, shadowBias, shDensity, shHeight, shRays, shG, shShade, shSteps, shSoft, shDither, shClouds, shadowTexel;
-    uniform mat4 invVP, shadowMat; uniform sampler2D tShadow, tCloud; uniform vec3 sunDir, sunCol, hazeCol;
-    uniform vec2 cloudOff; uniform float cloudScale, cloudAmt, cloudCover, cloudSoft;
     varying vec2 vUv;
-    #include <packing>
-    float shadowTap(vec2 uv, float z) { return step(z, unpackRGBAToDepth(texture2D(tShadow, uv))); }
-    // the sun's light at a point in the world: 0 in a shadow, 1 out of one (and out past the shadow map).
-    // Softened, it blends the four nearest shadow-map texels (spread shSoft texels apart), so a shaft's
-    // edge fades across a step instead of jumping, and the steps don't show as bands.
-    float sunLit(vec3 w) {
-      if (hasShadow < 0.5) return 1.0;
-      vec4 sc = shadowMat * vec4(w, 1.0);
-      vec3 s = sc.xyz / sc.w;
-      if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) return 1.0;
-      float z = s.z + shadowBias;
-      if (shSoft <= 0.0) return shadowTap(s.xy, z);
-      float t = shadowTexel * shSoft;
-      vec2 g = s.xy / t - 0.5, f = fract(g), b = (floor(g) + 0.5) * t;
-      return mix(mix(shadowTap(b, z), shadowTap(b + vec2(t, 0.0), z), f.x),
-                 mix(shadowTap(b + vec2(0.0, t), z), shadowTap(b + vec2(t, t), z), f.x), f.y);
-    }
-    // a 4 x 4 ordered dither, to stagger where each pixel's steps fall (shDither of it; 0 steps evenly)
-    float bayer2(vec2 a) { a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
-    float bayer4(vec2 a) { return bayer2(0.5 * a) * 0.25 + bayer2(a); }
     // the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
     // samples, and its depth and normal are read at its middle sample
     vec2 mid(vec2 px) { return ((clamp(px, vec2(0.0), res - 1.0) * ss + floor(ss * 0.5)) + 0.5) / (res * ss); }
@@ -1869,34 +1838,6 @@ const outlineMat = new THREE.ShaderMaterial({
         }
         col = mix(col, color, e * strength * haze);
       }
-      if (useShafts > 0.5) {
-        float d = texture2D(tDepth, mid(px)).x;
-        if (d < 0.99999) {
-          // the ground under this pixel, and the way the view ray runs down to it
-          vec2 ndc = (px + 0.5) / res * 2.0 - 1.0;
-          vec4 a4 = invVP * vec4(ndc, -1.0, 1.0), b4 = invVP * vec4(ndc, d * 2.0 - 1.0, 1.0);
-          vec3 eye = a4.xyz / a4.w, P = b4.xyz / b4.w, dir = normalize(P - eye);
-          float len = min(shHeight / max(0.15, -dir.y), length(P - eye));
-          float lit = 0.0, j = mix(0.5, bayer4(px), shDither);
-          vec2 drift = sunDir.xz / max(0.08, sunDir.y);
-          for (int i = 0; i < 48; i++) {
-            if (float(i) >= shSteps) break;
-            vec3 w = P - dir * len * (float(i) + j) / shSteps;
-            float l = sunLit(w);
-            // a cloud's shadow, where the sun's ray through this point reaches the ground
-            if (shClouds > 0.0 && l > 0.0) {
-              float n = texture2D(tCloud, (w.xz - drift * (w.y - P.y) + cloudOff) / cloudScale).r;
-              l *= mix(1.0, 1.0 - cloudAmt * smoothstep(1.0 - cloudCover - cloudSoft, 1.0 - cloudCover + cloudSoft, n), shClouds);
-            }
-            lit += l;
-          }
-          lit /= shSteps;
-          float hz = 1.0 - exp(-shDensity * len);
-          // brighter looking toward the sun (Henyey-Greenstein, 1 when it scatters every way alike)
-          float g = shG, ct = dot(dir, sunDir), ph = (1.0 - g * g) / pow(max(1e-3, 1.0 + g * g - 2.0 * g * ct), 1.5);
-          col = mix(col, hazeCol, hz * shShade) + sunCol * ph * hz * lit * shRays;
-        }
-      }
       gl_FragColor = vec4(col, 1.0);
     }`,
   depthTest: false, depthWrite: false,
@@ -1905,7 +1846,7 @@ const outlineScene = new THREE.Scene(), outlineCam = new THREE.Camera();
 outlineScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), outlineMat));
 function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
-  const shaftsOn = SHAFTS.on > 0.5 && SHAFTS.density > 0 && SHAFTS.steps >= 1, on = depthOn || sobelOn || shaftsOn || ssNow > 1;
+  const on = depthOn || sobelOn || ssNow > 1;
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   // three draws the sun's shadow map anew in every render, keeping only casters on the camera's layers:
@@ -1935,19 +1876,6 @@ function renderWorld() {
   u.sStep.value = Math.max(1, Math.round(SOBEL.thickness / 2));
   u.sTh.value = 2 * Math.sin(SOBEL.angle * Math.PI / 360);   // how far apart two unit normals that far apart are
   u.sStrength.value = SOBEL.strength; u.sColor.value.set(SOBEL.color);
-  u.useShafts.value = shaftsOn ? 1 : 0;
-  if (shaftsOn) {
-    u.invVP.value.multiplyMatrices(camera.matrixWorld, camera.projectionMatrixInverse);
-    const map = sun.castShadow && sun.shadow.map;
-    u.hasShadow.value = map ? 1 : 0; u.tShadow.value = map ? map.texture : null;
-    u.shadowMat.value.copy(sun.shadow.matrix); u.shadowBias.value = sun.shadow.bias;
-    u.sunDir.value.copy(sun.position).sub(sun.target.position).normalize();
-    u.sunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
-    u.hazeCol.value.copy(scene.fog ? scene.fog.color : hemi.color);
-    u.shDensity.value = SHAFTS.density; u.shHeight.value = SHAFTS.height; u.shRays.value = SHAFTS.rays; u.shG.value = clamp(SHAFTS.towardSun, -0.9, 0.9);
-    u.shShade.value = SHAFTS.shadowHaze; u.shSteps.value = Math.round(SHAFTS.steps); u.shClouds.value = SHAFTS.clouds;
-    u.shSoft.value = SHAFTS.soft; u.shDither.value = SHAFTS.dither; u.shadowTexel.value = 1 / sun.shadow.mapSize.x;
-  }
   renderer.setRenderTarget(null);
   renderer.clear();
   renderer.render(outlineScene, outlineCam);
@@ -2009,8 +1937,6 @@ THREE.MeshStandardMaterial.prototype.onBeforeCompile = function (shader) {
       .replace('? getShadow( directionalShadowMap[ i ]', '? mix( 1.0, getShadow( directionalShadowMap[ i ]')
       .replace('vDirectionalShadowCoord[ i ] ) : 1.0;', 'vDirectionalShadowCoord[ i ] ), shadowAmt ) : 1.0;'));
 };
-// the light shafts' pass reads the same clouds
-for (const k of ['tCloud', 'cloudOff', 'cloudScale', 'cloudAmt', 'cloudCover', 'cloudSoft']) outlineMat.uniforms[k] = CLOUD_U[k];
 function updateClouds(dt) {
   const a = CLOUDS.direction * Math.PI / 180, o = CLOUD_U.cloudOff.value, S = CLOUDS.scale;
   o.x = (o.x - Math.cos(a) * CLOUDS.speed * dt) % (S * 64); o.y = (o.y - Math.sin(a) * CLOUDS.speed * dt) % (S * 64);
@@ -6299,18 +6225,6 @@ const TUNING = [
     [SHADOWS, 'lowAngle', 'No shadow with the sun or moon this low (degrees)', 0, 60, 1],
     [SHADOWS, 'fullAngle', 'Full-strength shadow from this high (degrees)', 1, 90, 1],
   ]],
-  ['Light shafts', [
-    [SHAFTS, 'on', 'Light shafts through the haze (0 off, 1 on)', 0, 1, 1],
-    [SHAFTS, 'density', 'Haze thickness (per tile of air)', 0, 1, 0.005],
-    [SHAFTS, 'height', 'How high the haze layer reaches (tiles)', 0.5, 12, 0.1],
-    [SHAFTS, 'rays', 'Shaft brightness', 0, 6, 0.05],
-    [SHAFTS, 'towardSun', 'Brighter looking toward the sun (0 even)', 0, 0.9, 0.01],
-    [SHAFTS, 'shadowHaze', 'Haze over everything (shadows show as darker haze)', 0, 1, 0.01],
-    [SHAFTS, 'steps', 'Steps (quality against speed)', 1, 48, 1],
-    [SHAFTS, 'soft', 'Shaft edge softness (shadow-map texels; 0 hard)', 0, 6, 0.1],
-    [SHAFTS, 'dither', 'Dither: staggers steps to hide bands, but shows as a pattern (0 none)', 0, 1, 0.01],
-    [SHAFTS, 'clouds', 'Cloud shadows cut shafts too', 0, 1, 0.01],
-  ]],
   ['Haze', [
     [FOG, 'on', 'Distance haze (0 off, 1 on)', 0, 1, 1],
     [FOG, 'start', 'Starts this far beyond the hero (tiles)', 0, 80, 1],
@@ -6571,7 +6485,7 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
-  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, SHAFTS }),
+  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
