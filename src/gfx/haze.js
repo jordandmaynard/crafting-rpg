@@ -35,7 +35,8 @@ struct HP {
   more: vec4f,          // lava, wisps, wisp size (tiles), seconds
   tint: vec4f,          // the haze's colour
   wind: vec4f,          // the wisps' drift (tiles a second)
-  glow: vec4f,          // tiles lava's glow fades over, upward
+  glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
+                        // how much of the sky's (for shafts with more contrast)
 }
 @group(2) @binding(0) var<uniform> H: HP;
 `;
@@ -227,8 +228,9 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
         knot = ki;
       }
       L = mix(ambA, ambB, kf - f32(ki));
+      if (H.glow.z > 0.0 && F.sunDir.w > 0.5) { L *= mix(1.0, shadowAt(p), H.glow.z); }
     }
-    if (any(sunC > vec3f(0.0))) { L += sunC * cloudShade(p.xz) * mix(1.0, shadowAt(p), F.cloud2.z); }
+    if (any(sunC > vec3f(0.0))) { L += sunC * cloudShade(p.xz) * mix(1.0, shadowAt(p), H.glow.y); }
     if (H.light.w > 0.0) {
       for (var j = 0; j < ${MAX_POINTS}; j++) {
         if (j >= np) { break; }
@@ -303,7 +305,8 @@ export class LitHaze {
   // Each frame, after the scene is drawn and before what reads it. f: { on, camera, res: [x, y] (mosaic pixels),
   // ss (scene samples a mosaic pixel, each way), depth ({ view, id }: the scene's depth), steps, top, bottom (world
   // y the air runs between), density, height, floor, ground (y where the height field doesn't reach), sun,
-  // forward, sky, lamps, lava, lavaHeight, wisps, wispSize, wind: [x, y, z], tint: [r, g, b], groundColour (the
+  // forward, sky, lamps, lava, lavaHeight, shafts (how much of the sun's light shadows take out), shadeSky (and
+  // how much of the sky's), wisps, wispSize, wind: [x, y, z], tint: [r, g, b], groundColour (the
   // GI's ground colour view, or null), hfSize (its texels across) }
   update(f) {
     this.on = !!f.on;
@@ -326,7 +329,7 @@ export class LitHaze {
     d.set([f.lava, f.wisps, f.wispSize, performance.now() / 1000], 48);
     d.set([...f.tint, 0], 52);
     d.set([...f.wind, 0], 56);
-    d.set([f.lavaHeight, 0, 0, 0], 60);
+    d.set([f.lavaHeight, f.shafts, f.shadeSky, 0], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {
