@@ -23,7 +23,7 @@ const CPT = 4;            // sim cells a tile
 const GRID = 192;         // sim cells across (48 tiles), round the camera's target
 const JACOBI = 20;        // pressure solver iterations (pairs of passes)
 const MAX_DT = 1 / 30;    // the sim never steps further than this in one frame
-const CELL_BYTES = 48;    // three vec4f
+const CELL_BYTES = 32;    // two vec4f
 export const GROUND_HAZE_SITE = 128;   // site map texels across (64 tiles)
 export const GROUND_HAZE_SITE_TPT = 2; // site map texels a tile
 const DRAW_TILES = 56;    // tiles across the drawn slices
@@ -59,7 +59,7 @@ struct GH {
   g1: vec4f,   // origin shift since last frame (cells), dt, time
   p0: vec4f,   // resting haze amount, patchiness, patch frequency (a tile), relax rate (a second)
   p1: vec4f,   // wind (tiles a second, x z), air settling rate (a second), swirl
-  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (1/2: reset detail coordinate set 0/1, 4: fill with resting haze), _, _
+  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (4: fill with resting haze), _, _
   pl0: vec4f,  // hero position xz, velocity xz
   pl1: vec4f,  // wake radius (tiles), drag, haze cleared a tile walked, the air spun round the hero (tiles a second)
   s0: vec4f,   // site map: first texel x, z, texels across, texels a tile
@@ -67,15 +67,13 @@ struct GH {
 struct Cell {
   a: vec4f,    // velocity xz (tiles a second), haze, _
   b: vec4f,    // x: pressure (kept as the next solve's first guess)
-  c: vec4f,    // two sets of flow-carried detail coordinates (world xz where this air was at the set's last reset)
 }
 @group(0) @binding(0) var<uniform> hu: GH;
 @group(0) @binding(1) var<storage, read_write> simA: array<Cell>;   // the state
 @group(0) @binding(2) var<storage, read_write> simB: array<Cell>;   // advection target
 @group(0) @binding(3) var<storage, read_write> aux: array<vec4f>;   // divergence, curl, pressure (odd Jacobi steps)
 @group(0) @binding(4) var outState: texture_storage_2d<rgba16float, write>;   // haze, _, velocity xz
-@group(0) @binding(5) var outFlow: texture_storage_2d<rgba16float, write>;    // detail coordinate offsets (set 0 xz, set 1 xz)
-@group(0) @binding(6) var siteTex: texture_2d<f32>;                           // ground, solid, resting share, _
+@group(0) @binding(5) var siteTex: texture_2d<f32>;                           // ground, solid, resting share, _
 const CPM = ${CPT}.0;
 ${NOISE}
 
@@ -105,18 +103,18 @@ fn oldCell(cf: vec2f) -> Cell {
   let i0 = vec2i(floor(cf));
   let f = cf - floor(cf);
   var r: Cell;
-  r.a = vec4f(0.0); r.b = vec4f(0.0); r.c = vec4f(0.0);
+  r.a = vec4f(0.0); r.b = vec4f(0.0);
   for (var k = 0; k < 4; k++) {
     let c = i0 + vec2i(k % 2, k / 2);
     let w = select(1.0 - f.x, f.x, k % 2 == 1) * select(1.0 - f.y, f.y, k / 2 == 1);
     var t: Cell;
     if (outside(c)) {
       let wo = cellWorld(vec2f(c), oldOrigin);
-      t.a = vec4f(hu.p1.xy, hazeRest(wo), 0.0); t.b = vec4f(0.0); t.c = vec4f(wo, wo);
+      t.a = vec4f(hu.p1.xy, hazeRest(wo), 0.0); t.b = vec4f(0.0);
     } else {
       t = simA[idx(c)];
     }
-    r.a += t.a * w; r.b += t.b * w; r.c += t.c * w;
+    r.a += t.a * w; r.b += t.b * w;
   }
   return r;
 }
@@ -131,7 +129,7 @@ fn oldCell(cf: vec2f) -> Cell {
   let wall = solid(c);
   if (wall || (flags & 4u) != 0u) {
     // inside something solid the air is still, at the resting haze
-    o.a = vec4f(select(hu.p1.xy, vec2f(0.0), wall), rest, 0.0); o.b = vec4f(0.0); o.c = vec4f(wp, wp);
+    o.a = vec4f(select(hu.p1.xy, vec2f(0.0), wall), rest, 0.0); o.b = vec4f(0.0);
     simB[idx(c)] = o;
     return;
   }
@@ -159,12 +157,8 @@ fn oldCell(cf: vec2f) -> Cell {
   }
   let vm = length(vel);
   if (vm > 12.0) { vel *= 12.0 / vm; }
-  var uvs = s.c;
-  if ((flags & 1u) != 0u) { uvs = vec4f(wp, uvs.zw); }
-  if ((flags & 2u) != 0u) { uvs = vec4f(uvs.xy, wp); }
   o.a = vec4f(vel, max(h, 0.0), 0.0);
   o.b = vec4f(s.b.x, 0.0, 0.0, 0.0);
-  o.c = uvs;
   simB[idx(c)] = o;
 }
 
@@ -233,7 +227,7 @@ fn pressureX(c: vec2i, own: f32) -> f32 {
   simA[idx(c)].b.x = (sum - aux[idx(c)].x) * 0.25;
 }
 
-// takes away the pressure gradient, then publishes the haze, the velocity and the detail coordinates for drawing
+// takes away the pressure gradient, then publishes the haze and the velocity for drawing
 @compute @workgroup_size(8, 8) fn project(@builtin(global_invocation_id) id: vec3u) {
   let c = vec2i(id.xy);
   if (outside(c)) { return; }
@@ -247,10 +241,7 @@ fn pressureX(c: vec2i, own: f32) -> f32 {
                                  pressureA(c + vec2i(0, 1), own) - pressureA(c - vec2i(0, 1), own)), a.zw);
   }
   simA[i].a = a;
-  let wp = cellWorld(vec2f(c), hu.g0.xy);
-  let uvs = simA[i].c;
   textureStore(outState, c, vec4f(a.z, 0.0, a.x, a.y));
-  textureStore(outFlow, c, vec4f(uvs.xy - wp, uvs.zw - wp));
 }
 `;
 
@@ -290,25 +281,15 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
   let uv = (wp * CPM - U.grid.xy) / U.grid.zw;
   let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * U.grid.z / CPM;
-  let inside = smoothstep(0.0, max(U.detail.w, 0.01), edge);
+  let inside = smoothstep(0.0, max(U.rest.w, 0.01), edge);
   var haze = 0.0;
-  var flow = vec4f(0.0);
   if (inside < 1.0) { haze = ghPatches(wp, U.wind.xy, U.wind.z, U.rest.x * site.z, U.rest.y, U.rest.z); }
   if (inside > 0.0) {
     haze = mix(haze, textureSampleLevel(stateTex, stateTexS, uv, 0.0).x, inside);
-    flow = textureSampleLevel(flowTex, flowTexS, uv, 0.0) * inside;
   }
-  // fine wisps carried by the flow: two sets of coordinates, each reset in turn, cross-faded so the resets don't
-  // show; each slice its own offset, so it doesn't look like one pattern stacked up
-  let off = vec2f(i.slice * 7.31, i.slice * 3.17);
-  let f = U.detail.y;
-  let w0 = 1.0 - abs(2.0 * U.detail.z - 1.0);
-  let dn = (wp + flow.zw) * f + off; let dm = (wp + flow.xy) * f + off;
-  let n = mix(ghNoise(dn) * 0.6 + ghNoise(dn * 2.7 + vec2f(5.2, 1.3)) * 0.4, ghNoise(dm) * 0.6 + ghNoise(dm * 2.7 + vec2f(5.2, 1.3)) * 0.4, w0);
-  let det = mix(1.0, n * 2.0, U.detail.x);
   let H = max(U.look.x, 0.02);
   // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
-  let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * det * U.look.y;
+  let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * U.look.y;
   // the light's path through the slice, across it
   let path = (2.0 * H / U.look.z) * abs(sn.y) / max(abs(dot(V, sn)), 0.25);
   let alpha = 1.0 - exp(-sigma * path);
@@ -333,20 +314,18 @@ export class GroundHaze {
     this.simA = storage(GRID * GRID * CELL_BYTES); this.simB = storage(GRID * GRID * CELL_BYTES); this.aux = storage(GRID * GRID * 16);
     const tex = (n, format, usage) => device.createTexture({ size: [n, n], format, usage });
     this.stateTex = tex(GRID, 'rgba16float', T.STORAGE_BINDING | T.TEXTURE_BINDING);
-    this.flowTex = tex(GRID, 'rgba16float', T.STORAGE_BINDING | T.TEXTURE_BINDING);
     this.siteTex = tex(GROUND_HAZE_SITE, 'rgba16float', T.TEXTURE_BINDING | T.COPY_DST);
     this.tintTex = tex(GROUND_HAZE_SITE, 'rgba8unorm', T.TEXTURE_BINDING | T.COPY_DST);
     const layout = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: C, buffer: { type: 'uniform' } },
       ...[1, 2, 3].map(binding => ({ binding, visibility: C, buffer: { type: 'storage' } })),
-      ...[4, 5].map(binding => ({ binding, visibility: C, storageTexture: { access: 'write-only', format: 'rgba16float' } })),
-      { binding: 6, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 4, visibility: C, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+      { binding: 5, visibility: C, texture: { sampleType: 'unfilterable-float' } },
     ] });
     this.simBG = device.createBindGroup({ layout, entries: [
       { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: { buffer: this.simA } },
       { binding: 2, resource: { buffer: this.simB } }, { binding: 3, resource: { buffer: this.aux } },
-      { binding: 4, resource: this.stateTex.createView() }, { binding: 5, resource: this.flowTex.createView() },
-      { binding: 6, resource: this.siteTex.createView() }] });
+      { binding: 4, resource: this.stateTex.createView() }, { binding: 5, resource: this.siteTex.createView() }] });
     const module = device.createShaderModule({ code: SIM_WGSL, label: 'ground haze sim' });
     if (module.getCompilationInfo) module.getCompilationInfo().then(info => {
       for (const e of info.messages) if (e.type === 'error') console.error(`ground haze WGSL ${e.lineNum}:${e.linePos} ${e.message}\n` + SIM_WGSL.split('\n')[e.lineNum - 1]);
@@ -359,13 +338,12 @@ export class GroundHaze {
     const V2 = (x, y, z, w) => ({ x, y, z, w });
     this.material = new ShaderMaterial({
       uniforms: {
-        stateTex: { value: view(this.stateTex) }, flowTex: { value: view(this.flowTex) }, siteTex: { value: view(this.siteTex) }, tintTex: { value: view(this.tintTex) },
+        stateTex: { value: view(this.stateTex) }, siteTex: { value: view(this.siteTex) }, tintTex: { value: view(this.tintTex) },
         grid: { value: V2(0, 0, GRID, GRID) },          // sim grid origin (cells), cells across
         site: { value: V2(0, 0, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT) },   // site map first texel x, z, texels across, a tile
         look: { value: V2(0.2, 1, 4, 1) },              // height, density, slices, brightness
-        rest: { value: V2(1, 0.4, 0.25, 0) },           // resting amount, patchiness, patch frequency
+        rest: { value: V2(1, 0.4, 0.25, 3) },           // resting amount, patchiness, patch frequency, grid edge blend (tiles)
         wind: { value: V2(0, 0, 0, 0) },                // wind xz, seconds
-        detail: { value: V2(0.7, 0.8, 0, 3) },          // wisps, their frequency, phase, grid edge blend (tiles)
       },
       attributes: { slice: 'f32' }, code: DRAW_WGSL,
       transparent: true, blending: NormalBlending, depthWrite: false, side: DoubleSide,
@@ -373,7 +351,7 @@ export class GroundHaze {
     this.mesh = new Mesh(new BufferGeometry(), this.material);
     this.mesh.frustumCulled = false; this.mesh.castShadow = false; this.mesh.receiveShadow = false;
     this.slices = 0;
-    this.origin = null; this.phase = 0; this.time = 0; this.heroWas = null;
+    this.origin = null; this.time = 0; this.heroWas = null;
     this.on = false;
   }
   // the slices: a grid of DRAW_TILES tiles a side, DRAW_VPT vertices a tile, once for each slice
@@ -410,7 +388,7 @@ export class GroundHaze {
   // Each frame, before drawing. f: { on, target: [x, z] (the camera's), hero: [x, z], dt, amount, patchiness,
   // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear, spin
   // (tiles a second the air's spun round the hero, whirling), spinClear (haze swept aside round them a second),
-  // height, density, slices, brightness, detail, detailSize, detailCycle }
+  // height, density, slices, brightness }
   update(f) {
     this.on = !!f.on && !!this.siteOrigin;
     this.mesh.visible = this.on;
@@ -424,12 +402,7 @@ export class GroundHaze {
     const first = !this.origin;
     const shift = first ? [0, 0] : [origin[0] - this.origin[0], origin[1] - this.origin[1]];
     this.origin = origin;
-    // the wisps' coordinates: two sets, each reset once a cycle, half a cycle apart
-    const cycle = Math.max(f.detailCycle, 0.2), before = this.phase;
-    this.phase = (this.phase + dt / cycle) % 1;
-    let flags = first ? 4 | 1 | 2 : 0;
-    if (this.phase < before) flags |= 1;
-    if ((this.phase + 0.5) % 1 < (before + 0.5) % 1) flags |= 2;
+    const flags = first ? 4 : 0;
     const vel = this.heroWas && f.dt > 0 ? [(f.hero[0] - this.heroWas[0]) / f.dt, (f.hero[1] - this.heroWas[1]) / f.dt] : [0, 0];
     if (Math.hypot(vel[0], vel[1]) > 30) vel[0] = vel[1] = 0;   // a teleport, not a walk
     this.heroWas = [f.hero[0], f.hero[1]];
@@ -444,7 +417,6 @@ export class GroundHaze {
     Object.assign(U.look.value, { x: f.height, y: f.density, z: slices, w: f.brightness });
     Object.assign(U.rest.value, { x: f.amount, y: f.patchiness, z: freq });
     Object.assign(U.wind.value, { x: f.wind[0], y: f.wind[1], z: this.time });
-    Object.assign(U.detail.value, { x: f.detail, y: 1 / Math.max(f.detailSize, 0.05), z: this.phase });
     // the slices' vertices stay put in the world (whole steps of their spacing), so their shape doesn't shift as the
     // grid moves on
     const snap = v => Math.round(v * DRAW_VPT) / DRAW_VPT;
