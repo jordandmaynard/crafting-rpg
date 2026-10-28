@@ -18,6 +18,7 @@ Every load rolls a new world. To replay one, pin its seed (shown on the title sc
 - **F** open and close doors.
 - **Camera:** hold the right mouse button and drag to turn it freely (the middle button works too). The tilt always stays at 30°. **Z** / **C** turn it a quarter at a time, and the mouse wheel zooms.
 - **B** build mode: **1** floors (wood, stone), **2** walls (timber, log palisade, stone, wood fence, fieldstone wall), **3** doors (door, gate), **4** hearth. Each number opens its own row of kinds over the bar, and the numbers then pick from that row. Left click places; drag to lay a rectangle of floor, or a straight wall along whichever way you drag (as many pieces as you can pay for). A right click (without dragging) removes a piece for a full refund. Every button on the bar can be clicked too.
+- **O** options (or the OPTIONS button): HDR on or off, and how bright its highlights get. Kept in this browser.
 - **M** map: the mouse wheel zooms it (and the minimap) and dragging pans it. The minimap slides and turns every frame and repaints its contents a few times a second.
 - **T** tuning panel: the tile height per level (1, the original height, or 0.5; letting go of the slider rebuilds the same world from scratch, so you lose what you've built), the camera (orthographic, or perspective with a field of view you set, and how far in and out it can zoom), the mosaic pixel size and anti-aliasing (the scene is drawn finer and averaged into each mosaic pixel, so thin lines blend instead of breaking up), the hero's light (strength by night and day, reach, colour, and how far toward the camera and how high it hangs, so the side you see stays lit), the day and night (time, clock speed, latitude, season, sun, sky and moon light, haze, exposure), sun and moon shadows (on or off, strength, reach round the view, softness, and how they weaken as the sun or moon gets low: none at 50° above the horizon, full from 60°), the health bars (how long each stays, how long the health just lost waits and how fast it shrinks, the hit flash and glow, sizes, height over the head, opacity and colours), distance haze (where it starts and thickens, how thick, and its colour by day, dusk and night), the tumble (how long it lasts, its speed going in and coming out, steering, the run speed boost after it and how long that fades over, and its cooldown), the walk (cadence, forward and backward stride, arm swing, how wide a sidestep opens, bob, lean), cloud shadows (strength, cover, softness, size, drift speed and direction), the water (clarity, body brightness, wave height and speed, river flow, sun glitter, foam), the lava (ripple height, length and speed, glow, crust, glowing cracks, breathing, drift and flow speed, pattern size, cooled crust at the banks, how many bubbles, how often they burst and how big they are, and spatter), the black edge outline, and a second Sobel crease outline (its own colour, strength, angle and thickness) (how far back the ground behind an edge must be, and how many mosaic pixels thick).
 
@@ -76,6 +77,12 @@ Lit haze marched per pixel (`src/gfx/haze.js`). The game draws at a low mosaic r
 
 The outline pass lays the result over the picture. The tuning panel's Lit haze section has the switch and the sliders, including the number of steps. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
 
+## Eye adaptation and HDR
+
+The scene is drawn into float targets, so light brighter than white survives until the picture is shown. Each frame a compute pass (`src/gfx/exposure.js`) measures how bright the picture is, haze included: the geometric mean of its mosaic pixels, weighted toward the middle of the screen. The exposure then eases toward what brings that to a target, the way your eyes adjust. It darkens quickly when you step out of the deep forest onto a sunlit plain and opens up slowly again, and by default it never goes brighter than the look as tuned. The exposure stays on the GPU, where the outline pass applies it. The tuning panel's Eye adaptation section shows the brightness it measures and the exposure it's using, and has the target, the limits, the speeds and the middle weighting. It sits on top of the day and night auto exposure.
+
+HDR (the options menu, **O**) switches the canvas to float with extended tone mapping. On an HDR display, highlights (the sun on things, lava, lit haze) then ease off above white toward a peak you set, rather than clipping. Off, or on a display without HDR, everything over white clips as before.
+
 ## The drawing library (src/gfx)
 
 Emberwild draws with raw WebGPU through a small library of its own, shaped like the parts of three.js the game was first written on so the game code reads the same:
@@ -87,6 +94,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `shaders.js`: the WGSL every pipeline shares: the frame and object uniform blocks, haze, flat face normals, cloud shadow, the sun's 17-tap PCF shadow and the lighting (sky light, sun, point lights, Lambert plus a GGX specular lobe), and the built-in materials.
 - `probes.js`: probe lighting over a height field (see Global illumination).
 - `haze.js`: lit haze, marched per pixel (see Lit haze).
+- `exposure.js`: eye adaptation (see Eye adaptation and HDR).
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.

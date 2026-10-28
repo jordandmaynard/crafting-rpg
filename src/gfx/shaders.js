@@ -12,21 +12,23 @@
 // round about give back.
 
 export const MAX_POINTS = 8;
-export const FRAME_BYTES = 1024;  // the Frame struct (784 bytes), padded to the uniform offset alignment
+export const FRAME_BYTES = 1024;  // the Frame struct (800 bytes), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
 // Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
-// gives the accessors giHfRaw, giHfOrigin, giHfSize, giGrid, giVisAt and giLightAt). The height field holds, a
-// texel every half tile: the ground with whatever stands on it, the bottom and top of one floating layer over it
-// (tree crowns, roofs; bottom > top when there's none) and how much light that lets through (0 none: roofs).
-// Probes stand in columns, one a tile, at GI_LAYERS heights over the highest ground under their tile, kept in a
-// grid round the camera that wraps (a column's slot is its x, z modulo the grid). A probe's sky visibility is
-// order-1 spherical harmonics (a, b: the sky seen that way, facing n, is about a + 2 b·n), its light the same in
-// each colour, three texels across. A probe that's unusable (in the floating layer, or not lit yet) has a < 0.
+// gives the accessors giHfRaw, giHfOrigin, giHfSize, giGrid, giVisAt, giLightAt and giStandInLight). The height
+// field holds, a texel every half tile: the ground with whatever stands on it, the bottom and top of one floating
+// layer over it (tree crowns, roofs; bottom > top when there's none) and how much light that lets through (0
+// none: roofs). Probes stand in columns, one a tile, at GI_LAYERS heights over the highest ground under their
+// tile, kept in a grid round the camera that wraps (a column's slot is its x, z modulo the grid). A probe's sky
+// visibility is order-1 spherical harmonics (a, b: the sky seen that way, facing n, is about a + 2 b·n), its light
+// the same in each colour, three texels across. A probe that's unusable (in the floating layer, or not lit yet)
+// has a < 0, and is read as a shaded stand-in (GI_STAND_IN of the sky; giStandInLight).
 export const GI_TPT = 2;                       // height field texels a tile
 export const GI_LAYERS = [0.4, 1.4, 3.2, 7];   // probe heights over the ground
 export const GI_WGSL = /* wgsl */ `
 const GI_TPT = ${GI_TPT};
+const GI_STAND_IN = 0.15;   // the sky an unusable probe is taken to see
 fn giLayerH(l: i32) -> f32 { return select(select(select(${GI_LAYERS[3].toFixed(2)}, ${GI_LAYERS[2].toFixed(2)}, l == 2), ${GI_LAYERS[1].toFixed(2)}, l == 1), ${GI_LAYERS[0].toFixed(2)}, l == 0); }
 // the height field at world texel t (outside it: nothing, far below)
 fn giHf(t: vec2i) -> vec4f {
@@ -97,7 +99,14 @@ fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
       let w = wc * select(1.0 - t, t, e == 1);
       if (w <= 0.0) { continue; }
       let v = giVisAt(vec3i(s.x, layer, s.y));
-      if (v.x < 0.0) { continue; }
+      // a probe that can't be used (inside a crown or a roof, or not lit yet) counts as a shaded stand-in, never
+      // left out: leaving it out hands its share to the columns round it, and under a small tree (whose column's
+      // low probes sit in its crown) the open ground's light would show as a bright square
+      if (v.x < 0.0) {
+        if (bounce) { out.light += w * giStandInLight(); } else { out.vis += w * vec4f(GI_STAND_IN, 0.0, 0.0, 0.0); }
+        wsum += w;
+        continue;
+      }
       if (bounce) {
         let li = vec3i(s.x * 3, layer, s.y);
         let r = giLightAt(li);
@@ -141,6 +150,7 @@ struct Frame {
   giC: vec4f,         // the height field: its first texel x, z, texels across
   hazeA: vec4f,       // lit haze (haze.js): on
   hazeB: vec4f,       // its texels (mosaic pixels) across, down
+  post: vec4f,        // eye adaptation on (exposure.js), HDR highlights' peak (× white; 0 without HDR)
 }
 struct Obj {
   model: mat4x4f,
@@ -157,10 +167,12 @@ struct Obj {
 @group(0) @binding(6) var giLightTex: texture_3d<f32>;
 @group(0) @binding(7) var giHfTex: texture_2d<f32>;
 @group(0) @binding(8) var hazeTex: texture_2d<f32>;
+@group(0) @binding(9) var<storage, read> eyeState: array<f32, 4>;
 @group(1) @binding(0) var<uniform> O: Obj;
 fn giHfRaw(t: vec2i) -> vec4f { return textureLoad(giHfTex, t, 0); }
 fn giHfOrigin() -> vec2i { return vec2i(F.giC.xy); }
 fn giHfSize() -> i32 { return i32(F.giC.z); }
+fn giStandInLight() -> vec3f { return GI_STAND_IN * (F.hemiSky.rgb + F.hemiGround.rgb); }
 fn giGrid() -> vec4i { return vec4i(F.giB); }
 fn giVisAt(i: vec3i) -> vec4f { return textureLoad(giVisTex, i, 0); }
 fn giLightAt(i: vec3i) -> vec4f { return textureLoad(giLightTex, i, 0); }
@@ -195,6 +207,17 @@ fn hazeApply(c: vec3f, px: vec2f) -> vec3f {
   if (F.hazeA.x < 0.5) { return c; }
   let h = textureLoad(hazeTex, clamp(vec2i(px), vec2i(0), vec2i(F.hazeB.xy) - 1), 0);
   return c * h.a + h.rgb;
+}
+// the eye's exposure on a colour about to be shown
+fn postExpose(c: vec3f) -> vec3f { return select(c, c * eyeState[0], F.post.x > 0.5); }
+// a colour as the screen takes it: without HDR clipped at white (as the canvas would); with it, what's over a
+// little under white eases off toward the peak (its brightness × white's, put back into the sRGB curve the colours
+// are in), so the sun, lava and lit haze glow brighter than white without hard edges
+fn postOutput(c: vec3f) -> vec3f {
+  if (F.post.y < 1.0) { return clamp(c, vec3f(0.0), vec3f(1.0)); }
+  let knee = 0.85; let top = pow(F.post.y, 1.0 / 2.2) - knee;
+  let over = max(c - knee, vec3f(0.0));
+  return select(max(c, vec3f(0.0)), knee + top * (1.0 - exp(-over / top)), c > vec3f(knee));
 }
 fn cloudShade(xz: vec2f) -> f32 {
   let n = textureSampleLevel(cloudTex, linSamp, (xz + F.cloud.xy) / F.cloud.z, 0.0).r;

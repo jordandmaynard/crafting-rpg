@@ -118,7 +118,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune input[type=color] { grid-column: 1 / 3; width: 100%; height: 22px; padding: 0; border: 2px solid var(--panel-edge); background: none; cursor: pointer; }
 .tune .tune-row { display: flex; gap: 8px; margin-top: 10px; }
 .tune textarea { width: 100%; height: 80px; margin-top: 8px; font: 12px ui-monospace, monospace; background: rgba(0, 0, 0, 0.35); color: var(--bone); border: 2px solid var(--panel-edge); box-sizing: border-box; }
-#tuneBtn { padding: 6px 8px; font-size: 9px; align-self: flex-end; }
+#tuneBtn, #optsBtn { padding: 6px 8px; font-size: 9px; align-self: flex-end; }
+.opt { display: grid; gap: 6px; margin: 0 0 16px; font: 17px/1.1 var(--body); color: var(--bone); }
+.opt.check { grid-template-columns: auto 1fr; align-items: start; cursor: pointer; }
+.opt input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: var(--gold); }
+.opt input[type=range] { width: 100%; accent-color: var(--gold); }
+.opt small { display: block; color: var(--dim); font-size: 15px; margin-top: 3px; }
+.opt b { color: var(--gold); font-weight: normal; }
 
 .modal { position: fixed; inset: 0; display: grid; place-items: center; padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); background: rgba(5, 4, 9, 0.6); }
 .sheet { background: var(--panel); border: 4px solid var(--panel-edge); box-shadow: 8px 8px 0 #000; padding: 22px 22px 20px; width: min(520px, 100%); box-sizing: border-box;
@@ -174,6 +180,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     <div class="plate tally" id="stonePlate" title="Stone"><span id="stoneIcon"></span><span id="stone">0</span></div>
   </div>
   <div class="plate tally" id="killPlate" title="Foes slain"><span id="skullIcon"></span><span id="kills">0</span></div>
+  <button id="optsBtn" title="Options (O)">OPTIONS</button>
   <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
 </div>
 <div id="tuning" class="tune" hidden></div>
@@ -205,6 +212,15 @@ button:disabled { opacity: 0.45; cursor: default; }
     <div class="loading"><span id="loadText">SHAPING THE WORLD</span><span id="seedText"></span></div>
     <div class="loadbar"><i id="loadFill"></i></div>
     <button class="go" id="start" disabled>SET OUT</button>
+  </div>
+</div>
+
+<div class="modal" id="optsModal" hidden>
+  <div class="sheet" role="dialog" aria-labelledby="optsTitle">
+    <h1 id="optsTitle">OPTIONS</h1>
+    <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
+    <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
+    <button class="go" id="optsClose">DONE</button>
   </div>
 </div>
 
@@ -1841,7 +1857,7 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
     }
     col = mix(col, U.color, e * U.strength * haze);
   }
-  col = hazeApply(col, px);
+  col = postOutput(postExpose(hazeApply(col, px)));
   return vec4f(col, 1.0);
 }`,
   depthTest: false, depthWrite: false,
@@ -1876,11 +1892,61 @@ renderer.setGI(gi);
 // shadows take out of it (1 all); shadeSky: how much of the sky's too, for darker gaps between shafts; lavaHeight: tiles lava's glow fades
 // over, upward; wisps: how patchy (slow drifting noise, wispSize tiles, drifting with the clouds at windSpeed);
 // color: the haze's own.
-const HAZE = { on: 1, shafts: 1, shadeSky: 0, density: 0.04, height: 2.5, floor: 0.05, top: 14, sun: 1, forward: 0.35, sky: 1, lamps: 1.5, lava: 1, lavaHeight: 3,
-  wisps: 0.35, wispSize: 6, windSpeed: 0.4, color: '#ffffff', steps: 64 };
+const HAZE = { on: 1, shafts: 1, shadeSky: 0, density: 0.045, height: 4.5, floor: 0.14, top: 10, sun: 1.35, forward: 0.16, sky: 1, lamps: 1.5, lava: 1, lavaHeight: 3,
+  wisps: 0.35, wispSize: 6, windSpeed: 3.6, color: '#ffffff', steps: 150 };
 const haze = new GFX.LitHaze(renderer);
 renderer.setHaze(haze);
 const hazeTint = new GFX.Color();
+
+// ---------- Eye adaptation (T > Eye adaptation) ----------
+// As eyes adjust (src/gfx/exposure.js): every frame the GPU measures how bright the picture is (the average of its
+// mosaic pixels' brightness, as a geometric mean, `middle` weighting it toward the middle of the screen) and eases
+// the exposure toward what brings it to `target`, kept between `darkest` and `brightest` (1: never brighter than
+// as tuned, only darker on a bright plain); toDark / toLight: how fast it adjusts (a second) when the picture gets
+// brighter / darker. On top of the day and night auto exposure (T > Day & night).
+const EYE = { on: 1, target: 0.3, darkest: 0.35, brightest: 1, middle: 0.5, toDark: 1.5, toLight: 0.6 };
+const EYE_READ = { brightness: 0, exposure: 1 };   // what it measured, for the tuning panel
+const eye = new GFX.EyeAdaptation(renderer);
+renderer.setEye(eye);
+function updateEye() {
+  const res = outlineMat.uniforms.res.value;
+  eye.update({ on: EYE.on > 0.5, scene: renderer.textureView(outlineRT.texture), haze: hazeOn() ? { view: haze.view(), id: 'h' + haze.key } : null,
+    res: [res.x, res.y], ss: ssNow, target: EYE.target, darkest: EYE.darkest, brightest: EYE.brightest, middle: EYE.middle,
+    toDark: EYE.toDark, toLight: EYE.toLight });
+}
+setInterval(() => {
+  if ($('tuning').hidden || EYE.on < 0.5) return;
+  eye.read(); EYE_READ.brightness = eye.brightness; EYE_READ.exposure = eye.exposure; tuning.tick();
+}, 400);
+
+// ---------- Options (O) ----------
+// The player's own choices, kept in this browser. hdr: on an HDR display, highlights brighter than white, up to
+// hdrPeak × white (src/gfx/renderer.js setHDR).
+const OPTIONS_KEY = 'emberwild.options';
+const OPTIONS = (() => {
+  const d = { hdr: false, hdrPeak: 3 };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { return d; }
+})();
+let optsOpen = false;
+function applyOptions() {
+  renderer.setHDR(OPTIONS.hdr, OPTIONS.hdrPeak);
+  $('optHdr').checked = OPTIONS.hdr; $('optPeak').value = OPTIONS.hdrPeak; $('optPeakV').textContent = OPTIONS.hdrPeak.toFixed(1);
+  $('optPeak').disabled = !OPTIONS.hdr;
+  try { localStorage.setItem(OPTIONS_KEY, JSON.stringify(OPTIONS)); } catch (err) { /* private window: just this visit */ }
+}
+function toggleOptions(open = !optsOpen) {
+  optsOpen = open; $('optsModal').hidden = !open;
+  if (open) {
+    const hdrScreen = matchMedia('(dynamic-range: high)').matches;
+    $('hdrNote').textContent = hdrScreen ? 'This display says it can show HDR.' : "This display doesn't say it can show HDR, so here it will look the same.";
+    $('optHdr').focus();
+  }
+}
+$('optHdr').addEventListener('change', () => { OPTIONS.hdr = $('optHdr').checked; applyOptions(); });
+$('optPeak').addEventListener('input', () => { OPTIONS.hdrPeak = parseFloat($('optPeak').value); applyOptions(); });
+$('optsClose').addEventListener('click', () => toggleOptions(false));
+$('optsBtn').addEventListener('click', e => { toggleOptions(); e.currentTarget.blur(); });
+applyOptions();
 function hazeOn() { return HAZE.on > 0.5 && HAZE.density > 0; }
 // after the scene's drawn, before the outline pass lays it over
 function updateHaze() {
@@ -1956,7 +2022,7 @@ function updateGI() {
 }
 function renderWorld() {
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
-  const on = depthOn || sobelOn || ssNow > 1 || hazeOn();
+  const on = depthOn || sobelOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr;
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   // the renderer draws the sun's shadow map anew in every render, keeping only casters on the camera's
@@ -1967,6 +2033,7 @@ function renderWorld() {
   renderer.shadowMap.autoUpdate = false;
   camera.layers.set(1); renderer.render(scene, camera);
   updateHaze();
+  updateEye();
   if (!on) return;
   if (sobelOn) {
     // the same view again with every surface drawn as its normal, sky left clear
@@ -4641,6 +4708,8 @@ addEventListener('keydown', e => {
   setPadMode(false);
   if (e.target.closest && e.target.closest('.tune') && e.code !== 'KeyT') return;   // sliders keep their own keys
   if (e.code === 'KeyT' && !e.repeat) { tuning.toggle(); return; }
+  if (optsOpen) { if (e.code === 'Escape' || e.code === 'KeyO') { toggleOptions(false); e.preventDefault(); } return; }
+  if (e.code === 'KeyO' && !e.repeat && !mapOpen) { keys.clear(); toggleOptions(true); return; }
   if (!started) { if ((e.code === 'Space' || e.code === 'Enter') && !$('start').disabled && !$('intro').hidden) { e.preventDefault(); begin(); } return; }
   if (!$('dead').hidden) { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); respawn(); } return; }
   if (e.code === 'KeyM' || (e.code === 'Escape' && mapOpen)) { toggleMap(); e.preventDefault(); return; }
@@ -5438,14 +5507,14 @@ function removePiece() {
 const SKY = {
   timeOfDay: 8,          // hours, 0-24
   timeSpeed: 4,          // game hours that pass per real minute (0 = the clock stands still)
-  latitude: 40,          // degrees north: how high the sun climbs
+  latitude: 24,          // degrees north: how high the sun climbs
   season: 12,            // the sun's declination in degrees: +23 midsummer, 0 equinox, -23 midwinter
   north: 0,              // which way north is on the map, degrees (0: up the map, so the noon sun is to the south)
   sunColor: '#ffffff', sunStrength: 0.45,
   skyColor: '#ffffff', skyStrength: 1,
   moonColor: '#a8bcff', moonStrength: 1.08,
   nightLight: 0.15,      // the glow of the night sky, so the map can still be seen
-  haze: 11,              // aerosols: hazier makes redder, dimmer low sun
+  haze: 6,               // aerosols: hazier makes redder, dimmer low sun
   exposure: 1,
   autoExposure: 1,       // how much the exposure opens up as the light fails at dusk and night (0 = not at all)
   bgDay: '#9cc3e4', bgDusk: '#e9a27c', bgNight: '#18203a',   // the sky's light by day, at dusk and by night
@@ -6374,6 +6443,17 @@ const TUNING = [
     [HAZE, 'color', 'Colour', 'color'],
     [HAZE, 'steps', 'Steps along each ray (more: smoother shafts, slower)', 16, 256, 1],
   ]],
+  ['Eye adaptation', [
+    [EYE, 'on', 'Eye adaptation (0 off, 1 on)', 0, 1, 1],
+    [EYE_READ, 'brightness', 'Picture brightness now (measured)', 'readout', null, 0.01],
+    [EYE_READ, 'exposure', 'Its exposure now', 'readout', null, 0.01],
+    [EYE, 'target', 'Brightness it aims for', 0.05, 1, 0.01],
+    [EYE, 'darkest', 'Darkest exposure (on a bright plain)', 0.1, 1, 0.01],
+    [EYE, 'brightest', 'Brightest exposure (in the dark; 1 never above as tuned)', 1, 4, 0.01],
+    [EYE, 'middle', 'Weight toward the middle of the screen', 0, 1, 0.01],
+    [EYE, 'toDark', 'Adjusts to bright this fast (a second)', 0.05, 8, 0.05],
+    [EYE, 'toLight', 'Adjusts to dark this fast (a second)', 0.05, 8, 0.05],
+  ]],
   ['Walk', [
     [WALK, 'cadence', 'Cadence: steps per tile walked', 1, 12, 0.1],
     [WALK, 'stride', 'Forward stride (leg swing)', 0, 1.5, 0.01],
@@ -6486,7 +6566,7 @@ function tuneCopy(text, btn, out, label) {
   } catch (err) { fallback(); }
 }
 function createTuningPanel(el, spec, heading = 'Tuning') {
-  const sliders = [];
+  const sliders = [], readouts = [];
   const defaults = spec.flatMap(([, items]) => items.map(([o, k]) => [o, k, o[k]]));
   function build() {
     el.innerHTML = '';
@@ -6504,7 +6584,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
     const out = document.createElement('textarea');
     out.readOnly = true;
     out.hidden = true;
-    sliders.length = 0;
+    sliders.length = 0; readouts.length = 0;
     for (const g of spec) {
       const [name, items] = g;
       const sec = document.createElement('details');
@@ -6523,6 +6603,14 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
         text.textContent = label;
         const val = document.createElement('span');
         val.className = 'v';
+        // a value the game measures, shown as it changes
+        if (min === 'readout') {
+          val.textContent = obj[key].toFixed(tuneDecimals(step));
+          readouts.push({ obj, key, val, step });
+          row.append(text, val);
+          sec.append(row);
+          continue;
+        }
         if (min === 'color') {
           val.textContent = obj[key];
           const pick = Object.assign(document.createElement('input'), { type: 'color', value: obj[key] });
@@ -6558,6 +6646,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
   return {
     toggle() { el.hidden = !el.hidden; if (!el.hidden) build(); },
     refresh() { if (!el.hidden) build(); },
+    tick() { for (const r of readouts) r.val.textContent = r.obj[r.key].toFixed(tuneDecimals(r.step)); },
   };
 }
 const tuning = createTuningPanel($('tuning'), TUNING, 'Tuning');
@@ -6567,7 +6656,7 @@ function frame(now) {
   const real = (now - last) / 1000, dt = Math.min(0.05, real); last = now;
   fpsAcc += real; fpsN++; if (fpsAcc > 1) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
   pollPad(dt);
-  if (started && !mapOpen) update(dt);
+  if (started && !mapOpen && !optsOpen) update(dt);
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
   updateCamera(dt);
   showJumpHint();
@@ -6725,7 +6814,9 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE },
+  options: OPTIONS,
+  eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
   cutCount: () => cutEdges.size,
   light: () => ({ hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
   // draw a frame and give it back as a PNG data URL

@@ -12,7 +12,7 @@ import { PRELUDE, builtinCode, MAX_POINTS, FRAME_BYTES, OBJ_BYTES } from './shad
 import * as M from './materials.js';
 
 const DEPTH = 'depth32float';
-const COLOR_RT = 'rgba8unorm';
+const COLOR_RT = 'rgba16float';   // render targets keep light brighter than white, for eye adaptation and HDR
 const OBJ_PAGE = 4096;             // object blocks per uniform buffer
 const FRAME_SLOTS = 64;
 const SHADOW_FORMAT = 'depth32float';
@@ -71,6 +71,7 @@ class Renderer {
       { binding: 6, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
       { binding: 7, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
       { binding: 8, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
+      { binding: 9, visibility: S.FRAGMENT | S.COMPUTE, buffer: { type: 'read-only-storage' } },
     ] });
     this.bglFrameShadow = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: S.VERTEX, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } }] });
@@ -98,6 +99,9 @@ class Renderer {
     };
     this.noHaze = device.createTexture({ size: [1, 1], format: 'rgba16float', usage: T.TEXTURE_BINDING }).createView();
     this.haze = null; this._lastFrameOff = 0;
+    this.noEye = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(this.noEye, 0, new Float32Array([1, 0, 0, 1]));
+    this.eye = null; this.hdr = false; this.hdrPeak = 0;
     this.gi = null;
     this._ensureShadow(512);
     this._frameBG = null; this._frameBGKey = '';
@@ -122,6 +126,21 @@ class Renderer {
   // lit haze (haze.js): something with view() -> its texture (a texel a mosaic pixel) or null, uniforms() -> 8
   // numbers (the frame's hazeA, hazeB) and key, or null
   setHaze(h) { this.haze = h; this._frameBGKey = ''; }
+  // eye adaptation (exposure.js): something with buffer() -> its state (the exposure first) and on, or null
+  setEye(e) { this.eye = e; this._frameBGKey = ''; }
+  // HDR output: on an HDR display, a float canvas whose values above 1 show brighter than white; peak: the
+  // brightest highlights, × white's brightness. Off: the usual canvas, everything over white clipped.
+  setHDR(on, peak = 3) {
+    on = !!on;
+    this.hdrPeak = on ? Math.max(1, peak) : 0;
+    if (on === this.hdr) return;
+    this.hdr = on;
+    this.format = on ? 'rgba16float' : navigator.gpu.getPreferredCanvasFormat();
+    const cfg = { device: this.device, format: this.format, alphaMode: 'opaque', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC };
+    if (on) cfg.toneMapping = { mode: 'extended' };
+    this.context.configure(cfg);
+    this._canvasTex = null;
+  }
   // the WGSL every pipeline starts with, for compute passes that read the frame
   preludeCode() { return PRELUDE; }
   // record compute work into this frame, after what's been drawn so far: cb(encoder, the frame's bind group, the
@@ -193,15 +212,20 @@ class Renderer {
     this.flush();
     const tex = this._lastCanvasTex;
     if (!tex) return null;
-    const w = tex.width, h = tex.height, row = Math.ceil(w * 4 / 256) * 256, dev = this.device;
+    const half = tex.format === 'rgba16float', bpp = half ? 8 : 4;
+    const w = tex.width, h = tex.height, row = Math.ceil(w * bpp / 256) * 256, dev = this.device;
     const buf = dev.createBuffer({ size: row * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
     const enc = dev.createCommandEncoder();
     enc.copyTextureToBuffer({ texture: tex }, { buffer: buf, bytesPerRow: row }, [w, h]);
     dev.queue.submit([enc.finish()]);
     await buf.mapAsync(GPUMapMode.READ);
-    const src = new Uint8Array(buf.getMappedRange()), out = new Uint8Array(w * h * 4), bgra = this.format.startsWith('bgra');
+    const src = new Uint8Array(buf.getMappedRange()), out = new Uint8Array(w * h * 4), bgra = tex.format.startsWith('bgra');
+    // a half float, clipped to 0-1, as a byte
+    const f16 = (lo, hi) => { const b = hi << 8 | lo, e = (b >> 10) & 31, m = b & 1023, v = e ? (1 + m / 1024) * 2 ** (e - 15) : m / 1024 * 2 ** -14;
+      return b & 0x8000 ? 0 : Math.min(255, Math.round(v * 255)); };
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const s = y * row + x * 4, d = (y * w + x) * 4;
+      const s = y * row + x * bpp, d = (y * w + x) * 4;
+      if (half) { for (let c = 0; c < 4; c++) out[d + c] = f16(src[s + c * 2], src[s + c * 2 + 1]); continue; }
       out[d] = src[s + (bgra ? 2 : 0)]; out[d + 1] = src[s + 1]; out[d + 2] = src[s + (bgra ? 0 : 2)]; out[d + 3] = src[s + 3];
     }
     buf.unmap(); buf.destroy();
@@ -248,8 +272,8 @@ class Renderer {
   _frameBindGroup(noHaze = false) {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
     const gv = this.gi ? this.gi.views() : null;
-    const hv = this.haze && !noHaze ? this.haze.view() : null;
-    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-');
+    const hv = this.haze && !noHaze ? this.haze.view() : null, eb = this.eye && !noHaze ? this.eye.buffer() : null;
+    const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-') + ':' + (eb ? 'e' : '-');
     const C = noHaze ? (this._frameBGc = this._frameBGc || { key: '', bg: null }) : null;
     if (C ? key !== C.key : key !== this._frameBGKey) {
       if (C) C.key = key; else this._frameBGKey = key;
@@ -263,6 +287,7 @@ class Renderer {
         { binding: 6, resource: gv ? gv.light : this.noGI.light },
         { binding: 7, resource: gv ? gv.hf : this.noGI.hf },
         { binding: 8, resource: hv || this.noHaze },
+        { binding: 9, resource: { buffer: eb || this.noEye } },
       ] });
       if (C) C.bg = bg; else this._frameBG = bg;
     }
@@ -318,6 +343,7 @@ class Renderer {
     for (let i = 0; i < 12; i++) d[go + i] = g ? g[i] : 0;
     const hz = this.haze && this.haze.view() ? this.haze.uniforms() : null;
     for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
+    d[go + 20] = this.eye && this.eye.on ? 1 : 0; d[go + 21] = this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;
     return slot * FRAME_BYTES;
   }
   _writeObj(mesh, mat) {

@@ -56,6 +56,7 @@ fn giHfRaw(t: vec2i) -> vec4f { return textureLoad(hfTex, t, 0); }
 fn giHfOrigin() -> vec2i { return P.hf.xy; }
 fn giHfSize() -> i32 { return P.hf.z; }
 fn giGrid() -> vec4i { return P.grid; }
+fn giStandInLight() -> vec3f { return GI_STAND_IN * (P.sky.rgb + P.ground.rgb); }
 fn giVisAt(i: vec3i) -> vec4f { return textureLoad(visA, i, 0); }
 fn giLightAt(i: vec3i) -> vec4f { return textureLoad(lightA, i, 0); }
 ${GI_WGSL}
