@@ -1904,7 +1904,7 @@ const hazeTint = new GFX.Color();
 // the exposure toward what brings it to `target`, kept between `darkest` and `brightest` (1: never brighter than
 // as tuned, only darker on a bright plain); toDark / toLight: how fast it adjusts (a second) when the picture gets
 // brighter / darker. On top of the day and night auto exposure (T > Day & night).
-const EYE = { on: 1, target: 0.3, darkest: 0.35, brightest: 1, middle: 0.5, toDark: 1.5, toLight: 0.6 };
+const EYE = { on: 1, target: 0.15, darkest: 0.8, brightest: 1.5, middle: 0.5, toDark: 0.1, toLight: 0.1 };
 const EYE_READ = { brightness: 0, exposure: 1 };   // what it measured, for the tuning panel
 const eye = new GFX.EyeAdaptation(renderer);
 renderer.setEye(eye);
@@ -2980,10 +2980,14 @@ function oreVeins(x, z, k, vein) {
   part(G.box, CC(vein), x - 0.05, y + h * 0.5, z + 0.21, { sx: 0.08, sy: h * 0.42, sz: 0.06, ry: k * 2, rz: 0.4 + lean });
   part(G.box, CC(vein), x + 0.1, y + h * 0.66, z + 0.18, { sx: 0.06, sy: h * 0.22, sz: 0.06, ry: k * 2, rz: -0.5 });
 }
-// A redwood: a fluted trunk far taller than the view on a flared, rooted foot. Its crown is up out of
-// sight, in the canopy buffer, which draws nothing but casts the forest's dappled shade.
-const SEQ_H = 34;
-const SEQ_RINGS = [-0.3, 0, 0.16, 0.36, 0.62, 0.95, 1.4, 2, 2.8, 3.9, 5.4, 7.5, 10.5, 14.5, 19.5, 26, SEQ_H], SEQ_SEGS = 14;
+// A redwood: a fluted trunk taller than the view on a flared, rooted foot. Its crown is up out of sight, in
+// the canopy buffer, which draws nothing but casts the forest's dappled shade.
+// SEQ_H only has to clear the top of the screen from a tree just behind the hero (the nearer ones are cut
+// away): (view height / 2) / (cos 30° + sin 30° tan(fov / 2)) over the hero's ground, about 9.6 tiles for a
+// phone held upright at the farthest zoom (17.5 tiles of ground up the screen), with room to spare for ground
+// that falls away behind the hero.
+const SEQ_H = 14;
+const SEQ_RINGS = [-0.3, 0, 0.16, 0.36, 0.62, 0.95, 1.4, 2, 2.8, 3.9, 5.4, 7.5, 10.5, SEQ_H], SEQ_SEGS = 14;
 function sequoia(x, z, k) {
   const y0 = groundAt(x, z), R0 = 0.4 + k * 0.12, S = SEQ_SEGS, bark = shade(CC('#7e3c26'), 0.88 + k * 0.2), soil = CC('#3e2c1e');
   // buttresses: a handful of uneven ridges that splay out into roots at the foot and climb the trunk as
@@ -3023,14 +3027,23 @@ function sequoia(x, z, k) {
   const y = y0, dark = shade(bark, 0.62);
   // dead stubs of the lowest boughs
   for (let i = 0; i < 3; i++) {
-    const a = hash(x, z, i + 20) * 6.28, hy = 5 + i * 3.5 + hash(x, z, i + 23) * 2, R = R0 * (1 - hy / SEQ_H * 0.3) + 0.22;
+    const a = hash(x, z, i + 20) * 6.28, hy = 3.5 + i * 2 + hash(x, z, i + 23) * 1.2, R = R0 * (1 - hy / SEQ_H * 0.3) + 0.22;
     const cx = x + Math.sin(hy * 0.21 + k * 9) * 0.1 + lx * hy, cz = z + Math.cos(hy * 0.17 + k * 7) * 0.1 + lz * hy;
     part(G.box, dark, cx + Math.cos(a) * R, y + hy, cz + Math.sin(a) * R, { sx: 0.6, sy: 0.1, sz: 0.1, ry: -a, rz: 0.35, into: 'trunk' });
   }
   if (TRUNK.tag) TRUNK.tag(from, x, y, z);
-  for (let i = 0; i < 7; i++) {
-    const a = hash(x, z, i + 30) * 6.28, d = 0.5 + hash(x, z, i + 37) * 3.6, w = 2 + hash(x, z, i + 44) * 2.4;
-    part(G.ico, bark, x + Math.cos(a) * d, y + SEQ_H - 3 + hash(x, z, i + 51) * 6, z + Math.sin(a) * d, { sx: w, sy: w * 0.55, sz: w, ry: a, into: 'canopy' });
+  // the crown: boughs out from the trunk's top, longest low down, each a few flat clumps of sprays that thin out
+  // toward its tip, with sky between them, so the shade falls in broken flecks rather than blobs
+  const nb = 10 + Math.floor(hash(x, z, 200) * 4), turn = hash(x, z, 201) * 6.28;
+  for (let b = 0; b < nb; b++) {
+    const t = (b + hash(x, z, 210 + b) * 0.8) / nb, hy = SEQ_H - 6.5 + t * 7.5;
+    const a = turn + b * 2.4 + (hash(x, z, 230 + b) - 0.5) * 0.9, len = (1.4 + hash(x, z, 250 + b) * 1.6) * (1.25 - t * 0.7);
+    const nc = 2 + Math.floor(hash(x, z, 270 + b) * 3);
+    for (let c = 0; c < nc; c++) {
+      const u = (c + 0.6) / nc, d = 0.3 + len * u, w = (0.7 + hash(x, z, 290 + b * 5 + c) * 0.9) * (1.15 - u * 0.5);
+      const aa = a + (hash(x, z, 340 + b * 5 + c) - 0.5) * 0.6, droop = u * u * 0.6 + hash(x, z, 390 + b * 5 + c) * 0.4;
+      part(G.ico, bark, x + Math.cos(aa) * d, y + hy - droop, z + Math.sin(aa) * d, { sx: w, sy: w * 0.45, sz: w * 0.75, ry: -aa, into: 'canopy' });
+    }
   }
 }
 function fern(x, z, k) {
