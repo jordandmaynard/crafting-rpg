@@ -77,6 +77,10 @@ Lit haze marched per pixel (`src/gfx/haze.js`). The game draws at a low mosaic r
 
 The outline pass lays the result over the picture. The tuning panel's Lit haze section has the switch and the sliders, including the number of steps. One of them, "Light it adds over things" (lift), scales only the light the haze adds, not how much it hides. Turned down, it keeps shadows and near things dark while far things still fade. It sits on top of the distance haze, which still fades the far ground to the sky's colour.
 
+## Ground haze
+
+Neon Haze's liquid ground haze (`src/gfx/groundhaze.js`): a thin haze lying on the ground in swamps (green), graveyards (white) and the Blasted Wastes (orange). It's a 2D fluid sim in compute over a 48-tile grid that follows the camera, 4 cells a tile. Each frame it advects the air and the haze, eases the air back to a gentle wind (the clouds' way) and the haze back to a patchy resting field that drifts with it, and adds your wake. It also puts back the swirls the grid smears away and solves for pressure so the flow stays incompressible. Trees, rocks and other solid things are walls it flows round. The game fills a site map round the camera every few tiles: the ground's height (the top of water and lava), what's solid, and how much haze rests there and in what colour, by biome, blurred so it fades in at the edges. The haze is drawn after you as stacked slices that follow the ground, lit like everything else (sky and GI probes, the sun or moon through its shadow, the lamps and your torch) and fogged. The tuning panel's Ground haze section has each biome's amount and colour, and the sim's and the look's sliders.
+
 ## Eye adaptation and HDR
 
 The scene is drawn into float targets, so light brighter than white survives until the picture is shown. Each frame a compute pass (`src/gfx/exposure.js`) measures how bright the picture is, haze included: the geometric mean of its mosaic pixels, weighted toward the middle of the screen. The exposure then eases toward what brings that to a target, the way your eyes adjust. It darkens quickly when you step out of the deep forest onto a sunlit plain and opens up slowly again, and by default it never goes brighter than the look as tuned. The exposure stays on the GPU, where the outline pass applies it. The tuning panel's Eye adaptation section shows the brightness it measures and the exposure it's using, and has the target, the limits, the speeds and the middle weighting. It sits on top of the day and night auto exposure.
@@ -106,6 +110,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `haze.js`: lit haze, marched per pixel (see Lit haze).
 - `exposure.js`: eye adaptation (see Eye adaptation and HDR).
 - `bloom.js`: bloom (see Bloom and the grade).
+- `groundhaze.js`: the liquid ground haze (see Ground haze).
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.

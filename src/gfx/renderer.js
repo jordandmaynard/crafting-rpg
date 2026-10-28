@@ -510,6 +510,7 @@ class Renderer {
   }
   // a texture's GPU copy and its sampler
   _texture(t) {
+    if (t.isViewTexture) return { view: t.view, sampler: this._sampler(t), id: 'v' + t.id };
     if (t.isRenderTargetTexture || t.isDepthTexture) {
       const rt = t.target;
       this._targetViews(rt);

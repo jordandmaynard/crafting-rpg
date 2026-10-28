@@ -9,3 +9,4 @@ export { HeightProbes, rasterGround, rasterChunk } from './probes.js';
 export { LitHaze } from './haze.js';
 export { EyeAdaptation } from './exposure.js';
 export { Bloom } from './bloom.js';
+export { GroundHaze, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT } from './groundhaze.js';

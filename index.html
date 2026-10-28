@@ -1939,6 +1939,88 @@ function updateBloom() {
     eye: EYE.on > 0.5 ? eye.buffer() : null, res: [res.x, res.y], ss: ssNow, threshold: BLOOM.threshold, knee: BLOOM.knee, size: BLOOM.size,
     strength: BLOOM.strength });
 }
+
+// ---------- Ground haze (T > Ground haze) ----------
+// Neon Haze's liquid ground haze (src/gfx/groundhaze.js): a fluid sim on the ground round the camera, so the haze
+// flows round trees and rocks, swirls, and parts round you as you walk through it, drawn as lit slices that follow
+// the ground. For now it lies only in swamps, graveyards and the Blasted Wastes, each with its own share (0 none)
+// and colour. amount: how thick it rests; density: how much it hides; height: tiles it thins over; patchiness,
+// patchSize (tiles): the gaps in it; relax: how fast stirred haze drifts back (a second); windSpeed (tiles a second,
+// the clouds' way), settle, swirl: the air; wakeRadius, wakeDrag, wakeClear: how you stir it; detail, detailSize,
+// detailCycle: the wisps the flow carries.
+const GROUND_HAZE = { on: 1, amount: 1, density: 1.2, height: 0.2, slices: 4, patchiness: 0.4, patchSize: 4, relax: 0.05,
+  windSpeed: 0.25, settle: 0.56, swirl: 11.5, wakeRadius: 0.35, wakeDrag: 0.1, wakeClear: 4, brightness: 1.25,
+  detail: 0.69, detailSize: 1.2, detailCycle: 3,
+  swamp: 1, swampColor: '#6fae5a', grave: 1, graveColor: '#eef0f4', wastes: 1, wastesColor: '#ff8a3a' };
+const groundHaze = new GFX.GroundHaze(renderer);
+groundHaze.mesh.layers.set(1);   // drawn after the hero, so it swirls round their feet
+scene.add(groundHaze.mesh);
+const GH_N = GFX.GROUND_HAZE_SITE, GH_TPT = GFX.GROUND_HAZE_SITE_TPT, GH_TILES = GH_N / GH_TPT, GH_BLUR = 2;
+const ghSite = new Float32Array(GH_N * GH_N * 4), ghTint = new Uint8Array(GH_N * GH_N * 4);
+let ghCentre = null, ghKey = '', ghAt = 0, ghAny = false;
+// the site map round tile (cx, cz): the ground's height (the top of water and lava), what's solid, and how much
+// haze rests there and its colour, by biome, blurred over a couple of tiles so it fades in at the edges
+function groundHazeSite(cx, cz) {
+  const G = GROUND_HAZE, c0 = cx - GH_TILES / 2, r0 = cz - GH_TILES / 2, W = GH_TILES + 2 * GH_BLUR + 2;
+  const col = {}, share = b => b === SWAMP ? G.swamp : b === GRAVE ? G.grave : b === WASTES ? G.wastes : 0;
+  for (const [b, k] of [[SWAMP, 'swampColor'], [GRAVE, 'graveColor'], [WASTES, 'wastesColor']]) { tmpC2.set(G[k]); col[b] = [tmpC2.r, tmpC2.g, tmpC2.b]; }
+  // each tile's share and colour (times its share), from one tile before the window to one after, then blurred
+  const m = new Float32Array(W * W * 4), t = new Float32Array(W * W * 4), at = (c, r) => (r * W + c) * 4;
+  for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
+    const tc = c0 - GH_BLUR - 1 + c, tr = r0 - GH_BLUR - 1 + r;
+    if (tc < 0 || tr < 0 || tc >= N || tr >= N) continue;
+    const b = BI[T(tc, tr)], s = Math.max(0, share(b)), k = at(c, r);
+    if (s > 0) { m[k] = s; m[k + 1] = col[b][0] * s; m[k + 2] = col[b][1] * s; m[k + 3] = col[b][2] * s; }
+  }
+  for (const [dc, dr] of [[1, 0], [0, 1]]) {
+    for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
+      const k = at(c, r);
+      for (let q = 0; q < 4; q++) {
+        let sum = 0;
+        for (let o = -GH_BLUR; o <= GH_BLUR; o++) { const cc = clamp(c + o * dc, 0, W - 1), rr = clamp(r + o * dr, 0, W - 1); sum += m[at(cc, rr) + q]; }
+        t[k + q] = sum / (2 * GH_BLUR + 1);
+      }
+    }
+    m.set(t);
+  }
+  ghAny = false;
+  for (let j = 0; j < GH_N; j++) for (let i = 0; i < GH_N; i++) {
+    const x = c0 + (i + 0.5) / GH_TPT, z = r0 + (j + 0.5) / GH_TPT, k = (j * GH_N + i) * 4;
+    const tc = clamp(Math.floor(x), 0, N - 1), tr = clamp(Math.floor(z), 0, N - 1), ti = T(tc, tr);
+    // the share and colour: bilinear between the tile middles
+    const u = x - (c0 - GH_BLUR - 1) - 0.5, v = z - (r0 - GH_BLUR - 1) - 0.5, a = Math.floor(u), b = Math.floor(v), fu = u - a, fv = v - b;
+    const s = [0, 0, 0, 0];
+    for (let q = 0; q < 4; q++) s[q] = (m[at(a, b) + q] * (1 - fu) + m[at(a + 1, b) + q] * fu) * (1 - fv) + (m[at(a, b + 1) + q] * (1 - fu) + m[at(a + 1, b + 1) + q] * fu) * fv;
+    let y = heightAt(x, z);
+    if (!LV[ti]) y = WT[ti] >= 2 ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;
+    const o = OBJ[OB[ti]];
+    const solid = o.tile || (o.solid >= 0.15 && Math.hypot(x - tc - 0.5, z - tr - 0.5) < o.solid + 0.15) ? 1 : 0;
+    ghSite[k] = y; ghSite[k + 1] = solid; ghSite[k + 2] = s[0]; ghSite[k + 3] = 0;
+    const w = s[0] > 1e-4 ? 255 / s[0] : 0;
+    ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); ghTint[k + 3] = 255;
+    if (s[0] > 0.003) ghAny = true;
+  }
+  groundHaze.setSite([c0 * GH_TPT, r0 * GH_TPT], ghSite, ghTint);
+}
+function updateGroundHaze(dt) {
+  const G = GROUND_HAZE;
+  let on = G.on > 0.5 && G.amount > 0 && G.density > 0;
+  if (on) {
+    // anew when the camera's moved three tiles on, every couple of seconds (trees felled, things built), or retuned
+    const cx = Math.round(camTarget.x), cz = Math.round(camTarget.z), now = performance.now();
+    const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor].join();
+    if (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || now - ghAt > 2000 || key !== ghKey) {
+      ghCentre = [cx, cz]; ghAt = now; ghKey = key;
+      groundHazeSite(cx, cz);
+    }
+    on = ghAny;
+  }
+  const a = CLOUDS.direction * Math.PI / 180;
+  groundHaze.update({ on, target: [camTarget.x, camTarget.z], hero: [H.x, H.z], dt, amount: G.amount, patchiness: G.patchiness,
+    patchSize: G.patchSize, relax: G.relax, wind: [Math.cos(a) * G.windSpeed, Math.sin(a) * G.windSpeed], settle: G.settle, swirl: G.swirl,
+    wakeRadius: G.wakeRadius, wakeDrag: G.wakeDrag, wakeClear: G.wakeClear, height: G.height, density: G.density, slices: G.slices,
+    brightness: G.brightness, detail: G.detail, detailSize: G.detailSize, detailCycle: G.detailCycle });
+}
 setInterval(() => {
   if ($('tuning').hidden || EYE.on < 0.5) return;
   eye.read(); EYE_READ.brightness = eye.brightness; EYE_READ.exposure = eye.exposure; tuning.tick();
@@ -2065,10 +2147,10 @@ function renderWorld() {
     // the same view again with every surface drawn as its normal, sky left clear
     renderer.setRenderTarget(normRT);
     renderer.setClearColor(0x000000, 0); renderer.clear();
-    scene.overrideMaterial = normalMat; tallVisible(false);
+    scene.overrideMaterial = normalMat; tallVisible(false); groundHaze.mesh.visible = false;
     camera.layers.set(0); renderer.render(scene, camera);
     camera.layers.set(1); renderer.render(scene, camera);
-    scene.overrideMaterial = null; tallVisible(true);
+    scene.overrideMaterial = null; tallVisible(true); groundHaze.mesh.visible = groundHaze.on;
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
@@ -6485,6 +6567,32 @@ const TUNING = [
     [EYE, 'toDark', 'Adjusts to bright this fast (a second)', 0.05, 8, 0.05],
     [EYE, 'toLight', 'Adjusts to dark this fast (a second)', 0.05, 8, 0.05],
   ]],
+  ['Ground haze', [
+    [GROUND_HAZE, 'on', 'Ground haze (0 off, 1 on)', 0, 1, 1],
+    [GROUND_HAZE, 'swamp', 'Swamps: how much', 0, 2, 0.01],
+    [GROUND_HAZE, 'swampColor', 'Swamps: colour', 'color'],
+    [GROUND_HAZE, 'grave', 'Graveyards: how much', 0, 2, 0.01],
+    [GROUND_HAZE, 'graveColor', 'Graveyards: colour', 'color'],
+    [GROUND_HAZE, 'wastes', 'Blasted Wastes: how much', 0, 2, 0.01],
+    [GROUND_HAZE, 'wastesColor', 'Blasted Wastes: colour', 'color'],
+    [GROUND_HAZE, 'amount', 'Amount everywhere', 0, 3, 0.01],
+    [GROUND_HAZE, 'density', 'Density (how much it hides)', 0, 6, 0.01],
+    [GROUND_HAZE, 'height', 'Layer height (tiles)', 0.05, 1.5, 0.01],
+    [GROUND_HAZE, 'slices', 'Slices (more: smoother round you, slower)', 1, 16, 1],
+    [GROUND_HAZE, 'brightness', 'Brightness', 0, 4, 0.01],
+    [GROUND_HAZE, 'patchiness', 'Patchiness', 0, 1, 0.01],
+    [GROUND_HAZE, 'patchSize', 'Patch size (tiles)', 0.5, 20, 0.25],
+    [GROUND_HAZE, 'relax', 'Drifts back this fast (a second)', 0, 2, 0.01],
+    [GROUND_HAZE, 'windSpeed', 'Wind (tiles a second, the clouds\' way)', 0, 3, 0.01],
+    [GROUND_HAZE, 'settle', 'Air settles this fast (a second)', 0, 5, 0.01],
+    [GROUND_HAZE, 'swirl', 'Swirl', 0, 60, 0.5],
+    [GROUND_HAZE, 'wakeRadius', 'Your wake: size (tiles)', 0.05, 2, 0.01],
+    [GROUND_HAZE, 'wakeDrag', 'Your wake: drag', 0, 1, 0.01],
+    [GROUND_HAZE, 'wakeClear', 'Your wake: haze swept aside (a tile walked)', 0, 20, 0.05],
+    [GROUND_HAZE, 'detail', 'Wisps', 0, 1, 0.01],
+    [GROUND_HAZE, 'detailSize', 'Wisp size (tiles)', 0.1, 5, 0.05],
+    [GROUND_HAZE, 'detailCycle', 'Wisps renew every (seconds)', 0.5, 10, 0.1],
+  ]],
   ['Picture', [
     [BLOOM, 'strength', 'Bloom: how much glow (0 off)', 0, 2, 0.01],
     [BLOOM, 'threshold', 'Bloom: glows above this brightness', 0, 2, 0.01],
@@ -6710,6 +6818,7 @@ function frame(now) {
   drawMini(dt);
   if (pixelSize() !== pxScale || Math.round(PIXEL.antiAlias) !== ssNow) resize();
   updateGI();
+  updateGroundHaze(dt);
   renderWorld();
   requestAnimationFrame(frame);
 }
@@ -6733,7 +6842,8 @@ let genMs = 0;
 // test hook
 window.GAME = {
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, lavaMat]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, lavaMat, groundHaze.material]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
@@ -6855,7 +6965,7 @@ window.GAME = {
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE },
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
   cutCount: () => cutEdges.size,
