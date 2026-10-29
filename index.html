@@ -421,6 +421,81 @@ const BIOMES = [
   { name: 'THE BLASTED WASTES', foes: ['hellhound', 'hellhound', 'firespirit'] },
 ];
 const TOWN_NAMES = ['EMBERBROOK', 'ASHFORD', 'BRAMBLEGATE', 'THORNWICK', 'MILLHAVEN', 'OAKENREST', 'STONEMERE', 'WILLOWDEEP'];
+// Region names: every world names its land afresh. The biomes fall into regions (each patch of one biome, the
+// biggest split into parts of about REGION_SPLIT tiles, crumbs under REGION_MIN folded into whatever region is
+// nearest), and each region gets a name from its biome's words in one of three patterns: a compound and a noun
+// (Thornwold Forest), the compound alone (the Frostspine), or an adjective and a noun (the Tangled Wilds). That's
+// over a thousand names a biome. Walking into a region you haven't been in discovers it, and its name goes on
+// the map.
+const REGION_MIN = 200, REGION_SPLIT = 15000;
+const REG = new Int32Array(N * N).fill(-1);   // each tile's region (-1 in towns)
+const regions = [];   // { biome, name, n (tiles), spots (where its name can go, deepest inside first), found }
+const NAME_WORDS = [
+  /* MEADOW */ { pre: ['Gold', 'Honey', 'Clover', 'Amber', 'Sun', 'Lark', 'Barley', 'Thistle', 'Wheat', 'Fair', 'Bright', 'Dawn', 'Butter', 'Bee'],
+    root: ['reach', 'vale', 'field', 'down', 'brook', 'hollow', 'ford', 'mead', 'combe', 'stead'],
+    noun: ['Meadows', 'Fields', 'Downs', 'Leas', 'Pastures', 'Commons', 'Plains'],
+    adj: ['Sunlit', 'Rolling', 'Windswept', 'Golden', 'Quiet', 'Endless', 'Gentle', 'Swaying', 'Honeyed', 'Wildflower'] },
+  /* FOREST */ { pre: ['Whisper', 'Thorn', 'Oak', 'Ash', 'Elm', 'Hazel', 'Moss', 'Bramble', 'Fern', 'Shade', 'Owl', 'Briar', 'Rowan', 'Fox'],
+    root: ['wood', 'wold', 'holt', 'glade', 'shaw', 'dell', 'grove', 'hurst', 'weald', 'ridge'],
+    noun: ['Wood', 'Woods', 'Forest', 'Thicket', 'Grove', 'Wilds', 'Copse'],
+    adj: ['Whispering', 'Tangled', 'Sleeping', 'Green', 'Murmuring', 'Hushed', 'Crooked', 'Mossy', 'Dappled', 'Wandering'] },
+  /* SWAMP */ { pre: ['Mire', 'Fen', 'Murk', 'Sog', 'Reed', 'Black', 'Rot', 'Gloom', 'Toad', 'Leech', 'Sedge', 'Mud', 'Wither', 'Silt'],
+    root: ['fen', 'mere', 'water', 'mire', 'moor', 'slough', 'marsh', 'wallow', 'pool', 'bottom'],
+    noun: ['Bog', 'Fen', 'Marsh', 'Mire', 'Swamp', 'Slough', 'Morass'],
+    adj: ['Drowned', 'Sunken', 'Rotting', 'Weeping', 'Stagnant', 'Fetid', 'Sodden', 'Croaking', 'Misty', 'Murky'] },
+  /* GRAVE */ { pre: ['Hollow', 'Bone', 'Ash', 'Crypt', 'Raven', 'Dusk', 'Grim', 'Pale', 'Mourn', 'Shroud', 'Wraith', 'Weep', 'Barrow', 'Moth'],
+    root: ['field', 'hill', 'rest', 'yard', 'mound', 'stone', 'gate', 'moor', 'knell', 'cairn'],
+    noun: ['Graves', 'Barrows', 'Cairns', 'Tombs', 'Boneyard', 'Ossuary', 'Crypts'],
+    adj: ['Hollow', 'Silent', 'Forgotten', 'Restless', 'Weeping', 'Nameless', 'Sunken', 'Crooked', 'Hungry', 'Mourning'] },
+  /* SNOW */ { pre: ['Frost', 'Rime', 'Ice', 'Snow', 'Hoar', 'Winter', 'White', 'Storm', 'Shiver', 'Sleet', 'Pale', 'Cold', 'Bitter', 'Wolf'],
+    root: ['spine', 'peak', 'crown', 'fell', 'crag', 'reach', 'hold', 'horn', 'tooth', 'ridge'],
+    noun: ['Peaks', 'Heights', 'Fells', 'Wastes', 'Expanse', 'Tundra', 'Highlands'],
+    adj: ['Frozen', 'Howling', 'Bitter', 'Endless', 'Silent', 'Glittering', 'Shivering', 'Bleak', 'Starving', 'Hoarfrost'] },
+  /* DESERT */ { pre: ['Sun', 'Sand', 'Dust', 'Bone', 'Scorch', 'Amber', 'Copper', 'Red', 'Dune', 'Salt', 'Glass', 'Blaze', 'Ochre', 'Vulture'],
+    root: ['scorch', 'drift', 'reach', 'sea', 'sweep', 'bake', 'flat', 'gulch', 'mesa', 'wind'],
+    noun: ['Waste', 'Desert', 'Dunes', 'Sands', 'Barrens', 'Flats', 'Expanse'],
+    adj: ['Shifting', 'Burning', 'Endless', 'Singing', 'Thirsting', 'Blinding', 'Bleached', 'Whispering', 'Sunscorched', 'Glaring'] },
+  /* TOWN */ null,
+  /* DEEP */ { pre: ['Elder', 'Eld', 'Grey', 'Gloam', 'Umber', 'Night', 'Old', 'Deep', 'Shadow', 'Moon', 'Root', 'Wyrm', 'Dim', 'Raven'],
+    root: ['wood', 'holt', 'weald', 'glen', 'bough', 'root', 'heart', 'shade', 'tangle', 'hollow'],
+    noun: ['Wood', 'Weald', 'Forest', 'Deeps', 'Tangle', 'Heartwood', 'Wildwood'],
+    adj: ['Ancient', 'Elder', 'Silent', 'Brooding', 'Endless', 'Dreaming', 'Lightless', 'Watching', 'Primeval', 'Towering'] },
+  /* WASTES */ { pre: ['Ash', 'Cinder', 'Ember', 'Brim', 'Char', 'Slag', 'Soot', 'Scorch', 'Hell', 'Smoke', 'Blight', 'Burn', 'Magma', 'Ruin'],
+    root: ['waste', 'reach', 'scar', 'rift', 'field', 'pit', 'fall', 'scald', 'maw', 'crag'],
+    noun: ['Wastes', 'Barrens', 'Scar', 'Badlands', 'Expanse', 'Rifts', 'Hellscape'],
+    adj: ['Blasted', 'Burning', 'Smouldering', 'Shattered', 'Scorched', 'Molten', 'Cindered', 'Ruined', 'Broken', 'Cursed'] },
+];
+// a compound that reads badly: a word twice (Hollowhollow), or its root again in the noun (Thornwood Wood)
+const badName = (p, r, n) => p.toLowerCase() === r || (n && (n.toLowerCase().includes(r) || r.startsWith(n.toLowerCase().slice(0, 4))));
+// every name a biome's words can make (each pattern's combinations, less the ones that read badly)
+function allNames(b) {
+  const w = NAME_WORDS[b], out = [];
+  for (const p of w.pre) for (const r of w.root) {
+    if (badName(p, r)) continue;
+    out.push('THE ' + (p + r).toUpperCase());
+    for (const n of w.noun) if (!badName(p, r, n)) out.push((p + r + ' ' + n).toUpperCase());
+  }
+  for (const a of w.adj) for (const n of w.noun) out.push(('The ' + a + ' ' + n).toUpperCase());
+  return out;
+}
+// a fresh name for a region of biome b: half the time a compound and a noun, else the compound alone or an
+// adjective and a noun. No compound or name is used twice in a world.
+function makeRegionName(b, rand, used) {
+  const w = NAME_WORDS[b], pick = l => l[Math.floor(rand() * l.length)];
+  for (let k = 0; k < 200; k++) {
+    const u = rand(), p = pick(w.pre), r = pick(w.root), n = pick(w.noun), a = pick(w.adj);
+    let name, key;
+    if (u < 0.75) {
+      if (badName(p, r, u < 0.5 ? n : '')) continue;
+      key = p + r; name = u < 0.5 ? p + r + ' ' + n : 'The ' + p + r;
+    } else { key = a + n; name = 'The ' + a + ' ' + n; }
+    name = name.toUpperCase();
+    if (used.has(key) || used.has(name)) continue;
+    used.add(key); used.add(name);
+    return name;
+  }
+  return BIOMES[b].name;
+}
 const towns = [];
 const TOWN_R = 10;
 const DEEP_IN = 10;   // tiles of ordinary forest, give or take, ringing a deep forest
@@ -709,8 +784,81 @@ async function generate(progress) {
   deepenSea();
   progress(0.93, 'MARKING OUT PLOTS'); await nextFrame();
   layPlots(rand);
-  progress(0.95, 'DRAWING THE MAP'); await nextFrame();
+  progress(0.95, 'NAMING THE LANDS'); await nextFrame();
+  nameRegions();
+  progress(0.97, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
+}
+
+// Cut the world into regions and name them (see REGION_MIN above). Each region also gets the spots its name can
+// go on the map: the tiles deepest inside it (furthest from its edge), a few spread across it, the deepest
+// first, so the map can move a name off another that's in the way.
+function nameRegions() {
+  const rand = mulberry32(SEED ^ 0x7a3e5), used = new Set(TOWN_NAMES), NN = N * N;
+  const comp = new Int32Array(NN).fill(-1), dist = new Int32Array(NN), q = new Int32Array(NN);
+  const nbrs = (i, f) => { const c = i % N; if (i >= N) f(i - N); if (i < NN - N) f(i + N); if (c) f(i - 1); if (c < N - 1) f(i + 1); };
+  // breadth first from the tiles in q[0..n) through the tiles ok() lets in, each taking its source's mark
+  const spread = (n, ok, mark) => {
+    for (let h = 0; h < n; h++) { const i = q[h]; nbrs(i, j => { if (ok(j)) { mark(j, i); q[n++] = j; } }); }
+    return n;
+  };
+  REG.fill(-1); regions.length = 0;
+  const newRegion = b => { regions.push({ biome: b, name: makeRegionName(b, rand, used), n: 0, spots: [], found: false }); return regions.length - 1; };
+  let cid = 0;
+  for (let s = 0; s < NN; s++) {
+    if (comp[s] >= 0 || BI[s] === TOWN) continue;
+    const b = BI[s];
+    comp[s] = cid; q[0] = s;
+    const size = spread(1, j => comp[j] < 0 && BI[j] === b, j => { comp[j] = cid; });
+    if (size >= REGION_MIN) {
+      const tiles = q.slice(0, size), k = Math.ceil(size / REGION_SPLIT), inC = j => comp[j] === cid;
+      if (k === 1) { const id = newRegion(b); for (const i of tiles) REG[i] = id; }
+      else {
+        // a big one: seeds as far apart as can be (each the tile furthest, walking inside it, from those before),
+        // then each tile goes to the seed it's nearest
+        const seeds = [tiles[0]];
+        for (let m = 0; m <= k; m++) {
+          for (const i of tiles) dist[i] = -1;
+          const from = m ? seeds : [tiles[0]];
+          for (let h = 0; h < from.length; h++) { q[h] = from[h]; dist[from[h]] = 0; }
+          const n = spread(from.length, j => inC(j) && dist[j] < 0, (j, i) => { dist[j] = dist[i] + 1; });
+          const far = q[n - 1];
+          if (m === 0) seeds[0] = far; else if (m < k) seeds.push(far);
+        }
+        const ids = seeds.map(() => newRegion(b));
+        seeds.forEach((sd, h) => { REG[sd] = ids[h]; q[h] = sd; });
+        spread(seeds.length, j => inC(j) && REG[j] < 0, (j, i) => { REG[j] = REG[i]; });
+      }
+    }
+    cid++;
+  }
+  // crumbs: into the nearest region
+  let n = 0;
+  for (let i = 0; i < NN; i++) if (REG[i] >= 0) q[n++] = i;
+  spread(n, j => REG[j] < 0 && BI[j] !== TOWN, (j, i) => { REG[j] = REG[i]; });
+  // how deep each tile is inside its region: 1 on its edge (or the world's), counting in
+  n = 0; dist.fill(0);
+  for (let i = 0; i < NN; i++) {
+    if (REG[i] < 0) continue;
+    const c = i % N;
+    let edge = i < N || i >= NN - N || !c || c === N - 1;
+    if (!edge) nbrs(i, j => { if (REG[j] !== REG[i]) edge = true; });
+    if (edge) { dist[i] = 1; q[n++] = i; }
+  }
+  spread(n, j => REG[j] >= 0 && !dist[j], (j, i) => { dist[j] = dist[i] + 1; });
+  const deepest = new Int32Array(regions.length);
+  for (let i = 0; i < NN; i++) if (REG[i] >= 0) { regions[REG[i]].n++; deepest[REG[i]] = Math.max(deepest[REG[i]], dist[i]); }
+  const cand = regions.map(() => []);
+  for (let i = 0; i < NN; i++) { const g = REG[i]; if (g >= 0 && dist[i] * 2 >= deepest[g]) cand[g].push(i); }
+  regions.forEach((g, id) => {
+    const gap = Math.max(8, deepest[id]);
+    cand[id].sort((a, b) => dist[b] - dist[a]);
+    for (const i of cand[id]) {
+      const x = i % N + 0.5, z = Math.floor(i / N) + 0.5;
+      if (g.spots.every(([sx, sz]) => Math.hypot(sx - x, sz - z) >= gap)) g.spots.push([x, z]);
+      if (g.spots.length >= 6) break;
+    }
+  });
 }
 
 // ---------- Lakes, rivers and canyons ----------
@@ -7228,9 +7376,11 @@ function update(dt) {
   if (regionT <= 0) {
     regionT = 0.3;
     const i = T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1));
-    const name = BI[i] === TOWN ? towns[TN[i] - 1].name : BIOMES[BI[i]].name;
+    const g = BI[i] === TOWN ? null : regions[REG[i]];
+    const name = BI[i] === TOWN ? towns[TN[i] - 1].name : g ? g.name : BIOMES[BI[i]].name;
     if (name !== regionName) {
-      if (regionName) toast('Entering ' + titleCase(name) + '.', 'calm');
+      if (g && !g.found) { g.found = true; toast('Discovered ' + titleCase(name) + '!', 'good'); }
+      else if (regionName) toast('Entering ' + titleCase(name) + '.', 'calm');
       regionName = name; $('region').textContent = name;
     }
     revealFog();
@@ -7664,11 +7814,17 @@ function drawBigMap() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // markers and labels stay their own size at any zoom
   ctx.font = '14px "Press Start 2P", monospace'; ctx.textAlign = 'center';
+  const boxes = [];
   for (const t of towns) {
     const seen = fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] < 128, [x, z] = worldToBig(t.c, t.r);
     ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8);
-    if (seen) { ctx.fillStyle = '#000'; ctx.fillText(t.name, x + 2, z - 10); ctx.fillStyle = '#efe4c8'; ctx.fillText(t.name, x, z - 12); }
+    boxes.push([x - 6, z - 6, 12, 12]);
+    if (seen) {
+      ctx.fillStyle = '#000'; ctx.fillText(t.name, x + 2, z - 10); ctx.fillStyle = '#efe4c8'; ctx.fillText(t.name, x, z - 12);
+      const w = ctx.measureText(t.name).width + 6; boxes.push([x - w / 2, z - 30, w, 22]);
+    }
   }
+  drawRegionNames(ctx, boxes);
   ctx.fillStyle = '#8de8dc';
   for (const rm of rooms.values()) { const [x, z] = worldToBig(rm.tiles[0][0], rm.tiles[0][1]); ctx.fillRect(x - 3, z - 3, 6, 6); }
   for (const h of hearths.values()) { const [x, z] = worldToBig(h.c + 0.5, h.r + 0.5); ctx.fillStyle = '#000'; ctx.fillRect(x - 7, z - 7, 14, 14); ctx.fillStyle = '#ffa040'; ctx.fillRect(x - 5, z - 5, 10, 10); }
@@ -7679,6 +7835,43 @@ function drawBigMap() {
   ctx.beginPath(); ctx.moveTo(fx * 18, fz * 18); ctx.lineTo(-fx * 10 - fz * 10, -fz * 10 + fx * 10); ctx.lineTo(-fx * 10 + fz * 10, -fz * 10 - fx * 10); ctx.closePath();
   ctx.stroke(); ctx.fill(); ctx.restore();
   $('mapSeed').textContent = 'WORLD SEED ' + SEED + ' · ' + Math.floor(H.x) + ', ' + Math.floor(H.z);
+}
+// The names of the regions you've found, biggest first, each at the first of its spots where it overlaps nothing
+// already drawn (town names and markers, other regions' names) and stays on the map; failing that, where it
+// overlaps least. Long names go on two lines.
+const REGION_INK = ['#ece2a4', '#bfe2a2', '#cfdc96', '#cdc6dc', '#e4f2ff', '#f2d29a', '#efe4c8', '#a9dcae', '#ffb488'];
+function drawRegionNames(ctx, boxes) {
+  ctx.font = '9px "Press Start 2P", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const overlap = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+  const shown = regions.filter(g => g.found).sort((a, b) => b.n - a.n);
+  for (const g of shown) {
+    const words = g.name.split(' ');
+    let lines = [g.name];
+    if (g.name.length > 13 && words.length > 1) {
+      // split where the two lines come out most even
+      let best = 1, bd = 1e9;
+      for (let k = 1; k < words.length; k++) { const d = Math.abs(words.slice(0, k).join(' ').length - words.slice(k).join(' ').length); if (d < bd) { bd = d; best = k; } }
+      lines = [words.slice(0, best).join(' '), words.slice(best).join(' ')];
+    }
+    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 6, h = lines.length * 13 + 4;
+    let at = null, least = Infinity;
+    for (const [sx, sz] of g.spots) {
+      const [x, z] = worldToBig(sx, sz), box = [x - w / 2, z - h / 2, w, h];
+      const off = box[0] < 0 || box[1] < 0 || box[0] + w > N || box[1] + h > N;
+      const ov = boxes.reduce((t, b) => t + overlap(box, b), 0) + (off ? w * h : 0);
+      if (ov < least) { least = ov; at = [x, z, box]; }
+      if (!ov) break;
+    }
+    if (!at) continue;
+    const [x, z, box] = at;
+    boxes.push(box);
+    lines.forEach((l, k) => {
+      const y = z + (k - (lines.length - 1) / 2) * 13;
+      ctx.fillStyle = '#000'; ctx.fillText(l, x + 1, y + 1);
+      ctx.fillStyle = REGION_INK[g.biome]; ctx.fillText(l, x, y);
+    });
+  }
+  ctx.textBaseline = 'alphabetic';
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123)
 $('newWorld').onclick = () => {
@@ -8213,6 +8406,7 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
+  regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map((w, b) => w ? new Set(allNames(b)).size : 0) }),
   raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
