@@ -6160,6 +6160,8 @@ const HERO_MAT = {
 // the spear, butt to tip along z from the hand: [w, h, d, z, part], its tip SPEAR_TIP out
 const SPEAR_BOXES = [[0.032, 0.032, 0.82, 0.19, 'shaft'], [0.045, 0.045, 0.06, 0.6, 'collar'], [0.07, 0.02, 0.14, 0.69, 'head'], [0.04, 0.04, 0.05, 0.785, 'head']];
 const SPEAR_TIP = 0.81, SPEAR_BUTT = 0.22;
+// the hero's arm from shoulder to hand, and how far it's swung back by the hip holding the spear drawn back
+const SPEAR_ARM = 0.25, SPEAR_BACK = 0.55;
 const spearWood = flatMat({ color: '#8a6440' });
 function makeHuman() {
   const g = new GFX.Group(), parts = [];
@@ -8637,7 +8639,7 @@ function updateAimDecal() {
 // across and `flurryReach` long, set the way you aimed when it began (you can walk, slowly, but it doesn't turn).
 // E throws the harpoon on its chain out to `harpoonRange` tiles: the first foe it meets is struck and reeled
 // back to you, then slowed by `slow` (a share of its speed) for `slowTime` seconds. Knock-backs are in tiles.
-const SPEAR = { holdTip: 0.6, thrustTip: 1.36, dmg: 11, time: 0.32, reach: 2.2, width: 0.5, knock: 0.25,
+const SPEAR = { holdTip: 0.6, thrustTip: 1.25, lean: 0.45, twist: 0.3, dmg: 11, time: 0.32, reach: 2.2, width: 0.5, knock: 0.25,
   flurryTime: 2, flurryRate: 0.13, flurryReach: 2.4, flurryCone: 70, flurryDmg: 4, flurryKnock: 0.1, flurryMove: 0.7, flurryCd: 8, flurryGhosts: 2, ghostLife: 0.2, ghostGlow: 0.6,
   harpoonRange: 9, harpoonSpeed: 26, harpoonPull: 14, harpoonDmg: 8, slow: 0.9, slowTime: 2, harpoonCd: 7 };
 function startSpear(kind) {
@@ -9852,7 +9854,7 @@ function animateHero(dt) {
   hero.body.rotation.z = on ? -sd * WALK.lean : 0;
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
-  let jab = 0, pull = 0, thrust = 0, twist = 0;
+  let jab = 0, pull = 0, thrust = 0, twist = 0, bend = 0;
   if (H.spear) {
     // the spear held low and drawn back, the arm down by your side and the shaft level: a poke drives it out
     // hard (the arm swinging forward a little, the shoulder turned into it) and draws it back slower; the flurry
@@ -9861,11 +9863,15 @@ function animateHero(dt) {
     let out;
     if (sp.kind === 'flurry') { const n = Math.floor(sp.t / SPEAR.flurryRate); out = spearDrive((sp.t / SPEAR.flurryRate) % 1) * 0.85; ay = flurryAt(n) * SPEAR.flurryCone * Math.PI / 360 * 0.8; }
     else out = spearDrive(u) * (sp.kind === 'poke' ? 1 : 0.7);
-    twist = 0.22 * out;
-    ax = 0.18 - out * 0.55; ay -= twist;
-    // slid along its shaft so the tip is SPEAR.holdTip ahead of you drawn back and thrustTip at full stretch, wherever
-    // the hand has swung to (the tip sits SPEAR_TIP up the shaft from the hand)
-    thrust = SPEAR.holdTip + (SPEAR.thrustTip - SPEAR.holdTip) * out - SPEAR_TIP + 0.25 * Math.sin(ax);
+    // The hand never lets go of the shaft (gripped where it puts the tip SPEAR.holdTip ahead of you with the arm
+    // swung back by the hip), so the reach out to thrustTip comes from the body: leaning in at the waist, the
+    // shoulder turned into it, and the arm swung forward as far as level to bring the tip where it should be
+    bend = SPEAR.lean * out; twist = SPEAR.twist * out;
+    thrust = SPEAR.holdTip - SPEAR_TIP + SPEAR_ARM * Math.sin(SPEAR_BACK);
+    const tip = SPEAR.holdTip + (SPEAR.thrustTip - SPEAR.holdTip) * out;
+    const shoulder = 0.28 * Math.sin(bend) + 0.175 * Math.sin(twist);
+    const phi = Math.asin(clamp((shoulder - (tip - SPEAR_TIP - thrust)) / SPEAR_ARM, -1, 1));
+    ax = phi - bend; ay -= twist;
     hero.armL.rotation.set(-0.5, 0, 0.1);
   } else if (H.bow) {
     // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin
@@ -9898,11 +9904,15 @@ function animateHero(dt) {
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
   // (level against the arm's swing while attacking, tipped up a touch; upright at rest)
-  hero.spear.rotation.x += ((H.spear ? -ax - 0.08 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 40);
+  hero.spear.rotation.x += ((H.spear ? -ax - bend - 0.08 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 40);
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
   hero.body.rotation.y = H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
-  hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
+  hero.body.rotation.x = bend || (on && f < 0 ? f * WALK.lean * 0.85 : 0);
+  // a bend at the waist: the body tips forward about the hips (it hangs from the feet, so it's shifted back to keep
+  // them there) and the legs are turned back to stand straight under them
+  hero.body.position.z = -0.36 * Math.sin(bend); hero.body.position.y += 0.36 * (1 - Math.cos(bend));
+  hero.legL.rotation.x -= bend; hero.legR.rotation.x -= bend;
   hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
   hero.g.position.set(0, 0, 0);
   if (H.dash >= 0) {
@@ -10792,7 +10802,9 @@ const TUNING = [
   ]],
   ['Spear', [
     [SPEAR, 'holdTip', 'Look: tip drawn back (tiles ahead of you)', -0.5, 2, 0.01],
-    [SPEAR, 'thrustTip', 'Look: tip at full thrust (tiles ahead of you)', 0, 3, 0.01],
+    [SPEAR, 'thrustTip', 'Look: tip at full thrust (tiles ahead of you; as far as the arm reaches)', 0, 3, 0.01],
+    [SPEAR, 'lean', 'Look: lean in at the waist at full thrust (radians)', 0, 1, 0.01],
+    [SPEAR, 'twist', 'Look: shoulder turned in at full thrust (radians)', 0, 1, 0.01],
     [SPEAR, 'dmg', 'Poke damage', 1, 60, 1],
     [SPEAR, 'time', 'Poke time (seconds)', 0.1, 1, 0.01],
     [SPEAR, 'reach', 'Poke reach (tiles)', 0.5, 5, 0.05],
@@ -11256,6 +11268,7 @@ window.GAME = {
   spearCast: k => k === 'q' ? castFlurry() : k === 'e' ? castHarpoon() : startSpear('poke'),
   harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
   ghosts: () => ghostSpears.filter(g => g.g.visible).length + " shown, spear in hand " + hero.spearShaft.visible + ", chain " + chainLinks.count,
+  spearPose: t => { if (H.spear && t !== undefined) { H.spear.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.updateMatrixWorld(); const p = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld), q = new GFX.Vector3(0, 0, SPEAR_TIP).applyMatrix4(hero.spearShaft.matrixWorld), c = new GFX.Vector3(0, 0, -SPEAR_BUTT).applyMatrix4(hero.spearShaft.matrixWorld); const f = [Math.sin(H.face), Math.cos(H.face)], ah = v => +((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2); return `t ${H.spear ? H.spear.t.toFixed(2) : "-"} hand ${ah(p)} y ${(p.y - H.y).toFixed(2)} tip ${ah(q)} y ${(q.y - H.y).toFixed(2)} butt ${ah(c)} bend ${hero.body.rotation.x.toFixed(2)}`; },
   foeSlow: () => foes.map(f => +(f.slowT || 0).toFixed(2)),
   rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
   aimForce: k => { aimForce = k; },
