@@ -3039,7 +3039,10 @@ function seg(geo, color, a, b, r, into = 'world') {
   dummy.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2); dummy.scale.set(r * 2, len, r * 2); dummy.updateMatrix();
   emitPart(geo, color, into);
 }
+// (while partPre is set, every piece is moved by it too: see stationParts)
+let partPre = null;
 function emitPart(geo, color, into) {
+  if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
   const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
   B.need(src.length);
@@ -5771,7 +5774,7 @@ function rock(x, z, k, c = '#7a7684') {
 // ORE_LOOK or TREE_SIZE changed (the panel, a paste, Reset): every built chunk's objects are made again, once it's settled
 let oreLookKey = '', oreRemakeT = 0;
 function remakeOres(dt) {
-  const key = Object.values(ORE_LOOK).join() + '|' + Object.values(TREE_SIZE).join() + '|' + SPIDERS.size;
+  const key = Object.values(ORE_LOOK).join() + '|' + Object.values(TREE_SIZE).join() + '|' + SPIDERS.size + '|' + STATION_LOOK.size;
   if (!oreLookKey) oreLookKey = key;
   if (key !== oreLookKey) { oreLookKey = key; oreRemakeT = 0.3; }
   if (oreRemakeT > 0 && (oreRemakeT -= dt) <= 0) for (const ch of chunks.values()) rebuildObjects(ch.cx * CH, ch.cz * CH);
@@ -5997,6 +6000,15 @@ function weaponTable(x, z, c, r) {
 // moving parts (the saw's blade, the grinder's runner stone and gears, the smelter's fire) are built apart, by
 // stationFx, so they can turn while the station works; the rest is drawn with the chunk like any table. at(a, b)
 // is a point on the tile, a across the station and b from its front (-b, toward you when you built it) to its back.
+// A station is drawn shrunk to STATION_LOOK.size about the middle of its foot, so walls can stand on its sides
+// (they reach about a sixth of a tile in); its moving parts are scaled the same (stationFx, updateStations).
+const STATION_LOOK = { size: 0.66 };
+const partShrink = new GFX.Matrix4();
+function stationParts(draw, x, z, c, r) {
+  const y = surfaceY(x, z), s = STATION_LOOK.size;
+  partPre = partShrink.set(s, 0, 0, x * (1 - s), 0, s, 0, y * (1 - s), 0, 0, s, z * (1 - s), 0, 0, 0, 1);
+  try { draw(x, z, c, r); } finally { partPre = null; }
+}
 function stationAt(x, z, ry) { return (a, b) => [x + Math.cos(ry) * a + Math.sin(ry) * b, z - Math.sin(ry) * a + Math.cos(ry) * b]; }
 // a saw table: a plank bench on four legs with the motor box under it, a rip fence along the top, a log waiting
 // at one side and sawn planks stacked at the foot
@@ -6047,7 +6059,7 @@ function smelter(x, z, c, r) {
   part(G.box, '#1a1210', mx, y + 0.27, mz, { sx: 0.32, sy: 0.26, sz: 0.02, ry });
   part(G.box, dark, mx, y + 0.42, mz, { sx: 0.4, sy: 0.06, sz: 0.04, ry });
   // the bellows at its side, and their nozzle into the furnace
-  const [wx, wz] = at(0.47, 0.05);
+  const [wx, wz] = at(0.44, 0.05);
   part(G.box, '#6a4428', wx, y + 0.2, wz, { sx: 0.12, sy: 0.08, sz: 0.34, ry });
   part(G.box, '#8a5a34', wx, y + 0.27, wz, { sx: 0.1, sy: 0.07, sz: 0.3, ry });
   part(G.box, '#6a4428', wx, y + 0.33, wz, { sx: 0.12, sy: 0.04, sz: 0.34, ry, rx: 0.15 });
@@ -6145,10 +6157,10 @@ function drawObject(o, c, r) {
     case O.HEARTH: return hearth(x, z, c, r);
     case O.TANTABLE: return tanTable(x, z, c, r);
     case O.WEAPONTABLE: return weaponTable(x, z, c, r);
-    case O.SAWTABLE: return sawTable(x, z, c, r);
-    case O.GRINDER: return grinder(x, z, c, r);
-    case O.SMELTER: return smelter(x, z, c, r);
-    case O.TANRACK: return tanRack(x, z, c, r);
+    case O.SAWTABLE: return stationParts(sawTable, x, z, c, r);
+    case O.GRINDER: return stationParts(grinder, x, z, c, r);
+    case O.SMELTER: return stationParts(smelter, x, z, c, r);
+    case O.TANRACK: return stationParts(tanRack, x, z, c, r);
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -10262,7 +10274,7 @@ function gearMesh(R, mat) {
 // the moving parts of a station, in a group turned as it was built: spin is what turns, mouth the smelter's fire
 function stationFx(st) {
   const g = new GFX.Group(), x = st.c + 0.5, z = st.r + 0.5, y = surfaceY(x, z);
-  g.position.set(x, y, z); g.rotation.y = st.ry;
+  g.position.set(x, y, z); g.rotation.y = st.ry; g.scale.setScalar(STATION_LOOK.size);
   const parts = {};
   if (st.kind === 'sawtable') {
     const s = parts.blade = new GFX.Group();
@@ -10375,7 +10387,7 @@ function updateStations(dt) {
     // its parts come up to speed while it works, and run down after
     st.spin += ((st.busy ? 1 : 0) - st.spin) * Math.min(1, dt * (st.busy ? 3 : 1.2));
     const p = st.parts, d = Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z);
-    st.fx.visible = d < 60;
+    st.fx.visible = d < 60; st.fx.scale.setScalar(STATION_LOOK.size);
     if (p.blade) p.blade.rotation.x -= dt * st.spin * 30;
     if (p.runner) p.runner.rotation.y += dt * st.spin * 2.2;
     if (p.big) { p.big.rotation.z += dt * st.spin * 1.6; p.small.rotation.z -= dt * st.spin * 1.6 * 15 / 9; }
@@ -12011,6 +12023,7 @@ const TUNING = [
   ]],
   ['Stations', [
     [REFINE, 'time', 'Seconds to refine one (saw table, grinder, smelter, tanning rack)', 0.2, 30, 0.1],
+    [STATION_LOOK, 'size', 'Size (walls on its sides need it under about 0.68)', 0.3, 1.2, 0.01],
   ]],
   ['Tumble', [
     [TUMBLE, 'time', 'How long the tumble lasts (seconds)', 0.15, 1.5, 0.01],
