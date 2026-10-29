@@ -486,6 +486,7 @@ function terrainOpen(i, n, d) {
 }
 function heightAt(x, z) {
   const c = clamp(Math.floor(x), 0, N - 1), r = clamp(Math.floor(z), 0, N - 1), i = T(c, r);
+  if (WT[i] === 1) return surfH(x, z);   // in a swamp pool: down its bank onto its bed, so you wade knee deep
   const s = SH[i];
   if (!s) return LV[i] * STEP;
   const u = clamp(x - c, 0, 1), v = clamp(z - r, 0, 1), l = LIFT[s];
@@ -2261,7 +2262,7 @@ function chunkGI(cx, cz) {
   if (ch.gi && !ch.giStale) return ch.gi;
   const geo = m => m && m.geometry;
   if (!ch.giGround || ch.giStale === 2) ch.giGround = GFX.rasterGround(cx, cz, [
-    { geo: geo(ch.ground) }, { geo: geo(ch.bog) }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
+    { geo: geo(ch.ground) }, { geo: geo(ch.bog), color: [0.06, 0.07, 0.03] }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
     { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }]);
   // and the roofs over it (each building's is one mesh of its own)
   const roofs = [];
@@ -2336,6 +2337,8 @@ function renderWorld() {
   camera.layers.set(2); renderer.render(scene, camera);
   renderer.passName = 'hero, ground haze';
   camera.layers.set(1); renderer.render(scene, camera);
+  renderer.passName = 'swamp water';
+  camera.layers.set(3); renderer.render(scene, camera);
   updateHaze();
   updateEye();
   updateBloom();
@@ -2349,6 +2352,7 @@ function renderWorld() {
     camera.layers.set(0); renderer.render(scene, camera);
     camera.layers.set(2); renderer.render(scene, camera);
     camera.layers.set(1); renderer.render(scene, camera);
+    camera.layers.set(3); renderer.render(scene, camera);
     scene.overrideMaterial = null; tallVisible(true); groundHaze.mesh.visible = groundHaze.on; lootFx.visible = true;
     renderer.setClearColor('#0b0912', 1);
   }
@@ -2444,7 +2448,7 @@ class Buf {
   }
 }
 let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf();
-const bufGround = new Buf(), bufWater = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
+const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
   constructor() { super(); this.b = new Float32Array(this.p.length); }
@@ -2516,12 +2520,15 @@ PAL[WASTES] = P('#3e3836', '#38322f', '#5e4c42', '#54443a', '#4a3832', '#160e0c'
 PAL[SNOW].lip = C('#f4f8ff'); PAL[SNOW].rim = C('#a8b6ca');
 const PLAZA = C('#a09480'), PLAZA_B = C('#948872');
 const FLOWER = [C('#e8d24a'), C('#e86a8a'), C('#f0f0f0'), C('#8a7af0')];
-const BED = C('#3a4a50'), BOGW = C('#56744a');
+const BED = C('#3a4a50'), BOG_MUD = C('#3b3524');
+// swamp water (WT 1): its bed lies BOG_BED under the tile, its surface BOG_SURF under it, so it stands knee deep
+const BOG_BED = 0.3, BOG_SURF = 0.06;
 const VOID_Y = -3;
 
 // ---------- Ground chunks ----------
 function groundColor(c, r, i, j) {
   const t = T(c, r);
+  if (WT[t] === 1) return shade(BOG_MUD, 0.85 + hs(c, r, i * 2 + j) * 0.2);   // mud under swamp water
   let b = BI[t];
   // dither into the neighbouring biome near a border, as Bone Road does
   if (hs(c, r, i * 2 + j + 3) > 0.55) {
@@ -2550,6 +2557,7 @@ function groundColor(c, r, i, j) {
 const tileSurf = (c, r, u, v) => {
   const i = T(c, r), l = LIFT[SH[i]];
   if (!LV[i] || BR[i]) return GL[i] * STEP;   // a lake or river bed, the sea floor, a canyon's floor
+  if (WT[i] === 1) return LV[i] * STEP - BOG_BED;   // a swamp pool's bed (its banks are its neighbours' edges)
   return (LV[i] + (l[0] * (1 - u) + l[1] * u) * (1 - v) + (l[3] * (1 - u) + l[2] * u) * v) * STEP;
 };
 // height of the drawn ground at a half-grid point (x2, z2 are twice the world coordinates)
@@ -2592,7 +2600,7 @@ function cliffField(c0, r0, GW) {
     const X = c0 * 2 + hx, Z = r0 * 2 + hz;
     if (X < 0 || Z < 0 || X >= N * 2 || Z >= N * 2) continue;
     const c = X >> 1, r = Z >> 1, i = T(c, r);
-    if (!((LV[i] && !BR[i]) || CY[i])) continue;
+    if (!((LV[i] && !BR[i]) || CY[i]) || WT[i] === 1) continue;   // (swamp pools' banks stay smooth)
     let lifted = false;
     for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++)
       if (H(hx + a, hz + b) > tileSurf(c, r, (X + a) / 2 - c, (Z + b) / 2 - r) + 1e-4) lifted = true;
@@ -2689,7 +2697,6 @@ function roughCell(P, K, Q, flip, lifted) {
 
 function buildGround(cx, cz, ch) {
   OUT = bufGround; bufGround.n = 0;
-  const water = bufWater; water.n = 0;
   const c0 = cx * CH, r0 = cz * CH, GW = CH * 2 + 1;
   const grid = new Float32Array(GW * GW);
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) grid[j * GW + k] = pointH(c0 * 2 + k, r0 * 2 + j);
@@ -2752,12 +2759,6 @@ function buildGround(cx, cz, ch) {
       if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
       else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
     }
-    if (L && WT[i] === 1) {
-      OUT = water;
-      const y = L * STEP + 0.04, k = shade(BOGW, 0.9 + hs(c, r, 5) * 0.15);
-      quad([c, y, r], [c, y, r + 1], [c + 1, y, r + 1], [c + 1, y, r], k);
-      OUT = bufGround;
-    }
     // the cut edge of the world
     for (let d = 0; d < 4; d++) {
       const nc = c + DC[d], nr = r + DR[d];
@@ -2770,8 +2771,7 @@ function buildGround(cx, cz, ch) {
     }
   }
   ch.ground = bufGround.mesh(groundMat);
-  ch.bog = water.mesh(waterMat);
-  if (ch.bog) ch.bog.renderOrder = 1;
+  buildBog(c0, r0, grid, GW, ch);
   if (wet) buildWater(c0, r0, grid, GW, ch);
   if (molten) buildLava(c0, r0, grid, GW, ch);
 }
@@ -2818,6 +2818,33 @@ function buildWater(c0, r0, grid, GW, ch) {
   ch.water = new GFX.Mesh(g, waterMulMat); ch.water.renderOrder = 2;
   ch.water2 = new GFX.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
   ch.water.layers.set(2); ch.water2.layers.set(2);   // drawn after the world, over a copy of it
+}
+// Swamp pools (WT 1) the same way, in their own water (SWAMP_WATER): each point of a pool's tiles at its surface,
+// BOG_SURF under the tiles' level, with how deep it stands over the bed (negative up the banks, where it fades
+// out). Drawn after you (layer 3), over what's there, without writing depth: so you wade into it and the murk
+// takes your legs, rather than the water hiding them as something in front.
+function buildBog(c0, r0, grid, GW, ch) {
+  const pos = [], dep = [], zero2 = [], zero1 = [];
+  const vert = (j, k, y) => { pos.push(c0 + k / 2, y, r0 + j / 2); dep.push(y - grid[j * GW + k]); zero2.push(0, 0); zero1.push(0); };
+  for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+    const i = T(c, r);
+    if (WT[i] !== 1 || !LV[i]) continue;
+    const y = LV[i] * STEP - BOG_SURF;
+    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+      const j = (r - r0) * 2 + b, k = (c - c0) * 2 + a;
+      vert(j, k, y); vert(j + 1, k, y); vert(j + 1, k + 1, y);
+      vert(j, k, y); vert(j + 1, k + 1, y); vert(j, k + 1, y);
+    }
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('wDepth', new GFX.Float32BufferAttribute(dep, 1));
+  g.setAttribute('wFlow', new GFX.Float32BufferAttribute(zero2, 2));
+  g.setAttribute('wFall', new GFX.Float32BufferAttribute(zero1, 1));
+  ch.bog = new GFX.Mesh(g, bogMulMat); ch.bog.renderOrder = 2;
+  ch.bog2 = new GFX.Mesh(g, bogAddMat); ch.bog2.renderOrder = 3;
+  ch.bog.layers.set(3); ch.bog2.layers.set(3);
 }
 // Lava pools and rivers the same way, on their own: each point at the highest lava surface round it, a little
 // lower in its banks than water stands, with how far it is above the bed there (the shore) and its flow.
@@ -2889,7 +2916,6 @@ function updateTrunkCut() {
 }
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
 function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
-const waterMat = new GFX.MeshStandardMaterial({ vertexColors: true, emissive: '#0c2228', roughness: 0.55, metalness: 0, flatShading: true, transparent: true, opacity: 0.74, depthWrite: false });
 const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 
 // ---------- Water (T > Water) ----------
@@ -3107,12 +3133,23 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   if (U.passAdd > 0.5) { return vec4f(add * f, 1.0); }
   return vec4f(mix(vec3f(1.0), mul, f), 1.0);
 }`;
-const makeWaterMat = add => new GFX.ShaderMaterial({
-  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32' }, code: WATER_WGSL,
-  transparent: true, depthWrite: add, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+const makeWaterMat = (add, U = WATER_U, depth = add) => new GFX.ShaderMaterial({
+  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32' }, code: WATER_WGSL,
+  transparent: true, depthWrite: depth, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
   blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
 });
 const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
+// Swamp water (T > Swamp water): the same water, with its own look. Still, dark and murky by default: you see
+// only a little way into it, it barely ripples, and nothing bends or focuses in it. It shares the sun, sky,
+// lamp and textures with the rest; the rest is its own.
+const SWAMP_WATER = { color: '#3c4a1c', clarity: 0.3, turbidity: 1.6, waves: 0.35, waveSpeed: 0.8, rippleSize: 1.4, glitter: 1, roughness: 0.02,
+  sparkle: 0, shoreRipples: 0.3 };
+const BOG_U = Object.assign({}, WATER_U);
+for (const k of ['time', 'waveAmp', 'flowSpeed', 'glitter', 'rough', 'foamAmt', 'shoreFoam', 'swellAmp', 'swellLen', 'rippleLen', 'swellShade', 'crests', 'sparkle',
+  'caustics', 'shallows', 'shoreLine', 'shoreRipples', 'refr', 'refract']) BOG_U[k] = { value: 0 };
+BOG_U.waterCol = { value: new GFX.Vector3() }; BOG_U.absorb = { value: new GFX.Vector3() };
+BOG_U.swellLen.value = BOG_U.rippleLen.value = 1;
+const bogMulMat = makeWaterMat(false, BOG_U, false), bogAddMat = makeWaterMat(true, BOG_U, false);
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
 { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
@@ -3226,6 +3263,16 @@ function updateWater(dt) {
   U.absorb.value.set(0.42 / cl, 0.13 / cl, 0.09 / cl);
   U.lampPos.value.copy(heroLight.position); U.lampCol.value.copy(heroLight.color).multiplyScalar(heroLight.intensity);
   U.lampRange.value = heroLight.distance || 30;
+  // swamp water: its own look (the rest it shares)
+  const B = BOG_U, SW = SWAMP_WATER;
+  B.time.value = (B.time.value + dt * SW.waveSpeed) % 4000;
+  B.waveAmp.value = SW.waves; B.glitter.value = SW.glitter; B.rough.value = Math.max(0.004, SW.roughness);
+  B.rippleLen.value = Math.max(0.2, SW.rippleSize); B.sparkle.value = SW.sparkle; B.shoreRipples.value = SW.shoreRipples;
+  tmpC2.set(SW.color);
+  const bt = SW.turbidity * 0.3, bc = Math.max(0.02, SW.clarity);
+  B.waterCol.value.set(tmpC2.r * bt, tmpC2.g * bt, tmpC2.b * bt);
+  // murk: what light gets through is coloured like the water itself, blue lost first
+  B.absorb.value.set((1.15 - tmpC2.r) * 0.5 / bc, (1.15 - tmpC2.g) * 0.5 / bc, (1.15 - tmpC2.b) * 0.5 / bc);
 }
 
 // ---------- Scenery ----------
@@ -4091,11 +4138,11 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.canopy, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.canopy, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0 };
 function buildChunk(cx, cz) {
   const t0 = performance.now();
-  const ch = { cx, cz, ground: null, lava: null, bog: null, water: null, water2: null, obj: null, glow: null, build: null, used: 0 };
+  const ch = { cx, cz, ground: null, lava: null, bog: null, bog2: null, water: null, water2: null, obj: null, glow: null, build: null, used: 0 };
   buildGround(cx, cz, ch);
   buildObjects(cx, cz, ch);
   buildPieces(cx, cz, ch);
@@ -7805,6 +7852,18 @@ const TUNING = [
     [WATER, 'roughness', 'Glitter spread', 0.004, 0.2, 0.001],
     [WATER, 'foam', 'Foam', 0, 3, 0.05],
     [WATER, 'shoreFoam', 'Shore foam', 0, 2, 0.05],
+  ]],
+  ['Swamp water', [
+    [SWAMP_WATER, 'color', 'Colour', 'color'],
+    [SWAMP_WATER, 'clarity', 'Clarity: how deep you can see into it', 0.05, 3, 0.01],
+    [SWAMP_WATER, 'turbidity', 'Body brightness (silt and algae)', 0, 5, 0.01],
+    [SWAMP_WATER, 'waves', 'Ripple height', 0, 3, 0.01],
+    [SWAMP_WATER, 'waveSpeed', 'Ripple speed', 0, 4, 0.05],
+    [SWAMP_WATER, 'rippleSize', 'Ripple size', 0.3, 4, 0.05],
+    [SWAMP_WATER, 'glitter', 'Sun glitter', 0, 4, 0.05],
+    [SWAMP_WATER, 'roughness', 'Glitter spread', 0.004, 0.2, 0.001],
+    [SWAMP_WATER, 'sparkle', 'Sparkles', 0, 3, 0.05],
+    [SWAMP_WATER, 'shoreRipples', 'Ripples off the banks', 0, 2, 0.05],
   ]],
   ['Health bars', [
     [HPBAR, 'hold', 'Bar over the head stays this long after you look away (seconds)', 0, 10, 0.1],
