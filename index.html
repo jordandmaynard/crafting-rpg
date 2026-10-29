@@ -6682,7 +6682,7 @@ scene.add(heroShadow);
 // Tuning (T > Hero light): strength by night and by day, reach, falloff, colour, and where it hangs:
 // `toward` tiles from the hero along the line to the camera, then `height` above that
 // `steady`: how much of the eye's exposure it takes back off, so it looks as bright however far the eye has opened (1 all of it)
-const HERO_LIGHT = { night: 1.35, day: 0, range: 6.5, decay: 1.4, toward: 1.2, height: 1.0, color: '#ffa142', steady: 1 };
+const HERO_LIGHT = { night: 0.95, day: 0, range: 7.5, decay: 1.4, toward: 1.2, height: 1.0, color: '#ffa142', steady: 1 };
 const heroLight = addLight(new GFX.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.range, HERO_LIGHT.decay));
 // a few lamp lights shared out to whichever town lamps are nearest
 const lampLights = [0, 1, 2, 3].map(() => addLight(new GFX.PointLight('#ffb060', 0, 4.5, 2)));
@@ -7747,16 +7747,21 @@ function swingHit(range, arc, dmg) {
     hurtFoe(f, wdmg(dmg), H.x, H.z); hitAny = true;
   }
   if (hitAny) return;
-  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+  const best = propAhead(range, arc, H.face);
+  if (best) strikeProp(...best, dmg);
+}
+// the nearest tree or rock (anything with hp) within range in an arc about angle a: [i, c, r, dirx, dirz]
+function propAhead(range, arc, a) {
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z), reach = Math.ceil(range) + 1;
   let best = null, bd = 1e9;
-  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+  for (let dr = -reach; dr <= reach; dr++) for (let dc = -reach; dc <= reach; dc++) {
     const c = c0 + dc, r = r0 + dr, i = T(c, r), o = OB[i];
     if (!OBJ[o].hp || Math.abs(LV[i] * STEP - H.y) > 0.6) continue;
     const [ox, oz] = objPos(c, r, o), dx = ox - H.x, dz = oz - H.z, d = Math.hypot(dx, dz);
-    if (d > range + OBJ[o].solid || Math.abs(angDiff(Math.atan2(dx, dz), H.face)) > arc / 2 + 0.2) continue;
+    if (d > range + OBJ[o].solid || Math.abs(angDiff(Math.atan2(dx, dz), a)) > arc / 2 + 0.2) continue;
     if (d < bd) { bd = d; best = [i, c, r, dx / d, dz / d]; }
   }
-  if (best) strikeProp(...best, dmg);
+  return best;
 }
 function hurtHero(dmg, fromX, fromZ) {
   if (!H.alive || H.invuln > 0) return;
@@ -8680,7 +8685,11 @@ function updateSpear(dt) {
   if (sp.kind === 'poke') {
     if (!sp.hit && sp.t > sp.len * 0.4) {
       sp.hit = true;
-      for (const f of foesAhead(sp.dir, SPEAR.reach, SPEAR.width / 2)) hurtFoe(f, wdmg(SPEAR.dmg), H.x, H.z, SPEAR.knock * 8);
+      const hit = foesAhead(sp.dir, SPEAR.reach, SPEAR.width / 2);
+      for (const f of hit) hurtFoe(f, wdmg(SPEAR.dmg), H.x, H.z, SPEAR.knock * 8);
+      // with no foe in the way it works the tree or rock in front, as a sword stroke does (by its damage)
+      const prop = !hit.length && propAhead(SPEAR.reach, 0.4, sp.dir);
+      if (prop) strikeProp(...prop, SPEAR.dmg);
       cutGrass(H.x + fx * 1.2, H.z + fz * 1.2, 0.35, fx, fz);
     }
   } else if (sp.kind === 'flurry') {
@@ -8691,7 +8700,10 @@ function updateSpear(dt) {
       for (let k = 1; k <= SPEAR.flurryGhosts; k++) ghostJab(sp.dir + flurryAt(n + k * 7 + 3) * ha, k * SPEAR.flurryRate / (SPEAR.flurryGhosts + 1));
       sp.next += SPEAR.flurryRate;
       sfx.punch();
-      for (const f of foesAhead(sp.dir, SPEAR.flurryReach, 0, SPEAR.flurryCone * Math.PI / 360)) hurtFoe(f, wdmg(SPEAR.flurryDmg), H.x, H.z, SPEAR.flurryKnock * 8);
+      const hit = foesAhead(sp.dir, SPEAR.flurryReach, 0, SPEAR.flurryCone * Math.PI / 360);
+      for (const f of hit) hurtFoe(f, wdmg(SPEAR.flurryDmg), H.x, H.z, SPEAR.flurryKnock * 8);
+      const prop = !hit.length && propAhead(SPEAR.flurryReach, SPEAR.flurryCone * Math.PI / 180, sp.dir);
+      if (prop) strikeProp(...prop, SPEAR.flurryDmg);
       cutGrass(H.x + fx * 1.3, H.z + fz * 1.3, 0.5, fx, fz);
     }
   } else if (!sp.hit && sp.t > sp.len * 0.4) {
@@ -9834,6 +9846,7 @@ function update(dt) {
 }
 
 // a thrust's reach over its time (0..1): driven out hard, held a moment, drawn back slower
+let spearHeld = 0;
 const spearDrive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 : 1 - smooth(0.45, 1, v);
 // the flurry's nth jab, as a share of the cone's half-angle: spread across it in no order (by the golden ratio)
 const flurryAt = n => ((n * 0.618034 + 0.31) % 1) * 2 - 1;
@@ -9903,8 +9916,11 @@ function animateHero(dt) {
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
-  // (level against the arm's swing while attacking, tipped up a touch; upright at rest)
-  hero.spear.rotation.x += ((H.spear ? -ax - bend - 0.08 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 40);
+  // upright at rest; while attacking, held dead level against the arm's swing and the lean every frame (only the
+  // turn between the two is eased, so it never lags into a tilt as the arm swings back)
+  spearHeld += ((H.spear ? 1 : 0) - spearHeld) * Math.min(1, dt * 30);
+  if (spearHeld < 0.01) spearHeld = 0;
+  hero.spear.rotation.x = -Math.PI / 2 + (Math.PI / 2 - ax - bend) * spearHeld;
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
   hero.body.rotation.y = H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
@@ -11267,8 +11283,9 @@ window.GAME = {
   aimNow: () => [aim.x, aim.z],
   spearCast: k => k === 'q' ? castFlurry() : k === 'e' ? castHarpoon() : startSpear('poke'),
   harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
+  treeNear: () => { const c0 = Math.floor(H.x), r0 = Math.floor(H.z); for (let d = 1; d < 40; d++) for (let r = r0 - d; r <= r0 + d; r++) for (let c = c0 - d; c <= c0 + d; c++) { const i = T(c, r), o = OB[i]; if (OBJ[o].tree && OBJ[o].hp) { const [x, z] = objPos(c, r, o); return [x, z, c, r]; } } return null; },
   ghosts: () => ghostSpears.filter(g => g.g.visible).length + " shown, spear in hand " + hero.spearShaft.visible + ", chain " + chainLinks.count,
-  spearPose: t => { if (H.spear && t !== undefined) { H.spear.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.updateMatrixWorld(); const p = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld), q = new GFX.Vector3(0, 0, SPEAR_TIP).applyMatrix4(hero.spearShaft.matrixWorld), c = new GFX.Vector3(0, 0, -SPEAR_BUTT).applyMatrix4(hero.spearShaft.matrixWorld); const f = [Math.sin(H.face), Math.cos(H.face)], ah = v => +((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2); return `t ${H.spear ? H.spear.t.toFixed(2) : "-"} hand ${ah(p)} y ${(p.y - H.y).toFixed(2)} tip ${ah(q)} y ${(q.y - H.y).toFixed(2)} butt ${ah(c)} bend ${hero.body.rotation.x.toFixed(2)}`; },
+  spearPose: t => { if (H.spear && t !== undefined) { H.spear.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.updateMatrixWorld(); const p = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld), q = new GFX.Vector3(0, 0, SPEAR_TIP).applyMatrix4(hero.spearShaft.matrixWorld), c = new GFX.Vector3(0, 0, -SPEAR_BUTT).applyMatrix4(hero.spearShaft.matrixWorld); const f = [Math.sin(H.face), Math.cos(H.face)], ah = v => +((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2); return `t ${H.spear ? H.spear.t.toFixed(2) : "-"} hand ${ah(p)} y ${(p.y - H.y).toFixed(2)} tip ${ah(q)} y ${(q.y - H.y).toFixed(2)} butt ${ah(c)} y ${(c.y - H.y).toFixed(2)} bend ${hero.body.rotation.x.toFixed(2)}`; },
   foeSlow: () => foes.map(f => +(f.slowT || 0).toFixed(2)),
   rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
   aimForce: k => { aimForce = k; },
