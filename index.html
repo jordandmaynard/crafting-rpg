@@ -332,7 +332,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     <h1 id="optsTitle">OPTIONS</h1>
     <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
-    <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: with the bow, hold Q or E to aim (its reach glows on the ground) and let go to shoot</span></label>
+    <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
     <button class="go" id="optsClose">DONE</button>
   </div>
 </div>
@@ -8124,6 +8124,8 @@ function castWhirl() {
   H.whirl = 0; H.whirlTick = 0; H.cdQ = CD.Q; H.swing = -1;
   sfx.whirl();
 }
+// the lunge: a dash of `speed` tiles a second for `time` seconds, striking foes within `reach` of you on the way
+const LUNGE = { speed: 14, time: 0.24, reach: 1.0 };
 function castLunge() {
   if (mode !== 'play' || !H.alive || H.cdE > 0 || H.lunge >= 0 || H.whirl >= 0 || H.flip) return;
   H.lunge = 0; H.cdE = CD.E; H.swing = -1; H.lungeHit = new Set();
@@ -8358,7 +8360,8 @@ function updateArrows(dt) {
 const AIM_FX = { color: '#193148', steady: 1,
   shotWidth: 0.3, shotEdge: 0.02, shotEdgeBright: 0.8, shotFill: 0.15,
   volleyEdge: 0.04, volleyEdgeBright: 0.95, volleyFill: 0.15,
-  rainEdge: 0.03, rainEdgeBright: 0.95, rainFill: 0.15};
+  rainEdge: 0.03, rainEdgeBright: 0.95, rainFill: 0.15,
+  lungeWidth: 2, lungeEdge: 0.03, lungeEdgeBright: 0.95, lungeFill: 0.15 };
 const AIM_NU = 84, AIM_NV = 72;
 const AIM_U = { tD: { value: WATER_U.tRefrD.value }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
   len: { value: 20 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
@@ -8377,13 +8380,13 @@ fn aimBand(d: f32) -> f32 {
 }
 fn aimShape(d: vec2f) -> f32 {
   // the rain: a disc round where it falls
-  if (U.kind > 1.5) { return aimBand(U.radius - length(d)); }
+  if (U.kind > 1.5 && U.kind < 2.5) { return aimBand(U.radius - length(d)); }
   // along the aim and across it
   let f = U.dir.xz;
   let q = vec2f(dot(d, f), d.x * f.y - d.y * f.x);
   if (q.x < 0.45 || q.x > U.len) { return 0.0; }
-  // the shot: a long thin box, edged along both its sides
-  if (U.kind < 0.5) { return aimBand(U.boxW * 0.5 - abs(q.y)); }
+  // the shot (or the sword's lunge): a long box, edged along both its sides
+  if (U.kind < 0.5 || U.kind > 2.5) { return aimBand(U.boxW * 0.5 - abs(q.y)); }
   // the volley: its cone, edged along both its sides
   let half = U.cone * 0.5;
   return aimBand(q.x * sin(half) - abs(q.y) * cos(half));
@@ -8425,17 +8428,21 @@ const aimMesh = (() => {
 })();
 // Q and E held to aim (with the bow, when the option's on), and the touch button held
 const abilHeld = { q: false, e: false };
-const onRelease = () => OPTIONS.attackOnRelease && weapon().strike === 'shoot';
-function pressAbility(key) { if (onRelease()) abilHeld[key] = true; else useAbility(key); }
+// (the bow's Q and E, and the sword's lunge: the whirl and the swing are point blank)
+const AIMED = new Set(['volley', 'rain', 'lunge']);
+const onRelease = key => OPTIONS.attackOnRelease && AIMED.has(weapon()[key]);
+function pressAbility(key) { if (onRelease(key)) abilHeld[key] = true; else useAbility(key); }
 function releaseAbility(key) {
   if (!abilHeld[key]) return;
   abilHeld[key] = false;
-  if (weapon().strike === 'shoot') useAbility(key);
+  if (AIMED.has(weapon()[key])) useAbility(key);
 }
 let aimForce = -1;   // (the test hook's stand-in for a held button)
 function aimKind() {
   if (aimForce >= 0) return aimForce;
-  if (mode !== 'play' || !H.alive || weapon().strike !== 'shoot' || invOpen) return -1;
+  if (mode !== 'play' || !H.alive || invOpen) return -1;
+  if (weapon().e === 'lunge' && (abilHeld.e || TOUCH.hold === 'e')) return 3;
+  if (weapon().strike !== 'shoot') return -1;
   if (abilHeld.e || TOUCH.hold === 'e') return 2;
   if (abilHeld.q || TOUCH.hold === 'q') return 1;
   if (mouse.down || PAD.attack || TOUCH.attack) return 0;
@@ -8448,6 +8455,7 @@ function updateAimDecal() {
   let ox = H.x, oz = H.z, fx = aim.x, fz = aim.z, a0 = 0, a1 = BOW.range + 1, hw = AIM_FX.shotWidth / 2 + 1;
   if (k === 2) { [ox, oz] = rainTarget(); fx = 0; fz = 1; a0 = -BOW.rainRadius - 1.2; a1 = BOW.rainRadius + 1.2; hw = a1; }
   else if (k === 1) hw = a1 * Math.tan(Math.min(BOW.volleyCone, 170) * Math.PI / 360) + 1.2;
+  else if (k === 3) { a1 = LUNGE.speed * LUNGE.time + LUNGE.reach + 1; hw = AIM_FX.lungeWidth / 2 + 1; }
   const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
   // the sheet: a grid over the shape's box, along the aim (a) and across it (s, to the right: (fz, -fx))
   let o = 0;
@@ -8463,8 +8471,9 @@ function updateAimDecal() {
   const U = AIM_U;
   U.origin.value.set(ox, 0, oz); U.dir.value.set(fx, 0, fz); U.kind.value = k;
   U.len.value = BOW.range; U.cone.value = BOW.volleyCone * Math.PI / 180; U.radius.value = BOW.rainRadius;
-  const nm = ['shot', 'volley', 'rain'][k], A = AIM_FX;
-  U.boxW.value = A.shotWidth; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
+  const nm = ['shot', 'volley', 'rain', 'lunge'][k], A = AIM_FX;
+  if (k === 3) U.len.value = LUNGE.speed * LUNGE.time + LUNGE.reach;
+  U.boxW.value = k === 3 ? A.lungeWidth : A.shotWidth; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
   U.color.value.set(AIM_FX.color);
 }
 function castDash() {
@@ -9290,11 +9299,11 @@ function update(dt) {
       if (H.dash > TUMBLE.time) { H.dash = -1; H.boost = TUMBLE.boostTime; }
     } else if (H.lunge >= 0) {
       H.lunge += dt;
-      const sp = H.lunge < 0.24 ? 14 : 0;
+      const sp = H.lunge < LUNGE.time ? LUNGE.speed : 0;
       vx = Math.sin(H.face) * sp; vz = Math.cos(H.face) * sp;
       if (H.lunge < 0.3) cutGrass(H.x + Math.sin(H.face) * 0.5, H.z + Math.cos(H.face) * 0.5, 0.55, Math.sin(H.face), Math.cos(H.face));
       for (const f of foes.slice()) {
-        if (H.lungeHit.has(f) || Math.hypot(f.x - H.x, f.z - H.z) > 1.0 + f.def.rad) continue;
+        if (H.lungeHit.has(f) || Math.hypot(f.x - H.x, f.z - H.z) > LUNGE.reach + f.def.rad) continue;
         H.lungeHit.add(f); hurtFoe(f, 26, H.x - Math.sin(H.face), H.z - Math.cos(H.face), 4.5);
       }
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
@@ -10405,6 +10414,10 @@ const TUNING = [
     [AIM_FX, 'rainEdge', 'Rain: edge width (tiles)', 0, 0.5, 0.01],
     [AIM_FX, 'rainEdgeBright', 'Rain: edge brightness', 0, 6, 0.05],
     [AIM_FX, 'rainFill', 'Rain: fill brightness', 0, 3, 0.05],
+    [AIM_FX, 'lungeWidth', 'Lunge: box width (tiles)', 0.1, 4, 0.05],
+    [AIM_FX, 'lungeEdge', 'Lunge: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'lungeEdgeBright', 'Lunge: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'lungeFill', 'Lunge: fill brightness', 0, 3, 0.05],
   ]],
   ['Bow', [
     [BOW, 'dmg', 'Shot damage', 1, 60, 1],
