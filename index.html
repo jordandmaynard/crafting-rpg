@@ -125,7 +125,8 @@ body.pad canvas { cursor: none; }
 .cell .n { position: absolute; right: 3px; bottom: 1px; font-family: var(--display); font-size: 8px; color: var(--bone); text-shadow: 1px 1px 0 #000; pointer-events: none; }
 #craft { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 6; width: min(400px, calc(100vw - 32px)); box-sizing: border-box; padding: 10px 12px 12px; -webkit-user-select: none; user-select: none; }
 #craft .card-title { display: flex; justify-content: space-between; margin-bottom: 8px; }
-#craft .card-title span { color: var(--dim); }
+#craft .card-title #craftHave { color: var(--dim); }
+#craftList { max-height: min(430px, calc(100vh - 140px)); overflow-y: auto; }
 .recipe { display: grid; grid-template-columns: 48px 1fr auto auto; align-items: center; gap: 10px; padding: 4px; border: 3px solid transparent; }
 .recipe.focus { border-color: var(--gold); }
 .recipe .cell { width: 48px; height: 48px; cursor: default; }
@@ -299,7 +300,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 </div>
 <div id="dragIcon" hidden></div>
 <div id="craft" class="plate" hidden>
-  <div class="card-title">TANNING TABLE <span id="craftHave"></span></div>
+  <div class="card-title"><span id="craftTitle">TANNING TABLE</span> <span id="craftHave"></span></div>
   <div id="craftList"></div>
   <div class="craftFoot"><span class="kb-only">F OR ESC PUTS IT AWAY</span><span class="pad-only">D-PAD PICKS · A CRAFTS · B CLOSES</span><button id="craftClose">DONE</button></div>
 </div>
@@ -313,7 +314,7 @@ button:disabled { opacity: 0.45; cursor: default; }
       <li class="kb-only"><span><kbd>WASD</kbd> move, aim with the mouse, <kbd>LMB</kbd> attack (hold to keep swinging). Hit trees and rocks to gather.</li>
       <li class="kb-only"><span><kbd>Q</kbd> whirlwind, <kbd>E</kbd> lunge, <kbd>SPACE</kbd> dash (a tumble you can steer), <kbd>F</kbd> open and close doors.</span></li>
       <li class="kb-only"><span><kbd>TAB</kbd> inventory (your gear and pack, with your logs and stone): click to put on or take off, drag to move. Drag the window by its top to move it. Your weapon gives your attack and your <kbd>Q</kbd> and <kbd>E</kbd>; bare-handed you punch.</span></li>
-      <li>Wolves and boars leave a hide where they fall (<span class="kb-only"><kbd>F</kbd></span><span class="pad-only"><g-p>A</g-p></span> picks it up; hides stack to 100). Logs and stone go straight into your pack, 200 to a square; when it's full they fall on the ground in piles of up to 200 to pick up. Every town has a tannery: use its tanning table to make leather armor, pants, boots and a helmet.</li>
+      <li>Wolves and boars leave a hide where they fall (<span class="kb-only"><kbd>F</kbd></span><span class="pad-only"><g-p>A</g-p></span> picks it up; hides stack to 100). Logs and stone go straight into your pack, 200 to a square; when it's full they fall on the ground in piles of up to 200 to pick up. Every town has a tannery: use its tanning table to make leather armor, pants, boots and a helmet. Skeletons always leave bones, and wolves, boars and hellhounds do half the time. The town smithy's weapon table makes a sword, bow or spear from 10 logs, bones, copper ore or iron ore: the same attacks, harder hitting the better the material.</li>
       <li class="kb-only"><span><kbd>B</kbd> build mode: <kbd>1</kbd> floor, <kbd>2</kbd> wall, <kbd>3</kbd> door. <kbd>LMB</kbd> places, <kbd>RMB</kbd> removes for a full refund.</span></li>
       <li class="pad-only"><span><g-p>LS</g-p> move, <g-p>RS</g-p> aim, <g-p>RT</g-p> attack (hold to keep swinging). Hit trees and rocks to gather.</span></li>
       <li class="pad-only"><span><g-p>X</g-p> whirlwind, <g-p>Y</g-p> lunge, <g-p>B</g-p> dash, <g-p>A</g-p> open and close doors, or jump down off a cliff edge.</span></li>
@@ -1508,17 +1509,25 @@ function raiseHouses(t, n) {
       }
     }
   });
-  // the first house is the tannery: its table stands on the floor tile farthest from the door, along the house
-  const tan = t.houses[0];
-  if (tan) {
-    const [ic, ir] = tan.inside;
-    let best = tan.tiles[0], bd = -1;
-    for (const [c, r] of tan.tiles) { const d = Math.hypot(c - ic, r - ir); if (d > bd) { bd = d; best = [c, r]; } }
-    const cs = tan.tiles.map(p => p[0]), rs = tan.tiles.map(p => p[1]);
+  // the first house is the tannery and the second the smithy (or the tannery too, in a town of one house): each
+  // table stands on the free floor tile farthest from the door, along the house
+  const table = (house, o, kind) => {
+    const [ic, ir] = house.inside;
+    let best = null, bd = -1;
+    for (const [c, r] of house.tiles) { const d = Math.hypot(c - ic, r - ir); if (OB[T(c, r)] !== O.TANTABLE && d > bd) { bd = d; best = [c, r]; } }
+    if (!best) return;
+    const cs = house.tiles.map(p => p[0]), rs = house.tiles.map(p => p[1]);
     const wide = Math.max(...cs) - Math.min(...cs) >= Math.max(...rs) - Math.min(...rs);
-    OB[T(best[0], best[1])] = O.TANTABLE;
-    TABLES.push({ c: best[0], r: best[1], x: best[0] + 0.5, z: best[1] + 0.5, ry: wide ? 0 : Math.PI / 2, town: n });
+    OB[T(best[0], best[1])] = o;
+    TABLES.push({ c: best[0], r: best[1], x: best[0] + 0.5, z: best[1] + 0.5, ry: wide ? 0 : Math.PI / 2, town: n, kind });
+  };
+  const tan = t.houses[0], smithy = t.houses[1] || tan;
+  if (tan) {
+    table(tan, O.TANTABLE, 'tan');
     tan.color = '#7a5634'; tan.tannery = true; t.tannery = tan;
+    table(smithy, O.WEAPONTABLE, 'weapon');
+    if (smithy !== tan) smithy.color = '#5a5664';
+    smithy.smithy = true; t.smithy = smithy;
   }
 }
 const TABLES = [];
@@ -2003,7 +2012,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50, TANTABLE: 51,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -2035,6 +2044,7 @@ def(O.SHRINE, { tile: true });
 def(O.LAMP, { solid: 0.1 });
 def(O.HEARTH, { solid: 0.44 });
 def(O.TANTABLE, { name: 'tanning table', tile: true });
+def(O.WEAPONTABLE, { name: 'weapon table', tile: true });
 [O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG, O.FERN, O.PUMICE].forEach(id => def(id, {}));
 
 // where on its tile an object stands (round ones wander a little off centre)
@@ -5349,6 +5359,31 @@ function tanTable(x, z, c, r) {
   const [vx, vz] = at(-0.33, -0.16); part(G.cyl8, '#5a4a3a', vx, y + 0.63, vz, { sx: 0.13, sy: 0.14, sz: 0.13 });
   part(G.cyl8, '#3a2014', vx, y + 0.705, vz, { sx: 0.1, sy: 0.01, sz: 0.1 });
 }
+// the smithy's weapon table: a bench with a little anvil at one end, a sword and a spear laid out, a hammer and a
+// rack of bow staves leant at the back
+function weaponTable(x, z, c, r) {
+  const y = surfaceY(x, z), ry = TABLES.find(t => t.c === c && t.r === r)?.ry || 0, wood = '#6a4a30', dark = '#3a2618', steel = '#c8ccd4';
+  const at = (a, b) => [x + Math.cos(ry) * a + Math.sin(ry) * b, z - Math.sin(ry) * a + Math.cos(ry) * b];
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.2); part(G.box, dark, px, y + 0.25, pz, { sx: 0.08, sy: 0.5, sz: 0.08, ry }); }
+  part(G.box, wood, x, y + 0.53, z, { sx: 0.9, sy: 0.07, sz: 0.56, ry });
+  part(G.box, dark, x, y + 0.2, z, { sx: 0.78, sy: 0.05, sz: 0.06, ry });
+  // the anvil: a dark block on a waist, its horn out to the side
+  const [ax, az] = at(-0.27, -0.04);
+  part(G.box, '#3a3640', ax, y + 0.6, az, { sx: 0.12, sy: 0.07, sz: 0.1, ry });
+  part(G.box, '#4a4652', ax, y + 0.67, az, { sx: 0.22, sy: 0.07, sz: 0.13, ry });
+  const [hx, hz] = at(-0.42, -0.04); part(G.box, '#4a4652', hx, y + 0.675, hz, { sx: 0.09, sy: 0.04, sz: 0.06, ry });
+  // a sword and a spear laid along it, and a hammer
+  const [sx, sz] = at(0.1, -0.12);
+  part(G.box, steel, sx, y + 0.575, sz, { sx: 0.4, sy: 0.015, sz: 0.04, ry });
+  const [gx, gz] = at(-0.11, -0.12); part(G.box, '#c8a040', gx, y + 0.58, gz, { sx: 0.03, sy: 0.02, sz: 0.13, ry });
+  const [px, pz] = at(-0.17, -0.12); part(G.box, '#5a3a22', px, y + 0.58, pz, { sx: 0.1, sy: 0.025, sz: 0.03, ry });
+  const [qx, qz] = at(0.05, 0.1); part(G.box, '#8a6440', qx, y + 0.578, qz, { sx: 0.66, sy: 0.022, sz: 0.022, ry });
+  const [tx, tz] = at(0.4, 0.1); part(G.box, steel, tx, y + 0.578, tz, { sx: 0.13, sy: 0.015, sz: 0.06, ry });
+  const [mx, mz] = at(0.3, -0.06); part(G.box, '#5a3a22', mx, y + 0.578, mz, { sx: 0.03, sy: 0.022, sz: 0.18, ry: ry + 0.3 });
+  const [nx, nz] = at(0.33, -0.15); part(G.box, '#4a4652', nx, y + 0.59, nz, { sx: 0.1, sy: 0.05, sz: 0.05, ry: ry + 0.3 });
+  // bow staves leant against the bench's back
+  for (const k of [-0.1, 0.05, 0.2]) { const [bx, bz] = at(k, 0.3); part(G.box, '#7a4a26', bx, y + 0.42, bz, { sx: 0.035, sy: 0.84, sz: 0.035, ry, rx: -0.2 }); }
+}
 function well(x, z) {
   const y = groundAt(x, z);
   part(G.cyl8, '#8a8494', x, y + 0.2, z, { sx: 0.84, sy: 0.4, sz: 0.84 });
@@ -5406,6 +5441,7 @@ function drawObject(o, c, r) {
     case O.SHRINE: return shrine(x, z, k * 6);
     case O.HEARTH: return hearth(x, z, c, r);
     case O.TANTABLE: return tanTable(x, z, c, r);
+    case O.WEAPONTABLE: return weaponTable(x, z, c, r);
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -6118,6 +6154,8 @@ const heroSkin = flatMat({ color: '#e0b48a' }), heroTunic = flatMat({ color: '#3
 const HERO_MAT = {
   tunic: heroTunic, hood: flatMat({ color: '#2f5a3a' }), pants: flatMat({ color: '#5a4632' }), boots: flatMat({ color: '#3a2a1e' }),
   leather: flatMat({ color: '#8a5a34' }), leatherDark: flatMat({ color: '#4e3220' }), leatherPants: flatMat({ color: '#9a6a3e' }), leatherBoots: flatMat({ color: '#6e4426' }),
+  wpnWood: flatMat({ color: '#8a5a32' }), wpnBone: flatMat({ color: '#e4dac0' }),
+  wpnCopper: flatMat({ color: '#d4773e', roughness: 0.4, metalness: 0.5 }), wpnIron: flatMat({ color: '#d8dce8', roughness: 0.35, metalness: 0.55 }),
 };
 function makeHuman() {
   const g = new GFX.Group(), parts = [];
@@ -6167,20 +6205,20 @@ function makeHuman() {
   wear('sword', sword);
   box(sword, 0.035, 0.035, 0.14, 0, 0, 0, hiltMat);
   box(sword, 0.16, 0.03, 0.035, 0, 0, 0.08, goldMat);
-  box(sword, 0.045, 0.015, 0.46, 0, 0, 0.32, steelMat);
+  wear('wpn', box(sword, 0.045, 0.015, 0.46, 0, 0, 0.32, HERO_MAT.wpnIron));
   box(sword, 0.05, 0.05, 0.05, 0, 0, -0.08, goldMat);
   // the bow, in the left hand: its limbs run along the hand's z (stood upright at rest by turning its pivot), bowed
   // back toward its string on the hand's +y, which is toward you when the arm is raised to shoot. The string is two
   // halves from the tips, each turned and stretched to meet where it's drawn, with an arrow nocked there.
   const bow = pivot(armL, 0, -0.25, 0.02);
   wear('bow', bow);
-  const bowWood = flatMat({ color: '#7a4a26' }), bowString = flatMat({ color: '#e8dcc0' });
+  const bowString = flatMat({ color: '#e8dcc0' });
   box(bow, 0.045, 0.045, 0.1, 0, 0, 0, hiltMat);
   for (const k of [1, -1]) {
     const pts = [[0, 0.05], [0.035, 0.19], [0.12, 0.32]];
     for (let j = 0; j < 2; j++) {
       const [y0, z0] = pts[j], [y1, z1] = pts[j + 1], len = Math.hypot(y1 - y0, z1 - z0);
-      box(bow, 0.032, 0.026, len + 0.02, 0, (y0 + y1) / 2, k * (z0 + z1) / 2, bowWood, Math.atan2(-(y1 - y0) * k, z1 - z0));
+      wear('wpn', box(bow, 0.032, 0.026, len + 0.02, 0, (y0 + y1) / 2, k * (z0 + z1) / 2, HERO_MAT.wpnWood, Math.atan2(-(y1 - y0) * k, z1 - z0)));
     }
   }
   const bowStr = [1, -1].map(k => {
@@ -6200,8 +6238,7 @@ function makeHuman() {
   const spearShaft = pivot(spear, 0, 0, 0);
   box(spearShaft, 0.032, 0.032, 1.3, 0, 0, 0.35, flatMat({ color: '#8a6440' }));
   box(spearShaft, 0.045, 0.045, 0.08, 0, 0, 0.98, hiltMat);
-  box(spearShaft, 0.07, 0.02, 0.16, 0, 0, 1.09, steelMat);
-  box(spearShaft, 0.04, 0.04, 0.06, 0, 0, 1.19, steelMat);
+  wear('wpn', box(spearShaft, 0.07, 0.02, 0.16, 0, 0, 1.09, HERO_MAT.wpnIron), box(spearShaft, 0.04, 0.04, 0.06, 0, 0, 1.19, HERO_MAT.wpnIron));
   spear.rotation.x = -Math.PI / 2;
   g.scale.setScalar(1.12);
   return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock, spear, spearShaft };
@@ -6414,17 +6451,17 @@ function makeMantrap() {
 }
 const FOE = {
   goblin: { make: makeGoblin, name: 'Goblin', hp: 30, dmg: 7, speed: 2.7, reach: 0.8, aggro: 8, rad: 0.25 },
-  hellhound: { make: makeHellhound, name: 'Hellhound', hp: 38, dmg: 10, speed: 4.2, reach: 0.9, aggro: 10, rad: 0.3 },
+  hellhound: { make: makeHellhound, name: 'Hellhound', hp: 38, dmg: 10, speed: 4.2, reach: 0.9, aggro: 10, rad: 0.3, bone: 0.5 },
   firespirit: { make: makeFireSpirit, name: 'Fire spirit', hp: 30, dmg: 10, speed: 2.5, reach: 0.9, aggro: 9, rad: 0.27 },
-  wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28, hide: true },
+  wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28, hide: true, bone: 0.5 },
   slime: { make: makeSlime, name: 'Bog slime', hp: 26, dmg: 6, speed: 1.8, reach: 0.75, aggro: 6, rad: 0.3 },
   ghost: { make: () => makeGhost(), name: 'Wailing ghost', hp: 28, dmg: 9, speed: 2.4, reach: 0.85, aggro: 9, rad: 0.25 },
   zombie: { make: makeZombie, name: 'Zombie', hp: 48, dmg: 11, speed: 1.55, reach: 0.85, aggro: 7, rad: 0.27 },
-  skeleton: { make: makeSkeleton, name: 'Skeleton', hp: 34, dmg: 9, speed: 2.5, reach: 0.9, aggro: 8, rad: 0.25 },
-  frostwolf: { make: () => makeWolf('#dfe8f2', '#a8b8cc', '#5ad0ff'), name: 'Frost wolf', hp: 40, dmg: 10, speed: 4.1, reach: 0.85, aggro: 10, rad: 0.28, hide: true },
+  skeleton: { make: makeSkeleton, name: 'Skeleton', hp: 34, dmg: 9, speed: 2.5, reach: 0.9, aggro: 8, rad: 0.25, bone: 1 },
+  frostwolf: { make: () => makeWolf('#dfe8f2', '#a8b8cc', '#5ad0ff'), name: 'Frost wolf', hp: 40, dmg: 10, speed: 4.1, reach: 0.85, aggro: 10, rad: 0.28, hide: true, bone: 0.5 },
   wraith: { make: () => makeGhost('#a8d8ff', '#2a5a9a'), name: 'Ice wraith', hp: 36, dmg: 11, speed: 2.6, reach: 0.9, aggro: 10, rad: 0.25 },
   scorpion: { make: makeScorpion, name: 'Giant scorpion', hp: 36, dmg: 9, speed: 3.1, reach: 0.9, aggro: 8, rad: 0.3 },
-  boar: { make: makeBoar, name: 'Wild boar', hp: 36, dmg: 9, speed: 3.6, reach: 0.85, aggro: 6, rad: 0.3, hide: true },
+  boar: { make: makeBoar, name: 'Wild boar', hp: 36, dmg: 9, speed: 3.6, reach: 0.85, aggro: 6, rad: 0.3, hide: true, bone: 0.5 },
   spider: { make: makeSpider, name: 'Giant spider', hp: 24, dmg: 7, speed: 4.4, reach: 0.8, aggro: 9, rad: 0.3 },
   // rooted: never moves, only turns to face you and lunges its head out to bite
   mantrap: { make: makeMantrap, name: 'Mantrap', hp: 44, dmg: 12, speed: 0, reach: 1.55, aggro: 3.4, rad: 0.3, rooted: true },
@@ -6784,6 +6821,21 @@ function pixelSvg(rows, palette) {
   rows.forEach((row, y) => [...row].forEach((ch, x) => { if (palette[ch]) rects += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${palette[ch]}"/>`; }));
   return `<svg viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
 }
+// The weapons come in four materials, each made at a town's weapon table from WEAPON_TIER.cost of it (mat):
+// the same strokes and abilities, harder hitting the better the stuff (WEAPON_TIER[tier] times the damage).
+// look recolours each weapon's icon, and part is the HERO_MAT the hero's blade, bow limbs or spearhead wear.
+const WEAPON_TIER = { wood: 1, bone: 1.3, copper: 1.6, iron: 2, cost: 10 };
+const TIERS = {
+  wood: { name: 'Wooden', mat: 'wood', part: 'wpnWood', look: { sword: { w: '#c89a62', s: '#9a6a3e' }, bow: {}, spear: { s: '#9a6a3e', S: '#c89a62' } } },
+  bone: { name: 'Bone', mat: 'bone', part: 'wpnBone', look: { sword: { w: '#f8f2e2', s: '#d8ccae' }, bow: { b: '#d8ccae' }, spear: { s: '#d8ccae', S: '#f8f2e2' } } },
+  copper: { name: 'Copper', mat: 'copperOre', part: 'wpnCopper', look: { sword: { w: '#f0a060', s: '#c8743a' }, bow: { b: '#b0602e' }, spear: { s: '#c8743a', S: '#f0a060' } } },
+  iron: { name: 'Iron', mat: 'ironOre', part: 'wpnIron', look: { sword: {}, bow: { b: '#7a7684' }, spear: {} } },
+};
+const WEAPON_ART = {
+  sword: [['.......ww', '......wsw', '.....wsw.', '....wsw..', '.y.wsw...', '..yww....', '..by.....', '.b..y....', 'b........'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }],
+  bow: [['......b..', '....bbs..', '...b..s..', '..b...s..', 'hwgwwwsff', '..b...s..', '...b..s..', '....bbs..', '......b..'], { b: '#8a5a32', g: '#5a3a22', s: '#efe4c8', w: '#c89a62', h: '#a8acb8', f: '#d8443a' }],
+  spear: [['.......sS', '......sss', '.....bs..', '....b....', '...b.....', '..b......', '.b.......', 'b........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }],
+};
 // shapes the cloth and leather pieces share, in their own colours
 const ART = {
   shirt: ['.TT.c.TT.', 'TTTcccTTT', 'TsTTTTTsT', '.TTTTTTT.', '..TTTTT..', '..TTTTT..', '..ttttt..'],
@@ -6794,10 +6846,11 @@ const ICON = {
   skull: pixelSvg(['.XXXXX.', 'XXXXXXX', 'XrrXrrX', 'XXXdXXX', '.XXXXX.', '.X.X.X.'], { X: '#efe4c8', r: '#d8443a', d: '#17131f' }),
   wood: pixelSvg(['..BBBBB.', '.BbbbbbB', 'BbBBBBbB', 'BbBrrBbB', 'BbBBBBbB', '.BbbbbbB', '..BBBBB.'], { B: '#8a5a32', b: '#5a3a22', r: '#c89a62' }),
   stone: pixelSvg(['..GGG...', '.GgggGG.', 'GgggggGG', 'GggwggGG', 'GgggggGG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', w: '#c8c6d0' }),
-  sword: pixelSvg(['.......ww', '......wsw', '.....wsw.', '....wsw..', '.y.wsw...', '..yww....', '..by.....', '.b..y....', 'b........'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
+  sword: pixelSvg(...WEAPON_ART.sword),
   whirl: pixelSvg(['...www...', '.ww...ww.', 'w..sss..w', 'w.s...s.w', 'w.s.y.s.w', 'w.s...s.w', 'w..sss..w', '.ww...ww.', '...www...'], { w: '#8de8dc', s: '#efe4c8', y: '#f2c14e' }),
-  bow: pixelSvg(['......b..', '....bbs..', '...b..s..', '..b...s..', 'hwgwwwsff', '..b...s..', '...b..s..', '....bbs..', '......b..'], { b: '#8a5a32', g: '#5a3a22', s: '#efe4c8', w: '#c89a62', h: '#a8acb8', f: '#d8443a' }),
-  spear: pixelSvg(['.......sS', '......sss', '.....bs..', '....b....', '...b.....', '..b......', '.b.......', 'b........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }),
+  bow: pixelSvg(...WEAPON_ART.bow),
+  spear: pixelSvg(...WEAPON_ART.spear),
+  bone: pixelSvg(['WW.....WW', 'WbW...WbW', '.WbW.WbW.', '..WbWbW..', '...WbW...', '..WbWbW..', '.WbW.WbW.', 'WbW...WbW', 'WW.....WW'], { W: '#efe4c8', b: '#c8bc9c' }),
   flurry: pixelSvg(['.s..S..s.', '.s..s..s.', '..b.b.b..', '..b.b.b..', '...bbb...', '....b....', '....b....', '.........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }),
   harpoon: pixelSvg(['.....sSs.', '......ss.', '.....s.s.', '....c....', '...c.....', '..c......', '.c.......', 'c........', '.........'], { s: '#a8acb8', S: '#efe4c8', c: '#6a6674' }),
   volley: pixelSvg(['h...h...h', '.w..w..w.', '..w.w.w..', '...www...', '....w....', '....w....', '...fwf...', '...f.f...', '.........'], { h: '#a8acb8', w: '#c89a62', f: '#d8443a' }),
@@ -6836,6 +6889,7 @@ const ICON = {
   bag: pixelSvg(['...ddd...', '..d...d..', '.BBBBBBB.', '.BbbbbbB.', '.BBByBBB.', '.BbbbbbB.', '.BBBBBBB.'], { B: '#8a5a32', b: '#5a3a22', d: '#5a3a22', y: '#f2c14e' }),
   lock: pixelSvg(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
 };
+for (const [t, tr] of Object.entries(TIERS)) for (const [w, [rows, pal]] of Object.entries(WEAPON_ART)) ICON[w + '_' + t] = pixelSvg(rows, { ...pal, ...tr.look[w] });
 // an empty gear slot shows what goes there, in shadow
 const dimIcon = svg => svg.replace(/fill="#[0-9a-f]+"/g, 'fill="#3a3150"');
 
@@ -6848,9 +6902,6 @@ const ITEMS = {
   clothShirt: { name: 'Cloth Shirt', slot: 'chest', icon: 'shirt', armor: 0, mat: 'tunic', trim: 'hood' },
   clothPants: { name: 'Cloth Pants', slot: 'legs', icon: 'pants', armor: 0, mat: 'pants' },
   clothBoots: { name: 'Cloth Boots', slot: 'boots', icon: 'boots', armor: 0, mat: 'boots' },
-  basicSword: { name: 'Basic Sword', slot: 'weapon', icon: 'sword', strike: 'slash', q: 'whirl', e: 'lunge' },
-  hunterBow: { name: 'Hunting Bow', slot: 'weapon', icon: 'bow', strike: 'shoot', q: 'volley', e: 'rain' },
-  ironSpear: { name: 'Iron Spear', slot: 'weapon', icon: 'spear', strike: 'poke', q: 'flurry', e: 'harpoon' },
   leatherArmor: { name: 'Leather Armor', slot: 'chest', icon: 'leatherArmor', armor: 3, mat: 'leather', trim: 'leatherDark' },
   leatherPants: { name: 'Leather Pants', slot: 'legs', icon: 'leatherPants', armor: 2, mat: 'leatherPants' },
   leatherBoots: { name: 'Leather Boots', slot: 'boots', icon: 'leatherBoots', armor: 1, mat: 'leatherBoots' },
@@ -6860,7 +6911,18 @@ const ITEMS = {
   copperOre: { name: 'Copper Ore', icon: 'copperOre', stack: 100, pile: true, loot: 'material', about: 'Broken from copper rocks.' },
   ironOre: { name: 'Iron Ore', icon: 'ironOre', stack: 100, pile: true, loot: 'material', about: 'Broken from iron rocks.' },
   hide: { name: 'Hide', icon: 'hide', stack: 100, loot: 'material', about: 'Taken from wolves and boars. A tanner\'s table works it into leather.' },
+  bone: { name: 'Bone', icon: 'bone', stack: 100, loot: 'material', about: 'Taken from skeletons, and from wolves, boars and hellhounds half the time. A weapon table works it into bone weapons.' },
 };
+// a sword, bow and spear of each material: sword_wood, bow_bone, spear_iron...
+const WEAPONS = {
+  sword: { name: 'Sword', strike: 'slash', q: 'whirl', e: 'lunge' },
+  bow: { name: 'Bow', strike: 'shoot', q: 'volley', e: 'rain' },
+  spear: { name: 'Spear', strike: 'poke', q: 'flurry', e: 'harpoon' },
+};
+for (const [t, tr] of Object.entries(TIERS)) for (const [w, wp] of Object.entries(WEAPONS))
+  ITEMS[w + '_' + t] = { name: tr.name + ' ' + wp.name, slot: 'weapon', icon: w + '_' + t, strike: wp.strike, q: wp.q, e: wp.e, kind: w, tier: t };
+// a weapon stroke's damage in what the weapon's made of (bare fists hit as they are)
+const wdmg = d => Math.round(d * (GEAR.weapon ? WEAPON_TIER[ITEMS[GEAR.weapon].tier] : 1));
 const ARMOR_PER = 0.04;
 const armor = () => Object.values(GEAR).reduce((a, id) => a + (id && ITEMS[id].armor || 0), 0);
 const FISTS = { name: 'Bare Fists', strike: 'punch' };
@@ -6879,9 +6941,9 @@ const GEAR_SLOTS = [
   { slot: 'chest', name: 'CHEST', at: [2, 2], icon: 'shirt' }, { slot: 'legs', name: 'LEGS', at: [2, 3], icon: 'pants' },
   { slot: 'boots', name: 'BOOTS', at: [2, 4], icon: 'boots' },
 ];
-const GEAR = { head: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'basicSword' };
+const GEAR = { head: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'sword_wood' };
 const PACK = new Array(20).fill(null), PACK_N = new Array(20).fill(0);
-PACK[0] = 'hunterBow'; PACK_N[0] = 1; PACK[1] = 'ironSpear'; PACK_N[1] = 1;
+PACK[0] = 'bow_wood'; PACK_N[0] = 1; PACK[1] = 'spear_wood'; PACK_N[1] = 1;
 // building materials are counted out of the pack (H.wood and H.stone read it; addItem and takeItem change it)
 Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') } });
 const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
@@ -6897,14 +6959,16 @@ const DRESS = {
   boxers: () => !GEAR.legs, boxersBare: () => !GEAR.legs && !GEAR.chest,
   boots: () => GEAR.boots, feet: () => !GEAR.boots, cuffs: () => GEAR.boots === 'leatherBoots',
   helmet: () => GEAR.head === 'leatherHelmet',
-  sword: () => GEAR.weapon === 'basicSword',
-  bow: () => GEAR.weapon === 'hunterBow',
-  spear: () => GEAR.weapon === 'ironSpear',
+  sword: () => weapon().kind === 'sword',
+  bow: () => weapon().kind === 'bow',
+  spear: () => weapon().kind === 'spear',
+  wpn: () => true,
 };
 const DRESS_MAT = {
   shirt: () => GEAR.chest && ITEMS[GEAR.chest].mat, hood: () => GEAR.chest && ITEMS[GEAR.chest].trim,
   pants: () => GEAR.legs && ITEMS[GEAR.legs].mat, hipPants: () => GEAR.legs && ITEMS[GEAR.legs].mat,
   boots: () => GEAR.boots && ITEMS[GEAR.boots].mat,
+  wpn: () => GEAR.weapon && TIERS[ITEMS[GEAR.weapon].tier].part,
 };
 // (the silhouette and shadow copies keep their own materials)
 const DRESSABLE = new Set(Object.values(HERO_MAT));
@@ -7103,29 +7167,38 @@ function navInv(dx, dy) {
 }
 
 // ---------- Crafting ----------
-// Every town's tannery has a tanning table; using it opens the list of what can be made there, each for so
-// many hides. What you make goes in the pack.
-const RECIPES = [
-  { make: 'leatherArmor', cost: { hide: 5 } }, { make: 'leatherPants', cost: { hide: 4 } },
-  { make: 'leatherBoots', cost: { hide: 2 } }, { make: 'leatherHelmet', cost: { hide: 2 } },
-];
+// Every town's tannery has a tanning table, and its smithy a weapon table; using one opens the list of what can
+// be made there, leather gear for so many hides, or a sword, bow or spear for WEAPON_TIER.cost of its material.
+// What you make goes in the pack.
+const RECIPES = {
+  tan: [
+    { make: 'leatherArmor', cost: { hide: 5 } }, { make: 'leatherPants', cost: { hide: 4 } },
+    { make: 'leatherBoots', cost: { hide: 2 } }, { make: 'leatherHelmet', cost: { hide: 2 } },
+  ],
+  weapon: Object.entries(TIERS).flatMap(([t, tr]) => Object.keys(WEAPONS).map(w => ({ make: w + '_' + t, get cost() { return { [tr.mat]: WEAPON_TIER.cost }; } }))),
+};
+const TABLE_NAME = { tan: 'TANNING TABLE', weapon: 'WEAPON TABLE' };
 let craftAt = null, craftFocus = 0;   // the table in use
+const recipes = () => RECIPES[craftAt ? craftAt.kind : 'tan'];
 const canCraft = rc => Object.entries(rc.cost).every(([id, n]) => countItem(id) >= n);
 function renderCraft() {
   const list = $('craftList');
   list.innerHTML = '';
-  RECIPES.forEach((rc, k) => {
+  recipes().forEach((rc, k) => {
     const it = ITEMS[rc.make], ok = canCraft(rc), row = document.createElement('div');
     row.className = 'recipe' + (ok ? '' : ' poor') + (PAD.on && k === craftFocus ? ' focus' : '');
     const cost = Object.entries(rc.cost).map(([id, n]) => `<span class="${countItem(id) >= n ? '' : 'short'}">${n} ${ITEMS[id].name.toUpperCase()}</span>`).join(' ');
-    row.innerHTML = `<div class="cell full">${ICON[it.icon]}</div><div class="rtext"><b>${it.name.toUpperCase()}</b><span>${titleCase(it.slot)} · armor ${it.armor}</span></div><div class="rcost">${cost}</div><button>CRAFT</button>`;
+    const about = it.tier ? `damage ×${WEAPON_TIER[it.tier]} · you have ${countItem(TIERS[it.tier].mat)}` : `${titleCase(it.slot)} · armor ${it.armor}`;
+    row.innerHTML = `<div class="cell full">${ICON[it.icon]}</div><div class="rtext"><b>${it.name.toUpperCase()}</b><span>${about}</span></div><div class="rcost">${cost}</div><button>CRAFT</button>`;
     row.querySelector('button').addEventListener('click', () => { audioOn(); craftFocus = k; craft(k); });
     list.appendChild(row);
+    if (PAD.on && k === craftFocus) requestAnimationFrame(() => row.scrollIntoView({ block: 'nearest' }));
   });
-  $('craftHave').textContent = 'YOU HAVE ' + countItem('hide') + ' HIDE';
+  $('craftTitle').textContent = TABLE_NAME[craftAt ? craftAt.kind : 'tan'];
+  $('craftHave').textContent = craftAt && craftAt.kind === 'weapon' ? '' : 'YOU HAVE ' + countItem('hide') + ' HIDE';
 }
 function craft(k) {
-  const rc = RECIPES[k], it = ITEMS[rc.make];
+  const rc = recipes()[k], it = ITEMS[rc.make];
   if (!canCraft(rc)) { toast(`You need ${Object.entries(rc.cost).map(([id, n]) => n + ' ' + ITEMS[id].name.toLowerCase()).join(' and ')} for ${it.name.toLowerCase()}.`); sfx.nope(); return false; }
   for (const [id, n] of Object.entries(rc.cost)) takeItem(id, n);
   if (addItem(rc.make)) {
@@ -7480,12 +7553,20 @@ const hideMat = flatMat({ color: '#b07a4a' }), hideSpine = flatMat({ color: '#8a
 const hideGeo = new GFX.BoxGeometry(0.42, 0.025, 0.3), spineGeo = new GFX.BoxGeometry(0.34, 0.015, 0.08), pawGeo = new GFX.BoxGeometry(0.09, 0.02, 0.07);
 const logMat = flatMat({ color: '#8a5a32' }), logGeo = new GFX.CylinderGeometry(0.065, 0.065, 0.44, 6).rotateZ(Math.PI / 2);
 const pebbleMat = flatMat({ color: '#8c8a96' }), pebbleGeo = new GFX.DodecahedronGeometry(0.1, 0);
+const boneLootMat = flatMat({ color: '#e4dac0' }), boneGeo = new GFX.CylinderGeometry(0.025, 0.025, 0.3, 5).rotateZ(Math.PI / 2), knobGeo = new GFX.DodecahedronGeometry(0.035, 0);
 const oreMats = { copperOre: flatMat({ color: OBJ[O.COPPER].ore }), ironOre: flatMat({ color: OBJ[O.IRON].ore }) };
 function dropModel(id) {
   const g = new GFX.Group(), add = (geo, mat, x, y, z, ry = 0, s = 1) => { const m = new GFX.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.y = ry; m.scale.setScalar(s); g.add(m); };
   if (id === 'hide') {
     add(hideGeo, hideMat, 0, 0, 0); add(spineGeo, hideSpine, 0, 0.018, 0);
     for (const a of [-1, 1]) for (const b of [-1, 1]) add(pawGeo, hideMat, a * 0.2, 0, b * 0.17, 0.5 * a * b);
+  } else if (id === 'bone') {
+    // two long bones, crossed, a knuckle either side of each end
+    for (const ry of [0.5, -0.6]) {
+      const b = new GFX.Group(); b.rotation.y = ry; b.position.y = ry > 0 ? 0.03 : 0.065; g.add(b);
+      const m = new GFX.Mesh(boneGeo, boneLootMat); b.add(m);
+      for (const a of [-1, 1]) for (const c of [-1, 1]) { const k = new GFX.Mesh(knobGeo, boneLootMat); k.position.set(a * 0.16, 0, c * 0.03); b.add(k); }
+    }
   } else if (id === 'wood') {
     add(logGeo, logMat, 0, 0.05, -0.07); add(logGeo, logMat, 0, 0.05, 0.07); add(logGeo, logMat, 0.02, 0.16, 0, 0.15);
   } else if (oreMats[id]) {
@@ -7571,7 +7652,7 @@ function detach(i, c, r) {
 // each point taken off yields one wood, stone or ore, fractions carried over to the next blow.
 // RESOURCES.amount (T > Resources) scales everything gathered or dropped: these, and the hides foes leave.
 const RESOURCES = { amount: 4};
-const harvestCarry = { wood: 0, stone: 0, copperOre: 0, ironOre: 0, hide: 0 };
+const harvestCarry = { wood: 0, stone: 0, copperOre: 0, ironOre: 0, hide: 0, bone: 0 };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const o = OB[i], od = OBJ[o];
   const d = detach(i, c, r);
@@ -7641,12 +7722,15 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats();
     if (Math.random() < 0.35) dropOrb(f.x, f.z);
-    if (f.def.hide) {
-      harvestCarry.hide += RESOURCES.amount;
-      const n = Math.floor(harvestCarry.hide + 1e-6);
-      harvestCarry.hide -= n;
-      if (n) dropLoot('hide', n, f.x, f.z);
-    }
+    // a hide from the beasts, and bones (def.bone of the time) from skeletons and the bigger animals
+    const leave = id => {
+      harvestCarry[id] += RESOURCES.amount;
+      const n = Math.floor(harvestCarry[id] + 1e-6);
+      harvestCarry[id] -= n;
+      if (n) dropLoot(id, n, f.x + (id === 'bone' && f.def.hide ? 0.35 : 0), f.z);
+    };
+    if (f.def.hide) leave('hide');
+    if (f.def.bone && Math.random() < f.def.bone) leave('bone');
   }
 }
 // a sword stroke: foes in the arc, and the one nearest tree or rock in front
@@ -7656,7 +7740,7 @@ function swingHit(range, arc, dmg) {
     const dx = f.x - H.x, dz = f.z - H.z, d = Math.hypot(dx, dz);
     if (d > range + f.def.rad || Math.abs(f.y - H.y) > 1.2) continue;
     if (d > 0.3 && Math.abs(angDiff(Math.atan2(dx, dz), H.face)) > arc / 2) continue;
-    hurtFoe(f, dmg, H.x, H.z); hitAny = true;
+    hurtFoe(f, wdmg(dmg), H.x, H.z); hitAny = true;
   }
   if (hitAny) return;
   const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
@@ -7990,8 +8074,8 @@ function pollPad(dt) {
   const inv = invOpen || !!craftAt;
   if (craftAt) {
     if (hit('B')) toggleCraft(null);
-    if (hit('DU')) { craftFocus = (craftFocus + RECIPES.length - 1) % RECIPES.length; renderCraft(); }
-    if (hit('DD')) { craftFocus = (craftFocus + 1) % RECIPES.length; renderCraft(); }
+    if (hit('DU')) { craftFocus = (craftFocus + recipes().length - 1) % recipes().length; renderCraft(); }
+    if (hit('DD')) { craftFocus = (craftFocus + 1) % recipes().length; renderCraft(); }
     if (hit('A')) craft(craftFocus);
     if (hit('RB')) { toggleCraft(null); toggleInv(true); }
   } else if (inv) {
@@ -8220,12 +8304,12 @@ function updateBow(dt) {
   if (!b.fired && b.t >= b.len * (b.kind === 'shot' ? 0.6 : 0.5)) {
     b.fired = true;
     sfx.bow();
-    if (b.kind === 'shot') shootArrow(aim.x, aim.z, BOW.dmg, BOW.knock);
+    if (b.kind === 'shot') shootArrow(aim.x, aim.z, wdmg(BOW.dmg), BOW.knock);
     else if (b.kind === 'volley') {
       const n = Math.max(1, Math.round(BOW.volleyArrows)), cone = BOW.volleyCone * Math.PI / 180, a0 = Math.atan2(aim.x, aim.z);
       for (let k = 0; k < n; k++) {
         const a = a0 + (n > 1 ? (k / (n - 1) - 0.5) * cone : 0);
-        shootArrow(Math.sin(a), Math.cos(a), BOW.volleyDmg, BOW.volleyKnock);
+        shootArrow(Math.sin(a), Math.cos(a), wdmg(BOW.volleyDmg), BOW.volleyKnock);
       }
     } else {
       // one straight up out of sight, then the rain over the ring
@@ -8237,7 +8321,7 @@ function updateBow(dt) {
         const r = R * Math.sqrt((k + Math.random()) / BOW.rainArrows), th = Math.random() * Math.PI * 2;
         const x = tx + Math.sin(th) * r, z = tz + Math.cos(th) * r, sl = (Math.random() - 0.5) * 2;
         arrows.push({ state: 'wait', wait: BOW.rainDelay + Math.random() * 0.25, rain: true, x: x - sl * 0.3, y: surfH(x, z) + 9, z: z - sl * 0.15,
-          vx: sl * 0.8, vy: -26, vz: sl * 0.4, flown: 0, range: Infinity, dmg: BOW.rainDmg, knock: BOW.rainKnock, fromX: tx, fromZ: tz, life: 0, zone });
+          vx: sl * 0.8, vy: -26, vz: sl * 0.4, flown: 0, range: Infinity, dmg: wdmg(BOW.rainDmg), knock: BOW.rainKnock, fromX: tx, fromZ: tz, life: 0, zone });
       }
     }
   }
@@ -8592,7 +8676,7 @@ function updateSpear(dt) {
   if (sp.kind === 'poke') {
     if (!sp.hit && sp.t > sp.len * 0.4) {
       sp.hit = true;
-      for (const f of foesAhead(sp.dir, SPEAR.reach, SPEAR.width / 2)) hurtFoe(f, SPEAR.dmg, H.x, H.z, SPEAR.knock * 8);
+      for (const f of foesAhead(sp.dir, SPEAR.reach, SPEAR.width / 2)) hurtFoe(f, wdmg(SPEAR.dmg), H.x, H.z, SPEAR.knock * 8);
       cutGrass(H.x + fx * 1.2, H.z + fz * 1.2, 0.35, fx, fz);
     }
   } else if (sp.kind === 'flurry') {
@@ -8600,7 +8684,7 @@ function updateSpear(dt) {
     while (sp.next <= sp.t && sp.next < sp.len) {
       sp.next += SPEAR.flurryRate;
       sfx.punch();
-      for (const f of foesAhead(sp.dir, SPEAR.flurryReach, 0, SPEAR.flurryCone * Math.PI / 360)) hurtFoe(f, SPEAR.flurryDmg, H.x, H.z, SPEAR.flurryKnock * 8);
+      for (const f of foesAhead(sp.dir, SPEAR.flurryReach, 0, SPEAR.flurryCone * Math.PI / 360)) hurtFoe(f, wdmg(SPEAR.flurryDmg), H.x, H.z, SPEAR.flurryKnock * 8);
       cutGrass(H.x + fx * 1.3, H.z + fz * 1.3, 0.5, fx, fz);
     }
   } else if (!sp.hit && sp.t > sp.len * 0.4) {
@@ -8640,7 +8724,7 @@ function updateHarpoon(dt) {
       hp.x += hp.dx * SPEAR.harpoonSpeed * h; hp.z += hp.dz * SPEAR.harpoonSpeed * h; hp.dist += SPEAR.harpoonSpeed * h;
       const f = arrowFoe(hp);
       if (f) {
-        hurtFoe(f, SPEAR.harpoonDmg, f.x - hp.dx, f.z - hp.dz, 0);
+        hurtFoe(f, wdmg(SPEAR.harpoonDmg), f.x - hp.dx, f.z - hp.dz, 0);
         hp.out = false;
         if (f.hp > 0) { if (!f.def.rooted) { hp.foe = f; f.grabbed = hp; } else f.slowT = SPEAR.slowTime; }
       } else if (hp.dist >= SPEAR.harpoonRange || arrowBlocked(hp, x0, z0) || hp.y < surfH(hp.x, hp.z)) { hp.out = false; if (hp.dist < SPEAR.harpoonRange) sfx.thunk(); }
@@ -8852,7 +8936,7 @@ function nearDoor() {
 }
 const TABLE_REACH = 1.5;
 const nearTable = () => TABLES.find(t => Math.hypot(t.x - H.x, t.z - H.z) < TABLE_REACH && Math.abs(LV[T(t.c, t.r)] * STEP - H.y) < 0.6) || null;
-// what F (A on the controller) does here: pick up loot, use the tanning table, or open or shut a door
+// what F (A on the controller) does here: pick up loot, use a tanning or weapon table, or open or shut a door
 function actionHere() {
   if (mode !== 'play' || !H.alive) return null;
   const near = dropsNear();
@@ -9511,7 +9595,7 @@ function update(dt) {
       if (H.lunge < 0.3) cutGrass(H.x + Math.sin(H.face) * 0.5, H.z + Math.cos(H.face) * 0.5, 0.55, Math.sin(H.face), Math.cos(H.face));
       for (const f of foes.slice()) {
         if (H.lungeHit.has(f) || Math.hypot(f.x - H.x, f.z - H.z) > LUNGE.reach + f.def.rad) continue;
-        H.lungeHit.add(f); hurtFoe(f, 26, H.x - Math.sin(H.face), H.z - Math.cos(H.face), 4.5);
+        H.lungeHit.add(f); hurtFoe(f, wdmg(26), H.x - Math.sin(H.face), H.z - Math.cos(H.face), 4.5);
       }
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
@@ -9559,7 +9643,7 @@ function update(dt) {
       H.face += dt * 22;
       if (H.whirlTick <= 0) {
         H.whirlTick = 0.25; ringT = 0;
-        for (const f of foes.slice()) if (Math.hypot(f.x - H.x, f.z - H.z) < 1.75 + f.def.rad && Math.abs(f.y - H.y) < 1.2) hurtFoe(f, 9, H.x, H.z, 3.5);
+        for (const f of foes.slice()) if (Math.hypot(f.x - H.x, f.z - H.z) < 1.75 + f.def.rad && Math.abs(f.y - H.y) < 1.2) hurtFoe(f, wdmg(9), H.x, H.z, 3.5);
         propsNear(1.75, (i, c, r, dx, dz) => strikeProp(i, c, r, dx, dz, 9));
         cutArc(1.75, 6.0, H.face);
       }
@@ -9623,7 +9707,7 @@ function update(dt) {
   }
   for (const d of drops.slice()) { d.t += dt; if (d.t > DROP_LIFE) removeDrop(d); }
   updateLootGlow();
-  // walking off from the tanning table puts it away
+  // walking off from the table puts it away
   if (craftAt && Math.hypot(craftAt.x - H.x, craftAt.z - H.z) > 2.6) toggleCraft(null);
   arcT += dt; ringT += dt;
   arcMat.opacity = Math.max(0, 0.75 * (1 - arcT / 0.16));
@@ -9674,7 +9758,7 @@ function update(dt) {
       pr.innerHTML = key + lootLabel(act.drops);
       v3.set(h.x, surfaceY(h.x, h.z) + 0.45, h.z);
     } else if (act.kind === 'table') {
-      pr.innerHTML = key + (craftAt ? 'PUT AWAY' : 'USE TANNING TABLE');
+      pr.innerHTML = key + (craftAt ? 'PUT AWAY' : 'USE ' + TABLE_NAME[act.table.kind]);
       v3.set(act.table.x, LV[T(act.table.c, act.table.r)] * STEP + 1.0, act.table.z);
     } else {
       pr.innerHTML = key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
@@ -9725,16 +9809,20 @@ function animateHero(dt) {
   hero.body.rotation.z = on ? -sd * WALK.lean : 0;
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
-  let jab = 0, pull = 0, thrust = 0;
+  let jab = 0, pull = 0, thrust = 0, twist = 0;
   if (H.spear) {
-    // the spear held out level: a poke thrusts it out and back; the flurry jabs again and again, a little to
-    // either side; the harpoon's throw is a short shove
-    const sp = H.spear;
-    if (sp.kind === 'poke') thrust = Math.sin(Math.min(1, sp.t / sp.len) * Math.PI) * 0.45;
-    else if (sp.kind === 'flurry') { const n = Math.floor(sp.t / SPEAR.flurryRate); thrust = Math.abs(Math.sin(sp.t / SPEAR.flurryRate * Math.PI)) * 0.4; ay = (n % 2 ? 0.12 : -0.12); }
-    else thrust = Math.sin(Math.min(1, sp.t / sp.len) * Math.PI) * 0.3;
-    ax = -1.5; sx = Math.PI / 2;
-    hero.armL.rotation.set(-0.7, 0, 0.1);
+    // the spear held low and drawn back, the arm down by your side and the shaft level: a poke drives it out
+    // hard (the arm swinging forward a little, the shoulder turned into it) and draws it back slower; the flurry
+    // jabs again and again, a little to either side; the harpoon's throw is a shorter shove
+    const sp = H.spear, u = Math.min(1, sp.t / sp.len);
+    const drive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 : 1 - smooth(0.45, 1, v);
+    let out;
+    if (sp.kind === 'flurry') { const n = Math.floor(sp.t / SPEAR.flurryRate); out = drive((sp.t / SPEAR.flurryRate) % 1) * 0.85; ay = (n % 2 ? 0.12 : -0.12); }
+    else out = drive(u) * (sp.kind === 'poke' ? 1 : 0.7);
+    thrust = -0.32 + out * 0.8;
+    twist = 0.22 * out;
+    ax = 0.18 - out * 0.55; ay -= twist;
+    hero.armL.rotation.set(-0.5, 0, 0.1);
   } else if (H.bow) {
     // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin
     const b = H.bow, rel = b.len * (b.kind === 'shot' ? 0.6 : 0.5), u = smooth(0, 1, Math.min(1, b.t / rel));
@@ -9765,9 +9853,10 @@ function animateHero(dt) {
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
-  hero.spear.rotation.x += ((H.spear ? Math.PI / 2 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 30);
-  hero.spearShaft.position.z = thrust;
-  hero.body.rotation.y = H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
+  // (level against the arm's swing while attacking, tipped up a touch; upright at rest)
+  hero.spear.rotation.x += ((H.spear ? -ax - 0.08 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 40);
+  hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
+  hero.body.rotation.y = H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
   hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
   hero.g.position.set(0, 0, 0);
@@ -10700,6 +10789,13 @@ const TUNING = [
     [BOW, 'rainSeek', 'Rain: share of the spare arrows that seek a foe too (each foe in the ring gets one first)', 0, 1, 0.05],
     [BOW, 'stuckLife', 'Spent arrows last (seconds)', 1, 120, 1],
   ]],
+  ['Weapon materials', [
+    [WEAPON_TIER, 'wood', 'Wooden weapons: damage (times)', 0.1, 5, 0.05],
+    [WEAPON_TIER, 'bone', 'Bone weapons: damage (times)', 0.1, 5, 0.05],
+    [WEAPON_TIER, 'copper', 'Copper weapons: damage (times)', 0.1, 5, 0.05],
+    [WEAPON_TIER, 'iron', 'Iron weapons: damage (times)', 0.1, 5, 0.05],
+    [WEAPON_TIER, 'cost', 'Material a weapon takes', 1, 50, 1],
+  ]],
   ['Tumble', [
     [TUMBLE, 'time', 'How long the tumble lasts (seconds)', 0.15, 1.5, 0.01],
     [TUMBLE, 'speed', 'Speed going in (tiles a second)', 2, 20, 0.1],
@@ -11116,8 +11212,9 @@ window.GAME = {
   inv: open => toggleInv(open),
   pack: () => PACK.map((id, i) => id && [id, PACK_N[i]]),
   addItem: (id, n) => addItem(id, n),
-  tables: () => TABLES.map(t => [t.c, t.r, towns[t.town].name]),
-  craftAt: k => { toggleCraft(TABLES[0]); const ok = craft(k); return ok; },
+  tables: () => TABLES.map(t => [t.c, t.r, towns[t.town].name, t.kind]),
+  craftAt: (k, kind = 'tan') => { toggleCraft(TABLES.find(t => t.kind === kind)); const ok = craft(k); return ok; },
+  weaponDmg: d => wdmg(d),
   dropHide: (x, z) => dropLoot('hide', 1, x ?? H.x + 0.5, z ?? H.z),
   dropLoot: (id, n, x, z) => dropLoot(id, n, x ?? H.x + 0.5, z ?? H.z),
   drops: () => drops.map(d => [d.id, d.n]),
