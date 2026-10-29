@@ -2523,7 +2523,11 @@ function ghGround(x, z) {
   if (WT[ti] === 1) return Math.max(surfH(x, z), LV[ti] * STEP - BOG_SURF);
   return surfH(x, z);
 }
-function groundHazeSite(cx, cz) {
+// The site is worked out a few rows at a time over frames (a generator stepped for GH_BUDGET ms a frame, see
+// updateGroundHaze), the haze keeping the last one until it's done; groundHazeSite does it all at once.
+const GH_BUDGET = 2;
+function groundHazeSite(cx, cz) { const job = groundHazeSiteJob(cx, cz); while (!job.next().done); }
+function* groundHazeSiteJob(cx, cz) {
   const G = GROUND_HAZE, c0 = cx - GH_TILES / 2, r0 = cz - GH_TILES / 2, W = GH_TILES + 2 * GH_BLUR + 2;
   const col = {}, share = b => b === SWAMP ? G.swamp : b === GRAVE ? G.grave : b === WASTES ? G.wastes : 0;
   for (const [b, k] of [[SWAMP, 'swampColor'], [GRAVE, 'graveColor'], [WASTES, 'wastesColor']]) { tmpC2.set(G[k]); col[b] = [tmpC2.r, tmpC2.g, tmpC2.b]; }
@@ -2540,6 +2544,7 @@ function groundHazeSite(cx, cz) {
     const wi = T(tc, tr);
     if ((WT[wi] >= 2 && !LAVA[wi]) || roomOf.has(wi)) s = 0; else land[c + r * W] = 1;
     if (s > 0) { m[k] = s; m[k + 1] = col[b][0] * s; m[k + 2] = col[b][1] * s; m[k + 3] = col[b][2] * s; }
+    if (c === W - 1 && (r & 1) === 1) yield;
   }
   for (const [dc, dr] of [[1, 0], [0, 1]]) {
     for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
@@ -2549,11 +2554,19 @@ function groundHazeSite(cx, cz) {
         for (let o = -GH_BLUR; o <= GH_BLUR; o++) { const cc = clamp(c + o * dc, 0, W - 1), rr = clamp(r + o * dr, 0, W - 1); sum += m[at(cc, rr) + q]; }
         t[k + q] = sum / (2 * GH_BLUR + 1);
       }
+      if (c === W - 1 && (r & 15) === 15) yield;
     }
     m.set(t);
   }
-  ghAny = false;
+  // the ground at the corners of every texel (each a quarter tile off its middle), shared between neighbours
+  const corner = new Float32Array((GH_N + 1) * (GH_N + 1));
+  for (let j = 0; j <= GH_N; j++) {
+    for (let i = 0; i <= GH_N; i++) corner[j * (GH_N + 1) + i] = ghGround(c0 + i / GH_TPT, r0 + j / GH_TPT);
+    if ((j & 1) === 1) yield;
+  }
+  let any = false;
   for (let j = 0; j < GH_N; j++) for (let i = 0; i < GH_N; i++) {
+    if (i === 0 && j && (j & 1) === 0) yield;
     const x = c0 + (i + 0.5) / GH_TPT, z = r0 + (j + 0.5) / GH_TPT, k = (j * GH_N + i) * 4;
     const tc = clamp(Math.floor(x), 0, N - 1), tr = clamp(Math.floor(z), 0, N - 1), ti = T(tc, tr);
     // the share and colour: bilinear between the tile middles
@@ -2567,14 +2580,13 @@ function groundHazeSite(cx, cz) {
     const y = ghGround(x, z);
     // and the highest of it round the texel (a quarter tile each way), what a line of sight down through the haze
     // meets: between texel middles, the ground alone would round a cliff's top edge off below where it's drawn
-    let top = y;
-    for (const [ox, oz] of [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25]]) top = Math.max(top, ghGround(x + ox, z + oz));
+    const cn = j * (GH_N + 1) + i, top = Math.max(y, corner[cn], corner[cn + 1], corner[cn + GH_N + 1], corner[cn + GH_N + 2]);
     const o = OBJ[OB[ti]];
     const solid = o.tile || (o.solid >= 0.15 && Math.hypot(x - tc - 0.5, z - tr - 0.5) < o.solid + 0.15) ? 1 : 0;
     ghSite[k] = y; ghSite[k + 1] = solid; ghSite[k + 2] = s[0]; ghSite[k + 3] = top;
     const w = s[0] > 1e-4 ? 255 / s[0] : 0;
     ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); ghTint[k + 3] = 255;
-    if (s[0] > 0.003) ghAny = true;
+    if (s[0] > 0.003) any = true;
   }
   // the drape: each texel at least as high as any within GH_DRAPE_R texels, less GH_DRAPE a tile beyond the first
   // quarter tile (across, then down)
@@ -2588,11 +2600,14 @@ function groundHazeSite(cx, cz) {
         if (ii >= 0 && jj >= 0 && ii < GH_N && jj < GH_N) y = Math.max(y, from[jj * GH_N + ii] - fall * Math.max(0, o - 0.5));
       }
       to[j * GH_N + i] = y;
+      if (i === GH_N - 1 && (j & 31) === 31) yield;
     }
   }
   for (let k = 0; k < GH_N * GH_N; k++) ghSite[k * 4] = y0[k];
+  ghAny = any;
   groundHaze.setSite([c0 * GH_TPT, r0 * GH_TPT], ghSite, ghTint);
 }
+let ghJob = null;
 function updateGroundHaze(dt) {
   const G = GROUND_HAZE;
   let on = G.on > 0.5 && G.amount > 0 && G.density > 0;
@@ -2600,10 +2615,13 @@ function updateGroundHaze(dt) {
     // anew when the camera's moved three tiles on, every couple of seconds (trees felled, things built), or retuned
     const cx = Math.round(camTarget.x), cz = Math.round(camTarget.z), now = performance.now();
     const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor, G.poolAway, G.poolReach].join();
-    if (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || now - ghAt > 2000 || key !== ghKey) {
+    if (!ghJob && (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || now - ghAt > 2000 || key !== ghKey)) {
+      const first = !ghCentre;
       ghCentre = [cx, cz]; ghAt = now; ghKey = key;
-      groundHazeSite(cx, cz);
+      if (first) groundHazeSite(cx, cz);
+      else ghJob = groundHazeSiteJob(cx, cz);
     }
+    if (ghJob) { const until = performance.now() + GH_BUDGET; while (performance.now() < until) if (ghJob.next().done) { ghJob = null; break; } }
     on = ghAny;
   }
   const a = CLOUDS.direction * Math.PI / 180;
@@ -2673,11 +2691,12 @@ function updateHaze() {
 }
 let giVersion = 0;
 // A chunk's block of the height field is worked out when it's first wanted, and again after its meshes change,
-// a step at a time: its ground, then its things GI_RUN triangles at a time. Each frame steps on for GI_BUDGET ms
+// a step at a time: its ground, then its things, each part as far as the clock allows. Each frame steps on for GI_BUDGET ms
 // (at least one step), so chunks streaming into the window or a big rebuild are spread over frames instead of
 // stalling one; until a block's done, the old one (or none) stands.
-const GI_BUDGET = 2.5, GI_RUN = 4000;
+const GI_BUDGET = 2.5;
 let giUntil = 0, giStepped = false;
+const giStepMax = [0, 0, 0, 0];   // (the longest step of each stage so far, for the profiler's tests)
 function giMayStep() {
   if (!giStepped) { giStepped = true; return true; }
   return performance.now() < giUntil;
@@ -2690,11 +2709,22 @@ function chunkGI(cx, cz) {
   const geo = m => m && m.geometry;
   const job = ch.giJob || (ch.giJob = { stage: 0, ground: null, st: null, runs: null, k: 0, redoGround: !ch.giGround || ch.giStale === 2 });
   while (giMayStep()) {
+    const ts = performance.now(), stage = job.stage < 2 ? job.stage : job.k < job.runs.length ? 2 : 3;
+    try {
     if (job.stage === 0) {
-      job.ground = job.redoGround ? GFX.rasterGround(cx, cz, [
-        { geo: geo(ch.ground) }, { geo: geo(ch.bog), color: [0.06, 0.07, 0.03] }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
-        { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }]) : ch.giGround;
-      job.stage = 1;
+      // the ground, cut into runs as the things are
+      if (!job.redoGround) { job.ground = ch.giGround; job.stage = 1; continue; }
+      // (a big water or lava triangle can cover the whole block, so these go by the clock, not a count)
+      if (!job.gparts) {
+        job.ground = GFX.rasterGroundStart(cx, cz); job.gk = 0; job.gt = 0;
+        job.gparts = [{ geo: geo(ch.ground) }, { geo: geo(ch.bog), color: [0.06, 0.07, 0.03] }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
+          { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }];
+      }
+      if (job.gk < job.gparts.length) {
+        const part = job.gparts[job.gk], n = GFX.rasterTris(part);
+        job.gt = n ? GFX.rasterGroundPart(job.ground, part, job.gt, Infinity, giUntil) : 0;
+        if (job.gt >= n) { job.gk++; job.gt = 0; }
+      } else job.stage = 1;
     } else if (job.stage === 1) {
       // what stands on it, and the roofs over it (each building's is one mesh of its own), cut into runs
       const roofs = [];
@@ -2702,18 +2732,20 @@ function chunkGI(cx, cz) {
       const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
         { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs];
       job.st = GFX.rasterStart(cx, cz, job.ground);
-      job.runs = [];
-      for (const part of parts) { const n = GFX.rasterTris(part); for (let t = 0; t < n; t += GI_RUN) job.runs.push([part, t, t + GI_RUN]); }
+      job.runs = parts.filter(part => GFX.rasterTris(part) > 0); job.t = 0;
       job.stage = 2;
     } else if (job.k < job.runs.length) {
-      const [part, t0, t1] = job.runs[job.k++];
-      GFX.rasterPart(job.st, part, t0, t1);
+      // (by the clock too: a thing's cost goes by the texels under it, not its triangles)
+      const part = job.runs[job.k];
+      job.t = GFX.rasterPart(job.st, part, job.t, Infinity, giUntil);
+      if (job.t >= GFX.rasterTris(part)) { job.k++; job.t = 0; }
     } else {
       ch.giGround = job.ground;
       ch.gi = GFX.rasterEnd(job.st, ++giVersion);
       ch.giStale = 0; ch.giJob = null;
       return ch.gi;
     }
+    } finally { const d = performance.now() - ts; giStepMax[stage] = Math.max(giStepMax[stage], d); }
   }
   return ch.gi || null;
 }
@@ -3265,6 +3297,11 @@ const GROUND_SHAPE = { on: 1, wobble: 0.55, size: 2.8, blend: 1, rampSmooth: 1, 
 const groundTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 groundTex.regions = [];
 function buildGround(cx, cz, ch) {
+  for (const _ of groundSteps(cx, cz, ch));
+}
+// the same a step at a time (see streamChunks), a few rows of tiles a step; it alone draws into bufGround, so one
+// chunk's ground is built at a time
+function* groundSteps(cx, cz, ch) {
   OUT = bufGround; bufGround.n = 0;
   const gd = groundTex.image.data;
   const c0 = cx * CH, r0 = cz * CH, GW = CH * 2 + 1;
@@ -3272,74 +3309,78 @@ function buildGround(cx, cz, ch) {
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) grid[j * GW + k] = pointH(c0 * 2 + k, r0 * 2 + j);
   const P = [], own = [], up = [];
   cliffField(c0, r0, GW);
+  yield; OUT = bufGround;
   let wet = false, molten = false;
-  for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
-    const i = T(c, r), s = SH[i], pal = PAL[BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
-    if (!L && WL[i]) { if (LAVA[i]) molten = true; else wet = true; }
-    // the tile's 3 x 3 points, and which of them its higher neighbours lift
-    for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) {
-      const n = j * 3 + k, y = grid[((r - r0) * 2 + j) * GW + (c - c0) * 2 + k];
-      P[n] = [c + k / 2, y, r + j / 2];
-      own[n] = tileSurf(c, r, k / 2, j / 2);
-      up[n] = y > own[n] + 1e-4;
-    }
-    const strata = 0.9 + hs(c, r, 20) * 0.2;
-    // (under water the banks are sand; a canyon's walls fall away into the dark)
-    // (and a lava pool's are scorched black)
-    const scorch = !L && LAVA[i];
-    const rockTop = shade(L || cy || scorch ? pal.cliffA : pal.road, strata * (scorch ? 0.7 : 1));
-    const rockLow = cy ? shade(pal.cliffB, strata * 0.3) : scorch ? shade(pal.cliffB, strata * 1.4) : shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
-    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
-      const n00 = b * 3 + a, n10 = n00 + 1, n01 = n00 + 3, n11 = n00 + 4;
-      const lifted = up[n00] + up[n10] + up[n01] + up[n11];
-      let k00, k10, k01, k11;
-      if (lifted) {
-        // a slope: light rock at the top, darker where it meets the ground
-        [k00, k10, k01, k11] = [n00, n10, n01, n11].map(n => up[n] ? rockTop : rockLow);
-      } else {
-        let cc;
-        if (cy) cc = shade(pal.cliffB, 0.26 + hs(c, r, a + b * 2) * 0.08);
-        else if (!L) cc = WT[i] >= 2 && GL[i] >= WL[i] - 1
-          // a shallow bed: sand and pebbles; deeper, the dark silt
-          ? shade(pal.roadB.clone().lerp(BED, 0.35 + hs(c, r, 7 + a + b * 2) * 0.3), 0.8 + hs(c, r, a + b * 2) * 0.2)
-          : shade(BED, 0.85 + hs(c, r, 1) * 0.25);
-        else if (s) {
-          // ramps: stripes across the slope so the incline reads at a glance
-          const along = rampDir(s) & 1 ? a : b;
-          cc = PATH[i] ? shade(along % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, a + b * 2) * 0.1)
-            : shade(pal.a, (along % 2 ? 0.86 : 0.98) + hs(c, r, a + b * 2) * 0.06);
-        } else if (LAVA[i]) cc = shade(C('#1e1210'), 0.9 + hs(c, r, a + b * 2) * 0.2);
-        else cc = groundColor(c, r, a, b);
-        k00 = k10 = k01 = k11 = cc;
+  for (let r = r0; r < r0 + CH; r++) {
+    if (r > r0 && (r - r0) % 4 === 0) { yield; OUT = bufGround; }
+    for (let c = c0; c < c0 + CH; c++) {
+      const i = T(c, r), s = SH[i], pal = PAL[BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
+      if (!L && WL[i]) { if (LAVA[i]) molten = true; else wet = true; }
+      // the tile's 3 x 3 points, and which of them its higher neighbours lift
+      for (let j = 0; j < 3; j++) for (let k = 0; k < 3; k++) {
+        const n = j * 3 + k, y = grid[((r - r0) * 2 + j) * GW + (c - c0) * 2 + k];
+        P[n] = [c + k / 2, y, r + j / 2];
+        own[n] = tileSurf(c, r, k / 2, j / 2);
+        up[n] = y > own[n] + 1e-4;
       }
-      const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
-      if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
-      else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1); }
-      // split through the odd corner out, so slope corners come out as clean hips and valleys
-      const odd = lifted === 1 || lifted === 3;
-      const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
-      const W = CF.w, S = CF.s, q = ((r - r0) * 2 + b + 1) * W + (c - c0) * 2 + a + 1;
-      if (S[q] || S[q + 1] || S[q + W] || S[q + W + 1]) {
-        roughCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [q, q + 1, q + W, q + W + 1], flip, lifted);
-        continue;
+      const strata = 0.9 + hs(c, r, 20) * 0.2;
+      // (under water the banks are sand; a canyon's walls fall away into the dark)
+      // (and a lava pool's are scorched black)
+      const scorch = !L && LAVA[i];
+      const rockTop = shade(L || cy || scorch ? pal.cliffA : pal.road, strata * (scorch ? 0.7 : 1));
+      const rockLow = cy ? shade(pal.cliffB, strata * 0.3) : scorch ? shade(pal.cliffB, strata * 1.4) : shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
+      for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+        const n00 = b * 3 + a, n10 = n00 + 1, n01 = n00 + 3, n11 = n00 + 4;
+        const lifted = up[n00] + up[n10] + up[n01] + up[n11];
+        let k00, k10, k01, k11;
+        if (lifted) {
+          // a slope: light rock at the top, darker where it meets the ground
+          [k00, k10, k01, k11] = [n00, n10, n01, n11].map(n => up[n] ? rockTop : rockLow);
+        } else {
+          let cc;
+          if (cy) cc = shade(pal.cliffB, 0.26 + hs(c, r, a + b * 2) * 0.08);
+          else if (!L) cc = WT[i] >= 2 && GL[i] >= WL[i] - 1
+            // a shallow bed: sand and pebbles; deeper, the dark silt
+            ? shade(pal.roadB.clone().lerp(BED, 0.35 + hs(c, r, 7 + a + b * 2) * 0.3), 0.8 + hs(c, r, a + b * 2) * 0.2)
+            : shade(BED, 0.85 + hs(c, r, 1) * 0.25);
+          else if (s) {
+            // ramps: stripes across the slope so the incline reads at a glance
+            const along = rampDir(s) & 1 ? a : b;
+            cc = PATH[i] ? shade(along % 2 ? pal.roadB : pal.road, 0.94 + hs(c, r, a + b * 2) * 0.1)
+              : shade(pal.a, (along % 2 ? 0.86 : 0.98) + hs(c, r, a + b * 2) * 0.06);
+          } else if (LAVA[i]) cc = shade(C('#1e1210'), 0.9 + hs(c, r, a + b * 2) * 0.2);
+          else cc = groundColor(c, r, a, b);
+          k00 = k10 = k01 = k11 = cc;
+        }
+        const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
+        if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
+        else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1); }
+        // split through the odd corner out, so slope corners come out as clean hips and valleys
+        const odd = lifted === 1 || lifted === 3;
+        const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
+        const W = CF.w, S = CF.s, q = ((r - r0) * 2 + b + 1) * W + (c - c0) * 2 + a + 1;
+        if (S[q] || S[q + 1] || S[q + W] || S[q + W + 1]) {
+          roughCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [q, q + 1, q + W, q + W + 1], flip, lifted);
+          continue;
+        }
+        // beside a cell that is cut finer, take in its points along the shared side, or pinholes open along it
+        const sl = S[q - 1] || S[q + W - 1], sb = S[q + 2 * W] || S[q + 2 * W + 1], sr = S[q + 2] || S[q + W + 2], st = S[q - W] || S[q - W + 1];
+        if (sl || sb || sr || st) {
+          stitchCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [sl, sb, sr, st], flip);
+          continue;
+        }
+        if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
+        else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
       }
-      // beside a cell that is cut finer, take in its points along the shared side, or pinholes open along it
-      const sl = S[q - 1] || S[q + W - 1], sb = S[q + 2 * W] || S[q + 2 * W + 1], sr = S[q + 2] || S[q + W + 2], st = S[q - W] || S[q - W + 1];
-      if (sl || sb || sr || st) {
-        stitchCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [sl, sb, sr, st], flip);
-        continue;
-      }
-      if (flip) { tri(P[n00], P[n01], P[n10], k00, k01, k10); tri(P[n10], P[n01], P[n11], k10, k01, k11); }
-      else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
-    }
-    // the cut edge of the world
-    for (let d = 0; d < 4; d++) {
-      const nc = c + DC[d], nr = r + DR[d];
-      if (nc >= 0 && nr >= 0 && nc < N && nr < N) continue;
-      const e = [[0, 1, 2], [2, 5, 8], [8, 7, 6], [6, 3, 0]][d];
-      for (let k = 0; k < 2; k++) {
-        const A = P[e[k]], B = P[e[k + 1]];
-        quad(A, [A[0], VOID_Y, A[2]], [B[0], VOID_Y, B[2]], B, pal.cliffA, pal.cliffB, pal.cliffB, pal.cliffA);
+      // the cut edge of the world
+      for (let d = 0; d < 4; d++) {
+        const nc = c + DC[d], nr = r + DR[d];
+        if (nc >= 0 && nr >= 0 && nc < N && nr < N) continue;
+        const e = [[0, 1, 2], [2, 5, 8], [8, 7, 6], [6, 3, 0]][d];
+        for (let k = 0; k < 2; k++) {
+          const A = P[e[k]], B = P[e[k + 1]];
+          quad(A, [A[0], VOID_Y, A[2]], [B[0], VOID_Y, B[2]], B, pal.cliffA, pal.cliffB, pal.cliffB, pal.cliffA);
+        }
       }
     }
   }
@@ -3347,9 +3388,10 @@ function buildGround(cx, cz, ch) {
   groundTex.needsUpdate = true;
   ch.ground = bufGround.mesh(groundPrintMat);
   if (ch.ground) ch.ground.layers.set(5);   // drawn in a pass of its own (see renderWorld)
+  yield;
   buildBog(c0, r0, grid, GW, ch);
-  if (wet) buildWater(c0, r0, grid, GW, ch);
-  if (molten) buildLava(c0, r0, grid, GW, ch);
+  if (wet) { yield; buildWater(c0, r0, grid, GW, ch); }
+  if (molten) { yield; buildLava(c0, r0, grid, GW, ch); }
 }
 // The open water of a chunk on the same half-tile grid as the ground: each point stands at the highest
 // surface of the water tiles round it (so where a river steps down a level, the lower tile's upper half is a
@@ -6343,26 +6385,40 @@ function shrine(x, z, k) {
 }
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
-function buildObjects(cx, cz, ch) {
-  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; PLANT = bufPlant; WEB = bufWeb; SPIDER = bufSpider;
-  bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = bufPlant.n = bufWeb.n = bufSpider.n = 0;
+// (the buffers objects are drawn into: one set for building a chunk's at once, and one for a chunk streaming in
+// a band of rows at a time, which keeps its part-drawn objects over frames)
+const OBJ_BUFS = { obj: bufObj, glow: bufGlow, trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider };
+const BAND_BUFS = { obj: new Buf(), glow: new Buf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf() };
+const OBJ_BAND = 8;      // rows of tiles in a band
+let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUFS
+function objBufs(B, clear) {
+  OUT = B.obj; GLOW = B.glow; TRUNK = B.trunk; CANOPY = B.canopy; PLANT = B.plant; WEB = B.web; SPIDER = B.spider;
+  if (clear) for (const k in B) B[k].n = 0;
+}
+function objRows(cx, cz, ra, rb) {
   const c0 = cx * CH, r0 = cz * CH;
-  for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+  for (let r = r0 + ra; r < r0 + rb; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
     if (o && !detached.has(i)) drawObject(o, c, r);
     if (BR[i]) bridgeDeck(c, r, i);
     else if (RIM[i] & 255) cliffRocks(c, r, i);
   }
-  ch.obj = bufObj.mesh(groundMat);
-  ch.glow = bufGlow.mesh(glowMat);
-  ch.trunk = bufTrunk.mesh(trunkMat);
-  ch.plant = bufPlant.mesh(plantMat);
-  ch.canopy = bufCanopy.mesh(castOnlyMat);
-  if (ch.canopy) ch.canopy.castShadow = true;
-  ch.web = bufWeb.mesh(webMat);
-  if (ch.web) ch.web.castShadow = false;
-  ch.spider = bufSpider.mesh(spiderMat);
-  if (ch.spider) ch.spider.castShadow = false;
+}
+const OBJ_MESHES = ['obj', 'glow', 'trunk', 'plant', 'canopy', 'web', 'spider'];
+function objMesh(B, ch, k) {
+  if (k === 'obj') ch.obj = B.obj.mesh(groundMat);
+  else if (k === 'glow') ch.glow = B.glow.mesh(glowMat);
+  else if (k === 'trunk') ch.trunk = B.trunk.mesh(trunkMat);
+  else if (k === 'plant') ch.plant = B.plant.mesh(plantMat);
+  else if (k === 'canopy') { ch.canopy = B.canopy.mesh(castOnlyMat); if (ch.canopy) ch.canopy.castShadow = true; }
+  else if (k === 'web') { ch.web = B.web.mesh(webMat); if (ch.web) ch.web.castShadow = false; }
+  else { ch.spider = B.spider.mesh(spiderMat); if (ch.spider) ch.spider.castShadow = false; }
+}
+function objMeshes(B, ch) { for (const k of OBJ_MESHES) objMesh(B, ch, k); }
+function buildObjects(cx, cz, ch) {
+  objBufs(OBJ_BUFS, true);
+  objRows(cx, cz, 0, CH);
+  objMeshes(OBJ_BUFS, ch);
 }
 
 // ---------- Building pieces ----------
@@ -6806,18 +6862,63 @@ function refreshRooms(c, r, w) {
 const chunks = new Map();
 const CHUNK_KEEP = 70;
 function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
-const chunkTime = { n: 0, ms: 0 };
-function buildChunk(cx, cz) {
-  const t0 = performance.now();
-  const ch = { cx, cz, ground: null, lava: null, bog: null, bog2: null, water: null, water2: null, obj: null, glow: null, build: null, used: 0 };
-  buildGround(cx, cz, ch);
-  buildObjects(cx, cz, ch);
-  buildPieces(cx, cz, ch);
-  grassChunk(cx, cz);
+const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
+// A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
+// pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
+// it and its grass and drift. Until the later steps are done its ground stands bare.
+// The ground itself is built a few steps at a time too (groundSteps), one chunk's at a time; the chunk goes into
+// chunks once its ground is done.
+let groundJob = null;   // { key, ch, steps }
+function startGround(cx, cz) {
+  const ch = { cx, cz, ground: null, lava: null, bog: null, bog2: null, water: null, water2: null, obj: null, glow: null, build: null, used: 0, stage: 0 };
+  groundJob = { key: cz * NC + cx, ch, steps: groundSteps(cx, cz, ch) };
+}
+// steps the ground under way on until it's done (and returns its chunk) or it's past until (always at least a step)
+function stepGround(until) {
+  let r;
+  do {
+    const t0 = performance.now();
+    r = groundJob.steps.next();
+    const d = performance.now() - t0;
+    chunkTime.parts[0] = Math.max(chunkTime.parts[0], d); chunkTime.ms += d;
+  } while (!r.done && performance.now() < until);
+  if (!r.done) return null;
+  const ch = groundJob.ch;
+  groundJob = null;
   chunkMeshes(ch).forEach(m => { m.matrixAutoUpdate = false; m.updateMatrix(); scene.add(m); });
-  chunks.set(cz * NC + cx, ch);
-  chunkTime.n++; chunkTime.ms += performance.now() - t0;
+  chunks.set(ch.cz * NC + ch.cx, ch);
   return ch;
+}
+// the chunk's next step: what stands on it (1), then its pieces, grass and drift (2)
+function finishChunk(ch) {
+  const t0 = performance.now();
+  if (ch.stage === 0) {
+    // what stands on it, a band of rows a step (drawn into BAND_BUFS, which another chunk can take over, and then
+    // this one starts again), then its meshes made, one a step, and swapped in together
+    if (bandOwner !== ch) { bandOwner = ch; ch.band = 0; ch.made = {}; objBufs(BAND_BUFS, true); }
+    const bands = CH / OBJ_BAND;
+    if (ch.band < bands) {
+      objBufs(BAND_BUFS);
+      objRows(ch.cx, ch.cz, ch.band * OBJ_BAND, ++ch.band * OBJ_BAND);
+      objBufs(OBJ_BUFS);
+    } else if (ch.band < bands + OBJ_MESHES.length) objMesh(BAND_BUFS, ch.made, OBJ_MESHES[ch.band++ - bands]);
+    else {
+      for (const k of OBJ_MESHES) swapMesh(ch, k, ch.made[k]);
+      bandOwner = null; ch.made = null;
+      ch.stage = 1;
+    }
+    const k = ch.stage || ch.band > bands ? 2 : 1;
+    chunkTime.parts[k] = Math.max(chunkTime.parts[k], performance.now() - t0);
+  } else {
+    const tmp = {};
+    buildPieces(ch.cx, ch.cz, tmp);
+    swapMesh(ch, 'build', tmp.build);
+    grassChunk(ch.cx, ch.cz);
+    ch.stage = 2;
+    chunkTime.n++;
+    chunkTime.parts[3] = Math.max(chunkTime.parts[3], performance.now() - t0);
+  }
+  chunkTime.ms += performance.now() - t0;
 }
 function swapMesh(ch, key, m) {
   ch.giStale = Math.max(ch.giStale || 0, key === 'ground' || key === 'water' || key === 'lava' || key === 'bog' ? 2 : 1); ch.giJob = null;
@@ -6828,6 +6929,8 @@ function swapMesh(ch, key, m) {
 function rebuildObjects(c, r) {
   const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
   if (!ch) return;
+  // (one still streaming in draws its objects again from the first band)
+  if (ch.stage === 0) { if (bandOwner === ch) bandOwner = null; return; }
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
   swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
@@ -6873,10 +6976,17 @@ function streamChunks(budgetMs) {
   for (const [, cx, cz] of want) {
     const key = cz * NC + cx;
     let ch = chunks.get(key);
+    // (a step at a time, nearest first, as long as the budget lasts, and always at least one)
     if (!ch) {
       if (budgetMs !== Infinity && built && performance.now() - t0 > budgetMs) continue;
-      ch = buildChunk(cx, cz); built++;
+      const until = budgetMs === Infinity ? Infinity : t0 + budgetMs;
+      // (another chunk's ground under way goes first)
+      if (groundJob && groundJob.key !== key) { stepGround(until); built++; if (groundJob || budgetMs !== Infinity) continue; }
+      if (!groundJob) startGround(cx, cz);
+      ch = stepGround(until); built++;
+      if (!ch) continue;
     }
+    while (ch.stage < 2 && (budgetMs === Infinity || !built || performance.now() - t0 <= budgetMs)) { finishChunk(ch); built++; }
     ch.used = streamFrame;
   }
   if (chunks.size > CHUNK_KEEP) {
@@ -12458,6 +12568,9 @@ window.GAME = {
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
   wildFences: () => wildFence.size,
+  spikeReset: () => { chunkTime.parts.fill(0); giStepMax.fill(0); },
+  spikeParts: () => ({ gi: giStepMax.map(v => +v.toFixed(1)), chunk: chunkTime.parts.map(v => +v.toFixed(1)), chunkAvg: +(chunkTime.ms / Math.max(1, chunkTime.n)).toFixed(1) }),
+  ghTime: (n = 3) => { let tot = 0, max = 0, steps = 0; for (let k = 0; k < n; k++) { const job = groundHazeSiteJob(Math.round(camTarget.x) + k, Math.round(camTarget.z)); for (;;) { const t = performance.now(), d = job.next().done, e = performance.now() - t; tot += e; max = Math.max(max, e); steps++; if (d) break; } } return [+(tot / n).toFixed(1), +max.toFixed(1), steps / n]; },
   trails: () => arrowTrails.length + ' after-images, ' + trailMeshes.map(m => m.count).join('/'),
   fenceCount: () => { const n = new Array(11).fill(0); for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),

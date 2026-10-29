@@ -357,10 +357,23 @@ const SOLID_ABOVE = 0.3;   // a triangle starting no higher than this over the g
 // The ground: each texel at the highest of the ground triangles over its middle (or of the corners in it).
 // parts: [{ geo, color?: [r, g, b] (else the vertex colours), emit?: 0-1 (a quarter of the light it gives off) }]
 export function rasterGround(cx, cz, parts) {
-  const B = GI_BLOCK, x0 = cx * GI_CHUNK, z0 = cz * GI_CHUNK, h = new Float32Array(B * B).fill(-1e4), c = new Uint8Array(B * B * 4);
+  const gs = rasterGroundStart(cx, cz);
+  for (const part of parts) rasterGroundPart(gs, part);
+  return gs;
+}
+// the same a piece at a time (rasterGroundStart, then rasterGroundPart for each part or a run of its triangles),
+// so a chunk's ground can be spread over frames too; the start is the finished { h, c } once they're all in
+export function rasterGroundStart(cx, cz) {
+  const B = GI_BLOCK;
+  return { h: new Float32Array(B * B).fill(-1e4), c: new Uint8Array(B * B * 4), x0: cx * GI_CHUNK, z0: cz * GI_CHUNK };
+}
+// (until: a performance.now() time to stop by, checked every 16 triangles; returns the triangle it stopped
+// before, or the part's count once it's all in)
+export function rasterGroundPart(gs, part, t0 = 0, t1 = Infinity, until = Infinity) {
+  const B = GI_BLOCK, { h, c, x0, z0 } = gs;
   const put = (i, y, r, g, b, e) => { if (y > h[i]) { h[i] = y; c[i * 4] = r; c[i * 4 + 1] = g; c[i * 4 + 2] = b; c[i * 4 + 3] = e; } };
-  for (const part of parts) eachTri(part, (ax, ay, az, bx, by, bz, qx, qy, qz, r, g, b) => {
-    const e = Math.round((part.emit || 0) * 255);
+  const e = Math.round((part.emit || 0) * 255);
+  return eachTri(part, (ax, ay, az, bx, by, bz, qx, qy, qz, r, g, b) => {
     // corners first, so thin triangles still count
     for (const [x, y, z] of [[ax, ay, az], [bx, by, bz], [qx, qy, qz]]) {
       const i = Math.floor((x - x0) * GI_TPT), j = Math.floor((z - z0) * GI_TPT);
@@ -376,8 +389,7 @@ export function rasterGround(cx, cz, parts) {
       if (u < -1e-4 || v < -1e-4 || w < -1e-4) continue;
       put(j * B + i, u * ay + v * by + w * qy, r, g, b, e);
     }
-  });
-  return { h, c };
+  }, t0, t1, until);
 }
 
 // The things on it: each thing (a run of triangles joined at their corners, as a box, a crown or a roof is
@@ -402,8 +414,9 @@ export function rasterTris(part) {
   if (!geo || !geo.attributes.position) return 0;
   return Math.floor((geo.index ? geo.index.array.length : geo.attributes.position.count) / 3);
 }
-// one part, or its triangles t0 to t1 (a thing cut across two runs is taken as two things)
-export function rasterPart(st, part, t0 = 0, t1 = Infinity) {
+// one part, or its triangles t0 to t1 (a thing cut across two runs is taken as two things). until: a
+// performance.now() time to stop by, as rasterGroundPart's; returns the triangle it stopped before, or the count
+export function rasterPart(st, part, t0 = 0, t1 = Infinity, until = Infinity) {
   const { B, x0, z0, ground, top, g, lo, hi, leak, bc } = st;
   const groundAt = (x, z) => {
     const i = Math.min(B - 1, Math.max(0, Math.floor((x - x0) * GI_TPT))), j = Math.min(B - 1, Math.max(0, Math.floor((z - z0) * GI_TPT)));
@@ -411,12 +424,15 @@ export function rasterPart(st, part, t0 = 0, t1 = Infinity) {
   };
   {
     const e = Math.round((part.emit || 0) * 255);
-    let tris = [], corners = new Set(), lowY = 1e9, lowX = 0, lowZ = 0;
+    // (the thing's triangles go in one flat list used again, 12 numbers each, so a chunk makes little garbage)
+    const tb = [], corners = new Set();
+    let nt = 0, lowY = 1e9, lowX = 0, lowZ = 0;
     const flush = () => {
-      if (!tris.length) return;
+      if (!nt) return;
       const stands = lowY <= groundAt(lowX, lowZ) + SOLID_ABOVE;
-      for (const t of tris) {
-        const [ax, ay, az, bx, by, bz, qx, qy, qz, r, gg, b] = t;
+      for (let o = 0; o < nt * 12; o += 12) {
+        const ax = tb[o], ay = tb[o + 1], az = tb[o + 2], bx = tb[o + 3], by = tb[o + 4], bz = tb[o + 5], qx = tb[o + 6], qy = tb[o + 7], qz = tb[o + 8];
+        const r = tb[o + 9], gg = tb[o + 10], b = tb[o + 11];
         const i0 = Math.max(0, Math.floor((Math.min(ax, bx, qx) - x0) * GI_TPT)), i1 = Math.min(B - 1, Math.floor((Math.max(ax, bx, qx) - x0) * GI_TPT));
         const j0 = Math.max(0, Math.floor((Math.min(az, bz, qz) - z0) * GI_TPT)), j1 = Math.min(B - 1, Math.floor((Math.max(az, bz, qz) - z0) * GI_TPT));
         const y0 = Math.min(ay, by, qy), y1 = Math.max(ay, by, qy);
@@ -431,17 +447,22 @@ export function rasterPart(st, part, t0 = 0, t1 = Infinity) {
           }
         }
       }
-      tris = []; corners = new Set(); lowY = 1e9;
+      nt = 0; corners.clear(); lowY = 1e9;
     };
     const keyOf = (x, y, z) => (Math.round(x * 256) * 32768 + Math.round((y + 60) * 256)) * 524288 + Math.round(z * 256);
-    eachTri(part, (...t) => {
-      const ka = keyOf(t[0], t[1], t[2]), kb = keyOf(t[3], t[4], t[5]), kq = keyOf(t[6], t[7], t[8]);
-      if (tris.length && !corners.has(ka) && !corners.has(kb) && !corners.has(kq)) flush();
+    const done = eachTri(part, (ax, ay, az, bx, by, bz, qx, qy, qz, r, gg, b) => {
+      const ka = keyOf(ax, ay, az), kb = keyOf(bx, by, bz), kq = keyOf(qx, qy, qz);
+      if (nt && !corners.has(ka) && !corners.has(kb) && !corners.has(kq)) flush();
       corners.add(ka); corners.add(kb); corners.add(kq);
-      tris.push(t);
-      for (let v = 0; v < 9; v += 3) if (t[v + 1] < lowY) { lowY = t[v + 1]; lowX = t[v]; lowZ = t[v + 2]; }
-    }, t0, t1);
+      const o = nt++ * 12;
+      tb[o] = ax; tb[o + 1] = ay; tb[o + 2] = az; tb[o + 3] = bx; tb[o + 4] = by; tb[o + 5] = bz;
+      tb[o + 6] = qx; tb[o + 7] = qy; tb[o + 8] = qz; tb[o + 9] = r; tb[o + 10] = gg; tb[o + 11] = b;
+      if (ay < lowY) { lowY = ay; lowX = ax; lowZ = az; }
+      if (by < lowY) { lowY = by; lowX = bx; lowZ = bz; }
+      if (qy < lowY) { lowY = qy; lowX = qx; lowZ = qz; }
+    }, t0, t1, until);
     flush();
+    return done;
   }
 }
 export function rasterEnd(st, version) {
@@ -458,12 +479,13 @@ export function rasterEnd(st, version) {
 }
 
 // every triangle of a part's geometry (or those from t0 to t1), with its colour as bytes
-function eachTri(part, fn, t0 = 0, t1 = Infinity) {
+function eachTri(part, fn, t0 = 0, t1 = Infinity, until = Infinity) {
   const geo = part.geo;
-  if (!geo || !geo.attributes.position) return;
+  if (!geo || !geo.attributes.position) return 0;
   const p = geo.attributes.position.array, col = geo.attributes.color ? geo.attributes.color.array : null, idx = geo.index ? geo.index.array : null;
   const count = idx ? idx.length : geo.attributes.position.count, fixed = part.color && part.color.map(v => Math.round(v * 255));
   for (let t = t0 * 3; t + 2 < Math.min(count, t1 * 3); t += 3) {
+    if (until !== Infinity && t > t0 * 3 && (t / 3) % 16 === 0 && performance.now() > until) return t / 3;
     const a = idx ? idx[t] : t, b = idx ? idx[t + 1] : t + 1, q = idx ? idx[t + 2] : t + 2;
     let r, g, bl;
     if (fixed) [r, g, bl] = fixed;
@@ -474,4 +496,5 @@ function eachTri(part, fn, t0 = 0, t1 = Infinity) {
     } else r = g = bl = 128;
     fn(p[a * 3], p[a * 3 + 1], p[a * 3 + 2], p[b * 3], p[b * 3 + 1], p[b * 3 + 2], p[q * 3], p[q * 3 + 1], p[q * 3 + 2], Math.min(255, r), Math.min(255, g), Math.min(255, bl));
   }
+  return Math.floor(count / 3);
 }
