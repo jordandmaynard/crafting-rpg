@@ -1799,8 +1799,8 @@ function placeGrottos() {
         const [pc, pr] = at(0, 0), x0 = pc + (lx < 0 ? 1 : 0) + (ox < 0 ? 1 : 0), z0 = pr + (lz < 0 ? 1 : 0) + (oz < 0 ? 1 : 0);
         // where along the cliff the water falls, and a smaller fall off a ledge part way down, well to one side
         const fa = 2.2 + h(2) * 1.6, fa2 = fa < 3 ? fa + 1.9 + h(4) * 0.6 : fa - 1.9 - h(4) * 0.6;
-        const fall = { x: x0 + lx * fa + ox * 0.8, y: L * STEP - BOG_SURF, z: z0 + lz * fa + oz * 0.8, dx: ox, dz: oz, drop: (top - L) * STEP + 0.3 };
-        grottos.push({ c: mc, r: mr, x: mc + 0.5, z: mr + 0.5, L, top, d, pool, anchor: T(ac, ar), x0, z0, ox, oz, lx, lz, fa, fa2, fall, seed: h(3), fallTop: top * STEP + 0.3 });
+        const fall = { x: x0 + lx * fa + ox * 0.8, y: L * STEP - BOG_SURF, z: z0 + lz * fa + oz * 0.8, dx: ox, dz: oz, drop: (top - L) * STEP };
+        grottos.push({ c: mc, r: mr, x: mc + 0.5, z: mr + 0.5, L, top, d, pool, anchor: T(ac, ar), x0, z0, ox, oz, lx, lz, fa, fa2, fall, seed: h(3), fallTop: top * STEP + 0.04 });
       }
     }
   }
@@ -5184,11 +5184,11 @@ function buildGrottoFalls() {
       }
     };
     const pts = [], wids = [], H = g.fallTop - yS;
-    for (let n = 0; n <= 10; n++) { const tau = n / 10; pts.push([g.fa, -0.05 + 0.85 * tau, g.fallTop - H * tau * tau]); wids.push(0.65 + 0.3 * tau); }
+    for (let n = 0; n <= 10; n++) { const tau = n / 10; pts.push([g.fa, 0.05 + 0.8 * tau, g.fallTop - H * tau * tau]); wids.push(0.6 + 0.3 * tau); }
     ribbon(pts, wids, 1);
     // the smaller one, off its ledge part way down
     const y2 = g.L * STEP + (yT - g.L * STEP) * 0.55, b2 = 0.5 * (yT - y2) / (yT - g.L * STEP), H2 = y2 - yS, p2 = [], w2 = [];
-    for (let n = 0; n <= 6; n++) { const tau = n / 6; p2.push([g.fa2, b2 + 0.1 + 0.4 * tau, y2 - H2 * tau * tau]); w2.push(0.3 + 0.12 * tau); }
+    for (let n = 0; n <= 6; n++) { const tau = n / 6; p2.push([g.fa2, b2 + 0.12 + 0.4 * tau, y2 - H2 * tau * tau]); w2.push(0.26 + 0.12 * tau); }
     ribbon(p2, w2, 0.7);
     const geo = new GFX.BufferGeometry();
     geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
@@ -6203,56 +6203,58 @@ function burntTree(x, z, k) {
 }
 // a vent: a hole two tiles across in the ash, its throat falling away dark to an ember glow far down, inside
 // a low lip of crusted ash and sulphur (the smoke: see ventSmoke)
-// A fairy grotto's rock, moss, lily pads and toadstools (see placeGrottos): crags of the cliffs' own stone along
-// the cliff's top, as the rock pillars are built, rising to a cleft the water spills from; knobs of rock and
-// patches of moss over the face, moss along the lip and a few strands trailing down, ferns up top, lily pads floating on the pool (they drift aside as you wade past: plants
-// that float, see plantMat) and toadstools glowing round its bank.
+// A fairy grotto's rock face, lily pads and toadstools (see placeGrottos): the cliff's face made of boulders,
+// ferns up top, lily pads floating on the pool (they drift aside as you wade past: plants that float, see
+// plantMat) and toadstools glowing round its bank.
 const GROTTO_W = 6, GROTTO_D = 4;
 function grotto(g) {
   const W = GROTTO_W, D = GROTTO_D, P = (a, b) => [g.x0 + g.lx * a + g.ox * b, g.z0 + g.lz * a + g.oz * b];
-  const yT = g.top * STEP, yL = g.L * STEP, face = Math.atan2(g.ox, g.oz);
+  const yT = g.top * STEP, yL = g.L * STEP;
   let seed = g.seed * 1000 + 3;
   const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
-  // The cliff's face behind the pool is built up of boulders of the cliffs' own stone, irregular as the rock
-  // pillars are, in rough courses from the water to a little over the lip, each set a touch proud of the face and
-  // turned and squashed its own way, mossy on top here and there. The main fall spills off a flat ledge stone in a
-  // gap at the top; the boulders under both falls sit back so the water runs clear of them.
+  // The cliff's face behind the pool is one surface of rock laid over the ground's own face, shaped into
+  // boulders fitted together: a grid across the face pushed out by a cellular noise, each cell a boulder (high in
+  // its middle, falling into a crease where it meets the next, tilted its own way), drawn faceted in the cliffs'
+  // own stone, mossy wherever a facet faces up. It tucks into the ground along the lip and fades back into the
+  // ground's face at its ends, and is worn smooth and set back where the water runs.
   const [rockC, capC] = CLIFF_ROCK[DEEP], stone = k => shade(CC(rockC), 0.7 + k * 0.42), moss = k => shade(CC(k > 0.6 ? capC : k > 0.3 ? '#557a2c' : '#628a30'), 0.85 + k * 0.25);
-  const fh = yT - yL, yw = yL - BOG_SURF, rows = Math.max(2, Math.round(fh / 0.5)) + 1;
-  const y2 = yL + fh * 0.55;   // the ledge the smaller fall comes off
-  const boulder = (a, y, s, k, back) => {
-    // (b on the face at that height, out a little; back: tucked in behind a fall)
-    const bf = 0.5 * clamp((yT - y) / fh, -0.3, 1), [x, z] = P(a, bf + (back ? -0.12 : 0.06));
-    const sx = s * (0.85 + rnd() * 0.4), sy = s * (0.65 + rnd() * 0.35), sz = s * (0.7 + rnd() * 0.3), ry = rnd() * 6.28;
-    part(G.dodec, stone(k), x, y, z, { sx, sy, sz, ry, rx: (rnd() - 0.5) * 0.5, rz: (rnd() - 0.5) * 0.5 });
-    if (!back && rnd() < 0.45) part(G.dodec, moss(rnd()), x, y + sy * 0.36, z, { sx: sx * 0.7, sy: sy * 0.22, sz: sz * 0.7, ry: ry + 0.5 });
-    return [x, y + sy * 0.45, z];
-  };
-  for (let j = 0; j < rows; j++) {
-    const t = j / (rows - 1), y = yw + 0.05 + (fh + 0.35) * t, size = 0.75 - t * 0.2;
-    for (let a = -0.15 + rnd() * 0.3; a < W + 0.2; a += size * (0.62 + rnd() * 0.3)) {
-      const nearMain = Math.abs(a - g.fa) < 0.5, nearSmall = Math.abs(a - g.fa2) < 0.3 && y < y2;
-      if (j === rows - 1 && nearMain) continue;   // (the ledge stone's gap)
-      boulder(a, y + (rnd() - 0.5) * 0.12, size * (0.8 + rnd() * 0.45) * (nearMain || nearSmall ? 0.7 : 1), rnd(), nearMain || nearSmall);
+  const fh = yT - yL, y2 = yL + fh * 0.55, yTop = yT + 0.06, yBot = yL - 0.4;
+  const seeds = [];
+  for (let sy = yBot - 0.2; sy < yTop + 0.3; sy += 0.42) for (let sa = -1; sa < W + 1; sa += 0.55)
+    seeds.push({ a: sa + rnd() * 0.45, y: sy + rnd() * 0.35, depth: 0.12 + rnd() * 0.16, ta: (rnd() - 0.5) * 0.5, ty: (rnd() - 0.5) * 0.5, k: rnd() });
+  const cellAt = (a, y) => {
+    let f1 = 1e9, f2 = 1e9, best = null;
+    for (const q of seeds) {
+      const d = Math.hypot(q.a - a, (q.y - y) * 1.15);
+      if (d < f1) { f2 = f1; f1 = d; best = q; } else if (d < f2) f2 = d;
     }
+    return [best, f2 - f1];
+  };
+  const NA = Math.ceil((W + 1.2) / 0.11), NY = Math.max(8, Math.ceil((yTop - yBot) / 0.11));
+  const grid = [], cells = [];
+  for (let k = 0; k <= NY + 1; k++) {
+    const row = [], crow = [];
+    for (let i = 0; i <= NA; i++) {
+      const a = -0.6 + (W + 1.2) * i / NA;
+      if (k === 0) {
+        // (the row tucked under the ground behind the lip)
+        const [x, z] = P(a, -0.2); row.push([x, yT - 0.04, z]); crow.push(cellAt(a, yTop)[0]); continue;
+      }
+      const y = yTop - (yTop - yBot) * (k - 1) / NY, e = smoothstep(-0.6, 0.25, a) * smoothstep(W + 0.6, W - 0.25, a);
+      const ch = Math.exp(-(((a - g.fa) / 0.45) ** 2)) + (y < y2 ? Math.exp(-(((a - g.fa2) / 0.3) ** 2)) : 0);
+      const [q, edge] = cellAt(a, y);
+      const bump = Math.max(0, q.depth * Math.pow(smoothstep(0, 0.2, edge), 0.6) + (q.ta * (a - q.a) + q.ty * (y - q.y)) * 0.3);
+      const bf = 0.5 * clamp((yT - y) / fh, 0, 1) + 0.1 * e - 0.07 * (1 - e) - 0.11 * Math.min(1, ch);
+      const [x, z] = P(a, bf + bump * e * (1 - 0.65 * Math.min(1, ch)));
+      row.push([x, y, z]); crow.push(q);
+    }
+    grid.push(row); cells.push(crow);
   }
-  // the ledge stones the falls spill off
-  const [lx0, lz0] = P(g.fa, -0.25);
-  part(G.dodec, stone(0.3), lx0, g.fallTop - 0.1, lz0, { sx: 0.95, sy: 0.22, sz: 0.75, ry: face + 0.3 });
-  const [lx2, lz2] = P(g.fa2, 0.5 * (yT - y2) / fh - 0.05);
-  part(G.dodec, stone(0.5), lx2, y2 - 0.06, lz2, { sx: 0.5, sy: 0.16, sz: 0.55, ry: face - 0.4 });
-  // moss along the lip, and a few strands hanging over the boulders
-  for (let n = 0; n < 7; n++) {
-    const a = rnd() * W, w = 0.25 + rnd() * 0.3;
-    if (Math.abs(a - g.fa) < 0.6) continue;
-    const [x, z] = P(a, -0.3 + rnd() * 0.1);
-    part(G.dodec, moss(rnd()), x, yT + 0.3, z, { sx: w, sy: 0.12 + rnd() * 0.08, sz: w * (0.6 + rnd() * 0.5), ry: rnd() * 6 });
-  }
-  for (let n = 0; n < 6; n++) {
-    const a = rnd() * W, len = 0.25 + rnd() * 0.45;
-    if (Math.abs(a - g.fa) < 0.6 || Math.abs(a - g.fa2) < 0.35) continue;
-    const [tx, tz] = P(a, 0.08), [bx, bz] = P(a + (rnd() - 0.5) * 0.15, 0.1 + len * 0.45);
-    seg(G.frust4, rnd() < 0.4 ? shade(CC('#8a5a2e'), 0.8 + rnd() * 0.3) : moss(rnd()), [tx, yT + 0.25, tz], [bx, yT + 0.25 - len, bz], 0.03 + rnd() * 0.03);
+  const nrm = (p, q, r) => { const ux = q[0] - p[0], uy = q[1] - p[1], uz = q[2] - p[2], vx = r[0] - p[0], vy = r[1] - p[1], vz = r[2] - p[2], nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; return Math.abs(ny) / (Math.hypot(nx, ny, nz) || 1); };
+  const facet = (p, q, r, cell) => { const c = nrm(p, q, r) > 0.62 ? moss(cell.k) : stone(cell.k); tri(p, q, r, c, c, c); };
+  for (let k = 0; k <= NY; k++) for (let i = 0; i < NA; i++) {
+    const A = grid[k][i], B = grid[k][i + 1], C2 = grid[k + 1][i + 1], Dd = grid[k + 1][i], cell = cells[k + 1][i];
+    facet(A, B, C2, cell); facet(A, C2, Dd, cell);
   }
   // ferns up on the rock's ends, leaning out over the pool
   for (const a of [0.45, W - 0.45]) { const [x, z] = P(a, -0.6); fern(x, z, rnd()); }
