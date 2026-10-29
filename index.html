@@ -2366,7 +2366,7 @@ function updateBloom() {
 // whirlSpin (tiles a second round you), whirlClear (a second): how your whirlwind stirs it, even standing still.
 // poolAway: in swamps and the Wastes, the share of it left away from water and lava (thickest by them, thinning to
 // this poolReach tiles off). None lies over water (Jordan's ask, v109); lava keeps it.
-const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.41, slices: 1, patchiness: 1, patchSize: 17.3, relax: 0,
+const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 1, patchiness: 1, patchSize: 17.3, relax: 0,
   windSpeed: 0, settle: 1.19, swirl: 28.5, smooth: 0.15, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 100, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400'};
@@ -3685,8 +3685,11 @@ function updateCuts(dt) {
 // ground within a sixth of a tile (so it lies up to a cliff's lip, and at its foot, as a slab). DRIFT.smooth
 // blends its faceted shading (each triangle flat) into smooth normals worked out from the points round each one.
 // driftTex's r holds bits: 1 covered (strictly: the 4 × 4 points round it level), 2 covered (itself level),
-// 4 open snow or sand that slopes (a ramp or a cliff's face). Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
-const DRIFT = { on: 1, snowMin: 0.24, snowMax: 0.3, sandMin: 0.14, sandMax: 0.3, size: 0.02, press: 0.44, rim: 0.39, radius: 0.41, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0, cliffs: 0 };
+// 4 open snow or sand that slopes (a cliff's face, or a ramp's quarter lifted by a tile beside it), 8 a ramp's
+// quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
+// layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
+// point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
+const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.16, rim: 0.27, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1 };
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
@@ -3706,9 +3709,21 @@ function driftChunk(c0, r0, ph, W) {
         if (j && j < 3 && k && k < 3) { level = false; break; }
       }
       const hollow = at && Math.hypot(c + 0.25 + (q & 1) * 0.5 - at[0], r + 0.25 + (q >> 1) * 0.5 - at[1]) < sol + 0.25;
-      const bits = hollow ? 0 : (strict ? 1 : 0) | (level ? 2 : 0) | (open && !level ? 4 : 0), cov = bits & 3;
-      // (an uncovered quarter keeps its ground's middle, so the layer's edge can dip under it)
-      const y = cov ? h0 : (ph[(lz + 1) * W + lx + 1] + ph[(lz + 1) * W + lx + 2] + ph[(lz + 2) * W + lx + 1] + ph[(lz + 2) * W + lx + 2]) / 4;
+      // a ramp's quarter, lying on its slope (no corner lifted by a higher tile beside it): which way it rises
+      // (bits 16-32: +x, -x, +z, -z) and whether at half a level a tile (64)
+      let ramp = 0;
+      if (open && !level && SH[i]) {
+        const a = ph[(lz + 1) * W + lx + 1], b = ph[(lz + 1) * W + lx + 2], cc = ph[(lz + 2) * W + lx + 1], dd = ph[(lz + 2) * W + lx + 2];
+        const u0 = (q & 1) / 2, v0 = (q >> 1) / 2;
+        if (Math.abs(a - tileSurf(c, r, u0, v0)) < 1e-4 && Math.abs(b - tileSurf(c, r, u0 + 0.5, v0)) < 1e-4
+          && Math.abs(cc - tileSurf(c, r, u0, v0 + 0.5)) < 1e-4 && Math.abs(dd - tileSurf(c, r, u0 + 0.5, v0 + 0.5)) < 1e-4) {
+          const gx = b + dd - a - cc, gz = cc + dd - a - b, g = Math.max(Math.abs(gx), Math.abs(gz));
+          ramp = 8 | (Math.abs(gx) > Math.abs(gz) ? (gx > 0 ? 0 : 16) : (gz > 0 ? 32 : 48)) | (g < STEP * 0.75 ? 64 : 0);
+        }
+      }
+      const bits = hollow ? 0 : (strict ? 1 : 0) | (level ? 2 : 0) | (open && !level && !ramp ? 4 : 0) | ramp;
+      // (each quarter keeps its ground's middle; an uncovered one's lets the layer's edge dip under it)
+      const y = (ph[(lz + 1) * W + lx + 1] + ph[(lz + 1) * W + lx + 2] + ph[(lz + 2) * W + lx + 1] + ph[(lz + 2) * W + lx + 2]) / 4;
       const e = clamp(Math.round((y + 16) * 1024), 0, 65535), t = ((r * 2 + (q >> 1)) * N2 + c * 2 + (q & 1)) * 4;
       d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind;
     }
@@ -3719,7 +3734,7 @@ function driftChunk(c0, r0, ph, W) {
 // how much of the ground round (x, z) the layer covers (0-1), as the shader reads it
 function driftCov(x, z) {
   const qx = x * 2 - 0.5, qz = z * 2 - 0.5, bx = Math.floor(qx), bz = Math.floor(qz), fx = qx - bx, fz = qz - bz, d = driftTex.image.data, N2 = N * 2;
-  const bit = DRIFT.cliffs > 0.5 ? 2 : 1;
+  const bit = (DRIFT.cliffs > 0.5 ? 2 : 1) | (DRIFT.ramps > 0.5 ? 8 : 0);
   let cov = 0;
   for (let k = 0; k < 4; k++) {
     const tx = clamp(bx + (k & 1), 0, N2 - 1), tz = clamp(bz + (k >> 1), 0, N2 - 1);
@@ -3743,7 +3758,7 @@ const DRIFT_U = {
   dV: { value: { x: 0, y: 0, z: 48, w: 0 } },      // the trench map's corner (tiles), width (tiles), on
   depth: { value: { x: 0.18, y: 0.38, z: 0.14, w: 0.3 } },   // snow's least and most depth, sand's (tiles)
   look: { value: { x: 0.15, y: 0.92, z: 0.35, w: 0 } },      // the drifts' waves a tile, how far down a trench goes, a rim's height, smooth normals
-  edge: { value: { x: 0, y: 0, z: 0, w: 0 } },               // right up to cliffs (1 on)
+  edge: { value: { x: 0, y: 0, z: 0, w: 0 } },               // right up to cliffs (1 on), over ramps (1 on)
 };
 const driftMat = new GFX.ShaderMaterial({ uniforms: DRIFT_U, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -3760,7 +3775,24 @@ fn dNoise(p: vec2f) -> f32 {
 struct DP { y: f32, sand: bool, sx: f32, col: vec3f, wcol: f32 }
 fn dCov(t: vec4f) -> bool {
   let b = u32(round(t.r * 255.0));
-  return (b & select(1u, 2u, U.edge.x > 0.5)) != 0u;
+  return (b & (select(1u, 2u, U.edge.x > 0.5) | select(0u, 8u, U.edge.y > 0.5))) != 0u;
+}
+// a slope or cliff face the layer stops at (a ramp too, unless it lies over ramps)
+fn dSlope(t: vec4f) -> bool {
+  let b = u32(round(t.r * 255.0));
+  return (b & 4u) != 0u || ((b & 8u) != 0u && U.edge.y < 0.5);
+}
+// the ground under quarter q (its texel t) at xz: its middle's height, carried along a ramp's slope
+fn dGround(t: vec4f, q: vec2i, xz: vec2f) -> f32 {
+  let b = u32(round(t.r * 255.0));
+  var h = dH(t);
+  if ((b & 8u) != 0u) {
+    let d = xz - (vec2f(q) + 0.5) * 0.5;
+    let g = ${STEP.toFixed(6)} * select(1.0, 0.5, (b & 64u) != 0u);
+    let dir = (b >> 4u) & 3u;
+    h += g * select(select(-d.y, d.y, dir == 2u), select(-d.x, d.x, dir == 0u), dir < 2u);
+  }
+  return h;
 }
 fn dH(t: vec4f) -> f32 { return (round(t.g * 255.0) * 256.0 + round(t.b * 255.0)) / 1024.0 - 16.0; }
 // the layer's top at xz
@@ -3776,10 +3808,9 @@ fn dPoint(xz: vec2f) -> DP {
     let q = clamp(base + o, vec2i(0), lim);
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
     let t = textureLoad(tDrift, q, 0);
-    let h = dH(t);
-    hall += h * w;
-    if (dCov(t)) { cov += w; hc += h * w; if (round(t.a * 255.0) > 1.5) { sand += w; } }
-    if ((u32(round(t.r * 255.0)) & 4u) != 0u) { slope = true; }
+    hall += dH(t) * w;
+    if (dCov(t)) { cov += w; hc += dGround(t, q, xz) * w; if (round(t.a * 255.0) > 1.5) { sand += w; } }
+    if (dSlope(t)) { slope = true; }
     let g = textureLoad(tGround, q, 0);
     if (g.a > 0.002) { col += g.rgb * 2.0 * w; wcol += w; }
   }
@@ -3791,11 +3822,13 @@ fn dPoint(xz: vec2f) -> DP {
     let hi = clamp(vec2i(floor(xz * 2.0 + 1e-3)), vec2i(0), lim);
     var top = -1e9;
     for (var k = 0; k < 4; k++) {
-      let t = textureLoad(tDrift, vec2i(select(lo.x, hi.x, (k & 1) == 1), select(lo.y, hi.y, k > 1)), 0);
-      if (dCov(t)) { top = max(top, dH(t)); }
+      let q = vec2i(select(lo.x, hi.x, (k & 1) == 1), select(lo.y, hi.y, k > 1));
+      let t = textureLoad(tDrift, q, 0);
+      if (dCov(t)) { top = max(top, dGround(t, q, xz)); }
     }
+    // (on the covered side its ground is still the blend round it, so it runs on smoothly down a ramp)
+    if (top < -1e8) { ground = hall; } else if (cov < 1e-4) { ground = top; }
     cov = select(0.0, 1.0, top > -1e8);
-    ground = select(hall, top, cov > 0.5);
   }
   // drifts and dunes: between the least and the most depth
   let n = dNoise(xz * U.look.x) * 0.7 + dNoise(xz * U.look.x * 2.7 + vec2f(13.1, 7.7)) * 0.3;
@@ -3865,7 +3898,7 @@ function updateDrift(dt) {
     if (D.on > 0.5) {
       const d = driftTex.image.data, N2 = N * 2, cx = Math.floor(camTarget.x * 2), cz = Math.floor(camTarget.z * 2);
       for (let z = cz - DRIFT_R * 2; z <= cz + DRIFT_R * 2 && !any; z += 3) for (let x = cx - DRIFT_R * 2; x <= cx + DRIFT_R * 2; x += 3) {
-        if (x >= 0 && z >= 0 && x < N2 && z < N2 && d[(z * N2 + x) * 4] & 3) { any = true; break; }
+        if (x >= 0 && z >= 0 && x < N2 && z < N2 && d[(z * N2 + x) * 4] & 11) { any = true; break; }
       }
     }
     driftMesh.visible = any;
@@ -3876,7 +3909,7 @@ function updateDrift(dt) {
   Object.assign(u.win.value, { x: Math.floor(camTarget.x * DRIFT_S) / DRIFT_S - DRIFT_R, y: Math.floor(camTarget.z * DRIFT_S) / DRIFT_S - DRIFT_R });
   Object.assign(u.depth.value, { x: D.snowMin, y: D.snowMax, z: D.sandMin, w: D.sandMax });
   Object.assign(u.look.value, { x: D.size, y: D.press, z: D.rim, w: D.smooth });
-  u.edge.value.x = D.cliffs;
+  u.edge.value.x = D.cliffs; u.edge.value.y = D.ramps;
   const bodies = [];
   if (H.alive && !H.flip) bodies.push({ x: H.x, z: H.z, radius: D.radius, strength: 1 });
   if (D.foes > 0.5) {
@@ -9506,6 +9539,7 @@ const TUNING = [
     [DRIFT, 'sandSlow', 'How much sand slows you (0 not at all)', 0, 0.9, 0.01],
     [DRIFT, 'smooth', 'Smooth normals (0 faceted, 1 smooth)', 0, 1, 0.01],
     [DRIFT, 'cliffs', 'Right up to cliff edges (1 on, 0 thins out before them)', 0, 1, 1],
+    [DRIFT, 'ramps', 'Over ramps too (1 on, 0 stops at them)', 0, 1, 1],
   ]],
   ['Footprints', [
     [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
@@ -9841,6 +9875,7 @@ window.GAME = {
   drift: () => ({ visible: driftMesh.visible, cov: driftCov(H.x, H.z), slow: driftSlow(H.x, H.z), view: [...drift.view], on: drift.on }),
   driftAt: (x, z) => ({ cov: driftCov(x, z), slow: driftSlow(x, z) }),
   driftSet: o => Object.assign(DRIFT, o),
+  driftBits: () => { const d = driftTex.image.data, n = [0, 0, 0, 0, 0, 0, 0]; for (let t = 0; t < d.length; t += 4) for (let b = 0; b < 7; b++) if (d[t] >> b & 1) n[b]++; return n; },
   cutGrass: (x, z, r) => cutGrass(x, z, r ?? 0.5, 1, 0),
   cuts: () => ({ queue: cutQueue.length, log: cutLog.length, on: cuts.on, bits: debris.filter(d => d.fall).length }),
   grassAt: (c, r) => { const d = grassTex.image.data, o = T(c, r) * 4; return { mask: d[o] & 15, kind: d[o] >> 4, y: (d[o + 1] * 256 + d[o + 2]) / 1024 - 16 }; },
