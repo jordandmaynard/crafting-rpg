@@ -250,6 +250,9 @@ button:disabled { opacity: 0.45; cursor: default; }
 .mapview { position: relative; }
 #bigLabels { position: absolute; left: 3px; top: 3px; pointer-events: none; }
 .maprow { display: flex; gap: 10px; align-items: center; justify-content: space-between; width: 100%; font-family: var(--display); font-size: 8px; color: var(--dim); }
+.seedEntry { display: flex; gap: 6px; align-items: center; }
+#seedInput { width: 110px; font-family: var(--display); font-size: 9px; padding: 5px 6px; background: #0b0912; color: #efe4c8; border: 2px solid #000; outline: none; }
+#seedInput:focus { border-color: var(--gold); }
 
 @media (max-width: 720px) {
   #inv { --cell: 48px; }
@@ -374,6 +377,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   <div class="sheet">
     <div class="mapview"><canvas id="bigmap" width="640" height="640"></canvas><canvas id="bigLabels"></canvas></div>
     <div class="maprow"><span id="mapSeed">SEED</span><span class="kb-only">WHEEL ZOOMS · DRAG PANS · M OR ESC CLOSES</span><span class="pad-only"><g-p>LS</g-p> PANS · <g-p>RT</g-p> <g-p>LT</g-p> ZOOM · <g-p>B</g-p> CLOSES</span><button id="plotsBtn">PLOTS: OFF</button><button id="newWorld">NEW WORLD</button></div>
+    <div class="maprow"><button id="revealBtn">REVEAL ALL (N): OFF</button><span class="seedEntry"><input id="seedInput" type="text" inputmode="numeric" maxlength="10" placeholder="SEED" autocomplete="off"><button id="seedGo">LOAD SEED</button></span><button id="seedMode">EACH LOAD: NEW SEED</button></div>
   </div>
 </div>
 
@@ -404,7 +408,14 @@ const N = 1024, CH = 32, NC = N / CH, STEP = WORLD.tileHeight, MAXL = 8;
 const T = (c, r) => r * N + c;
 const params = new URLSearchParams(location.search);
 const hashSeed = /^#seed-(\d+)$/.exec(location.hash);
-const SEED = (parseInt(params.get('seed'), 10) || (hashSeed && +hashSeed[1]) || Math.floor(Math.random() * 1e9)) >>> 0;
+// (the map's seed options, kept in the browser: 'keep' loads the same world each time, 'random' a new one, a seed
+// in the address (?seed=123, or #seed-123 for this load only) still winning)
+const SEED_KEY = 'emberwild.seed', SEED_MODE_KEY = 'emberwild.seedMode';
+const seedStore = { get: k => { try { return localStorage.getItem(k); } catch (err) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, String(v)); return true; } catch (err) { return false; } } };
+let seedMode = seedStore.get(SEED_MODE_KEY) === 'keep' ? 'keep' : 'random';
+const SEED = (parseInt(params.get('seed'), 10) || (hashSeed && +hashSeed[1]) || (seedMode === 'keep' && parseInt(seedStore.get(SEED_KEY), 10)) || Math.floor(Math.random() * 1e9)) >>> 0;
+if (seedMode === 'keep') seedStore.set(SEED_KEY, SEED);
+else if (hashSeed) history.replaceState(null, '', location.pathname + location.search);
 const SEEDK = (SEED % 997) * 1.37;
 const hs = (a, b, k) => hash(a, b, k + SEEDK);
 
@@ -9396,6 +9407,7 @@ addEventListener('keydown', e => {
   if (!$('dead').hidden) { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); respawn(); } return; }
   if (e.code === 'KeyM' || (e.code === 'Escape' && mapOpen)) { toggleMap(); e.preventDefault(); return; }
   if (e.code === 'KeyP' && !e.repeat) { togglePlots(); return; }
+  if (e.code === 'KeyN' && !e.repeat && mapOpen) { toggleReveal(); return; }
   if (e.code === 'KeyL' && !e.repeat) {
     GI.on = (Math.round(GI.on) + 1) % 3; tuning.refresh();
     toast(`Lighting: ${['plain', 'sky visibility', 'bounce light'][GI.on]}`);
@@ -12045,7 +12057,7 @@ function paintMini() {
     if (miniHover) { const pl = plots[miniHover]; g.drawImage(plotFill(pl), (pl.x0 - x0) * S, (pl.z0 - z0) * S, (pl.x1 - pl.x0 + 1) * S, (pl.z1 - pl.z0 + 1) * S); }
   }
   g.imageSmoothingEnabled = true;
-  g.drawImage(fogCv, x0 / 8, z0 / 8, R / 4, R / 4, 0, 0, side, side);
+  if (!mapReveal) g.drawImage(fogCv, x0 / 8, z0 / 8, R / 4, R / 4, 0, 0, side, side);
 }
 $('mini').addEventListener('pointermove', e => {
   if (!showPlots) return;
@@ -12082,6 +12094,15 @@ function drawMini(dt) {
   ctx.beginPath(); ctx.moveTo(fx * 7, fz * 7); ctx.lineTo(-fx * 4 - fz * 4, -fz * 4 + fx * 4); ctx.lineTo(-fx * 4 + fz * 4, -fz * 4 - fx * 4); ctx.closePath();
   ctx.stroke(); ctx.fill();
   ctx.restore();
+}
+// N on the map (or its REVEAL ALL button): the whole world shown, fog, names and all, without counting any of it
+// as found
+let mapReveal = false;
+function toggleReveal() {
+  mapReveal = !mapReveal;
+  $('revealBtn').textContent = 'REVEAL ALL (N): ' + (mapReveal ? 'ON' : 'OFF');
+  miniT = 0;
+  if (mapOpen) drawBigMap();
 }
 function toggleMap() {
   mapOpen = !mapOpen;
@@ -12134,7 +12155,7 @@ function drawBigMap() {
   ctx.drawImage(mapCv, 0, 0);
   if (showPlots) ctx.drawImage(plotCv, 0, 0);
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(fogCv, 0, 0, N, N);
+  if (!mapReveal) ctx.drawImage(fogCv, 0, 0, N, N);
   if (showPlots && bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // markers stay their own size at any zoom
@@ -12195,16 +12216,18 @@ function drawMapLabels(side) {
     }
   };
   for (const t of towns) {
-    if (fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] >= 128) continue;
+    if (!mapReveal && fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] >= 128) continue;
     const [x, z] = at(t.c, t.r);
     place([t.name], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
   // regions, lakes, seas, rivers and roads you've found, biggest first
-  const found = regions.filter(g => g.found).map(g => [g, REGION_INK[g.biome]]).concat(features.filter(f => f.found).map(f => [f, FEATURE_INK[f.kind]]));
+  const found = regions.filter(g => g.found || mapReveal).map(g => [g, REGION_INK[g.biome]]).concat(features.filter(f => f.found || mapReveal).map(f => [f, FEATURE_INK[f.kind]]));
   for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink);
 }
-// every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123)
+// every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123) or kept (the
+// map's EACH LOAD button); a new world is a fresh one, kept from then on if seeds are being kept
 $('newWorld').onclick = () => {
+  seedStore.set(SEED_KEY, '');
   if (params.has('seed')) { location.search = ''; return; }
   if (location.hash) history.replaceState(null, '', location.pathname);
   location.reload();
@@ -12218,6 +12241,26 @@ function rebuildWorld(v) {
 }
 $('respawn').onclick = respawn;
 $('plotsBtn').onclick = togglePlots;
+$('revealBtn').onclick = toggleReveal;
+// load a world by its seed (kept for later loads if seeds are being kept, else for this load only)
+function loadSeed() {
+  const v = parseInt($('seedInput').value.trim(), 10);
+  if (!(v >= 0) || v > 4294967295) { sfx.nope(); toast('A seed is a whole number, 0 to 4294967295.'); return; }
+  if (seedMode === 'keep') seedStore.set(SEED_KEY, v >>> 0);
+  history.replaceState(null, '', location.pathname + '#seed-' + (v >>> 0));
+  location.reload();
+}
+$('seedGo').onclick = loadSeed;
+$('seedInput').addEventListener('keydown', e => { e.stopPropagation(); if (e.code === 'Enter' || e.code === 'NumpadEnter') loadSeed(); if (e.code === 'Escape') $('seedInput').blur(); });
+function setSeedMode(m) {
+  seedMode = m;
+  if (!seedStore.set(SEED_MODE_KEY, m)) toast('Your browser is blocking storage, so this can\'t be kept.');
+  if (m === 'keep') seedStore.set(SEED_KEY, SEED);
+  $('seedMode').textContent = m === 'keep' ? 'EACH LOAD: THIS SEED' : 'EACH LOAD: NEW SEED';
+}
+$('seedMode').onclick = () => setSeedMode(seedMode === 'keep' ? 'random' : 'keep');
+$('seedMode').textContent = seedMode === 'keep' ? 'EACH LOAD: THIS SEED' : 'EACH LOAD: NEW SEED';
+$('seedInput').value = SEED;
 
 // ---------- Go ----------
 function begin() {
@@ -13283,6 +13326,8 @@ window.GAME = {
     return null;
   },
   reveal: () => fogCtx.clearRect(0, 0, N / 8, N / 8),
+  mapOpts: () => ({ reveal: mapReveal, seedMode, seed: SEED, stored: seedStore.get(SEED_KEY), hash: location.hash }),
+  toggleReveal, setSeedMode,
   O,
 };
 })();
