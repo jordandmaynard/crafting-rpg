@@ -6882,25 +6882,31 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 });
 const wilRay = new GFX.Vector3();
 function updateWillows() {
-  WILLOW_U.hero.value.set(H.x, H.z); WILLOW_U.heroW.value.set(H.x, H.y + 0.8, H.z);
+  // (the hero's height without the bob of its stride, so the line doesn't bob across a dome's edge)
+  WILLOW_U.hero.value.set(H.x, H.z); WILLOW_U.heroW.value.set(H.x, heightAt(H.x, H.z) + 0.8, H.z);
   // each dome: hidden if the line from you to the camera passes through its shell, stepped along till it's over
-  // the top; its limbs too, then, if you're further from the camera than its trunk
-  const R = WILLOW.radius, hx = H.x, hy = H.y + 0.8, hz = H.z;
+  // the top; its limbs too, then, if you're further from the camera than its trunk. Once hidden, a dome comes
+  // back only when the line clears a shell grown by a margin and has stayed clear a moment (no flicker as the
+  // line grazes its edge)
+  const now = performance.now();
+  const R = WILLOW.radius, hx = H.x, hy = WILLOW_U.heroW.value.y, hz = H.z;
   wilRay.copy(camera.position).sub(WILLOW_U.heroW.value).normalize();
   for (const w of willows) {
     if (!w.top) continue;
     let hit = false;
-    const y0 = w.L * STEP, top = y0 + WILLOW.height + 1;
-    if (Math.hypot(w.x - hx, w.z - hz) < R + 30) for (let t = 0; t < 60 && !hit; t += 0.35) {
+    const y0 = w.L * STEP, g = w.topShown ? 0 : 0.8, top = y0 + WILLOW.height + 1 + g;
+    if (Math.hypot(w.x - hx, w.z - hz) < R + 30) for (let t = 0; t < 60 && !hit; t += 0.2) {
       const px = hx + wilRay.x * t, py = hy + wilRay.y * t, pz = hz + wilRay.z * t;
       if (py > top) break;
       const r = Math.hypot(px - w.x, pz - w.z);
       const dy = y0 + WILLOW.height - 2.6 * (r / R) * (r / R);
-      if (r <= R + 0.4 && py >= dy - 1.6 && py <= dy + 0.9) hit = true;
+      if (r <= R + 0.4 + g && py >= dy - 1.6 - g && py <= dy + 0.9 + g) hit = true;
     }
-    w.topShown = !hit;
+    if (hit) w.clearAt = 0; else if (!w.clearAt) w.clearAt = now;
+    w.topShown = !hit && now - w.clearAt > 250;
     w.top.visible = w.topShown;
-    w.limbsShown = !(hit && (hx - w.x) * wilRay.x + (hz - w.z) * wilRay.z < 0);
+    const back = (hx - w.x) * wilRay.x + (hz - w.z) * wilRay.z;
+    w.limbsShown = w.topShown || (w.limbsShown ? back > -0.3 : back > 0.3);
     w.limbs.visible = w.limbsShown;
   }
   WILLOW_U.time.value = time % 4000;
@@ -6960,7 +6966,7 @@ function buildWillows() {
       }
     }
     tagTo(-1, 0);
-    w.top = hideable(); w.topShown = true;
+    w.top = hideable(); w.topShown = true; w.clearAt = 1;
     // the curtains: ribbons of leaves turned along the ring, a little zigzag down them, lighter toward the tips
     for (let r = R * 0.5; r <= R + 0.01; r += 0.45) {
       const cnt = Math.round(6.28 * r / 0.34), outer = Math.min(1, Math.max(0, (r / R - 0.55) / 0.4));
