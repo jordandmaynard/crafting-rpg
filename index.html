@@ -6349,11 +6349,18 @@ function grotto(g) {
 // is the sand drifted on its upper side, the mound round its foot and a slab broken off it.
 const STATUE_FRAME = new GFX.Object3D();
 STATUE_FRAME.rotation.order = 'YXZ';
-const OBELISK = { h: 3.6, w0: 0.78, w1: 0.5, cap: 0.42, carve: 1.6, color: '#c6a068' };
+const OBELISK = { h: 3.6, w0: 0.78, w1: 0.5, cap: 0.42, carve: 1.6, scale: 1, color: '#c6a068' };
 const OB_Y0 = -0.9;   // (the shaft's foot, well under the sand)
+const obSize = st => st.size * OBELISK.scale;
+// how far it leans: its own tilt, stood up straighter as it grows so its top still ends over its 3 x 2 tiles
+// (the foot is 0.95 in from the back edge, so the top may reach about 1.95 forward of it)
+function obTilt(st) {
+  const S = obSize(st), q = (1.95 - OBELISK.w1 / 2 * S) / ((OBELISK.h + OBELISK.cap) * S);
+  return Math.min(st.tilt, Math.asin(Math.max(0, Math.min(1, q))));
+}
 function statueFrame(st) {
   const F = STATUE_FRAME;
-  F.position.set(st.x, st.L * STEP - 0.75, st.z); F.rotation.set(st.tilt, st.yaw, st.roll); F.scale.setScalar(st.size); F.updateMatrix();
+  F.position.set(st.x, st.L * STEP - 0.75 * OBELISK.scale, st.z); F.rotation.set(obTilt(st), st.yaw, st.roll); F.scale.setScalar(obSize(st)); F.updateMatrix();
   return F.matrix;
 }
 const obHalf = y => (OBELISK.w0 + (OBELISK.w1 - OBELISK.w0) * y / OBELISK.h) / 2;
@@ -6372,9 +6379,10 @@ function obelisk(st) {
   } finally { partPre = null; }
   // a mound of sand round its foot, and a slab broken off it lying by it
   const fx = Math.sin(st.yaw), fz = Math.cos(st.yaw), sxx = Math.cos(st.yaw), szz = -Math.sin(st.yaw);
+  const ms = Math.min(1.5, OBELISK.scale);
   for (let n = 0; n < 7; n++) {
-    const a = (n / 7) * 6.28, x = st.x + sxx * Math.cos(a) * 0.6 + fx * Math.sin(a) * 0.6, z = st.z + szz * Math.cos(a) * 0.6 + fz * Math.sin(a) * 0.6;
-    part(G.dodec, sand(), x, y0 + 0.02, z, { sx: 0.6 + rnd() * 0.3, sy: 0.22, sz: 0.5 + rnd() * 0.2, ry: rnd() * 6 });
+    const a = (n / 7) * 6.28, x = st.x + (sxx * Math.cos(a) + fx * Math.sin(a)) * 0.6 * ms, z = st.z + (szz * Math.cos(a) + fz * Math.sin(a)) * 0.6 * ms;
+    part(G.dodec, sand(), x, y0 + 0.02, z, { sx: (0.6 + rnd() * 0.3) * ms, sy: 0.22 * ms, sz: (0.5 + rnd() * 0.2) * ms, ry: rnd() * 6 });
   }
   const bx = st.x + fx * 1.4 + sxx * 0.75, bz = st.z + fz * 1.4 + szz * 0.75;
   part(G.box, stone(), bx, y0 + 0.05, bz, { sx: 0.34, sy: 0.14, sz: 0.24, rx: 0.3, ry: rnd() * 6 });
@@ -6457,7 +6465,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 // each mapped to its column of the carving, and a pyramid on top (on the carving's blank margin)
 function buildObelisks() {
   if (!statues.length) return;
-  OBELISK_U.tCarve = { value: makeCarveTex() };
+  if (!OBELISK_U.tCarve) OBELISK_U.tCarve = { value: makeCarveTex() };
   for (const st of statues) {
     const M = statueFrame(st), e = M.elements, W = p => [e[0] * p[0] + e[4] * p[1] + e[8] * p[2] + e[12], e[1] * p[0] + e[5] * p[1] + e[9] * p[2] + e[13], e[2] * p[0] + e[6] * p[1] + e[10] * p[2] + e[14]];
     const dir = p => { const v = [e[0] * p[0] + e[4] * p[1] + e[8] * p[2], e[1] * p[0] + e[5] * p[1] + e[9] * p[2], e[2] * p[0] + e[6] * p[1] + e[10] * p[2]], l = Math.hypot(...v); return v.map(q => q / l); };
@@ -6487,6 +6495,15 @@ function buildObelisks() {
     m.matrixAutoUpdate = false;
     scene.add(m);
     st.mesh = m;
+  }
+}
+// the size slider: every obelisk's shaft built again, and the chunks they stand in drawn again (their sand)
+function rescaleObelisks() {
+  for (const st of statues) if (st.mesh) { scene.remove(st.mesh); st.mesh.geometry.dispose(); st.mesh = null; }
+  buildObelisks();
+  for (const st of statues) {
+    const c = st.anchor % N, r = (st.anchor - c) / N, key = Math.floor(r / CH) * NC + Math.floor(c / CH);
+    if (chunks.has(key)) dropChunk(key);
   }
 }
 function vent(c, r, k) {
@@ -12868,6 +12885,9 @@ const TUNING = [
     [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
     [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
+  ['Sunken obelisks', [
+    [OBELISK, 'scale', 'Size (stays on its 3 x 2 tiles: bigger ones lean less). Letting go redraws them', 0.5, 2.2, 0.05, rescaleObelisks],
+  ]],
   ['Heat shimmer', [
     [HEAT, 'strength', 'Strength (0 off)', 0, 4, 0.05],
     [HEAT, 'lava', 'Over lava', 0, 2, 0.05],
@@ -13382,7 +13402,7 @@ window.GAME = {
   wheatCut: () => wheatCut.size,
   grottos: () => grottos.map(g => ({ c: g.c, r: g.r, L: g.L, top: g.top, pool: g.pool.length, wading: g.pool.every(([c, r]) => WT[T(c, r)] === 1 && GROT[T(c, r)] === 1),
     anchor: OB[g.anchor] === O.GROTTO, built: !!(chunks.get(Math.floor(g.r / CH) * NC + Math.floor(g.c / CH)) || {}).grot, mesh: !!g.mesh })),
-  statues: () => statues.map(st => ({ x: +st.x.toFixed(1), z: +st.z.toFixed(1), L: st.L, tilt: +st.tilt.toFixed(2), anchor: OB[st.anchor] === O.STATUE, mesh: !!st.mesh, cast: !!(st.mesh && st.mesh.castShadow) })),
+  statues: () => statues.map(st => ({ x: +st.x.toFixed(1), z: +st.z.toFixed(1), L: st.L, tilt: +obTilt(st).toFixed(2), size: +obSize(st).toFixed(2), anchor: OB[st.anchor] === O.STATUE, mesh: !!st.mesh, cast: !!(st.mesh && st.mesh.castShadow) })),
   grottoLights: () => lampLights.filter(l => l.intensity > 0).map(l => [l.color.r.toFixed(2), l.color.g.toFixed(2), l.distance]),
   spikeReset: () => { chunkTime.parts.fill(0); giStepMax.fill(0); },
   spikeParts: () => ({ gi: giStepMax.map(v => +v.toFixed(1)), chunk: chunkTime.parts.map(v => +v.toFixed(1)), chunkAvg: +(chunkTime.ms / Math.max(1, chunkTime.n)).toFixed(1) }),
@@ -13433,7 +13453,8 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK },
+  rescaleObelisks: () => rescaleObelisks(),
   gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
   moveItem: (from, to) => moveItem(from, to),
   clickCell: c => clickCell(c),
