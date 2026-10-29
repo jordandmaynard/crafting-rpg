@@ -829,6 +829,7 @@ async function generate(progress) {
   }
   for (const w of waystones) OB[T(w.c, w.r)] = O.SHRINE;
   placeVents();
+  fenceGraveyards();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1575,6 +1576,56 @@ function fenceTowns() {
     if (!t.gates.length && ends.length) { const [ec, er, w] = ends[0]; (w ? WW : WN)[T(ec, er)] = KIND_VAL.gate; t.gates.push(ends[0]); }
   });
 }
+// Every graveyard has an old iron fence round it, broken: whole runs of it gone, a gap wherever a road comes
+// through, and a few broken lines of railing across its middle where plots were once fenced apart. They belong
+// to the dead (wildFence): you can't take them down for their iron.
+const wildFence = new Set();   // edgeKeys
+function fenceGraveyards() {
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  const free = i => BI[i] !== TOWN && !WT[i] && !LAVA[i] && !PATH[i] && !OBJ[OB[i]].tile;
+  // the fence on tile i's side d, if the ground lets it stand
+  const put = (i, d) => {
+    const n = i + DI[d];
+    if (!free(i) || !free(n) || !terrainOpen(i, n, d)) return;
+    const c = i % N, r = (i - c) / N, [ec, er, w] = edgeOf(c, r, d), arr = w ? WW : WN, e = T(ec, er);
+    if (arr[e]) return;
+    arr[e] = KIND_VAL.ironfence; piece(ec, er); wildFence.add(edgeKey(ec, er, w));
+  };
+  // (what's left of a run: a slow noise along it, so the gaps come a few tiles long)
+  const standing = (c, r, d) => fbm(nX, c / 3.1 + d * 17.3 + 400, r / 3.1 - 250, 2) > -0.22;
+  const seen = new Uint8Array(N * N);
+  for (let r0 = 2; r0 < N - 2; r0++) for (let c0 = 2; c0 < N - 2; c0++) {
+    const i0 = T(c0, r0);
+    if (BI[i0] !== GRAVE || seen[i0]) continue;
+    // the graveyard: its tiles, side by side
+    const yard = [i0];
+    seen[i0] = 1;
+    for (let k = 0; k < yard.length; k++) for (const dd of DI) {
+      const n = yard[k] + dd, c = n % N, r = (n - c) / N;
+      if (c < 2 || r < 2 || c >= N - 2 || r >= N - 2 || seen[n] || BI[n] !== GRAVE) continue;
+      seen[n] = 1; yard.push(n);
+    }
+    if (yard.length < 12) continue;
+    for (const i of yard) for (let d = 0; d < 4; d++) {
+      const c = i % N, r = (i - c) / N;
+      if (BI[i + DI[d]] !== GRAVE && standing(c, r, d)) put(i, d);
+    }
+    // a few lines across it, straight, broken here and there
+    const lines = clamp(Math.round(yard.length / 160), 2, 6);
+    for (let k = 0, tries = 0; k < lines && tries < 40; tries++) {
+      const i = yard[Math.floor(hs(i0 + tries, k, 141) * yard.length)], c = i % N, r = (i - c) / N;
+      const along = hs(c, r, 142) < 0.5 ? 1 : 0, len = 5 + Math.floor(hs(c, r, 143) * 10), side = along ? 0 : 3;
+      let inside = true;
+      for (let j = -1; j <= len && inside; j++) { const t = along ? T(c + j, r) : T(c, r + j); if (BI[t] !== GRAVE || BI[t + DI[side]] !== GRAVE) inside = false; }
+      if (!inside) continue;
+      k++;
+      for (let j = 0; j < len; j++) {
+        const t = along ? T(c + j, r) : T(c, r + j);
+        if (hs(c + j, r + j * 3, 144 + k) > 0.22) put(t, side);
+      }
+    }
+  }
+}
 // once the scene exists, the town houses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
@@ -2263,13 +2314,16 @@ const normRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, m
 const normalMat = new GFX.MeshNormalMaterial({ flatShading: true, side: GFX.DoubleSide });
 const outlineRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
 outlineRT.depthTexture = new GFX.DepthTexture(1, 1);
+// the heat shimmer's offsets, in mosaic pixels, for the outline pass to read the whole picture shifted by (see HEAT)
+const heatRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
 outlineRT.depthTexture.type = GFX.UnsignedIntType;
 const outlineMat = new GFX.ShaderMaterial({
   uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new GFX.Vector2(1, 1) },
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new GFX.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
-    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 } },
+    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 },
+    tHeat: { value: heatRT.texture }, useHeat: { value: 0 } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -2287,7 +2341,9 @@ fn depthAt(px: vec2f) -> f32 {
 // the view-space normal there (empty sky counts as the centre's, so it never strokes)
 fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px), 0); return select(g.rgb * 2.0 - 1.0, n0, g.a < 0.5); }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
-  let px = floor(i.pos.xy);
+  // (where hot air rises, the whole picture, strokes and all, is read a few pixels off: see HEAT)
+  var px = floor(i.pos.xy);
+  if (U.useHeat > 0.5) { px = clamp(px + textureLoad(tHeat, mid(px), 0).xy, vec2f(0.0), U.res - 1.0); }
   // strokes fade into the haze with the ground they outline
   let haze = 1.0 - sat((depthAt(px) + U.near - U.fogNear) / (U.fogFar - U.fogNear));
   var col = vec3f(0.0);
@@ -2737,12 +2793,6 @@ function renderWorld() {
   camera.layers.set(1); renderer.render(scene, camera);
   renderer.passName = 'swamp water, ground haze';
   camera.layers.set(3); renderer.render(scene, camera);
-  // the heat shimmer, over a copy of the picture so far
-  if (on && heatMesh && heatMesh.visible) {
-    const s = renderer.snapshot(outlineRT); HEAT_U.tC.value = s.color; HEAT_U.tD.value = s.depth;
-    renderer.passName = 'heat shimmer';
-    camera.layers.set(8); renderer.render(scene, camera);
-  }
   // the aim decal, over a copy of the depth so far
   if (on && aimMesh.visible) {
     AIM_U.tD.value = renderer.snapshot(outlineRT).depth;
@@ -2753,6 +2803,17 @@ function renderWorld() {
   updateEye();
   updateBloom();
   if (!on) return;
+  // the heat shimmer's offsets, over the finished world's depth, for the outline pass
+  const heatOn = !!(heatMesh && heatMesh.visible);
+  outlineMat.uniforms.useHeat.value = heatOn ? 1 : 0;
+  if (heatOn) {
+    HEAT_U.res.value.copy(outlineMat.uniforms.res.value); HEAT_U.ss.value = ssNow;
+    renderer.setRenderTarget(heatRT);
+    renderer.setClearColor(0x000000, 0); renderer.clear();
+    renderer.passName = 'heat shimmer';
+    camera.layers.set(8); renderer.render(scene, camera);
+    renderer.setClearColor('#0b0912', 1);
+  }
   if (sobelOn) {
     // the same view again with every surface drawn as its normal, sky left clear
     renderer.setRenderTarget(normRT);
@@ -2940,6 +3001,23 @@ const G = {
   frust4: new GFX.CylinderGeometry(0.2, 0.5, 1, 4),
 };
 // each primitive's triangles, unrolled once, so dropping thousands of them into a chunk stays cheap
+// the snow lying on a frost pine's boughs: a band round the wide foot of a six-sided cone (G.cone6's own unit
+// shape, its corners and the middles of its sides), thicker on some sides than others, with a lip hanging just
+// over the edge
+G.snowSkirt = (() => {
+  const top = [0.3, 0.18, 0.36, 0.24, 0.42, 0.2, 0.28, 0.38, 0.16, 0.32, 0.26, 0.4], pos = [], g = new GFX.BufferGeometry();
+  const at = (j, f, out) => {
+    const t = j / 12 * Math.PI * 2, r = 0.5 * (1 - f) * (j & 1 ? Math.cos(Math.PI / 6) : 1) * out;
+    return [r * Math.sin(t), -0.5 + f, r * Math.cos(t)];
+  };
+  for (let j = 0; j < 12; j++) {
+    const b0 = at(j, -0.02, 1.1), b1 = at(j + 1, -0.02, 1.1), t0 = at(j, top[j], 1.05), t1 = at(j + 1, top[(j + 1) % 12], 1.05);
+    // (both ways round: whichever faces out is the one drawn)
+    pos.push(...b0, ...b1, ...t1, ...b0, ...t1, ...t0, ...b0, ...t1, ...b1, ...b0, ...t0, ...t1);
+  }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+})();
 const GP = new Map();
 for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attributes.position.array);
 // drop a primitive into the current buffer, posed and tinted
@@ -3925,7 +4003,7 @@ function driftSlow(x, z) {
   return 1 - (sand ? DRIFT.sandSlow : DRIFT.snowSlow) * cov * clamp(deep / 0.3, 0, 1.5) / 1.5;
 }
 const drift = new GFX.Drift(renderer);
-const driftHoles = [];   // where arrows came down this frame: each pokes a little hole (DRIFT.arrowHole tiles across)
+const driftHoles = [];   // where arrows came down this frame: each pokes a little hole (DRIFT.arrowHole tiles across, or its own third value)
 const DRIFT_U = {
   tDrift: { value: driftTex }, tGround: { value: groundTex }, tDeform: { value: drift.texture },
   win: { value: { x: 0, y: 0, z: 0, w: 0 } },      // the mesh's corner (tiles, x z)
@@ -4122,7 +4200,7 @@ function updateDrift(dt) {
   // (the whirlwind's blade ploughs a hollow round you, as it cuts the grass and clears the ground haze)
   if (H.alive && !H.flip) bodies.push({ x: H.x, z: H.z, radius: H.whirl >= 0 && D.whirl > 0 ? Math.max(D.radius, D.whirl) : D.radius, strength: 1 });
   // (a hole is pressed in one frame and fills back in like a trench; any past 8 wait for the next frame)
-  for (const [x, z] of driftHoles.splice(0, 8)) if (D.arrowHole > 0) bodies.push({ x, z, radius: D.arrowHole / 2, strength: 1 });
+  for (const [x, z, across] of driftHoles.splice(0, 8)) { const d = across || D.arrowHole; if (d > 0) bodies.push({ x, z, radius: d / 2, strength: 1 }); }
   if (D.foes > 0.5) {
     const near = [];
     for (const f of foes) {
@@ -4358,7 +4436,7 @@ const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 const webMat = flatMat({ vertexColors: true, side: GFX.DoubleSide, opacity: 0 });
 // Every so often a spider drops down from its web on a thread, hangs there bobbing a moment, then climbs back up
 // (T > Graveyard spiders). Lit like the world, but writing alpha 0 so the outline draws no stroke round it.
-const SPIDERS = { drops: 1, depth: 1, dropTime: 0.8, hang: 4, climb: 6 };
+const SPIDERS = { drops: 1.95, depth: 1.5, dropTime: 0.8, hang: 4, climb: 6, size: 1 };
 const SPIDER_U = { drops: { value: 1 }, depth: { value: 1 }, dropTime: { value: 0.8 }, hang: { value: 4 }, climb: { value: 6 } };
 const spiderMat = new GFX.ShaderMaterial({ uniforms: SPIDER_U, vertexColors: true, side: GFX.DoubleSide, attributes: { spider: 'vec4f' }, lit: true,
   code: /* wgsl */ `
@@ -5156,14 +5234,57 @@ function updateAmbient() {
   U.dayK.value = smoothstep(-0.05, 0.2, sunDir[1]);
   if (ambMesh) ambMesh.visible = A.butterflies + A.dragonflies + A.fireflies + A.embers + A.snow > 0;
 }
+// Now and then a clump of snow slides off a frost pine's bough near you and drops into the deep snow below,
+// bursting into powder and punching a hole in it (T > Ambient life: SNOWFALL).
+const SNOWFALL = { every: 5, size: 1, hole: 0.7 };
+const snowClumpMat = flatMat({ color: '#eef4fa' }), snowClumpGeo = new GFX.DodecahedronGeometry(0.07, 0);
+const snowfalls = [];
+let snowfallT = 2, snowfallN = 0;
+function updateSnowfalls(dt) {
+  for (let n = snowfalls.length - 1; n >= 0; n--) {
+    const f = snowfalls[n];
+    f.vy -= GRAV * dt; f.g.position.y += f.vy * dt; f.g.rotation.x += dt * 3;
+    if (f.g.position.y > f.land) continue;
+    scene.remove(f.g);
+    snowfalls.splice(n, 1);
+    puff(f.g.position.x, f.land - 0.1, f.g.position.z, '#f4f8fc', 8, 0.7 * SNOWFALL.size);
+    if (driftHoles.length < 64) driftHoles.push([f.g.position.x, f.g.position.z, SNOWFALL.hole * SNOWFALL.size]);
+  }
+  if (SNOWFALL.every <= 0 || (snowfallT -= dt) > 0) return;
+  snowfallT = SNOWFALL.every * (0.4 + Math.random() * 1.2);
+  // a frost pine standing in deep snow, near you
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+  for (let tries = 0; tries < 30; tries++) {
+    const c = c0 + Math.floor((Math.random() - 0.5) * 28), r = r0 + Math.floor((Math.random() - 0.5) * 20), i = T(clamp(c, 0, N - 1), clamp(r, 0, N - 1));
+    if (OB[i] !== O.SNOWPINE) continue;
+    // where its tiers are (as pine() builds it), and a spot on the rim of one
+    const [x, z] = objPos(c, r, O.SNOWPINE), k = hs(c, r, 6), P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P;
+    const tier = Math.floor(Math.random() * 3), w = (0.75 - tier * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + tier * hgt * 0.24 + hgt * 0.2;
+    const a = Math.random() * Math.PI * 2, rad = w * 0.5 * 1.15, fx = x + Math.sin(a) * rad, fz = z + Math.cos(a) * rad;
+    if (driftCov(fx, fz) < 0.3) continue;
+    const g = new GFX.Group();
+    for (let q = 0; q < 4; q++) {
+      const m = new GFX.Mesh(snowClumpGeo, snowClumpMat);
+      m.position.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.12); m.scale.setScalar((0.7 + Math.random() * 0.6) * SNOWFALL.size);
+      g.add(m);
+    }
+    g.position.set(fx, yy - hgt * 0.2, fz);
+    scene.add(g);
+    puff(fx, yy - hgt * 0.25, fz, '#f4f8fc', 3, 0.25);
+    snowfallN++;
+    snowfalls.push({ g, vy: 0, land: groundAt(fx, fz) + (DRIFT.snowMin + DRIFT.snowMax) * 0.5 * driftCov(fx, fz) });
+    break;
+  }
+}
 // Heat rising (T > Heat shimmer): over the lava, and faintly over the desert's deep sand, the world behind
-// wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and drawn last
-// (layer 8) over a copy of the picture so far: each pixel shows the copy a few pixels off, by ripples rising
-// up the sheet, strongest in its middle and fading at its sides and top. Anything nearer than the sheet is
-// left as it is, so the hot air never smears what stands in front of it.
+// wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and are drawn
+// last (layer 8) into heatRT, each pixel an offset in mosaic pixels by ripples rising up the sheet, strongest in
+// its middle and fading at its sides and top; the outline pass then reads the whole picture there that far off,
+// strokes included. Anything nearer than the sheet is left as it is (and isn't pulled in from beside it), so the
+// hot air never smears what stands in front of it.
 const HEAT = { lava: 1, sand: 0.7, strength: 1, speed: 1.25, height: 3.75 };
 const HEAT_DENSITY = { lava: 0.35, sand: 0.06 };
-const HEAT_U = { tC: { value: null }, tD: { value: null }, strength: { value: 1 }, speed: { value: 1 }, height: { value: 1 }, lava: { value: 1 }, sand: { value: 0.5 } };
+const HEAT_U = { tD: { value: null }, res: { value: new GFX.Vector2(1, 1) }, ss: { value: 1 }, strength: { value: 1 }, speed: { value: 1 }, height: { value: 1 }, lava: { value: 1 }, sand: { value: 0.5 } };
 const HEAT_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) k: f32, @location(2) pix: vec3f, @location(3) seed: f32 }
 @vertex fn vs(v: VIn) -> VOut {
@@ -5177,31 +5298,36 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
   o.k = select(U.sand, U.lava, lava);
   return o;
 }
+// the view-space depth of what was drawn at RT pixel q
+fn heatSceneZ(q: vec2i) -> f32 {
+  let P = F.proj;
+  let zb = textureLoad(tD, q, 0);
+  return (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+}
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let u = i.uv;
   let mask = (1.0 - u.x * u.x) * smoothstep(0.0, 0.2, u.y) * (1.0 - smoothstep(0.35, 1.0, u.y)) * i.k * U.strength;
   if (mask <= 0.002) { discard; }
-  let dims = vec2i(textureDimensions(tC));
+  let dims = vec2i(textureDimensions(tD));
   let p = clamp(vec2i(i.pos.xy), vec2i(0), dims - 1);
+  let vs = (F.view * vec4f(i.pix, 1.0)).z;
+  // (behind something nearer: no shimmer over it)
+  if (heatSceneZ(p) > vs) { discard; }
   let t = F.camDir.w * U.speed;
   let q = i.pix;
   let wob = vec2f(sin(q.y * 9.0 - t * 5.0 + q.x * 3.1 + i.seed) + 0.5 * sin(q.y * 17.0 - t * 8.3 + q.z * 5.3 + i.seed),
     0.6 * sin(q.y * 11.0 - t * 6.1 + q.z * 2.7 + i.seed * 1.7));
-  let off = vec2i(round(wob * mask * 2.0 * f32(dims.y) / 360.0));
-  let ps = clamp(p + off, vec2i(0), dims - 1);
-  // (not from anything nearer than the sheet)
-  let P = F.proj;
-  let zb = textureLoad(tD, ps, 0);
-  let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
-  let vs = (F.view * vec4f(i.pix, 1.0)).z;
-  let src = select(ps, p, vb > vs);
-  return vec4f(textureLoad(tC, src, 0).rgb, 1.0);
+  var off = round(wob * mask * 2.0 * U.res.y / 360.0);
+  // (nor from something nearer beside it)
+  let ps = clamp(p + vec2i(off * U.ss), vec2i(0), dims - 1);
+  if (heatSceneZ(ps) > vs) { off = vec2f(0.0); }
+  return vec4f(off, 0.0, 1.0);
 }`;
 const heatMat = new GFX.ShaderMaterial({
   uniforms: HEAT_U, attributes: { hPart: 'vec4f', corner: 'vec2f' }, code: HEAT_WGSL,
-  transparent: true, depthWrite: false, side: GFX.DoubleSide,
+  depthTest: false, depthWrite: false, side: GFX.DoubleSide,
 });
-heatMat.keepAlpha = true;
+HEAT_U.tD.value = outlineRT.depthTexture;
 let heatMesh = null;
 const heatAt = { x: -1e9, z: -1e9 };
 const HEAT_R = 30;
@@ -5238,7 +5364,7 @@ function updateHeat() {
 }
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
-{ const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; HEAT_U.tC.value = s.color; HEAT_U.tD.value = s.depth; }
+{ const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
 // splat this frame's caustics, before the water reads them
 function updateCaustics() {
   const P = 9 * Math.max(0.2, WATER.rippleSize), t = WATER_U.time.value, sd = WATER_U.sunDir.value;
@@ -5398,7 +5524,11 @@ function pine(x, z, k, snow = false) {
   for (let i = 0; i < 3; i++) {
     const w = (0.75 - i * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + i * hgt * 0.24 + hgt * 0.2;
     part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 });
-    if (snow) part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3 });
+    if (snow) {
+      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3 });
+      // and dusting the wide foot of each tier, turned a sixth round from the one below so it isn't the same
+      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3 });
+    }
   }
 }
 function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
@@ -5540,9 +5670,10 @@ function spiderWeb(anchors, rnd, S) {
     // (and like the web drawn with no outline, which would dwarf it)
     const sx = hub[0] + (rnd() - 0.5) * 0.04 * S, sy = hub[1] + (rnd() - 0.5) * 0.04 * S, sz = hub[2] + (rnd() - 0.5) * 0.04 * S;
     const drop = clamp(sy - groundAt(sx, sz) - 0.12, 0, 0.9) * (0.6 + rnd() * 0.4), sd = rnd(), from = SPIDER.n;
-    part(G.dodec, '#1c1418', sx, sy, sz, { s: 0.022, into: 'spider' });
-    part(G.dodec, '#2a1a1e', sx, sy - 0.022, sz, { sx: 0.03, sy: 0.034, sz: 0.03, into: 'spider' });
-    part(G.box, '#a82a20', sx, sy - 0.024, sz + 0.012, { sx: 0.01, sy: 0.012, sz: 0.008, into: 'spider' });
+    const sk = SPIDERS.size;
+    part(G.dodec, '#1c1418', sx, sy, sz, { s: 0.022 * sk, into: 'spider' });
+    part(G.dodec, '#2a1a1e', sx, sy - 0.022 * sk, sz, { sx: 0.03 * sk, sy: 0.034 * sk, sz: 0.03 * sk, into: 'spider' });
+    part(G.box, '#a82a20', sx, sy - 0.024 * sk, sz + 0.012 * sk, { sx: 0.01 * sk, sy: 0.012 * sk, sz: 0.008 * sk, into: 'spider' });
     SPIDER.tag(from, sy, drop, sd, 0);
     // its thread: two crossed ribbons, their tops held at the hub and their feet going down with the spider
     const tw = th * 0.5, k = CC('#e8eaf0');
@@ -5640,7 +5771,7 @@ function rock(x, z, k, c = '#7a7684') {
 // ORE_LOOK or TREE_SIZE changed (the panel, a paste, Reset): every built chunk's objects are made again, once it's settled
 let oreLookKey = '', oreRemakeT = 0;
 function remakeOres(dt) {
-  const key = Object.values(ORE_LOOK).join() + '|' + Object.values(TREE_SIZE).join();
+  const key = Object.values(ORE_LOOK).join() + '|' + Object.values(TREE_SIZE).join() + '|' + SPIDERS.size;
   if (!oreLookKey) oreLookKey = key;
   if (key !== oreLookKey) { oreLookKey = key; oreRemakeT = 0.3; }
   if (oreRemakeT > 0 && (oreRemakeT -= dt) <= 0) for (const ch of chunks.values()) rebuildObjects(ch.cx * CH, ch.cz * CH);
@@ -9838,7 +9969,7 @@ const plotWhy = i => PLOT[i] ? 'Claim this plot with a hearth before you build o
 const standingIn = (x, z, r) => [H, ...foes].some(e => Math.hypot(e.x - x, e.z - z) < r);
 function floorSpot(c, r, kind) {
   const i = T(c, r);
-  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH) && !OBJ[OB[i]].tile && BI[i] !== TOWN;
+  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH) && (!OBJ[OB[i]].tile || stations.has(i)) && BI[i] !== TOWN;
   let why = FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.';
   if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
   return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
@@ -9846,7 +9977,7 @@ function floorSpot(c, r, kind) {
 // a wall or door on the edge named by (ec, er, w)
 function edgeSpot(ec, er, w, kind) {
   const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1);
-  const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && !OBJ[OB[i]].tile && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH);
+  const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && (!OBJ[OB[i]].tile || stations.has(i)) && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH);
   // along a cliff top only the high side needs to be clear and flat: the wall stands on its edge and may
   // overhang the slope below a little (no doors there, they'd open onto the drop)
   const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
@@ -9962,14 +10093,15 @@ function placeSpot(s) {
   buildCount[ch]++;
   if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
-    FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH) OB[i] = 0; markObj(s.c, s.r);
+    FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH && !stations.has(i)) OB[i] = 0; markObj(s.c, s.r);
     if (hearths.has(i)) shapeHearth(hearths.get(i));
+    if (stations.has(i)) seatStation(stations.get(i));
   } else if (s.kind === 'hearth') lightHearth(s.c, s.r);
   else if (isStation(s.kind)) placeStation(s);
   else {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
     // clear the grass and flowers either side
-    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
+    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH && !stations.has(i)) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
     if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind);
     markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
     hearthsBy(s.c, s.r, s.w);
@@ -10157,6 +10289,8 @@ function stationFx(st) {
   scene.add(g);
   st.fx = g; st.parts = parts;
 }
+// its moving parts set on the ground (or the floor) under it
+function seatStation(st) { st.fx.position.y = surfaceY(st.c + 0.5, st.r + 0.5); }
 // what goes in, and what it becomes
 const refinesTo = (st, id) => id ? STATION_KIND[st.kind].refine[id] || null : null;
 // room in the output for one more of id
@@ -10280,12 +10414,13 @@ function removePiece() {
   if (!target) { sfx.nope(); return; }
   const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
   if (BI[T(target.c, target.r)] === TOWN || (across >= 0 && BI[across] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
+  if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
   const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
   buildCount[ch] = Math.max(0, buildCount[ch] - 1);
-  if (isFloor(target.kind)) FL[T(target.c, target.r)] = 0;
+  if (isFloor(target.kind)) { const i = T(target.c, target.r); FL[i] = 0; markObj(target.c, target.r); if (stations.has(i)) seatStation(stations.get(i)); }
   else if (target.kind === 'hearth') putOutHearth(T(target.c, target.r));
   else if (isStation(target.kind)) takeDownStation(T(target.c, target.r));
   else {
@@ -11048,7 +11183,7 @@ function resize() {
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   ssNow = Math.max(1, Math.min(4, Math.round(PIXEL.antiAlias)));
   renderer.setSize(rw, rh, false);
-  outlineRT.setSize(rw * ssNow, rh * ssNow); normRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
+  outlineRT.setSize(rw * ssNow, rh * ssNow); normRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
   cv.style.width = rw * px + 'px'; cv.style.height = rh * px + 'px';
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
@@ -11619,6 +11754,7 @@ const TUNING = [
     [SPIDERS, 'dropTime', 'Drop (seconds)', 0.1, 4, 0.05],
     [SPIDERS, 'hang', 'Hang there (seconds)', 0, 15, 0.1],
     [SPIDERS, 'climb', 'Climb back (seconds)', 0.5, 20, 0.1],
+    [SPIDERS, 'size', 'Spider size', 0.2, 6, 0.05],
   ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
@@ -11742,6 +11878,9 @@ const TUNING = [
     [AMBIENT, 'snowFall', 'Snow: how fast it falls', 0.1, 4, 0.05],
     [AMBIENT, 'snowColor', 'Snow: colour', 'color'],
     [AMBIENT, 'wind', 'Wind (embers and snow)', 0, 2, 0.05],
+    [SNOWFALL, 'every', 'Snow falling off pines: about every (seconds, 0 never)', 0, 60, 0.5],
+    [SNOWFALL, 'size', 'Snow falling off pines: clump size', 0.2, 4, 0.05],
+    [SNOWFALL, 'hole', 'Snow falling off pines: hole it leaves (tiles across)', 0, 3, 0.05],
   ]],
   ['Heat shimmer', [
     [HEAT, 'strength', 'Strength (0 off)', 0, 4, 0.05],
@@ -12071,6 +12210,7 @@ function frame(now) {
   updateSpray();
   updateSmoke();
   updateAmbient();
+  updateSnowfalls(dt);
   updateHeat();
   updateTrample(dt);
   updateGrass();
@@ -12244,6 +12384,8 @@ window.GAME = {
   },
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
+  wildFences: () => wildFence.size,
+  snowfalls: () => [snowfallN, snowfalls.length, driftHoles.length],
   fenceCount: () => { const n = new Array(11).fill(0); for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp, homing: f.homing, calm: +f.calm.toFixed(1), path: f.path ? f.path.length : -1 })),
