@@ -38,7 +38,8 @@ struct HP {
   tint: vec4f,          // the haze's colour; w: how much of the light it scatters toward the camera is added (lift)
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
-                        // how much of the sky's (for shafts with more contrast)
+                        // how much of the sky's (for shafts with more contrast); how far (shadow-map texels) the
+                        // shadow taps spread sideways (shaft softness)
 }
 @group(2) @binding(0) var<uniform> H: HP;
 `;
@@ -127,12 +128,14 @@ fn warpW(s: f32, u0: f32, beta: f32) -> f32 {
 }
 fn warpD(s: f32, u0: f32, beta: f32) -> f32 { return WARP_A + exp(-max(u0 + beta * s, -10.0)); }
 // the sun's shadow at p: one tap (the comparison sampler's own 2 × 2 filtering), none off the map
-fn shadowAt(p: vec3f) -> f32 {
+fn shadowAt(p: vec3f) -> f32 { return shadowNear(p, vec2f(0.0)); }
+// and moved off by off (in the map's uvs)
+fn shadowNear(p: vec3f, off: vec2f) -> f32 {
   if (F.sunColor.w < 0.5) { return 1.0; }
   let sc = F.shadowMat * vec4f(p, 1.0);
   let s = sc.xyz / sc.w;
   if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) { return 1.0; }
-  return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy, s.z + F.shadow.x);
+  return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + off, s.z + F.shadow.x);
 }
 // a probe's light in every direction at once (its spherical harmonics' constant term): with sky visibility, the
 // sky's by the share of it seen and the ground's by how open it is; with bounce light, all that arrives
@@ -249,9 +252,15 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
   let total = warpW(1.0, u0, beta);
   // The light and the haze are read at the steps' ends and blended across each step: the light evenly, the
   // haze's thinning with height exactly (its mean over the step), so neither shows as bands between steps.
+  // what shadows take out: the sky's light (by glow.z) and the sun's (glow.y)
+  let shadeSky = useSky && H.glow.z > 0.0 && F.sunDir.w > 0.5;
+  let shadeSun = any(sunC > vec3f(0.0)) && H.glow.y > 0.0;
+  let soft = H.glow.w / f32(textureDimensions(shadowMap).x);
   var S = vec3f(0.0);
   var T = 1.0;
-  var sP = 0.0; var uP = 0.0; var wP = 1.0; var LP = vec3f(0.0);
+  var sP = 0.0; var uP = 0.0; var wP = 1.0; var pP = pa;
+  // the light at the last step's end: the sky's and the sun's (both before shadow), and the rest
+  var skyP = vec3f(0.0); var sunP = vec3f(0.0); var restP = vec3f(0.0);
   for (var i = 0; i <= n; i++) {
     var s = 0.0;
     if (i == n) { s = 1.0; }
@@ -265,7 +274,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
     let g = groundAt(p.xz);
     let u = max(p.y - g, 0.0) / hh;
     let w = wispAt(p);
-    var L = vec3f(0.0);
+    var sky = vec3f(0.0); var sunL = vec3f(0.0); var rest = vec3f(0.0);
     if (useSky) {
       let kf = s * f32(K);
       let ki = min(i32(floor(kf)), K - 1);
@@ -274,10 +283,9 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
         ambB = ambientAt(pa + seg * (f32(ki + 1) / f32(K))) * H.light.z;
         knot = ki;
       }
-      L = mix(ambA, ambB, kf - f32(ki));
-      if (H.glow.z > 0.0 && F.sunDir.w > 0.5) { L *= mix(1.0, shadowAt(p), H.glow.z); }
+      sky = mix(ambA, ambB, kf - f32(ki));
     }
-    if (any(sunC > vec3f(0.0))) { L += sunC * cloudShade(p.xz) * mix(1.0, shadowAt(p), H.glow.y); }
+    if (any(sunC > vec3f(0.0))) { sunL = sunC * cloudShade(p.xz); }
     if (lamps != 0u) {
       for (var j = 0; j < ${MAX_POINTS}; j++) {
         if (((lamps >> u32(j)) & 1u) == 0u) { continue; }
@@ -285,21 +293,31 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
         let dist = length(pl.pos.xyz - p);
         var att = 1.0;
         if (pl.pos.w > 0.0 && pl.color.w > 0.0) { att = pow(sat(1.0 - dist / pl.pos.w), pl.color.w); }
-        L += pl.color.rgb * att * H.light.w;
+        rest += pl.color.rgb * att * H.light.w;
       }
     }
-    if (H.more.x > 0.0) { L += glowAt(p, g) * H.more.x; }
+    if (H.more.x > 0.0) { rest += glowAt(p, g) * H.more.x; }
     if (i > 0) {
       // the step from the last end to this one: exp(-u)'s mean over it (u runs straight between its ends)
       var e = exp(-0.5 * (u + uP));
       if (abs(u - uP) > 1e-3) { e = (exp(-uP) - exp(-u)) / (u - uP); }
       let k = H.dens.x * mix(e, 1.0, H.dens.z) * 0.5 * (w + wP);
+      // the shadow across the step: four taps spread evenly along it, each a little to one side (by the
+      // softness), so a shaft's edge fades across the step instead of jumping where the step ends
+      var sh = 1.0;
+      if (shadeSky || shadeSun) {
+        sh = 0.25 * (shadowNear(mix(pP, p, 0.125), vec2f(soft, 0.0)) + shadowNear(mix(pP, p, 0.375), vec2f(0.0, soft))
+                   + shadowNear(mix(pP, p, 0.625), vec2f(-soft, 0.0)) + shadowNear(mix(pP, p, 0.875), vec2f(0.0, -soft)));
+      }
+      var L = 0.5 * (rest + restP);
+      L += 0.5 * (sky + skyP) * select(1.0, mix(1.0, sh, H.glow.z), shadeSky);
+      L += 0.5 * (sunL + sunP) * mix(1.0, sh, H.glow.y);
       // what the step scatters toward the camera, less what it loses again before it leaves the step
       let t = exp(-k * len * (s - sP));
-      S += T * H.tint.rgb * 0.5 * (L + LP) * (1.0 - t);
+      S += T * H.tint.rgb * L * (1.0 - t);
       T *= t;
     }
-    sP = s; uP = u; wP = w; LP = L;
+    sP = s; uP = u; wP = w; pP = p; skyP = sky; sunP = sunL; restP = rest;
   }
   textureStore(hazeOut, vec2i(id.xy), vec4f(S * H.tint.w, T));
 }
@@ -375,9 +393,9 @@ export class LitHaze {
   // ss (scene samples a mosaic pixel, each way), depth ({ view, id }: the scene's depth), steps, top, bottom (world
   // y the air runs between), density, height, floor, ground (y where the height field doesn't reach), sun,
   // forward, sky, lamps, lava, lavaHeight, shafts (how much of the sun's light shadows take out), shadeSky (and
-  // how much of the sky's), wisps, wispSize, wind: [x, y, z], tint: [r, g, b], lift (0-1: how much of the
-  // light the haze scatters toward the camera it adds; under 1, shadows stay darker while far things still
-  // fade), groundColour (the GI's ground colour view, or null), hfSize (its texels across) }
+  // how much of the sky's), shaftSoft (shadow-map texels its shadow taps spread sideways), wisps, wispSize,
+  // wind: [x, y, z], tint: [r, g, b], lift (0-1: how much of the light the haze scatters toward the camera it
+  // adds; under 1, shadows stay darker while far things still fade), groundColour (the GI's ground colour view, or null), hfSize (its texels across) }
   update(f) {
     this.on = !!f.on;
     if (!this.on) return;
@@ -399,7 +417,7 @@ export class LitHaze {
     d.set([f.lava, f.wisps, f.wispSize, performance.now() / 1000], 48);
     d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
-    d.set([f.lavaHeight, f.shafts, f.shadeSky, 0], 60);
+    d.set([f.lavaHeight, f.shafts, f.shadeSky, f.shaftSoft ?? 0], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {
