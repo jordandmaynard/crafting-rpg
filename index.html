@@ -6849,6 +6849,46 @@ const WEAPON_ART = {
   bow: [['......b..', '....bbs..', '...b..s..', '..b...s..', 'hwgwwwsff', '..b...s..', '...b..s..', '....bbs..', '......b..'], { b: '#8a5a32', g: '#5a3a22', s: '#efe4c8', w: '#c89a62', h: '#a8acb8', f: '#d8443a' }],
   spear: [['.......sS', '......sss', '.....bs..', '....b....', '...b.....', '..b......', '.b.......', 'b........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }],
 };
+// The icons (pack, gear, bar) are drawn from those little pixel maps at twice their resolution: each is doubled
+// by Scale2x (which rounds off diagonal steps rather than making blocks of them), lit from above (a lighter top
+// edge and a darker bottom one on each shape) and outlined a pixel wide in near-black.
+const ICON_LIGHT = 0.18, ICON_SHADE = 0.22, ICON_LINE = '#120e18';
+function shadeHex(hex, k) {
+  const n = parseInt(hex.slice(1), 16), to = k > 0 ? 255 : 0, a = Math.abs(k);
+  return '#' + [16, 8, 0].map(b => Math.round(((n >> b) & 255) * (1 - a) + to * a).toString(16).padStart(2, '0')).join('');
+}
+function iconArt(rows, palette) {
+  const h = rows.length, w = rows[0].length;
+  const at = (x, y) => y >= 0 && y < h && x >= 0 && x < w && palette[rows[y][x]] ? rows[y][x] : '.';
+  // Scale2x into a grid a pixel bigger all round (room for the outline)
+  const H2 = h * 2 + 2, W2 = w * 2 + 2, g = Array.from({ length: H2 }, () => new Array(W2).fill('.'));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const P = at(x, y), A = at(x, y - 1), B = at(x + 1, y), C = at(x - 1, y), D = at(x, y + 1);
+    const q = A !== D && C !== B;
+    g[2 * y + 1][2 * x + 1] = q && C === A ? A : P;
+    g[2 * y + 1][2 * x + 2] = q && A === B ? B : P;
+    g[2 * y + 2][2 * x + 1] = q && C === D ? C : P;
+    g[2 * y + 2][2 * x + 2] = q && D === B ? D : P;
+  }
+  const full = (x, y) => y >= 0 && y < H2 && x >= 0 && x < W2 && g[y][x] !== '.';
+  let rects = '';
+  for (let y = 0; y < H2; y++) {
+    let run = null, rx = 0;
+    const flush = x => { if (run) rects += `<rect x="${rx}" y="${y}" width="${x - rx + 0.02}" height="1.02" fill="${run}"/>`; };
+    for (let x = 0; x <= W2; x++) {
+      let col = null;
+      if (x < W2) {
+        if (full(x, y)) {
+          col = palette[g[y][x]];
+          if (!full(x, y - 1)) col = shadeHex(col, ICON_LIGHT);
+          else if (!full(x, y + 1)) col = shadeHex(col, -ICON_SHADE);
+        } else if (full(x - 1, y) || full(x + 1, y) || full(x, y - 1) || full(x, y + 1)) col = ICON_LINE;
+      }
+      if (col !== run) { flush(x); run = col; rx = x; }
+    }
+  }
+  return `<svg viewBox="0 0 ${W2} ${H2}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
+}
 // shapes the cloth and leather pieces share, in their own colours
 const ART = {
   shirt: ['.TT.c.TT.', 'TTTcccTTT', 'TsTTTTTsT', '.TTTTTTT.', '..TTTTT..', '..TTTTT..', '..ttttt..'],
@@ -6856,54 +6896,54 @@ const ART = {
   boots: ['..BBBB...', '..BBBB...', '..BBBB...', '..cccc...', '..BBBBBB.', '.BBBBBBBB', '.ssssssss'],
 };
 const ICON = {
-  skull: pixelSvg(['.XXXXX.', 'XXXXXXX', 'XrrXrrX', 'XXXdXXX', '.XXXXX.', '.X.X.X.'], { X: '#efe4c8', r: '#d8443a', d: '#17131f' }),
-  wood: pixelSvg(['..BBBBB.', '.BbbbbbB', 'BbBBBBbB', 'BbBrrBbB', 'BbBBBBbB', '.BbbbbbB', '..BBBBB.'], { B: '#8a5a32', b: '#5a3a22', r: '#c89a62' }),
-  stone: pixelSvg(['..GGG...', '.GgggGG.', 'GgggggGG', 'GggwggGG', 'GgggggGG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', w: '#c8c6d0' }),
-  sword: pixelSvg(...WEAPON_ART.sword),
-  whirl: pixelSvg(['...www...', '.ww...ww.', 'w..sss..w', 'w.s...s.w', 'w.s.y.s.w', 'w.s...s.w', 'w..sss..w', '.ww...ww.', '...www...'], { w: '#8de8dc', s: '#efe4c8', y: '#f2c14e' }),
-  bow: pixelSvg(...WEAPON_ART.bow),
-  spear: pixelSvg(...WEAPON_ART.spear),
-  amulet: pixelSvg(['.c.....c.', '..c...c..', '...c.c...', '....c....', '...ggg...', '..gGRGg..', '..gRrRg..', '..gGRGg..', '...ggg...'], { c: '#c8a040', g: '#f2c14e', G: '#a8781a', R: '#d8443a', r: '#ff8a7a' }),
-  bone: pixelSvg(['WW.....WW', 'WbW...WbW', '.WbW.WbW.', '..WbWbW..', '...WbW...', '..WbWbW..', '.WbW.WbW.', 'WbW...WbW', 'WW.....WW'], { W: '#efe4c8', b: '#c8bc9c' }),
-  flurry: pixelSvg(['.s..S..s.', '.s..s..s.', '..b.b.b..', '..b.b.b..', '...bbb...', '....b....', '....b....', '.........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }),
-  harpoon: pixelSvg(['.....sSs.', '......ss.', '.....s.s.', '....c....', '...c.....', '..c......', '.c.......', 'c........', '.........'], { s: '#a8acb8', S: '#efe4c8', c: '#6a6674' }),
-  volley: pixelSvg(['h...h...h', '.w..w..w.', '..w.w.w..', '...www...', '....w....', '....w....', '...fwf...', '...f.f...', '.........'], { h: '#a8acb8', w: '#c89a62', f: '#d8443a' }),
-  rain: pixelSvg(['f...f...f', 'w...w...w', 'w.f.w.f.w', 'h.w.h.w.h', '..w...w..', '..h...h..', '.........', '.rrrrrrr.', '..rrrrr..'], { h: '#a8acb8', w: '#c89a62', f: '#efe4c8', r: '#e8642a' }),
-  lunge: pixelSvg(['.........', '....w....', '...www...', '..wwwww..', '....s....', '....s....', '...yyy...', '....b....', '....b....'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
-  dash: pixelSvg(['.........', '..bbbb...', '..bbbb...', '..bbbb...', '..bbbbbb.', '.bbbbbbbb', '.........', 'w.w.w....', '.........'], { b: '#8a5a32', w: '#8de8dc' }),
-  hammer: pixelSvg(['.GGGGG...', '.GgggG...', '.GGGGG...', '...b.....', '...b.....', '...b.....', '...b.....', '...b.....'], { G: '#5a5664', g: '#a8a6b0', b: '#8a5a32' }),
-  map: pixelSvg(['yyyyyyyy', 'ygggbbby', 'yggbbbby', 'ygbbgggy', 'ybbggrgy', 'ybgggggy', 'yyyyyyyy'], { y: '#c8a860', g: '#6a9a4a', b: '#4a7aaa', r: '#d8443a' }),
-  floor: pixelSvg(['BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb'], { B: '#8a6a44', b: '#6a4c2e' }),
-  wall: pixelSvg(['dddddddd', 'dppppppd', 'dppppppd', 'dbbbbbbd', 'dppppppd', 'GGGGGGGG', 'GgGgGgGG'], { d: '#4a3020', p: '#cdb894', b: '#5a3a24', G: '#5a5664', g: '#8c8a96' }),
-  door: pixelSvg(['dddddddd', 'd.wwww.d', 'd.wwww.d', 'd.kkkk.d', 'd.wwyw.d', 'd.wwww.d', 'd.kkkk.d', 'd.wwww.d'], { d: '#4a3020', w: '#6a4428', k: '#2a2630', y: '#f2c14e' }),
-  logwall: pixelSvg(['.l.l.l.l', 'lLlLlLlL', 'lLlLlLlL', 'bbbbbbbb', 'lLlLlLlL', 'lLlLlLlL', 'lLlLlLlL'], { l: '#5a3a22', L: '#8a5a32', b: '#3a2416' }),
-  stonewall: pixelSvg(['GG.GG.GG', 'GGGGGGGG', 'gGgggGgg', 'GGGGGGGG', 'ggGgggGg', 'GGGGGGGG', 'gGgggGgg'], { G: '#5a5664', g: '#8c8a96' }),
-  stonefloor: pixelSvg(['GGGgGGGG', 'GGGgGGGG', 'gggggggg', 'GgGGGGgG', 'GgGGGGgG', 'gggggggg'], { G: '#8c8894', g: '#3e3a44' }),
-  hearth: pixelSvg(['...GG...', '...GG...', '..GGGG..', '.GGGGGG.', '.G.yy.G.', '.GyrryG.', 'GGGGGGGG'], { G: '#8a8694', y: '#f2c14e', r: '#e8642a' }),
-  fence: pixelSvg(['b...b...b', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'b...b...b'], { b: '#6a4a2c', L: '#8a6440' }),
-  stonefence: pixelSvg(['.ccc.ccc.', 'ccccccccc', '.GG.gGG.G', 'GggGGgGGg', 'gGGgGGggG', 'GgGGgGGGg'], { c: '#a8a49a', G: '#8e8a80', g: '#6a665e' }),
-  gate: pixelSvg(['P.......P', 'PwwwwwwwP', 'Pw.w.w.wP', 'PwLwLw.wP', 'Pw.wLwLwP', 'PwwwwwwwP', 'P.......P'], { P: '#5a3c24', w: '#8a6440', L: '#6a4428' }),
-  ironfence: pixelSvg(['o.^.^.^.o', 'P.i.i.i.P', 'PIIIIIIIP', 'P.i.i.i.P', 'P.i.i.i.P', 'PIIIIIIIP', 'P.i.i.i.P'], { o: '#6a6674', '^': '#6a6674', P: '#34303a', I: '#4a4652', i: '#5a5664' }),
-  irondoor: pixelSvg(['dddddddd', 'd.pppp.d', 'd.IsIs.d', 'd.pppp.d', 'd.ppyp.d', 'd.IsIs.d', 'd.pppp.d', 'd.IsIs.d'], { d: '#4a3020', p: '#6a6674', I: '#34303a', s: '#8c8a96', y: '#a8a6b0' }),
-  irongate: pixelSvg(['o.^^^^^.o', 'P.iiiii.P', 'PIIIIIIIP', 'P.iOiOi.P', 'P.ii.ii.P', 'PIIIIIIIP', 'P.......P'], { o: '#6a6674', '^': '#6a6674', P: '#34303a', I: '#4a4652', i: '#5a5664', O: '#6a6674' }),
-  remove: pixelSvg(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
-  helm: pixelSvg(['...XXX...', '.XXXXXXX.', 'XXXXXXXXX', 'XX.....XX', 'XX.X.X.XX', 'XX.....XX', 'X.......X'], { X: '#8c8a96' }),
-  shirt: pixelSvg(ART.shirt, { T: '#3f6a8a', t: '#2f5070', c: '#2f5a3a', s: '#3f6a8a' }),
-  pants: pixelSvg(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#7a5e42' }),
-  boots: pixelSvg(ART.boots, { B: '#6a4a32', s: '#2a1e16', c: '#6a4a32' }),
-  leatherArmor: pixelSvg(ART.shirt, { T: '#9a6638', t: '#5a3820', c: '#5a3820', s: '#5a3820' }),
-  leatherPants: pixelSvg(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#b07a46' }),
-  leatherBoots: pixelSvg(ART.boots, { B: '#8a5430', s: '#3a2416', c: '#4e3220' }),
-  leatherHelmet: pixelSvg(['...LLL...', '.LLLLLLL.', 'LLLLLLLLL', 'LdddddddL', 'LL.....LL', 'L.......L'], { L: '#9a6638', d: '#4e3220' }),
-  copperOre: pixelSvg(['..GGG...', '.GgoogG.', 'GgooOggG', 'GooOogGG', 'GgoggooG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', o: '#b0602e', O: '#f0a060' }),
-  ironOre: pixelSvg(['..GGG...', '.GgoogG.', 'GgooOggG', 'GooOogGG', 'GgoggooG', '.GGGGGG.'], { G: '#4a4652', g: '#7a7684', o: '#a8aeb8', O: '#eef2f8' }),
-  hide: pixelSvg(['.H.....H.', 'HHH...HHH', '.HHHHHHH.', '..HhHhH..', '..HHhHH..', '.HHHHHHH.', 'HHH...HHH', '.H.....H.'], { H: '#b07a4a', h: '#7a5434' }),
-  table: pixelSvg(['.........', '..hhhhh..', 'TTTTTTTTT', 'TTTTTTTTT', '.L.....L.', '.L.....L.', '.L.....L.'], { T: '#8a5a32', h: '#b07a4a', L: '#5a3a22' }),
-  fist: pixelSvg(['..SSSSS..', '.SsSsSsS.', '.SSSSSSS.', '.SSSSSSS.', '..SSSSSS.', '...SSSS..', '...TTTT..', '...TTTT..'], { S: '#e0b48a', s: '#a8805a', T: '#3f6a8a' }),
-  bag: pixelSvg(['...ddd...', '..d...d..', '.BBBBBBB.', '.BbbbbbB.', '.BBByBBB.', '.BbbbbbB.', '.BBBBBBB.'], { B: '#8a5a32', b: '#5a3a22', d: '#5a3a22', y: '#f2c14e' }),
-  lock: pixelSvg(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
+  skull: iconArt(['.XXXXX.', 'XXXXXXX', 'XrrXrrX', 'XXXdXXX', '.XXXXX.', '.X.X.X.'], { X: '#efe4c8', r: '#d8443a', d: '#17131f' }),
+  wood: iconArt(['..BBBBB.', '.BbbbbbB', 'BbBBBBbB', 'BbBrrBbB', 'BbBBBBbB', '.BbbbbbB', '..BBBBB.'], { B: '#8a5a32', b: '#5a3a22', r: '#c89a62' }),
+  stone: iconArt(['..GGG...', '.GgggGG.', 'GgggggGG', 'GggwggGG', 'GgggggGG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', w: '#c8c6d0' }),
+  sword: iconArt(...WEAPON_ART.sword),
+  whirl: iconArt(['...www...', '.ww...ww.', 'w..sss..w', 'w.s...s.w', 'w.s.y.s.w', 'w.s...s.w', 'w..sss..w', '.ww...ww.', '...www...'], { w: '#8de8dc', s: '#efe4c8', y: '#f2c14e' }),
+  bow: iconArt(...WEAPON_ART.bow),
+  spear: iconArt(...WEAPON_ART.spear),
+  amulet: iconArt(['.c.....c.', '..c...c..', '...c.c...', '....c....', '...ggg...', '..gGRGg..', '..gRrRg..', '..gGRGg..', '...ggg...'], { c: '#c8a040', g: '#f2c14e', G: '#a8781a', R: '#d8443a', r: '#ff8a7a' }),
+  bone: iconArt(['WW.....WW', 'WbW...WbW', '.WbW.WbW.', '..WbWbW..', '...WbW...', '..WbWbW..', '.WbW.WbW.', 'WbW...WbW', 'WW.....WW'], { W: '#efe4c8', b: '#c8bc9c' }),
+  flurry: iconArt(['.s..S..s.', '.s..s..s.', '..b.b.b..', '..b.b.b..', '...bbb...', '....b....', '....b....', '.........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }),
+  harpoon: iconArt(['.....sSs.', '......ss.', '.....s.s.', '....c....', '...c.....', '..c......', '.c.......', 'c........', '.........'], { s: '#a8acb8', S: '#efe4c8', c: '#6a6674' }),
+  volley: iconArt(['h...h...h', '.w..w..w.', '..w.w.w..', '...www...', '....w....', '....w....', '...fwf...', '...f.f...', '.........'], { h: '#a8acb8', w: '#c89a62', f: '#d8443a' }),
+  rain: iconArt(['f...f...f', 'w...w...w', 'w.f.w.f.w', 'h.w.h.w.h', '..w...w..', '..h...h..', '.........', '.rrrrrrr.', '..rrrrr..'], { h: '#a8acb8', w: '#c89a62', f: '#efe4c8', r: '#e8642a' }),
+  lunge: iconArt(['.........', '....w....', '...www...', '..wwwww..', '....s....', '....s....', '...yyy...', '....b....', '....b....'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
+  dash: iconArt(['.........', '..bbbb...', '..bbbb...', '..bbbb...', '..bbbbbb.', '.bbbbbbbb', '.........', 'w.w.w....', '.........'], { b: '#8a5a32', w: '#8de8dc' }),
+  hammer: iconArt(['.GGGGG...', '.GgggG...', '.GGGGG...', '...b.....', '...b.....', '...b.....', '...b.....', '...b.....'], { G: '#5a5664', g: '#a8a6b0', b: '#8a5a32' }),
+  map: iconArt(['yyyyyyyy', 'ygggbbby', 'yggbbbby', 'ygbbgggy', 'ybbggrgy', 'ybgggggy', 'yyyyyyyy'], { y: '#c8a860', g: '#6a9a4a', b: '#4a7aaa', r: '#d8443a' }),
+  floor: iconArt(['BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb', 'BbBbBbBb'], { B: '#8a6a44', b: '#6a4c2e' }),
+  wall: iconArt(['dddddddd', 'dppppppd', 'dppppppd', 'dbbbbbbd', 'dppppppd', 'GGGGGGGG', 'GgGgGgGG'], { d: '#4a3020', p: '#cdb894', b: '#5a3a24', G: '#5a5664', g: '#8c8a96' }),
+  door: iconArt(['dddddddd', 'd.wwww.d', 'd.wwww.d', 'd.kkkk.d', 'd.wwyw.d', 'd.wwww.d', 'd.kkkk.d', 'd.wwww.d'], { d: '#4a3020', w: '#6a4428', k: '#2a2630', y: '#f2c14e' }),
+  logwall: iconArt(['.l.l.l.l', 'lLlLlLlL', 'lLlLlLlL', 'bbbbbbbb', 'lLlLlLlL', 'lLlLlLlL', 'lLlLlLlL'], { l: '#5a3a22', L: '#8a5a32', b: '#3a2416' }),
+  stonewall: iconArt(['GG.GG.GG', 'GGGGGGGG', 'gGgggGgg', 'GGGGGGGG', 'ggGgggGg', 'GGGGGGGG', 'gGgggGgg'], { G: '#5a5664', g: '#8c8a96' }),
+  stonefloor: iconArt(['GGGgGGGG', 'GGGgGGGG', 'gggggggg', 'GgGGGGgG', 'GgGGGGgG', 'gggggggg'], { G: '#8c8894', g: '#3e3a44' }),
+  hearth: iconArt(['...GG...', '...GG...', '..GGGG..', '.GGGGGG.', '.G.yy.G.', '.GyrryG.', 'GGGGGGGG'], { G: '#8a8694', y: '#f2c14e', r: '#e8642a' }),
+  fence: iconArt(['b...b...b', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'b...b...b'], { b: '#6a4a2c', L: '#8a6440' }),
+  stonefence: iconArt(['.ccc.ccc.', 'ccccccccc', '.GG.gGG.G', 'GggGGgGGg', 'gGGgGGggG', 'GgGGgGGGg'], { c: '#a8a49a', G: '#8e8a80', g: '#6a665e' }),
+  gate: iconArt(['P.......P', 'PwwwwwwwP', 'Pw.w.w.wP', 'PwLwLw.wP', 'Pw.wLwLwP', 'PwwwwwwwP', 'P.......P'], { P: '#5a3c24', w: '#8a6440', L: '#6a4428' }),
+  ironfence: iconArt(['o.^.^.^.o', 'P.i.i.i.P', 'PIIIIIIIP', 'P.i.i.i.P', 'P.i.i.i.P', 'PIIIIIIIP', 'P.i.i.i.P'], { o: '#6a6674', '^': '#6a6674', P: '#34303a', I: '#4a4652', i: '#5a5664' }),
+  irondoor: iconArt(['dddddddd', 'd.pppp.d', 'd.IsIs.d', 'd.pppp.d', 'd.ppyp.d', 'd.IsIs.d', 'd.pppp.d', 'd.IsIs.d'], { d: '#4a3020', p: '#6a6674', I: '#34303a', s: '#8c8a96', y: '#a8a6b0' }),
+  irongate: iconArt(['o.^^^^^.o', 'P.iiiii.P', 'PIIIIIIIP', 'P.iOiOi.P', 'P.ii.ii.P', 'PIIIIIIIP', 'P.......P'], { o: '#6a6674', '^': '#6a6674', P: '#34303a', I: '#4a4652', i: '#5a5664', O: '#6a6674' }),
+  remove: iconArt(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
+  helm: iconArt(['...XXX...', '.XXXXXXX.', 'XXXXXXXXX', 'XX.....XX', 'XX.X.X.XX', 'XX.....XX', 'X.......X'], { X: '#8c8a96' }),
+  shirt: iconArt(ART.shirt, { T: '#3f6a8a', t: '#2f5070', c: '#2f5a3a', s: '#3f6a8a' }),
+  pants: iconArt(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#7a5e42' }),
+  boots: iconArt(ART.boots, { B: '#6a4a32', s: '#2a1e16', c: '#6a4a32' }),
+  leatherArmor: iconArt(ART.shirt, { T: '#9a6638', t: '#5a3820', c: '#5a3820', s: '#5a3820' }),
+  leatherPants: iconArt(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#b07a46' }),
+  leatherBoots: iconArt(ART.boots, { B: '#8a5430', s: '#3a2416', c: '#4e3220' }),
+  leatherHelmet: iconArt(['...LLL...', '.LLLLLLL.', 'LLLLLLLLL', 'LdddddddL', 'LL.....LL', 'L.......L'], { L: '#9a6638', d: '#4e3220' }),
+  copperOre: iconArt(['..GGG...', '.GgoogG.', 'GgooOggG', 'GooOogGG', 'GgoggooG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', o: '#b0602e', O: '#f0a060' }),
+  ironOre: iconArt(['..GGG...', '.GgoogG.', 'GgooOggG', 'GooOogGG', 'GgoggooG', '.GGGGGG.'], { G: '#4a4652', g: '#7a7684', o: '#a8aeb8', O: '#eef2f8' }),
+  hide: iconArt(['.H.....H.', 'HHH...HHH', '.HHHHHHH.', '..HhHhH..', '..HHhHH..', '.HHHHHHH.', 'HHH...HHH', '.H.....H.'], { H: '#b07a4a', h: '#7a5434' }),
+  table: iconArt(['.........', '..hhhhh..', 'TTTTTTTTT', 'TTTTTTTTT', '.L.....L.', '.L.....L.', '.L.....L.'], { T: '#8a5a32', h: '#b07a4a', L: '#5a3a22' }),
+  fist: iconArt(['..SSSSS..', '.SsSsSsS.', '.SSSSSSS.', '.SSSSSSS.', '..SSSSSS.', '...SSSS..', '...TTTT..', '...TTTT..'], { S: '#e0b48a', s: '#a8805a', T: '#3f6a8a' }),
+  bag: iconArt(['...ddd...', '..d...d..', '.BBBBBBB.', '.BbbbbbB.', '.BBByBBB.', '.BbbbbbB.', '.BBBBBBB.'], { B: '#8a5a32', b: '#5a3a22', d: '#5a3a22', y: '#f2c14e' }),
+  lock: iconArt(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
 };
-for (const [t, tr] of Object.entries(TIERS)) for (const [w, [rows, pal]] of Object.entries(WEAPON_ART)) ICON[w + '_' + t] = pixelSvg(rows, { ...pal, ...tr.look[w] });
+for (const [t, tr] of Object.entries(TIERS)) for (const [w, [rows, pal]] of Object.entries(WEAPON_ART)) ICON[w + '_' + t] = iconArt(rows, { ...pal, ...tr.look[w] });
 // an empty gear slot shows what goes there, in shadow
 const dimIcon = svg => svg.replace(/fill="#[0-9a-f]+"/g, 'fill="#3a3150"');
 
