@@ -7,7 +7,9 @@
 // Uniforms: one Frame block per pass and one Obj block per object drawn, written into big buffers at
 // 256-byte steps and picked out with dynamic offsets; ShaderMaterials keep their own block and textures.
 // An InstancedMesh (scene.js) draws its first `count` copies in one call, each placed by its matrix in a
-// vertex buffer stepped once a copy (the built-in materials and the shadow pass only).
+// vertex buffer stepped once a copy (the built-in materials and the shadow pass only). A ShaderMaterial mesh
+// whose geometry has an `instanceCount` is drawn that many times over, its shader telling the copies apart by
+// @builtin(instance_index) (none at 0).
 // Projections are kept as the scene graph makes them (z from -1 to 1) and squeezed to WebGPU's 0 to 1 here.
 import { Matrix4, Vector3, Frustum, Color } from './math.js';
 import { PRELUDE, builtinCode, MAX_POINTS, FRAME_BYTES, OBJ_BYTES } from './shaders.js';
@@ -251,7 +253,7 @@ class Renderer {
       const slot = this._bindGeometry(pass, geo, kind === 'shader' ? mat : null, hasColor);
       if (!slot) continue;
       if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
-      this._draw(pass, geo, inst ? mesh.count : 1);
+      this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
     }
     pass.end();
     if (!this.target) this.flush();
@@ -499,6 +501,7 @@ class Renderer {
     pass.end();
   }
   _draw(pass, geo, copies = 1) {
+    if (!copies) return;
     this.info.draws++;
     if (geo.index) pass.drawIndexed(geo.index.count, copies);
     else pass.draw(geo.attributes.position.count, copies);
@@ -605,7 +608,10 @@ class Renderer {
         g = { tex, view: tex.createView(), w: width, h: height, id: Math.random() };
         this._texs.set(t, g);
       }
-      this.device.queue.writeTexture({ texture: g.tex }, data, { bytesPerRow: width * 4 }, [width, height]);
+      // only the parts that changed, when it says which (regions: [x, y, w, h], emptied once sent)
+      if (t.regions && t.regions.length && g.version >= 0) for (const [x, y, w, h] of t.regions) this.device.queue.writeTexture({ texture: g.tex, origin: [x, y] }, data, { offset: (y * width + x) * 4, bytesPerRow: width * 4 }, [w, h]);
+      else this.device.queue.writeTexture({ texture: g.tex }, data, { bytesPerRow: width * 4 }, [width, height]);
+      if (t.regions) t.regions.length = 0;
       g.version = t.version;
       g.sampler = this._sampler(t);
     }
