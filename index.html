@@ -2629,7 +2629,7 @@ const hazeTint = new GFX.Color();
 // brighter / darker. On top of the day and night auto exposure (T > Day & night). `target` is by day and
 // `nightTarget` by night (night should stay darker than day, not be brought up to it), eased between as the sun
 // goes down and comes up.
-const EYE = { on: 1, target: 0.25, nightTarget: 0.12, darkest: 1, brightest: 4, middle: 0.66, toDark: 2.3, toLight: 2.3 };
+const EYE = { on: 1, target: 0.25, nightTarget: 0.12, darkest: 1, brightest: 2.22, middle: 1, toDark: 2.3, toLight: 2.3 };
 const EYE_READ = { brightness: 0, exposure: 1 };   // what it measured, for the tuning panel
 const eye = new GFX.EyeAdaptation(renderer);
 renderer.setEye(eye);
@@ -5129,8 +5129,8 @@ const bogMulMat = makeBogMat(false), bogAddMat = makeBogMat(true);
 bogMulMat.keepAlpha = bogAddMat.keepAlpha = true;
 // A fairy grotto (T > Fairy grotto): its pool's clear, glowing water (the swamp water's shader with its own colours
 // and glow), the waterfall, its light and its fairies
-const GROTTO = { color: '#2aa8a0', clarity: 1.6, glow: 0.35, glowColor: '#5ff0d8', light: 1.4, lightRange: 6, lightColor: '#60ffe0',
-  fall: 0.85, fallSpeed: 1.6, fallColor: '#e0fff8' };
+const GROTTO = { color: '#0d8c81', clarity: 1.05, glow: 0.19, glowColor: '#1b6f62', light: 0.65, lightRange: 15, lightColor: '#00ffcc',
+  fall: 0.7, fallSpeed: 1.8, fallColor: '#cdfef3' };
 const GROT_U = { waterCol: { value: new GFX.Vector3() }, absorb: { value: new GFX.Vector3() }, shoreCol: { value: new GFX.Color('#c8fff4') }, wakeCol: { value: new GFX.Color('#c8fff4') },
   magic: { value: 1 }, glowCol: { value: new GFX.Color(GROTTO.glowColor) }, glowK: { value: GROTTO.glow } };
 const makeGrotMat = add => { const m = makeBogMat(add); m.uniforms = Object.assign({}, m.uniforms, GROT_U); m.keepAlpha = true; return m; };
@@ -6200,9 +6200,9 @@ function burntTree(x, z, k) {
 }
 // a vent: a hole two tiles across in the ash, its throat falling away dark to an ember glow far down, inside
 // a low lip of crusted ash and sulphur (the smoke: see ventSmoke)
-// A fairy grotto's rock, moss, lily pads and toadstools (see placeGrottos): boulders along the cliff's top,
-// tallest either side of the fall and mossed over, a mossy slab the water spills over, moss on the lip and
-// trailing down the face, ferns up top, lily pads floating on the pool (they drift aside as you wade past: plants
+// A fairy grotto's rock, moss, lily pads and toadstools (see placeGrottos): crags of the cliffs' own stone along
+// the cliff's top, as the rock pillars are built, rising to a cleft the water spills from; knobs of rock and
+// patches of moss over the face, moss along the lip and a few strands trailing down, ferns up top, lily pads floating on the pool (they drift aside as you wade past: plants
 // that float, see plantMat) and toadstools glowing round its bank.
 const GROTTO_W = 6, GROTTO_D = 4;
 function grotto(g) {
@@ -6210,29 +6210,53 @@ function grotto(g) {
   const yT = g.top * STEP, yL = g.L * STEP, face = Math.atan2(g.ox, g.oz);
   let seed = g.seed * 1000 + 3;
   const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
-  const stone = k => shade(CC('#3c3b36'), 0.8 + k * 0.35), moss = k => shade(CC(k > 0.6 ? '#5f8a2a' : k > 0.3 ? '#4f7a26' : '#6e9a34'), 0.85 + k * 0.25);
-  // the boulders, and the slab the water comes over in the gap between them
-  for (let n = 0; n < 10; n++) {
-    const a = 0.25 + n * (W - 0.5) / 9 + (rnd() - 0.5) * 0.25;
-    if (Math.abs(a - g.fa) < 0.5) continue;
-    const near = 1 - Math.min(1, Math.abs(a - g.fa) / 2.6), b = -0.5 - rnd() * 0.9, hgt = 0.45 + near * 0.8 + rnd() * 0.35, wid = 0.5 + rnd() * 0.3 + near * 0.15;
-    const [x, z] = P(a, b), k = rnd();
-    part(G.dodec, stone(k), x, yT + hgt * 0.32, z, { sx: wid, sy: hgt, sz: wid * 0.9, ry: rnd() * 6 });
-    part(G.dodec, moss(rnd()), x, yT + hgt * 0.5, z, { sx: wid * 1.04, sy: hgt * 0.62, sz: wid * 0.95, ry: rnd() * 6 });
+  // (the stone of the cliffs and rock pillars round about, mossed as the forest's rocks are)
+  const [rockC, capC] = CLIFF_ROCK[DEEP], stone = k => shade(CC(rockC), 0.72 + k * 0.4), moss = k => shade(CC(k > 0.6 ? capC : k > 0.3 ? '#557a2c' : '#628a30'), 0.85 + k * 0.25);
+  // a craggy pillar of rock as the rock pillars are: a big leaning block with a smaller one against it, sunk at
+  // the foot, moss lying on its top now and then
+  const crag = (a, b, h, w, k, mossy) => {
+    const [x, z] = P(a, b), lean = (k - 0.5) * 0.35, spin = k * 6.28;
+    part(G.dodec, stone(k * 0.5), x, yT + 0.05, z, { sx: w * 1.2, sy: 0.3, sz: w * 1.1, ry: spin * 1.7 });
+    part(G.dodec, stone(k), x, yT + h * 0.42, z, { sx: w, sy: h, sz: w * 0.88, ry: spin, rz: lean });
+    const sa = spin + 1.9, sw = w * (0.5 + rnd() * 0.2);
+    part(G.dodec, stone(rnd()), x + Math.sin(sa) * w * 0.38, yT + h * 0.26, z + Math.cos(sa) * w * 0.38, { sx: sw, sy: h * 0.6, sz: sw * 0.9, ry: spin * 0.7, rz: -lean * 1.4 });
+    if (mossy) part(G.dodec, moss(rnd()), x - Math.sin(lean) * h * 0.3, yT + h * 0.84, z, { sx: w * 0.72, sy: 0.12, sz: w * 0.66, ry: spin * 1.3 });
+  };
+  // the crags along the cliff's top, rising toward the cleft the water comes out of; in the cleft, a lower rock
+  // worn smooth that it spills over, between two tall leaning ones
+  const lipH = g.fallTop - yT;
+  for (let n = 0; n < 7; n++) {
+    const a = 0.35 + n * (W - 0.7) / 6 + (rnd() - 0.5) * 0.35;
+    if (Math.abs(a - g.fa) < 0.85) continue;
+    const near = 1 - Math.min(1, Math.abs(a - g.fa) / 3);
+    crag(a, -0.55 - rnd() * 0.8, 0.5 + near * 0.9 + rnd() * 0.35, 0.5 + rnd() * 0.25, rnd(), rnd() < 0.6);
   }
-  const [sx, sz] = P(g.fa, -0.65), lipH = g.fallTop - yT;
-  part(G.box, stone(0.4), sx, yT + lipH / 2 - 0.05, sz, { sx: 0.95, sy: lipH + 0.1, sz: 1.05, ry: face });
-  for (const side of [-1, 1]) { const [x, z] = P(g.fa + side * 0.5, -0.45); part(G.dodec, moss(rnd()), x, g.fallTop - 0.08, z, { sx: 0.3, sy: 0.22, sz: 0.5, ry: face }); }
-  // moss along the lip, and trailing down the cliff's face (green, and russet like dead fern)
-  for (let n = 0; n < 16; n++) {
-    const a = 0.15 + n * (W - 0.3) / 15 + (rnd() - 0.5) * 0.2, [x, z] = P(a, 0.02);
-    part(G.dodec, moss(rnd()), x, yT - 0.02, z, { sx: 0.32 + rnd() * 0.2, sy: 0.14, sz: 0.3 + rnd() * 0.15, ry: rnd() * 6 });
+  for (const side of [-1, 1]) crag(g.fa + side * (0.62 + rnd() * 0.1), -0.6 - rnd() * 0.3, lipH + 0.45 + rnd() * 0.4, 0.55, rnd(), true);
+  const [lx0, lz0] = P(g.fa, -0.7);
+  part(G.dodec, stone(0.35), lx0, yT + lipH * 0.45, lz0, { sx: 0.8, sy: lipH * 1.1, sz: 1.1, ry: face + 0.4 });
+  part(G.dodec, shade(CC('#3a4a3e'), 0.9), lx0, g.fallTop - 0.07, lz0, { sx: 0.55, sy: 0.12, sz: 0.85, ry: face + 0.4 });
+  // the cliff's face behind the pool: knobs of rock standing out of it, moss in patches over them and the lip,
+  // and here and there a strand of moss or dead fern hanging down, all at odds and ends (nothing in rows)
+  const fh = yT - yL, onFace = (a, t, out = 0) => { const [x, z] = P(a, 0.02 + 0.46 * t + out); return [x, yT - fh * t, z]; };
+  for (let n = 0; n < 9; n++) {
+    const a = rnd() * W, t = 0.2 + rnd() * 0.65, w = 0.14 + rnd() * 0.16;
+    seg(G.dodec, stone(rnd()), onFace(a, t - 0.12), onFace(a + (rnd() - 0.5) * 0.2, t + 0.12, 0.02), w);
+  }
+  for (let n = 0; n < 11; n++) {
+    const a = rnd() * W, t = rnd() * 0.5, len = 0.15 + rnd() * 0.35, w = 0.1 + rnd() * 0.12;
+    if (Math.abs(a - g.fa) < 0.4) continue;
+    seg(G.dodec, moss(rnd()), onFace(a, t, 0.03), onFace(a + (rnd() - 0.5) * 0.3, Math.min(0.95, t + len), 0.03), w);
+  }
+  for (let n = 0; n < 9; n++) {
+    const a = rnd() * W, w = 0.25 + rnd() * 0.3;
+    if (Math.abs(a - g.fa) < 0.4) continue;
+    const [x, z] = P(a, -0.02 + rnd() * 0.06);
+    part(G.dodec, moss(rnd()), x, yT - 0.01, z, { sx: w, sy: 0.1 + rnd() * 0.06, sz: w * (0.6 + rnd() * 0.5), ry: rnd() * 6 });
+  }
+  for (let n = 0; n < 6; n++) {
+    const a = rnd() * W, len = 0.25 + rnd() * 0.5;
     if (Math.abs(a - g.fa) < 0.45) continue;
-    for (let st = 0; st < 2; st++) {
-      const aa = a + (rnd() - 0.5) * 0.3, len = 0.35 + rnd() * 0.55, t = Math.min(1, len / Math.max(0.4, yT - yL));
-      const [tx, tz] = P(aa, 0.06), [bx, bz] = P(aa, 0.06 + 0.46 * t);
-      seg(G.frust4, rnd() < 0.3 ? shade(CC('#8a5a2e'), 0.85 + rnd() * 0.3) : moss(rnd()), [tx, yT - 0.01, tz], [bx, yT - (yT - yL) * t + 0.02, bz], 0.06 + rnd() * 0.05);
-    }
+    seg(G.frust4, rnd() < 0.4 ? shade(CC('#8a5a2e'), 0.8 + rnd() * 0.3) : moss(rnd()), onFace(a, 0, 0.05), onFace(a + (rnd() - 0.5) * 0.15, len, 0.06), 0.03 + rnd() * 0.03);
   }
   // ferns up on the rock's ends, leaning out over the pool
   for (const a of [0.45, W - 0.45]) { const [x, z] = P(a, -0.35); fern(x, z, rnd()); }
