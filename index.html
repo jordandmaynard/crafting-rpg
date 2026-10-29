@@ -3692,7 +3692,7 @@ function updateCuts(dt) {
 // quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
 // layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
 // point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
-const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.84, rim: 0.47, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.25 };
+const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.9, rim: 0.94, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.19};
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
@@ -3765,7 +3765,7 @@ const DRIFT_U = {
 };
 const driftMat = new GFX.ShaderMaterial({ uniforms: DRIFT_U, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) nrm: vec3f }
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) nrm: vec3f, @location(4) cov: f32 }
 fn dHash(p: vec2i) -> f32 {
   var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
   h = (h ^ (h >> 13u)) * 1274126177u;
@@ -3775,7 +3775,7 @@ fn dNoise(p: vec2f) -> f32 {
   let i = vec2i(floor(p)); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
   return mix(mix(dHash(i), dHash(i + vec2i(1, 0)), u.x), mix(dHash(i + vec2i(0, 1)), dHash(i + vec2i(1, 1)), u.x), u.y);
 }
-struct DP { y: f32, sand: bool, sx: f32, col: vec3f, wcol: f32 }
+struct DP { y: f32, sand: bool, sx: f32, col: vec3f, wcol: f32, cov: f32 }
 fn dCov(t: vec4f) -> bool {
   let b = u32(round(t.r * 255.0));
   return (b & (select(1u, 2u, U.edge.x > 0.5) | select(0u, 8u, U.edge.y > 0.5))) != 0u;
@@ -3819,17 +3819,19 @@ fn dDeform(uv: vec2f) -> vec2f {
 // the layer's top at xz
 fn dPoint(xz: vec2f) -> DP {
   let lim = vec2i(${N * 2 - 1});
-  // the four quarters round the point: how much of it is covered, the covered ground's height, its colour
+  // the four quarters round the point: how much of it is covered, the covered ground's height, its colour, and
+  // the lowest of their grounds (where none is covered the layer lies under that, so it can't poke out of the
+  // inside corner of a cliff, where a blend of the quarters round it would stand above the rock)
   let qp = xz * 2.0 - 0.5;
   let base = vec2i(floor(qp));
   let f = fract(qp);
-  var cov = 0.0; var hc = 0.0; var hall = 0.0; var col = vec3f(0.0); var wcol = 0.0; var sand = 0.0; var slope = false;
+  var cov = 0.0; var hc = 0.0; var hall = 1e9; var col = vec3f(0.0); var wcol = 0.0; var sand = 0.0; var slope = false;
   for (var k = 0; k < 4; k++) {
     let o = vec2i(k & 1, k >> 1);
     let q = clamp(base + o, vec2i(0), lim);
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
     let t = textureLoad(tDrift, q, 0);
-    hall += dH(t) * w;
+    hall = min(hall, dH(t));
     if (dCov(t)) { cov += w; hc += dGround(t, q, xz) * w; if (round(t.a * 255.0) > 1.5) { sand += w; } }
     if (dSlope(t)) { slope = true; }
     let g = textureLoad(tGround, q, 0);
@@ -3861,7 +3863,7 @@ fn dPoint(xz: vec2f) -> DP {
     if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) { s = dDeform(uv); }
   }
   let lift = 1.0 - s.x * U.look.y + s.y * (1.0 - s.x) * U.look.z;
-  return DP(ground + deep * cov * lift - 0.08 * (1.0 - cov), isSand, s.x, col, wcol);
+  return DP(ground + deep * cov * lift - 0.08 * (1.0 - cov), isSand, s.x, col, wcol, cov);
 }
 @vertex fn vs(v: VIn) -> VOut {
   let xz = U.win.xy + v.position.xz;
@@ -3881,9 +3883,11 @@ fn dPoint(xz: vec2f) -> DP {
   albedo = albedo * (1.0 - p.sx * 0.14);
   if (!isSand) { albedo = mix(albedo, albedo * vec3f(0.8, 0.88, 1.0), p.sx * 0.6); }
   let w = vec3f(xz.x, y, xz.y);
-  return VOut(F.viewProj * vec4f(w, 1.0), w, albedo, w - F.camPos.xyz, nrm);
+  return VOut(F.viewProj * vec4f(w, 1.0), w, albedo, w - F.camPos.xyz, nrm, p.cov);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  // (none of it is drawn between points none of which is covered)
+  if (i.cov < 0.002) { discard; }
   // smooth normals: the vertices' (between them the triangles' shapes still show in the light), or worked out
   // afresh at each pixel (DRIFT.fine), so no edge between triangles shows at all
   var sn = normalize(i.nrm);
