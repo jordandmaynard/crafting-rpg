@@ -469,12 +469,33 @@ const NAME_WORDS = [
 ];
 // a compound that reads badly: a word twice (Hollowhollow), or its root again in the noun (Thornwood Wood)
 const badName = (p, r, n) => p.toLowerCase() === r || (n && (n.toLowerCase().includes(r) || r.startsWith(n.toLowerCase().slice(0, 4))));
-// every name a biome's words can make (each pattern's combinations, less the ones that read badly)
-function allNames(b) {
-  const w = NAME_WORDS[b], out = [];
+// Lakes, seas, rivers and roads are named the same way, from words of their own; a lake's compound can also
+// follow its noun (Lake Silvermere).
+const FEATURE_WORDS = {
+  lake: { lead: 'Lake', pre: ['Silver', 'Mirror', 'Still', 'Glass', 'Moon', 'Swan', 'Heron', 'Cold', 'Blue', 'Reed', 'Willow', 'Star', 'Mist', 'Otter'],
+    root: ['mere', 'water', 'tarn', 'pool', 'loch', 'deep', 'well', 'wash', 'bay', 'glim'],
+    noun: ['Lake', 'Mere', 'Water', 'Tarn', 'Pool', 'Loch', 'Shallows'],
+    adj: ['Still', 'Silent', 'Glimmering', 'Mirrored', 'Drowned', 'Sleeping', 'Misty', 'Shining', 'Hidden', 'Sunken'] },
+  sea: { pre: ['Grey', 'Storm', 'Salt', 'Whale', 'Gull', 'Tide', 'Wave', 'Dawn', 'Dusk', 'Iron', 'Sapphire', 'Pearl', 'Wind', 'Foam'],
+    root: ['reach', 'water', 'deep', 'sound', 'gulf', 'march', 'brine', 'swell', 'mere', 'wash'],
+    noun: ['Sea', 'Deep', 'Expanse', 'Gulf', 'Sound', 'Reach', 'Waters'],
+    adj: ['Endless', 'Restless', 'Grey', 'Shimmering', 'Howling', 'Sunlit', 'Sleeping', 'Wide', 'Weeping', 'Glittering'] },
+  river: { pre: ['Swift', 'Silver', 'Bright', 'Cold', 'Stone', 'Willow', 'Otter', 'Salmon', 'Alder', 'Rush', 'Foam', 'Clear', 'Long', 'Wind'],
+    root: ['water', 'brook', 'run', 'burn', 'beck', 'rush', 'flow', 'ford', 'wash', 'rill'],
+    noun: ['River', 'Run', 'Brook', 'Beck', 'Stream', 'Burn', 'Rapids'],
+    adj: ['Winding', 'Rushing', 'Laughing', 'Tumbling', 'Wandering', 'Singing', 'Restless', 'Silver', 'Swift', 'Babbling'] },
+  road: { pre: ['Old', 'Iron', 'Salt', 'King', 'Stone', 'Thorn', 'Crow', 'Ash', 'Elder', 'Mill', 'Wain', 'Hollow', 'Long', 'Gold'],
+    root: ['way', 'gate', 'ride', 'mile', 'march', 'ford', 'stile', 'cross', 'wend', 'reach'],
+    noun: ['Road', 'Way', 'Trail', 'Track', 'Path', 'Highway', 'Lane'],
+    adj: ['Old', 'Winding', 'Long', 'Pilgrim', 'Drovers', 'Merchants', 'Kings', 'Weary', 'Sunken', 'Crooked'] },
+};
+// every name a set of words can make (each pattern's combinations, less the ones that read badly)
+function allNames(w) {
+  const out = [];
   for (const p of w.pre) for (const r of w.root) {
     if (badName(p, r)) continue;
     out.push('THE ' + (p + r).toUpperCase());
+    if (w.lead) out.push((w.lead + ' ' + p + r).toUpperCase());
     for (const n of w.noun) if (!badName(p, r, n)) out.push((p + r + ' ' + n).toUpperCase());
   }
   for (const a of w.adj) for (const n of w.noun) out.push(('The ' + a + ' ' + n).toUpperCase());
@@ -482,21 +503,21 @@ function allNames(b) {
 }
 // a fresh name for a region of biome b: half the time a compound and a noun, else the compound alone or an
 // adjective and a noun. No compound or name is used twice in a world.
-function makeRegionName(b, rand, used) {
-  const w = NAME_WORDS[b], pick = l => l[Math.floor(rand() * l.length)];
+function makeRegionName(w, rand, used, fallback) {
+  const pick = l => l[Math.floor(rand() * l.length)];
   for (let k = 0; k < 200; k++) {
     const u = rand(), p = pick(w.pre), r = pick(w.root), n = pick(w.noun), a = pick(w.adj);
     let name, key;
     if (u < 0.75) {
       if (badName(p, r, u < 0.5 ? n : '')) continue;
-      key = p + r; name = u < 0.5 ? p + r + ' ' + n : 'The ' + p + r;
+      key = p + r; name = u < 0.5 ? p + r + ' ' + n : (w.lead && u < 0.65 ? w.lead + ' ' : 'The ') + p + r;
     } else { key = a + n; name = 'The ' + a + ' ' + n; }
     name = name.toUpperCase();
     if (used.has(key) || used.has(name)) continue;
     used.add(key); used.add(name);
     return name;
   }
-  return BIOMES[b].name;
+  return fallback;
 }
 const towns = [];
 const TOWN_R = 10;
@@ -835,7 +856,7 @@ function nameRegions() {
     return n;
   };
   REG.fill(-1); regions.length = 0;
-  const newRegion = b => { regions.push({ biome: b, name: makeRegionName(b, rand, used), n: 0, spots: [], found: false }); return regions.length - 1; };
+  const newRegion = b => { regions.push({ biome: b, name: makeRegionName(NAME_WORDS[b], rand, used, BIOMES[b].name), n: 0, spots: [], found: false }); return regions.length - 1; };
   let cid = 0;
   for (let s = 0; s < NN; s++) {
     if (comp[s] >= 0 || BI[s] === TOWN) continue;
@@ -868,21 +889,30 @@ function nameRegions() {
   let n = 0;
   for (let i = 0; i < NN; i++) if (REG[i] >= 0) q[n++] = i;
   spread(n, j => REG[j] < 0 && BI[j] !== TOWN, (j, i) => { REG[j] = REG[i]; });
-  // how deep each tile is inside its region: 1 on its edge (or the world's), counting in
-  n = 0; dist.fill(0);
+  labelSpots(REG, regions);
+  nameFeatures(rand, used);
+}
+// Each thing's size (n) and the spots its name can go: the tiles deepest inside it (1 on its edge or the world's,
+// counting in), a few spread across it, the deepest first. ID gives each tile's thing (-1 for none).
+function labelSpots(ID, list) {
+  const NN = N * N, dist = new Int32Array(NN), q = new Int32Array(NN);
+  let n = 0;
   for (let i = 0; i < NN; i++) {
-    if (REG[i] < 0) continue;
+    if (ID[i] < 0) continue;
     const c = i % N;
-    let edge = i < N || i >= NN - N || !c || c === N - 1;
-    if (!edge) nbrs(i, j => { if (REG[j] !== REG[i]) edge = true; });
+    const edge = i < N || i >= NN - N || !c || c === N - 1 || ID[i - N] !== ID[i] || ID[i + N] !== ID[i] || ID[i - 1] !== ID[i] || ID[i + 1] !== ID[i];
     if (edge) { dist[i] = 1; q[n++] = i; }
   }
-  spread(n, j => REG[j] >= 0 && !dist[j], (j, i) => { dist[j] = dist[i] + 1; });
-  const deepest = new Int32Array(regions.length);
-  for (let i = 0; i < NN; i++) if (REG[i] >= 0) { regions[REG[i]].n++; deepest[REG[i]] = Math.max(deepest[REG[i]], dist[i]); }
-  const cand = regions.map(() => []);
-  for (let i = 0; i < NN; i++) { const g = REG[i]; if (g >= 0 && dist[i] * 2 >= deepest[g]) cand[g].push(i); }
-  regions.forEach((g, id) => {
+  for (let h = 0; h < n; h++) {
+    const i = q[h];
+    for (const j of [i - N, i + N, i - 1, i + 1]) if (j >= 0 && j < NN && ID[j] === ID[i] && !dist[j]) { dist[j] = dist[i] + 1; q[n++] = j; }
+  }
+  const deepest = new Int32Array(list.length);
+  for (const g of list) { g.n = 0; g.spots = []; }
+  for (let i = 0; i < NN; i++) if (ID[i] >= 0) { list[ID[i]].n++; deepest[ID[i]] = Math.max(deepest[ID[i]], dist[i]); }
+  const cand = list.map(() => []);
+  for (let i = 0; i < NN; i++) { const g = ID[i]; if (g >= 0 && dist[i] * 2 >= deepest[g]) cand[g].push(i); }
+  list.forEach((g, id) => {
     const gap = Math.max(8, deepest[id]);
     cand[id].sort((a, b) => dist[b] - dist[a]);
     for (const i of cand[id]) {
@@ -891,6 +921,56 @@ function nameRegions() {
       if (g.spots.length >= 6) break;
     }
   });
+}
+// Lakes and seas (each body of still water), rivers (each run of running water, joined ones as one) and roads
+// (each stretch laid between two places, outside towns) get names too. You don't walk into them, so coming
+// within FEATURE_SEE tiles of one discovers it, and from then its name is on the map.
+const FEATURE_MIN = { lake: 12, sea: 12, river: 8, road: 12 }, SEA_AT = 6000, FEATURE_SEE = 4;
+const FEAT = new Int32Array(N * N).fill(-1);   // each tile's lake, sea, river or road (-1 for none)
+const features = [];   // { kind, name, n, spots, found }
+const roadLines = [];  // the tiles each road laid down first (layRoads)
+const FEATURE_INK = { lake: '#9fd6f2', sea: '#9fd6f2', river: '#a8dcf4', road: '#ecd3a6' };
+function nameFeatures(rand, used) {
+  const NN = N * N, seen = new Uint8Array(NN), q = new Int32Array(NN);
+  FEAT.fill(-1); features.length = 0;
+  // bodies of water: still (WT 2) and running (WT 3), not lava, each joined side or corner
+  for (const [wt, kind] of [[2, 'lake'], [3, 'river']]) {
+    const ok = i => WT[i] === wt && !LAVA[i];
+    for (let s = 0; s < NN; s++) {
+      if (!ok(s) || seen[s]) continue;
+      let n = 1; q[0] = s; seen[s] = 1;
+      for (let h = 0; h < n; h++) {
+        const i = q[h], c = i % N, r = (i - c) / N;
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+          const cc = c + dc, rr = r + dr, j = rr * N + cc;
+          if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && ok(j) && !seen[j]) { seen[j] = 1; q[n++] = j; }
+        }
+      }
+      const k = kind === 'lake' && n >= SEA_AT ? 'sea' : kind;
+      if (n < FEATURE_MIN[k]) continue;
+      const id = features.length;
+      features.push({ kind: k, name: makeRegionName(FEATURE_WORDS[k], rand, used, k.toUpperCase()), n: 0, spots: [], found: false });
+      for (let h = 0; h < n; h++) FEAT[q[h]] = id;
+    }
+  }
+  // roads: what each laid down first that's still road, out of town
+  for (const line of roadLines) {
+    const tiles = line.filter(i => PATH[i] && !TN[i] && FEAT[i] < 0);
+    if (tiles.length < FEATURE_MIN.road) continue;
+    const id = features.length;
+    features.push({ kind: 'road', name: makeRegionName(FEATURE_WORDS.road, rand, used, 'THE ROAD'), n: 0, spots: [], found: false });
+    for (const i of tiles) FEAT[i] = id;
+  }
+  labelSpots(FEAT, features);
+}
+// any new lake, sea, river or road near you
+function discoverFeatures() {
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z), R = FEATURE_SEE;
+  for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) {
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const f = features[FEAT[T(c, r)]];
+    if (f && !f.found) { f.found = true; toast('Discovered ' + titleCase(f.name) + '!', 'good'); }
+  }
 }
 
 // ---------- Lakes, rivers and canyons ----------
@@ -1502,7 +1582,14 @@ function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
     if (roadDone[i] === run) continue;
     roadDone[i] = run;
     if (i === g) {
-      for (let j = g; j >= 0; j = roadFrom[j]) { PATH[j] = 1; if (roadVia[j] >= 0) PATH[roadVia[j]] = 1; if (roadSpan[j]) makeBridge(roadFrom[j], roadDir[j] >> 1, roadSpan[j]); }
+      const line = [];
+      for (let j = g; j >= 0; j = roadFrom[j]) {
+        if (!PATH[j]) line.push(j);
+        PATH[j] = 1;
+        if (roadVia[j] >= 0) { if (!PATH[roadVia[j]]) line.push(roadVia[j]); PATH[roadVia[j]] = 1; }
+        if (roadSpan[j]) makeBridge(roadFrom[j], roadDir[j] >> 1, roadSpan[j]);
+      }
+      roadLines.push(line);
       return true;
     }
     const c = i % N, r = (i - c) / N, pd = roadDir[i];
@@ -1580,6 +1667,7 @@ function makeBridge(from, d, span) {
   bridges.push({ from, d, span });
 }
 async function layRoads(rand, progress) {
+  roadLines.length = 0;
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) roadRough[T(c, r)] = 1.6 * clamp(0.5 + fbm(nX, c / 34 + 900, r / 34 - 300, 2) * 1.8, 0, 1);
   const nodes = towns.map(t => ({ c: t.c, r: t.r, town: t }));
   for (const b of [MEADOW, FOREST, SWAMP, GRAVE, SNOW, DESERT, DEEP, WASTES]) {
@@ -3415,7 +3503,7 @@ const bogMulMat = makeBogMat(false), bogAddMat = makeBogMat(true);
 // seed and the time, so nothing is stepped on the CPU: it loops forever, a fresh throw each time round. Two kinds:
 // spray, thrown out and up off the fall and dropping back, and mist, bigger and fainter, drifting up and away.
 // The falls round you are gathered into one mesh, built again when you've walked a way.
-const FALL_SPRAY = { amount: 0.65, size: 2, speed: 0.7, color: '#e6f0f4' };
+const FALL_SPRAY = { amount: 1.1, size: 3, speed: 0.25, color: '#e6f0f4' };
 const falls = [];   // { x, y, z (the foot of the fall), dx, dz (the way it falls), drop (how far) }
 function findFalls() {
   falls.length = 0;
@@ -7561,6 +7649,7 @@ function update(dt) {
       else if (regionName) toast('Entering ' + titleCase(name) + '.', 'calm');
       regionName = name; $('region').textContent = name;
     }
+    discoverFeatures();
     revealFog();
   }
   updateBar();
@@ -8053,7 +8142,9 @@ function drawMapLabels(side) {
     const [x, z] = at(t.c, t.r);
     place([t.name], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
-  for (const g of regions.filter(g => g.found).sort((a, b) => b.n - a.n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), REGION_INK[g.biome]);
+  // regions, lakes, seas, rivers and roads you've found, biggest first
+  const found = regions.filter(g => g.found).map(g => [g, REGION_INK[g.biome]]).concat(features.filter(f => f.found).map(f => [f, FEATURE_INK[f.kind]]));
+  for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink);
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123)
 $('newWorld').onclick = () => {
@@ -8599,7 +8690,8 @@ window.GAME = {
   },
   // tests: the world's arrays and helpers, to check them in bulk
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
-  regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map((w, b) => w ? new Set(allNames(b)).size : 0) }),
+  regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
+    features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
