@@ -640,7 +640,14 @@ class Renderer {
     }
     return m;
   }
+  // a material with keepAlpha blends its colour as usual but leaves the target's alpha as it was (the outline
+  // pass reads that alpha as a mark: grass, deep snow)
   _blend(mat) {
+    const b = this._blendOf(mat);
+    if (b && mat.keepAlpha) b.alpha = { srcFactor: 'zero', dstFactor: 'one', operation: 'add' };
+    return b;
+  }
+  _blendOf(mat) {
     if (mat.blending === M.NoBlending || (mat.blending === M.NormalBlending && !mat.transparent)) return undefined;
     if (mat.blending === M.AdditiveBlending) return { color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' } };
     if (mat.blending === M.CustomBlending) {
