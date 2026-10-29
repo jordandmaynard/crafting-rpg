@@ -38,8 +38,7 @@ struct HP {
   tint: vec4f,          // the haze's colour; w: how much of the light it scatters toward the camera is added (lift)
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
-                        // how much of the sky's (for shafts with more contrast); how far (shadow-map texels) the
-                        // shadow taps spread sideways (shaft softness)
+                        // how much of the sky's (for shafts with more contrast)
 }
 @group(2) @binding(0) var<uniform> H: HP;
 `;
@@ -128,14 +127,26 @@ fn warpW(s: f32, u0: f32, beta: f32) -> f32 {
 }
 fn warpD(s: f32, u0: f32, beta: f32) -> f32 { return WARP_A + exp(-max(u0 + beta * s, -10.0)); }
 // the sun's shadow at p: one tap (the comparison sampler's own 2 × 2 filtering), none off the map
-fn shadowAt(p: vec3f) -> f32 { return shadowNear(p, vec2f(0.0)); }
-// and moved off by off (in the map's uvs)
-fn shadowNear(p: vec3f, off: vec2f) -> f32 {
+fn shadowAt(p: vec3f) -> f32 {
   if (F.sunColor.w < 0.5) { return 1.0; }
   let sc = F.shadowMat * vec4f(p, 1.0);
   let s = sc.xyz / sc.w;
   if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) { return 1.0; }
-  return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + off, s.z + F.shadow.x);
+  return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy, s.z + F.shadow.x);
+}
+// the share of the stretch p0 to p1 in the sun, its ends' shadows a and b: the same at both, that; else a shaft's
+// edge crosses it, found by halving (to a sixteenth of the stretch), and the stretch is lit up to it as a and
+// beyond as b. So an edge falls where it is, not at the steps' ends, and doesn't band.
+fn litShare(p0: vec3f, p1: vec3f, a: f32, b: f32) -> f32 {
+  if (abs(a - b) < 0.05) { return 0.5 * (a + b); }
+  let m = 0.5 * (a + b);
+  var lo = 0.0; var hi = 1.0;
+  for (var k = 0; k < 4; k++) {
+    let x = 0.5 * (lo + hi);
+    if ((shadowAt(mix(p0, p1, x)) - m) * (a - m) > 0.0) { lo = x; } else { hi = x; }
+  }
+  let x = 0.5 * (lo + hi);
+  return a * x + b * (1.0 - x);
 }
 // a probe's light in every direction at once (its spherical harmonics' constant term): with sky visibility, the
 // sky's by the share of it seen and the ground's by how open it is; with bounce light, all that arrives
@@ -255,10 +266,9 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
   // what shadows take out: the sky's light (by glow.z) and the sun's (glow.y)
   let shadeSky = useSky && H.glow.z > 0.0 && F.sunDir.w > 0.5;
   let shadeSun = any(sunC > vec3f(0.0)) && H.glow.y > 0.0;
-  let soft = H.glow.w / f32(textureDimensions(shadowMap).x);
   var S = vec3f(0.0);
   var T = 1.0;
-  var sP = 0.0; var uP = 0.0; var wP = 1.0; var pP = pa;
+  var sP = 0.0; var uP = 0.0; var wP = 1.0; var pP = pa; var shP = 1.0;
   // the light at the last step's end: the sky's and the sun's (both before shadow), and the rest
   var skyP = vec3f(0.0); var sunP = vec3f(0.0); var restP = vec3f(0.0);
   for (var i = 0; i <= n; i++) {
@@ -297,17 +307,20 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       }
     }
     if (H.more.x > 0.0) { rest += glowAt(p, g) * H.more.x; }
+    var shE = 1.0;
+    if (shadeSky || shadeSun) { shE = shadowAt(p); }
     if (i > 0) {
       // the step from the last end to this one: exp(-u)'s mean over it (u runs straight between its ends)
       var e = exp(-0.5 * (u + uP));
       if (abs(u - uP) > 1e-3) { e = (exp(-uP) - exp(-u)) / (u - uP); }
       let k = H.dens.x * mix(e, 1.0, H.dens.z) * 0.5 * (w + wP);
-      // the shadow across the step: four taps spread evenly along it, each a little to one side (by the
-      // softness), so a shaft's edge fades across the step instead of jumping where the step ends
+      // the share of the step in the sun: its ends' and middle's shadows, and where a shaft's edge crosses
+      // between them, found (litShare), so an edge doesn't jump to where the steps fall
       var sh = 1.0;
       if (shadeSky || shadeSun) {
-        sh = 0.25 * (shadowNear(mix(pP, p, 0.125), vec2f(soft, 0.0)) + shadowNear(mix(pP, p, 0.375), vec2f(0.0, soft))
-                   + shadowNear(mix(pP, p, 0.625), vec2f(-soft, 0.0)) + shadowNear(mix(pP, p, 0.875), vec2f(0.0, -soft)));
+        let pm = mix(pP, p, 0.5);
+        let shM = shadowAt(pm);
+        sh = 0.5 * (litShare(pP, pm, shP, shM) + litShare(pm, p, shM, shE));
       }
       var L = 0.5 * (rest + restP);
       L += 0.5 * (sky + skyP) * select(1.0, mix(1.0, sh, H.glow.z), shadeSky);
@@ -317,7 +330,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       S += T * H.tint.rgb * L * (1.0 - t);
       T *= t;
     }
-    sP = s; uP = u; wP = w; pP = p; skyP = sky; sunP = sunL; restP = rest;
+    sP = s; uP = u; wP = w; pP = p; shP = shE; skyP = sky; sunP = sunL; restP = rest;
   }
   textureStore(hazeOut, vec2i(id.xy), vec4f(S * H.tint.w, T));
 }
@@ -393,7 +406,7 @@ export class LitHaze {
   // ss (scene samples a mosaic pixel, each way), depth ({ view, id }: the scene's depth), steps, top, bottom (world
   // y the air runs between), density, height, floor, ground (y where the height field doesn't reach), sun,
   // forward, sky, lamps, lava, lavaHeight, shafts (how much of the sun's light shadows take out), shadeSky (and
-  // how much of the sky's), shaftSoft (shadow-map texels its shadow taps spread sideways), wisps, wispSize,
+  // how much of the sky's), wisps, wispSize,
   // wind: [x, y, z], tint: [r, g, b], lift (0-1: how much of the light the haze scatters toward the camera it
   // adds; under 1, shadows stay darker while far things still fade), groundColour (the GI's ground colour view, or null), hfSize (its texels across) }
   update(f) {
@@ -417,7 +430,7 @@ export class LitHaze {
     d.set([f.lava, f.wisps, f.wispSize, performance.now() / 1000], 48);
     d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
-    d.set([f.lavaHeight, f.shafts, f.shadeSky, f.shaftSoft ?? 0], 60);
+    d.set([f.lavaHeight, f.shafts, f.shadeSky, 0], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {
