@@ -3142,18 +3142,15 @@ const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
 // Swamp water (T > Swamp water): still, murky water of its own colour. The lake water's shader cut down to what
 // still water has: no waves (a flat surface: the sky in it by Fresnel, no glitter), no swells, flow, foam,
 // sparkles, caustics or bending; just its body, what it lets through of the bed, the hero's torch, and ripples
-// running off the banks, and rings spreading from you as you wade (the wake). It shares the sun, sky, lamp and
+// running off the banks, and the waves you make wading through it (the wake). It shares the sun, sky, lamp and
 // wave texture with the lakes.
 const SWAMP_WATER = { color: '#80b602', clarity: 0.61, turbidity: 3.1, waveSpeed: 2.25, shoreRipples: 0.45, rippleReach: 0.75,
-  wake: 1, wakeSpread: 0.9 };
-// The wake: WAKE_N rings, each (x, z, when it started, strength), four to a mat4 uniform (wake0..3, a column
-// each), reused oldest first. Wading drops one every WAKE_STEP you go, so at a walk they trail behind you in a V;
-// standing in it, one now and then, softer.
-const WAKE_N = 16, WAKE_STEP = 0.5, WAKE_LIFE = 2.4;
+  wake: 1, wakeSpread: 0.9, wakeFade: 1.2 };
+// The wake is simulated (src/gfx/ripples.js): a sheet of water round you that your body pushes aside as you wade
+// and your legs stir, its waves running out, off the banks and away. Its crests are drawn as the bank ripples are.
+const ripples = new GFX.Ripples(renderer);
 const BOG_U = { time: { value: 0 }, waterCol: { value: new GFX.Vector3() }, absorb: { value: new GFX.Vector3() }, shoreRipples: { value: 0 }, ripReach: { value: 1 },
-  wakeT: { value: 0 }, wake: { value: 1 }, wakeSpread: { value: 0.9 } };
-for (let k = 0; k < 4; k++) BOG_U['wake' + k] = { value: { elements: new Float32Array(16) } };
-const wakeRings = { next: 0, x: 0, z: 0, gone: 0, idle: 0, inside: false };
+  tWake: { value: ripples.texture }, wakeV: { value: { x: 0, y: 0, z: 10, w: 0 } }, wakeOn: { value: 0 } };
 for (const k of ['tWave', 'sunDir', 'sunCol', 'skyCol', 'viewDir', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) BOG_U[k] = WATER_U[k];
 const BOG_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) depth: f32, @location(2) fogZ: f32 }
@@ -3164,24 +3161,11 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location
   return o;
 }
 fn fresnelWater(c: f32) -> f32 { let x = 1.0 - sat(c); let x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
-// one wake ring at xz: (the surface's slope there, x and z; how much crest). A short packet of ripples round a
-// circle that grows at wakeSpread a second, widening and dying away as it goes.
-fn wakeRing(c: vec4f, xz: vec2f) -> vec3f {
-  let age = U.wakeT - c.z;
-  if (c.w <= 0.0 || age < 0.0 || age > ${WAKE_LIFE.toFixed(2)}) { return vec3f(0.0); }
-  let r = 0.12 + U.wakeSpread * age;
-  let dv = xz - c.xy; let dist = length(dv) + 1e-4;
-  let w = 0.07 + 0.05 * age;
-  let x = (dist - r) / w;
-  if (abs(x) > 3.0) { return vec3f(0.0); }
-  let env = exp(-x * x) * c.w * exp(-age * 1.3) / (1.0 + 1.5 * r) * (1.0 - smoothstep(${(WAKE_LIFE * 0.6).toFixed(2)}, ${WAKE_LIFE.toFixed(2)}, age));
-  let ph = x * 2.4;
-  return vec3f(dv / dist * (-sin(ph) * env * 0.3), env * pow(max(cos(ph), 0.0), 6.0));
-}
-fn wakeAt(xz: vec2f) -> vec3f {
-  var s = vec3f(0.0);
-  for (var j = 0; j < 4; j++) { s += wakeRing(U.wake0[j], xz) + wakeRing(U.wake1[j], xz) + wakeRing(U.wake2[j], xz) + wakeRing(U.wake3[j], xz); }
-  return s * U.wake;
+// the wake's height at xz (0 off its grid), between its last two steps
+fn wakeH(xz: vec2f) -> f32 {
+  let uv = (xz - U.wakeV.xy) / U.wakeV.z;
+  let w = textureSampleLevel(tWake, tWakeS, uv, 0.0);
+  return mix(w.r, w.g, U.wakeV.w) * U.wakeOn * f32(all(uv > vec2f(0.0)) && all(uv < vec2f(1.0)));
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let t = U.time;
@@ -3189,13 +3173,14 @@ fn wakeAt(xz: vec2f) -> vec3f {
   let d = max(i.depth, 0.0);
   let V = -U.viewDir; let L = normalize(U.sunDir);
   let sunE = U.sunCol * cloudShade(xz);
-  // the wake tilts the surface: the sky in it by Fresnel round that, and a soft sheen of sun off its slopes
-  let wk = wakeAt(xz);
-  let N = normalize(vec3f(-wk.x, 1.0, -wk.y));
+  // the wake: its height and slope (a sixteenth of a tile either side), which tilts the surface a little
+  let hw = wakeH(xz);
+  let we = 1.0 / 16.0;
+  let wg = vec2f(wakeH(xz + vec2f(we, 0.0)) - wakeH(xz - vec2f(we, 0.0)), wakeH(xz + vec2f(0.0, we)) - wakeH(xz - vec2f(0.0, we))) / (2.0 * we);
+  let N = normalize(vec3f(-wg.x * 0.02, 1.0, -wg.y * 0.02));
   let R = reflect(-V, N);
   let Fr = fresnelWater(max(dot(V, N), 0.0));
-  let sheen = sunE * pow(sat(dot(R, L)), 24.0) * sat(length(wk.xy) * 5.0) * 0.6;
-  let refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y))) + sheen;
+  let refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y)));
   // the water body: light scattered back up out of it, from the sky, the sun and the hero's torch
   let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
   let body = U.waterCol * (U.skyCol * 1.6 + sunE * max(L.y, 0.0) * 0.8 + U.lampCol * lampK * 1.5);
@@ -3205,8 +3190,10 @@ fn wakeAt(xz: vec2f) -> vec3f {
   let wb = abs(fract(t * 0.3) * 2.0 - 1.0);
   let fp = mix(textureSampleLevel(tWave, tWaveS, xz / 1.9, 0.0).a, textureSampleLevel(tWave, tWaveS, xz / 1.9 + 0.5, 0.0).a, wb);
   let rp = fract(d * 7.0 - t * 0.32 + fp * 0.6);
-  let fm = sat(max(step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05 * U.ripReach, 0.3 * U.ripReach, d)) * smoothstep(0.02, 0.04, d) * U.shoreRipples * 0.8,
-    wk.z * 0.5));
+  // the wake's crests drawn the same way: thin lines along their tops (where the slope is small against the
+  // height), broken up as the bank ripples are, fading as the waves die down
+  let crest = (1.0 - smoothstep(2.0, 5.0, length(wg) / max(hw, 1e-4))) * smoothstep(0.02, 0.1, hw);
+  let fm = sat(max(step(rp, 0.08) * (1.0 - smoothstep(0.05 * U.ripReach, 0.3 * U.ripReach, d)) * U.shoreRipples, crest) * step(0.4, fp) * smoothstep(0.02, 0.04, d) * 0.8);
   let foamLit = vec3f(0.82, 0.87, 0.92) * (sunE * max(L.y, 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
   let add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr) * (1.0 - fm) + foamLit * fm;
   let mul = Tr * (1.0 - Fr) * (1.0 - fm);
@@ -3347,24 +3334,17 @@ function updateWater(dt) {
   // murk: what light gets through is coloured like the water itself, blue lost first
   B.absorb.value.set((1.15 - tmpC2.r) * 0.5 / bc, (1.15 - tmpC2.g) * 0.5 / bc, (1.15 - tmpC2.b) * 0.5 / bc);
 }
-// the wake: drop rings while you're in a swamp pool, deeper than its waterline
+// the wake: step its sheet of water while there's swamp water round you; your body moves water while you're in it
 function updateWake(dt) {
-  const B = BOG_U, W = wakeRings;
-  B.wakeT.value += dt; B.wake.value = SWAMP_WATER.wake; B.wakeSpread.value = SWAMP_WATER.wakeSpread;
-  const i = T(Math.floor(H.x), Math.floor(H.z));
+  const hx = Math.floor(H.x), hz = Math.floor(H.z), SW = SWAMP_WATER;
+  let on = false;
+  for (let r = hz - 6; r <= hz + 6 && !on; r++) for (let c = hx - 6; c <= hx + 6; c++) if (WT[T(c, r)] === 1) { on = true; break; }
+  const i = T(hx, hz);
   const inside = !H.flip && WT[i] === 1 && LV[i] * STEP - BOG_SURF - H.y > 0.03;
-  const ring = k => {
-    const m = B['wake' + (W.next >> 2)].value.elements, o = (W.next & 3) * 4;
-    m[o] = H.x; m[o + 1] = H.z; m[o + 2] = B.wakeT.value; m[o + 3] = k;
-    W.next = (W.next + 1) % WAKE_N; W.x = H.x; W.z = H.z; W.gone = 0; W.idle = 0;
-  };
-  if (inside && !W.inside) ring(1.4);   // stepping in
-  else if (inside) {
-    W.gone += Math.hypot(H.x - W.x, H.z - W.z); W.x = H.x; W.z = H.z; W.idle += dt;
-    if (W.gone >= WAKE_STEP) ring(1);
-    else if (W.idle > 1.3) ring(0.35);
-  }
-  W.inside = inside;
+  ripples.update({ on, hero: [H.x, H.z], dt, body: inside ? SW.wake : 0, stir: 0.05, speed: SW.wakeSpread, fade: SW.wakeFade,
+    site: (c, r) => WT[T(c, r)] === 1 });
+  const v = BOG_U.wakeV.value, w = ripples.view;
+  v.x = w[0]; v.y = w[1]; v.z = w[2]; v.w = w[3]; BOG_U.wakeOn.value = ripples.on ? 1 : 0;
 }
 
 // ---------- Scenery ----------
@@ -7952,8 +7932,9 @@ const TUNING = [
     [SWAMP_WATER, 'shoreRipples', 'Ripples off the banks', 0, 2, 0.05],
     [SWAMP_WATER, 'waveSpeed', 'Ripples: speed', 0, 4, 0.05],
     [SWAMP_WATER, 'rippleReach', 'Ripples: how far out from the banks they run', 0.1, 0.75, 0.01],
-    [SWAMP_WATER, 'wake', 'Wake: rings as you wade', 0, 3, 0.05],
-    [SWAMP_WATER, 'wakeSpread', 'Wake: how fast the rings spread', 0.2, 3, 0.05],
+    [SWAMP_WATER, 'wake', 'Wake: the waves you make wading', 0, 3, 0.05],
+    [SWAMP_WATER, 'wakeSpread', 'Wake: how fast its waves run', 0.2, 2.5, 0.05],
+    [SWAMP_WATER, 'wakeFade', 'Wake: how fast its waves die away', 0.2, 4, 0.05],
   ]],
   ['Health bars', [
     [HPBAR, 'hold', 'Bar over the head stays this long after you look away (seconds)', 0, 10, 0.1],
@@ -8205,7 +8186,7 @@ window.GAME = {
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
-  wake: () => ({ next: wakeRings.next, inside: wakeRings.inside, live: [0, 1, 2, 3].flatMap(k => Array.from({ length: 4 }, (_, j) => BOG_U['wake' + k].value.elements.slice(j * 4, j * 4 + 4))).filter(c => c[3] > 0 && BOG_U.wakeT.value - c[2] < WAKE_LIFE).length }),
+  wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur }),
   compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {

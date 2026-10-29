@@ -11,5 +11,6 @@ export { EyeAdaptation } from './exposure.js';
 export { Bloom } from './bloom.js';
 export { GroundHaze, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT } from './groundhaze.js';
 export { Caustics } from './caustics.js';
+export { Ripples } from './ripples.js';
 export { GpuProfiler } from './profiler.js';
 export { SpikeRecorder, SPIKE_TUNING } from './spikes.js';
