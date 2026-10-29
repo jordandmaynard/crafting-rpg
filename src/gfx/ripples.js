@@ -6,7 +6,7 @@
 // which tiles are, site()) are banks: the waves reflect off them. Near the grid's edge the waves are damped away.
 // Whatever wades in it (the hero, and foes near them, up to MAX_BODIES) stirs it two ways: its body pushes the
 // water aside as it moves (the height under it moves with it, so walking pushes up a bow wave and leaves a
-// trough), and its legs work it up and down, sending rings out.
+// trough), and its legs work it up and down as it walks, sending rings out. Standing still, it settles.
 //
 // `texture` holds the heights a step ago and now (r, g); a shader reads it at `view` (the grid's corner in tiles,
 // its width in tiles, and how far the time is between those two steps) and mixes the two, so the waves move
@@ -21,6 +21,7 @@ const SITE = Math.ceil(N / CPT) + 2;   // tiles across the site map
 const EDGE = 12;          // cells over which the grid's edge damps the waves away
 const MAX_BODIES = 8;     // waders stirring it at once
 const STIR_HZ = 3;        // how fast their legs work the water
+const WALK = 1.5;         // tiles a second at which they work it fully (standing still, not at all)
 
 const WGSL = /* wgsl */ `
 struct P {
@@ -148,10 +149,13 @@ export class Ripples {
         if (!st.moved || list.length >= MAX_BODIES) { this.bodies.delete(key); continue; }
         list.push({ st, now: st.last, amount: 0, rad: st.rad });
       }
+      // legs work the water only while they walk: full at WALK tiles a second, easing in and out
       for (const w of list) {
-        const st = w.st;
-        if (Math.hypot(w.now[0] - st.last[0], w.now[1] - st.last[1]) > CPT) st.last = w.now;   // (it jumped: no wave)
+        const st = w.st, moved = Math.hypot(w.now[0] - st.last[0], w.now[1] - st.last[1]);
+        if (moved > CPT) st.last = w.now;   // (it jumped: no wave)
         st.rad = w.rad;
+        const go = moved > CPT ? 0 : Math.min(1, moved / CPT / (steps / RATE) / WALK);
+        st.walk = (st.walk || 0) + (go - (st.walk || 0)) * Math.min(1, dt * 6);
       }
       const c2 = Math.min(0.45, (speed * CPT / RATE) ** 2), damp = Math.exp(-fade / RATE);
       const p = this.pdata;
@@ -164,7 +168,7 @@ export class Ripples {
           st.phase = (st.phase + 2 * Math.PI * STIR_HZ / RATE) % (2 * Math.PI);
           p.set([f[0] + (w.now[0] - f[0]) * v - ox - 0.5, f[1] + (w.now[1] - f[1]) * v - oz - 0.5,
             f[0] + (w.now[0] - f[0]) * u - ox - 0.5, f[1] + (w.now[1] - f[1]) * u - oz - 0.5,
-            k ? w.amount : st.moved, w.amount, stir * w.amount * Math.sin(st.phase), w.rad], o);
+            k ? w.amount : st.moved, w.amount, stir * w.amount * st.walk * Math.sin(st.phase), w.rad], o);
         });
         d.queue.writeBuffer(this.params[k], 0, p);
       }
