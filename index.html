@@ -6851,9 +6851,11 @@ function willowTrunk(w) {
 }
 // The canopy: the great limbs out of the fork, a low dome of leaf clumps over them, and the hanging curtains:
 // ribbons of leaves in rings from half its radius out to the edge, the outer ones down nearly to the ground.
-// It sways in the wind (the strands more, the further down), and dissolves while you're under it (WILLOW_U.hero,
-// a dither by your distance from its trunk). Strands write alpha 0 so the outline leaves them unstroked.
-const WILLOW_U = { time: { value: 0 }, hero: { value: new GFX.Vector2() }, wind: { value: new GFX.Vector2(0.8, 0.6) }, sway: { value: WILLOW.sway },
+// It sways in the wind (the strands more, the further down). While you're under it (by your distance from its
+// trunk), the hanging strands nearer the camera than you dither away, and the dome and limbs open a hole round
+// the line from you to the camera (where you'd be lost under it from the far side); the rest stays. Strands
+// write alpha 0 so the outline leaves them unstroked.
+const WILLOW_U = { time: { value: 0 }, hero: { value: new GFX.Vector2() }, heroW: { value: new GFX.Vector3() }, wind: { value: new GFX.Vector2(0.8, 0.6) }, sway: { value: WILLOW.sway },
   radius: { value: WILLOW.radius }, fade: { value: WILLOW.fade } };
 const willowMat = new GFX.ShaderMaterial({ uniforms: WILLOW_U, vertexColors: true, side: GFX.DoubleSide, attributes: { wv: 'vec4f' }, lit: true,
   code: /* wgsl */ `
@@ -6866,8 +6868,19 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, v.wv);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
-  let d = distance(U.hero, i.wv.zw);
-  let vis = smoothstep(U.radius - U.fade, U.radius + U.fade * 0.6, d);
+  let under = 1.0 - smoothstep(U.radius - U.fade, U.radius + U.fade * 0.6, distance(U.hero, i.wv.zw));
+  let v = normalize(F.camPos.xyz - U.heroW);
+  let q = i.world - U.heroW;
+  var gone = 0.0;
+  if (i.wv.x >= 0.0) {
+    // a strand: gone once it's on the camera's side of you
+    gone = smoothstep(-0.6, 0.8, dot(q.xz, normalize(v.xz)));
+  } else {
+    // the dome and limbs: a hole round your line of sight
+    let t = dot(q, v);
+    gone = select(0.0, 1.0 - smoothstep(1.7, 2.8, length(q - v * t)), t > 0.0);
+  }
+  let vis = 1.0 - under * gone;
   let n = fract(sin(dot(floor(i.pos.xy), vec2f(12.9898, 78.233))) * 43758.5453);
   if (n >= vis) { discard; }
   let N = flatNormal(i.eye);
@@ -6876,7 +6889,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }`,
 });
 function updateWillows() {
-  WILLOW_U.hero.value.set(H.x, H.z);
+  WILLOW_U.hero.value.set(H.x, H.z); WILLOW_U.heroW.value.set(H.x, H.y + 0.8, H.z);
   WILLOW_U.time.value = time % 4000;
   WILLOW_U.sway.value = WILLOW.sway; WILLOW_U.radius.value = WILLOW.radius; WILLOW_U.fade.value = WILLOW.fade;
 }
@@ -13340,7 +13353,7 @@ const TUNING = [
   ]],
   ['Great willows', [
     [WILLOW, 'sway', 'Hanging leaves: how far they sway', 0, 1, 0.01],
-    [WILLOW, 'fade', 'Fading out as you walk under: over how far (tiles)', 0.2, 4, 0.1],
+    [WILLOW, 'fade', 'Hanging leaves in front of you fade as you walk under: over how far (tiles)', 0.2, 4, 0.1],
   ]],
   ['Sunken obelisks', [
     [OBELISK, 'scale', 'Size (stays on its 3 x 2 tiles: bigger ones lean less). Letting go redraws them', 0.5, 2.2, 0.05, rescaleObelisks],
