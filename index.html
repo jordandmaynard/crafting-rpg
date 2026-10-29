@@ -417,6 +417,7 @@ const TN = new Uint8Array(N * N);   // town number + 1
 const FL = new Uint8Array(N * N);   // built floor
 const FARM = new Uint8Array(N * N); // 1 a farm's ground: its house, yard and fields (see placeFarms)
 const FIELD = new Uint8Array(N * N); // a wheat field on tilled earth: 1 its rows running east-west, 2 north-south
+const GROT = new Uint8Array(N * N);  // a fairy grotto: 1 its pool, 2 the mossy rock over it (see placeGrottos)
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
 const WW = new Uint8Array(N * N);   // built piece on the tile's west edge
 const PATH = new Uint8Array(N * N); // road
@@ -833,6 +834,7 @@ async function generate(progress) {
   placeVents();
   fenceGraveyards();
   placeFarms();
+  placeGrottos();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -842,6 +844,7 @@ async function generate(progress) {
   progress(0.95, 'NAMING THE LANDS'); await nextFrame();
   nameRegions();
   findFalls();
+  for (const g of grottos) falls.push(g.fall);
   progress(0.97, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
 }
@@ -1719,12 +1722,96 @@ function placeFarms() {
     }
   }
 }
+// The deep forest's points of interest: fairy grottos, one for every so much of it (up to three). A grotto is a
+// knee-deep pool, about 6 x 4, at the foot of a cliff, fed by a waterfall spilling over a mossy rock on the cliff's
+// top and down its face. Moss covers the rock and drapes over the lip, ferns grow round the pool, lily pads float
+// on it, and its water glows, lighting the place up; fairies hover about it. It's open water of its own, never
+// near a lake or river. The pool is swamp water in all but its look (WT 1, so you wade through it and the wake
+// ripples it); GROT marks it and the rock.
+const grottos = [];
+const GROTTO_COUNT = n => n < 500 ? 0 : n < 4000 ? 1 : n < 10000 ? 2 : 3;
+function placeGrottos() {
+  const seen = new Uint8Array(N * N), W = 6, D = 4;
+  const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (BI[s0] !== DEEP || !LV[s0] || seen[s0]) continue;
+    const patch = [s0];
+    seen[s0] = 1;
+    for (let k = 0; k < patch.length; k++) for (const dd of DI) {
+      const n = patch[k] + dd;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== DEEP || !LV[n]) continue;
+      seen[n] = 1; patch.push(n);
+    }
+    const want = GROTTO_COUNT(patch.length);
+    // (every tile of the patch in a shuffled order, each tried four ways round, till enough are found)
+    const order = patch.map((i, k) => [hs(i % N, (i / N) | 0, 171), i]).sort((a, b) => a[0] - b[0]);
+    let got = 0;
+    for (const [, i0] of order) {
+      if (got >= want) break;
+      const c0 = i0 % N, r0 = (i0 - c0) / N, L = LV[i0];
+      for (let d = 0; d < 4 && got < want; d++) {
+        // a along the cliff, b out from it into the pool; the cliff's top at b = -1 and -2
+        const at = (a, b) => d === 0 ? [c0 + a, r0 + b] : d === 1 ? [c0 - b, r0 + a] : d === 2 ? [c0 - a, r0 - b] : [c0 + b, r0 - a];
+        let ok = true;
+        for (let b = -3; b <= D + 2 && ok; b++) for (let a = -2; a <= W + 1 && ok; a++) {
+          const [c, r] = at(a, b);
+          if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) ok = false;
+        }
+        if (!ok) continue;
+        // the pool and the ground round it: one level of open deep forest
+        for (let b = 0; b <= D + 1 && ok; b++) for (let a = -1; a <= W && ok; a++) { const i = T(...at(a, b)); if (LV[i] !== L || BI[i] !== DEEP || !open(i) || GROT[i]) ok = false; }
+        // the cliff behind, a level or more up, its top open for the rock
+        let top = 0;
+        for (let a = 0; a < W && ok; a++) {
+          const i = T(...at(a, -1)), j = T(...at(a, -2));
+          if (LV[i] <= L || !open(i) || LV[j] < LV[i] || !open(j) || GROT[i]) ok = false;
+          top = Math.max(top, LV[i]);
+        }
+        // no lake, river or swamp pool within three tiles
+        for (let b = -3; b <= D + 2 && ok; b++) for (let a = -2; a <= W + 1 && ok; a++) { const i = T(...at(a, b)); if (WT[i] || LAVA[i]) ok = false; }
+        if (!ok) continue;
+        const [mc, mr] = at(W >> 1, 2);
+        if (grottos.some(g => Math.hypot(g.c - mc, g.r - mr) < 40)) continue;
+        got++;
+        const h = q => hs(c0 * 3 + d, r0, 172 + q);
+        // the pool: 6 x 4, its front corners rounded off, one back corner too sometimes
+        const pool = [];
+        for (let b = 0; b < D; b++) for (let a = 0; a < W; a++) {
+          if (b === D - 1 && (a === 0 || a === W - 1)) continue;
+          if (b === D - 2 && ((a === 0 && h(0) < 0.4) || (a === W - 1 && h(1) < 0.4))) continue;
+          const [c, r] = at(a, b), i = T(c, r);
+          WT[i] = 1; GROT[i] = 1; OB[i] = 0; pool.push([c, r]);
+        }
+        // clear round it, ferns all round the bank (thick near the pool, thinning out), the rock on the cliff
+        for (let b = -2; b <= D + 1; b++) for (let a = -1; a <= W; a++) {
+          const [c, r] = at(a, b), i = T(c, r);
+          if (GROT[i]) continue;
+          OB[i] = 0;
+          if (b >= 0) { const edge = b === D + 1 || a === -1 || a === W ? 0.45 : 0.85; if (hs(c, r, 175) < edge) OB[i] = O.FERN; }
+        }
+        for (let a = 0; a < W; a++) { const i = T(...at(a, -1)); GROT[i] = 2; OB[i] = O.GROTTOX; }
+        for (let a = 1; a < W - 1; a++) { const i = T(...at(a, -2)); GROT[i] = 2; OB[i] = O.GROTTOX; }
+        const [ac, ar] = at(0, -1);
+        OB[T(ac, ar)] = O.GROTTO;
+        // where things are, in the world: the way out from the cliff (ox, oz), along it (lx, lz), the lip's line
+        const ox = d === 0 ? 0 : d === 1 ? -1 : d === 2 ? 0 : 1, oz = d === 0 ? 1 : d === 1 ? 0 : d === 2 ? -1 : 0;
+        const lx = d === 0 ? 1 : d === 1 ? 0 : d === 2 ? -1 : 0, lz = d === 0 ? 0 : d === 1 ? 1 : d === 2 ? 0 : -1;
+        // (a tile's (a, b) corner nearest the cliff and the start of the row, in world terms)
+        const [pc, pr] = at(0, 0), x0 = pc + (lx < 0 ? 1 : 0) + (ox < 0 ? 1 : 0), z0 = pr + (lz < 0 ? 1 : 0) + (oz < 0 ? 1 : 0);
+        const fa = 2.4 + h(2) * 1.2;   // where along the cliff the water falls
+        const fall = { x: x0 + lx * fa + ox * 0.55, y: L * STEP - BOG_SURF, z: z0 + lz * fa + oz * 0.55, dx: ox, dz: oz, drop: (top - L) * STEP + 0.85 };
+        grottos.push({ c: mc, r: mr, x: mc + 0.5, z: mr + 0.5, L, top, d, pool, anchor: T(ac, ar), x0, z0, ox, oz, lx, lz, fa, fall, seed: h(3), fallTop: top * STEP + 0.85 });
+      }
+    }
+  }
+}
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
     for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
   }
+  buildGrottoFalls();
   for (const f of farms) {
     if (f.door) makeDoor(...f.door);
     if (f.gate) makeDoor(...f.gate, 'gate');
@@ -2178,7 +2265,7 @@ const connectStats = { reached: 0 };
 const O = {
   PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8,
   ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14, COPPER: 15, IRON: 16,
-  BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
+  BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
   TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56,
@@ -2197,6 +2284,10 @@ def(O.BURNT, { name: 'burned tree', solid: 0.15, hp: 2, give: 'wood', tree: true
 // drawn from its north-west tile (VENT), and the other three (VENTX) are just its ground
 def(O.VENT, { name: 'smoking vent', tile: true });
 def(O.VENTX, { name: 'smoking vent', tile: true });
+// a fairy grotto's mossy rock over its waterfall: drawn, with the grotto's moss, lily pads and glowing
+// toadstools, from one tile (GROTTO), the rest of the rock (GROTTOX) just standing in the way
+def(O.GROTTO, { name: 'mossy rock', tile: true });
+def(O.GROTTOX, { name: 'mossy rock', tile: true });
 // the deep forest's redwoods: far too big to fell
 def(O.SEQUOIA, { name: 'redwood', solid: 0.62 });
 def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
@@ -2816,6 +2907,7 @@ function chunkGI(cx, cz) {
       if (!job.gparts) {
         job.ground = GFX.rasterGroundStart(cx, cz); job.gk = 0; job.gt = 0;
         job.gparts = [{ geo: geo(ch.ground) }, { geo: geo(ch.bog), color: [0.06, 0.07, 0.03] }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
+          { geo: geo(ch.grot), color: [0.2, 0.7, 0.65], emit: 0.3 },
           { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }];
       }
       if (job.gk < job.gparts.length) {
@@ -3214,9 +3306,10 @@ const BOG_BED = 0.3, BOG_SURF = 0.06;
 const VOID_Y = -3;
 
 // ---------- Ground chunks ----------
-const TILLED = C('#4e3420');
+const TILLED = C('#4e3420'), GROT_BED = C('#4a5e58');
 function groundColor(c, r, i, j) {
   const t = T(c, r);
+  if (GROT[t] === 1) return shade(GROT_BED, 0.8 + hs(c, r, i * 2 + j) * 0.35);   // pebbles under a grotto's pool
   if (WT[t] === 1) return shade(BOG_MUD, 0.85 + hs(c, r, i * 2 + j) * 0.2);   // mud under swamp water
   if (FIELD[t]) return shade(TILLED, 0.9 + hs(c, r, i * 2 + j) * 0.12);   // a field's tilled earth (its ridges: furrows)
   let b = BI[t];
@@ -3542,25 +3635,28 @@ function buildWater(c0, r0, grid, GW, ch) {
 // out). Drawn after you (layer 3), over what's there, without writing depth: so you wade into it and the murk
 // takes your legs, rather than the water hiding them as something in front.
 function buildBog(c0, r0, grid, GW, ch) {
-  const pos = [], dep = [];
-  const vert = (j, k, y) => { pos.push(c0 + k / 2, y, r0 + j / 2); dep.push(y - grid[j * GW + k]); };
-  for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
-    const i = T(c, r);
-    if (WT[i] !== 1 || !LV[i]) continue;
-    const y = LV[i] * STEP - BOG_SURF;
-    for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
-      const j = (r - r0) * 2 + b, k = (c - c0) * 2 + a;
-      vert(j, k, y); vert(j + 1, k, y); vert(j + 1, k + 1, y);
-      vert(j, k, y); vert(j + 1, k + 1, y); vert(j, k + 1, y);
+  // (a fairy grotto's pool apart, in its glowing water: see GROTTO)
+  for (const grot of [false, true]) {
+    const pos = [], dep = [];
+    const vert = (j, k, y) => { pos.push(c0 + k / 2, y, r0 + j / 2); dep.push(y - grid[j * GW + k]); };
+    for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+      const i = T(c, r);
+      if (WT[i] !== 1 || !LV[i] || (GROT[i] === 1) !== grot) continue;
+      const y = LV[i] * STEP - BOG_SURF;
+      for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+        const j = (r - r0) * 2 + b, k = (c - c0) * 2 + a;
+        vert(j, k, y); vert(j + 1, k, y); vert(j + 1, k + 1, y);
+        vert(j, k, y); vert(j + 1, k + 1, y); vert(j, k + 1, y);
+      }
     }
+    if (!pos.length) continue;
+    const g = new GFX.BufferGeometry();
+    g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+    g.setAttribute('wDepth', new GFX.Float32BufferAttribute(dep, 1));
+    const m1 = new GFX.Mesh(g, grot ? grotMulMat : bogMulMat), m2 = new GFX.Mesh(g, grot ? grotAddMat : bogAddMat);
+    m1.renderOrder = 2; m2.renderOrder = 3; m1.layers.set(3); m2.layers.set(3);
+    if (grot) { ch.grot = m1; ch.grot2 = m2; } else { ch.bog = m1; ch.bog2 = m2; }
   }
-  if (!pos.length) return;
-  const g = new GFX.BufferGeometry();
-  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
-  g.setAttribute('wDepth', new GFX.Float32BufferAttribute(dep, 1));
-  ch.bog = new GFX.Mesh(g, bogMulMat); ch.bog.renderOrder = 2;
-  ch.bog2 = new GFX.Mesh(g, bogAddMat); ch.bog2.renderOrder = 3;
-  ch.bog.layers.set(3); ch.bog2.layers.set(3);
 }
 // Lava pools and rivers the same way, on their own: each point at the highest lava surface round it, a little
 // lower in its banks than water stands, with how far it is above the bed there (the shore) and its flow.
@@ -3684,6 +3780,17 @@ fn pushAt(p: vec2f) -> vec2f {
     }
     return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
   }
+  // a floating leaf (flex 10 and up, the rest how freely): a lily pad pushed aside along the water, staying
+  // level, turning a little as it bobs
+  if (v.plant.w >= 10.0) {
+    let pb = pushAt(root.xz) * U.bend;
+    var off = pb * 0.5 * (v.plant.w - 10.0);
+    off = off * min(1.0, 0.55 / max(length(off), 1e-4));
+    let ya = 0.15 * sin(U.windV.w * 0.35 + root.x * 1.3 + root.z * 1.7) + (pb.x - pb.y) * 0.3;
+    let rel = w0 - root;
+    let w = root + vec3f(rel.x * cos(ya) - rel.z * sin(ya) + off.x, rel.y, rel.x * sin(ya) + rel.z * cos(ya) + off.y);
+    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+  }
   var push = vec2f(0.0);
   if (U.trV.w > 0.5) {
     let uv = (root.xz - U.trV.xy) / U.trV.z;
@@ -3788,7 +3895,7 @@ function grassChunk(cx, cz) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), b = BI[i];
     let kind = 0, mask = 0, y = 0;
-    if (WT[i] === 1 && LV[i] && !BR[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; }
+    if (WT[i] === 1 && LV[i] && !BR[i]) { if (!GROT[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; } }
     else if (FIELD[i]) { if (LV[i] && !SH[i]) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
     else if (GRASS_KIND[b] && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || townCell(c, r) === 'yard')) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
@@ -4939,7 +5046,8 @@ const SWAMP_WATER = { color: '#80b602', clarity: 0.64, turbidity: 4.81, waveSpee
 const ripples = new GFX.Ripples(renderer);
 const BOG_U = { time: { value: 0 }, waterCol: { value: new GFX.Vector3() }, absorb: { value: new GFX.Vector3() }, shoreRipples: { value: 0 }, ripReach: { value: 1 },
   tWake: { value: ripples.texture }, wakeV: { value: { x: 0, y: 0, z: 10, w: 0 } }, wakeOn: { value: 0 }, wakeWidth: { value: 1 },
-  shoreCol: { value: new GFX.Color('#d1deeb') }, wakeCol: { value: new GFX.Color('#d1deeb') } };
+  shoreCol: { value: new GFX.Color('#d1deeb') }, wakeCol: { value: new GFX.Color('#d1deeb') },
+  magic: { value: 0 }, glowCol: { value: new GFX.Color('#000000') }, glowK: { value: 0 } };   // (a fairy grotto's: see GROTTO)
 for (const k of ['tWave', 'sunDir', 'sunCol', 'skyCol', 'viewDir', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) BOG_U[k] = WATER_U[k];
 const BOG_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) depth: f32, @location(2) fogZ: f32 }
@@ -4995,7 +5103,16 @@ fn wakeH(xz: vec2f) -> f32 {
   // each in its own colour (where they cross, mixed by how strong each is)
   let foamCol = (U.shoreCol * sat(shore) + U.wakeCol * crest) / max(sat(shore) + crest, 1e-4);
   let foamLit = foamCol * (sunE * max(L.y, 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
-  let add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr) * (1.0 - fm) + foamLit * fm;
+  var add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr) * (1.0 - fm) + foamLit * fm;
+  if (U.magic > 0.5) {
+    // a fairy grotto's water glows from within: softly swelling and fading, brighter where it's deeper, with
+    // motes of light drifting under its surface
+    let n1 = textureSampleLevel(tWave, tWaveS, xz / 2.3 + vec2f(t * 0.021, t * 0.013), 0.0).a;
+    let n2 = textureSampleLevel(tWave, tWaveS, xz / 1.1 - vec2f(t * 0.017, -t * 0.024), 0.0).a;
+    let pulse = 0.75 + 0.25 * sin(t * 0.9 + n1 * 6.0);
+    let motes = smoothstep(0.55, 0.75, n1 * n2 * 1.25);
+    add += U.glowCol * U.glowK * (pulse * (0.35 + 0.65 * smoothstep(0.0, 0.25, d)) + motes * 1.6);
+  }
   let mul = Tr * (1.0 - Fr) * (1.0 - fm);
   // the waterline fades in over the first few hundredths, and the whole into the haze
   let f = smoothstep(0.0, 0.03, i.depth) * (1.0 - sat((i.fogZ - U.fogNear) / (U.fogFar - U.fogNear)));
@@ -5010,6 +5127,75 @@ const makeBogMat = add => new GFX.ShaderMaterial({
 });
 const bogMulMat = makeBogMat(false), bogAddMat = makeBogMat(true);
 bogMulMat.keepAlpha = bogAddMat.keepAlpha = true;
+// A fairy grotto (T > Fairy grotto): its pool's clear, glowing water (the swamp water's shader with its own colours
+// and glow), the waterfall, its light and its fairies
+const GROTTO = { color: '#2aa8a0', clarity: 1.6, glow: 0.35, glowColor: '#5ff0d8', light: 1.4, lightRange: 6, lightColor: '#60ffe0',
+  fall: 0.85, fallSpeed: 1.6, fallColor: '#e0fff8' };
+const GROT_U = { waterCol: { value: new GFX.Vector3() }, absorb: { value: new GFX.Vector3() }, shoreCol: { value: new GFX.Color('#c8fff4') }, wakeCol: { value: new GFX.Color('#c8fff4') },
+  magic: { value: 1 }, glowCol: { value: new GFX.Color(GROTTO.glowColor) }, glowK: { value: GROTTO.glow } };
+const makeGrotMat = add => { const m = makeBogMat(add); m.uniforms = Object.assign({}, m.uniforms, GROT_U); m.keepAlpha = true; return m; };
+const grotMulMat = makeGrotMat(false), grotAddMat = makeGrotMat(true);
+// The grotto's waterfall: ribbons of falling water, streaked by the wave texture running down them, white where
+// they meet the pool, a little of the pool's glow in them; blended over the world as the smoke is (layer 3)
+const FALL_U = { time: { value: 0 }, amount: { value: 1 }, speed: { value: 1 }, color: { value: new GFX.Color('#ffffff') }, glowCol: { value: new GFX.Color('#000000') }, glowK: { value: 0 } };
+for (const k of ['tWave', 'sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) FALL_U[k] = WATER_U[k];
+const fallMat = new GFX.ShaderMaterial({
+  uniforms: FALL_U, attributes: { fUV: 'vec3f' }, transparent: true, depthWrite: false, side: GFX.DoubleSide,
+  blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec3f, @location(1) wpos: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = O.model * vec4f(v.position, 1.0);
+  var o: VOut;
+  o.pos = F.viewProj * w; o.uv = v.fUV; o.wpos = w.xyz;
+  return o;
+}
+// uv: across the ribbon (0-1), down it (tiles), and how strong it is (a trickle less)
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let t = U.time * U.speed;
+  let s1 = textureSampleLevel(tWave, tWaveS, vec2f(i.uv.x * 0.45 + 0.13, i.uv.y * 0.2 - t * 0.45), 0.0).a;
+  let s2 = textureSampleLevel(tWave, tWaveS, vec2f(i.uv.x * 0.8 + 0.57, i.uv.y * 0.33 - t * 0.7), 0.0).a;
+  let streak = smoothstep(0.3, 0.8, s1 * 0.55 + s2 * 0.55);
+  let edge = smoothstep(0.0, 0.2, i.uv.x) * smoothstep(1.0, 0.8, i.uv.x);
+  let L = normalize(U.sunDir);
+  let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
+  let light = U.skyCol * 1.1 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * 0.6 + U.lampCol * lampK;
+  let a = sat((0.25 + streak * 0.75) * edge * U.amount * i.uv.z) * (1.0 - sat((viewDepth(i.wpos) - U.fogNear) / (U.fogFar - U.fogNear)));
+  let col = U.color * light * (0.75 + streak * 0.5) + U.glowCol * U.glowK * 0.8;
+  return vec4f(col * a, a);
+}`,
+});
+fallMat.keepAlpha = true;
+// a grotto's falls: the main one over the slab, arcing out and down into the pool, and a trickle or two down the
+// cliff's face beside it
+function buildGrottoFalls() {
+  for (const g of grottos) {
+    const pos = [], uv = [], P = (a, b) => [g.x0 + g.lx * a + g.ox * b, g.z0 + g.lz * a + g.oz * b];
+    const yS = g.L * STEP - BOG_SURF, yT = g.top * STEP;
+    // a ribbon through points [a, b, y] of the given widths, its strength k
+    const ribbon = (pts, wids, k) => {
+      let len = 0;
+      for (let n = 0; n + 1 < pts.length; n++) {
+        const q = [pts[n], pts[n + 1]], l = Math.hypot(q[1][1] - q[0][1], q[1][2] - q[0][2]);
+        const corner = (m, side) => { const [a, b, y] = q[m], w = wids[n + m] / 2, [x, z] = P(a + side * w, b); return [x, y, z]; };
+        const A = corner(0, -1), B = corner(0, 1), C2 = corner(1, 1), Dd = corner(1, -1);
+        for (const [p, u, v] of [[A, 0, len], [B, 1, len], [C2, 1, len + l], [A, 0, len], [C2, 1, len + l], [Dd, 0, len + l]]) { pos.push(...p); uv.push(u, v, k); }
+        len += l;
+      }
+    };
+    const pts = [], wids = [], H = g.fallTop - yS;
+    for (let n = 0; n <= 10; n++) { const tau = n / 10; pts.push([g.fa, -0.2 + 0.75 * tau, g.fallTop - H * tau * tau]); wids.push(0.7 + 0.25 * tau); }
+    ribbon(pts, wids, 1);
+    for (const a of [0.9 + g.seed * 0.6, GROTTO_W - 1.1 - g.seed * 0.5]) ribbon([[a, 0.06, yT - 0.02], [a, 0.3, yT - (yT - yS) * 0.5], [a, 0.52, yS]], [0.12, 0.14, 0.18], 0.55);
+    const geo = new GFX.BufferGeometry();
+    geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('fUV', new GFX.Float32BufferAttribute(uv, 3));
+    const m = new GFX.Mesh(geo, fallMat);
+    m.renderOrder = 11; m.layers.set(3); m.matrixAutoUpdate = false; m.castShadow = false;
+    scene.add(m);
+    g.mesh = m;
+  }
+}
 
 // ---------- Waterfall spray (T > Waterfall spray) ----------
 // Wherever running water steps down a level (a river's falls, or where it drops into a lake), spray and mist
@@ -5263,12 +5449,12 @@ function updateSmoke() {
 const AMBIENT = { butterflies: 1, dragonflies: 0.75, fireflies: 2, embers: 1, snow: 1.85, wind: 0.3,
   bfSize: 0.09, bfRange: 1, bfLift: 1, dfSize: 0.3, dfRange: 1.45, dfSpeed: 0.55, flySize: 0.03, flyGlow: 4.1, flyColor: '#dff060',
   emberSize: 0.06, emberGlow: 4.9, emberRise: 1, emberColor: '#ffb040', emberColor2: '#ff4a18',
-  snowSize: 0.05, snowFall: 0.9, snowColor: '#ffffff' };
+  snowSize: 0.05, snowFall: 0.9, snowColor: '#ffffff', fairies: 1, fairySize: 0.07, fairyGlow: 3.5 };
 const AMB_DENSITY = { meadow: 0.02, swamp: 0.05, deep: 0.05, wastes: 0.035, lava: 0.25, snow: 0.6 };   // (a tile's chance of one)
 const AMB_U = { dayK: { value: 1 }, flyCol: { value: new GFX.Color(AMBIENT.flyColor) }, emberA: { value: new GFX.Color(AMBIENT.emberColor) },
   emberB: { value: new GFX.Color(AMBIENT.emberColor2) }, snowCol: { value: new GFX.Color(AMBIENT.snowColor) } };
-for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'bfLift', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall'])
-  AMB_U[k] = { value: AMBIENT[k] };
+const AMB_KEYS = ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'bfLift', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall', 'fairies', 'fairySize', 'fairyGlow'];
+for (const k of AMB_KEYS) AMB_U[k] = { value: AMBIENT[k] };
 for (const k of ['sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) AMB_U[k] = WATER_U[k];
 const AMB_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32, @location(2) wpos: vec3f, @location(3) col: vec3f, @location(4) kind: f32 }
@@ -5328,6 +5514,24 @@ fn dfSpot(s: f32, n: f32) -> vec3f { let h = s + n * 3.17; return vec3f(ambHash(
     // a blue, a green or a red
     col = select(select(vec3f(0.8, 0.2, 0.15), vec3f(0.2, 0.7, 0.35), a < 0.7), vec3f(0.15, 0.45, 0.85), a < 0.4);
     al = U.dayK * U.dragonflies;
+  } else if (kind == 6) {
+    // a fairy: loops and hovers about the grotto, bobbing, a point of light in a soft glow with two pairs of
+    // gauzy wings fluttering (sPart.w 1 a wing, z which side)
+    let tt = t * (0.2 + a * 0.12) + a * 50.0;
+    let p = vec2f(sin(tt + b * 6.28) + 0.4 * sin(tt * 2.9 + c * 6.28), cos(tt * 0.83 + c * 6.28) + 0.4 * sin(tt * 2.3 + d * 6.28)) * 1.4;
+    at = v.position + vec3f(p.x, 0.45 + 0.9 * a + 0.25 * sin(tt * 1.7 + d * 6.28) + 0.05 * sin(t * 5.0 + s), p.y);
+    let sz = U.fairySize * (0.85 + 0.3 * c);
+    var pal = array<vec3f, 4>(vec3f(1.0, 0.55, 0.85), vec3f(0.5, 0.95, 1.0), vec3f(0.78, 0.62, 1.0), vec3f(1.0, 0.9, 0.55));
+    col = pal[u32(d * 3.999)];
+    al = U.fairies * (0.8 + 0.2 * sin(t * 3.0 + s)) * (0.7 + 0.3 * (1.0 - U.dayK));
+    if (v.sPart.w < 0.5) {
+      col = col * U.fairyGlow;
+      w = at + bb * sz;
+    } else {
+      let flap = 0.35 + 0.65 * abs(sin(t * 28.0 + s));
+      let ox = v.corner.x * sz * 1.3;
+      w = at + right * v.sPart.z * ox * flap + upv * (v.corner.y * sz * 0.55 + v.corner.x * sz * 0.35);
+    }
   } else if (kind == 1) {
     // a firefly: drifts slowly about where it hatched, and blinks now and then
     let tt = t * 0.25 + a * 30.0;
@@ -5367,7 +5571,7 @@ fn dfSpot(s: f32, n: f32) -> vec3f { let h = s + n * 3.17; return vec3f(ambHash(
   if (al < 0.002) { w = at; }   // (folded to a point: not drawn)
   var o: VOut;
   o.pos = F.viewProj * vec4f(w, 1.0);
-  o.uv = v.corner; o.a = al; o.wpos = at; o.col = col; o.kind = f32(kind) + select(0.0, 1.0, kind == 4 && v.sPart.w > 1.5);
+  o.uv = v.corner; o.a = al; o.wpos = at; o.col = col; o.kind = f32(kind) + select(0.0, 1.0, (kind == 4 && v.sPart.w > 1.5) || (kind == 6 && v.sPart.w > 0.5));
   return o;
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
@@ -5392,6 +5596,13 @@ fn dfSpot(s: f32, n: f32) -> vec3f { let h = s + n * 3.17; return vec3f(ambHash(
     if (e > 1.0) { discard; }
     let al = select(0.3, 0.55, e > 0.8) * i.a;
     return vec4f(vec3f(0.85, 0.9, 1.0) * (light + 0.1) * al, al);
+  }
+  if (kind == 7) {
+    // a fairy's wing: gauzy, tinted, brighter at the rim
+    let e = length((i.uv - vec2f(0.5, 0.0)) / vec2f(0.5, 1.0));
+    if (e > 1.0) { discard; }
+    let al = select(0.25, 0.5, e > 0.75) * i.a;
+    return vec4f((i.col * 0.6 + vec3f(0.6)) * (light + 0.3) * al, al);
   }
   if (kind == 5) {
     // its body: head, a broad thorax and a long thin tail (uv.x runs from tail -1 to head 1), with a sheen
@@ -5431,8 +5642,20 @@ function buildAmbient() {
     } else if (kind === 4) {
       for (const pc of [0, 1]) for (const wing of [-1, 1]) for (const [cx, cz] of W) { pos.push(x, y, z); part.push(sd, 4, wing, pc); corner.push(cx, cz); }
       for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, 4, 0, 2); corner.push(cx, cz); }
+    } else if (kind === 6) {
+      for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, 6, 0, 0); corner.push(cx, cz); }
+      for (const wing of [-1, 1]) for (const [cx, cz] of W) { pos.push(x, y, z); part.push(sd, 6, wing, 1); corner.push(cx, cz); }
     } else for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, kind, 0, 0); corner.push(cx, cz); }
   };
+  // fairies about the grottos near
+  for (const g of grottos) {
+    if (Math.hypot(g.x - H.x, g.z - H.z) > AMB_R + 8) continue;
+    seed = g.anchor % 100000;
+    for (let n = 0; n < 9; n++) {
+      const a = rnd() * GROTTO_W, b = 0.5 + rnd() * (GROTTO_D + 0.5);
+      add(g.x0 + g.lx * a + g.ox * b, g.L * STEP, g.z0 + g.lz * a + g.oz * b, 6);
+    }
+  }
   const c0 = Math.floor(H.x), r0 = Math.floor(H.z), D = AMB_DENSITY;
   for (let r = Math.max(1, r0 - AMB_R); r <= Math.min(N - 2, r0 + AMB_R); r++) for (let c = Math.max(1, c0 - AMB_R); c <= Math.min(N - 2, c0 + AMB_R); c++) {
     const i = T(c, r), b = BI[i];
@@ -5459,12 +5682,12 @@ function buildAmbient() {
 function updateAmbient() {
   if (Math.hypot(H.x - ambAt.x, H.z - ambAt.z) > 8) buildAmbient();
   const A = AMBIENT, U = AMB_U;
-  for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'bfLift', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall']) U[k].value = A[k];
+  for (const k of AMB_KEYS) U[k].value = A[k];
   U.flyCol.value.set(A.flyColor); U.emberA.value.set(A.emberColor); U.emberB.value.set(A.emberColor2); U.snowCol.value.set(A.snowColor);
   for (const k of ['drops', 'depth', 'dropTime', 'hang', 'climb']) SPIDER_U[k].value = SPIDERS[k];
   // (the sun's own height: the light's direction, sunDir in the shaders, is the moon's by night)
   U.dayK.value = smoothstep(-0.05, 0.2, sunDir[1]);
-  if (ambMesh) ambMesh.visible = A.butterflies + A.dragonflies + A.fireflies + A.embers + A.snow > 0;
+  if (ambMesh) ambMesh.visible = A.butterflies + A.dragonflies + A.fireflies + A.embers + A.snow + A.fairies > 0;
 }
 // Heat rising (T > Heat shimmer): over the lava, and faintly over the desert's deep sand, the world behind
 // wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and are drawn
@@ -5680,6 +5903,14 @@ function updateWater(dt) {
   B.waterCol.value.set(tmpC2.r * bt, tmpC2.g * bt, tmpC2.b * bt);
   // murk: what light gets through is coloured like the water itself, blue lost first
   B.absorb.value.set((1.15 - tmpC2.r) * 0.5 / bc, (1.15 - tmpC2.g) * 0.5 / bc, (1.15 - tmpC2.b) * 0.5 / bc);
+  // a fairy grotto's: clear, and glowing
+  const GR = GROTTO, gc = Math.max(0.02, GR.clarity);
+  tmpC2.set(GR.color);
+  GROT_U.waterCol.value.set(tmpC2.r * 0.4, tmpC2.g * 0.4, tmpC2.b * 0.4);
+  GROT_U.absorb.value.set((1.15 - tmpC2.r) * 0.5 / gc, (1.15 - tmpC2.g) * 0.5 / gc, (1.15 - tmpC2.b) * 0.5 / gc);
+  GROT_U.glowCol.value.set(GR.glowColor); GROT_U.glowK.value = GR.glow;
+  FALL_U.time.value = (FALL_U.time.value + dt) % 4000; FALL_U.amount.value = GR.fall; FALL_U.speed.value = GR.fallSpeed;
+  FALL_U.color.value.set(GR.fallColor); FALL_U.glowCol.value.set(GR.glowColor); FALL_U.glowK.value = GR.glow;
 }
 // the wake: step its sheet of water while there's swamp water round you; you, and foes near you, move water
 // while you're in it
@@ -5969,6 +6200,67 @@ function burntTree(x, z, k) {
 }
 // a vent: a hole two tiles across in the ash, its throat falling away dark to an ember glow far down, inside
 // a low lip of crusted ash and sulphur (the smoke: see ventSmoke)
+// A fairy grotto's rock, moss, lily pads and toadstools (see placeGrottos): boulders along the cliff's top,
+// tallest either side of the fall and mossed over, a mossy slab the water spills over, moss on the lip and
+// trailing down the face, ferns up top, lily pads floating on the pool (they drift aside as you wade past: plants
+// that float, see plantMat) and toadstools glowing round its bank.
+const GROTTO_W = 6, GROTTO_D = 4;
+function grotto(g) {
+  const W = GROTTO_W, D = GROTTO_D, P = (a, b) => [g.x0 + g.lx * a + g.ox * b, g.z0 + g.lz * a + g.oz * b];
+  const yT = g.top * STEP, yL = g.L * STEP, face = Math.atan2(g.ox, g.oz);
+  let seed = g.seed * 1000 + 3;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const stone = k => shade(CC('#3c3b36'), 0.8 + k * 0.35), moss = k => shade(CC(k > 0.6 ? '#5f8a2a' : k > 0.3 ? '#4f7a26' : '#6e9a34'), 0.85 + k * 0.25);
+  // the boulders, and the slab the water comes over in the gap between them
+  for (let n = 0; n < 10; n++) {
+    const a = 0.25 + n * (W - 0.5) / 9 + (rnd() - 0.5) * 0.25;
+    if (Math.abs(a - g.fa) < 0.5) continue;
+    const near = 1 - Math.min(1, Math.abs(a - g.fa) / 2.6), b = -0.5 - rnd() * 0.9, hgt = 0.45 + near * 0.8 + rnd() * 0.35, wid = 0.5 + rnd() * 0.3 + near * 0.15;
+    const [x, z] = P(a, b), k = rnd();
+    part(G.dodec, stone(k), x, yT + hgt * 0.32, z, { sx: wid, sy: hgt, sz: wid * 0.9, ry: rnd() * 6 });
+    part(G.dodec, moss(rnd()), x, yT + hgt * 0.5, z, { sx: wid * 1.04, sy: hgt * 0.62, sz: wid * 0.95, ry: rnd() * 6 });
+  }
+  const [sx, sz] = P(g.fa, -0.65), lipH = g.fallTop - yT;
+  part(G.box, stone(0.4), sx, yT + lipH / 2 - 0.05, sz, { sx: 0.95, sy: lipH + 0.1, sz: 1.05, ry: face });
+  for (const side of [-1, 1]) { const [x, z] = P(g.fa + side * 0.5, -0.45); part(G.dodec, moss(rnd()), x, g.fallTop - 0.08, z, { sx: 0.3, sy: 0.22, sz: 0.5, ry: face }); }
+  // moss along the lip, and trailing down the cliff's face (green, and russet like dead fern)
+  for (let n = 0; n < 16; n++) {
+    const a = 0.15 + n * (W - 0.3) / 15 + (rnd() - 0.5) * 0.2, [x, z] = P(a, 0.02);
+    part(G.dodec, moss(rnd()), x, yT - 0.02, z, { sx: 0.32 + rnd() * 0.2, sy: 0.14, sz: 0.3 + rnd() * 0.15, ry: rnd() * 6 });
+    if (Math.abs(a - g.fa) < 0.45) continue;
+    for (let st = 0; st < 2; st++) {
+      const aa = a + (rnd() - 0.5) * 0.3, len = 0.35 + rnd() * 0.55, t = Math.min(1, len / Math.max(0.4, yT - yL));
+      const [tx, tz] = P(aa, 0.06), [bx, bz] = P(aa, 0.06 + 0.46 * t);
+      seg(G.frust4, rnd() < 0.3 ? shade(CC('#8a5a2e'), 0.85 + rnd() * 0.3) : moss(rnd()), [tx, yT - 0.01, tz], [bx, yT - (yT - yL) * t + 0.02, bz], 0.06 + rnd() * 0.05);
+    }
+  }
+  // ferns up on the rock's ends, leaning out over the pool
+  for (const a of [0.45, W - 0.45]) { const [x, z] = P(a, -0.35); fern(x, z, rnd()); }
+  // lily pads on the water, a flower on some, away from where the fall comes down
+  const ys = yL - BOG_SURF + 0.008;
+  for (let n = 0, tries = 0; n < 7 && tries < 40; tries++) {
+    const a = 0.7 + rnd() * (W - 1.4), b = 1.1 + rnd() * (D - 2);
+    if (Math.abs(a - g.fa) < 1 && b < 1.6) continue;
+    const [x, z] = P(a, b), r = 0.24 + rnd() * 0.1, flex = 10 + 0.6 + rnd() * 0.6, pad = shade(CC(rnd() < 0.5 ? '#3f8a3a' : '#5a9a3e'), 0.85 + rnd() * 0.3);
+    stem(G.cyl8, pad, x, ys, z, { sx: r * 2, sy: 0.014, sz: r * 2, ry: rnd() * 6 }, x, ys, z, flex);
+    if (rnd() < 0.45) {
+      const fx = x + (rnd() - 0.5) * r * 0.6, fz = z + (rnd() - 0.5) * r * 0.6, col = rnd() < 0.5 ? '#f0b8d8' : '#f4f0e8';
+      for (let pt = 0; pt < 5; pt++) stem(G.cone4, col, fx, ys + 0.04, fz, { sx: 0.05, sy: 0.08, sz: 0.03, rx: 0.9, ry: pt * 1.257 }, x, ys, z, flex);
+      stem(G.box, '#f4d860', fx, ys + 0.05, fz, { s: 0.03 }, x, ys, z, flex);
+    }
+    n++;
+  }
+  // glowing toadstools round the bank
+  for (let n = 0; n < 7; n++) {
+    const side = rnd(), a = side < 0.25 ? -0.55 : side < 0.5 ? W + 0.55 : 0.3 + rnd() * (W - 0.6), b = side < 0.5 ? 0.6 + rnd() * (D - 1) : D + 0.25 + rnd() * 0.4;
+    const [x, z] = P(a, b), y = groundAt(x, z);
+    for (let m = 0; m < 2 + Math.floor(rnd() * 3); m++) {
+      const mx = x + (rnd() - 0.5) * 0.3, mz = z + (rnd() - 0.5) * 0.3, h = 0.06 + rnd() * 0.1, w = 0.05 + rnd() * 0.05;
+      part(G.cyl6, '#d8e4d0', mx, y + h / 2, mz, { sx: w * 0.4, sy: h, sz: w * 0.4 });
+      part(G.cone6, rnd() < 0.5 ? '#6af4e8' : '#9ad0ff', mx, y + h + 0.02, mz, { sx: w * 2, sy: 0.05, sz: w * 2, into: 'glow' });
+    }
+  }
+}
 function vent(c, r, k) {
   const x = c + 1, z = r + 1, y = LV[T(c, r)] * STEP;
   part(G.cyl8, shade(CC('#241c1a'), 0.9 + k * 0.1), x, y + 0.006, z, { sx: 1.62, sy: 0.012, sz: 1.5, ry: k * 3 });
@@ -6389,6 +6681,7 @@ function drawObject(o, c, r) {
     case O.CACTUS: return cactus(x, z, k2);
     case O.BURNT: return burntTree(x, z, k2);
     case O.VENT: return vent(c, r, k2);
+    case O.GROTTO: { const g = grottos.find(q => q.anchor === T(c, r)); return g && grotto(g); }
     case O.PUMICE: return pumice(x, z, k2);
     case O.ROCK: return rock(x, z, k2, BI[T(c, r)] === WASTES ? '#4a403c' : '#7a7684');
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
@@ -7064,7 +7357,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -7073,7 +7366,7 @@ const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest
 // chunks once its ground is done.
 let groundJob = null;   // { key, ch, steps }
 function startGround(cx, cz) {
-  const ch = { cx, cz, ground: null, lava: null, bog: null, bog2: null, water: null, water2: null, obj: null, glow: null, build: null, used: 0, stage: 0 };
+  const ch = { cx, cz, ground: null, lava: null, bog: null, bog2: null, grot: null, grot2: null, water: null, water2: null, obj: null, glow: null, build: null, used: 0, stage: 0 };
   groundJob = { key: cz * NC + cx, ch, steps: groundSteps(cx, cz, ch) };
 }
 // steps the ground under way on until it's done (and returns its chunk) or it's past until (always at least a step)
@@ -11006,11 +11299,20 @@ function updateLamps() {
   const near = [];
   for (const t of towns) if (Math.hypot(t.c - H.x, t.r - H.z) < 40) near.push(...t.lamps);
   for (const h of hearths.values()) if (Math.hypot(h.c - H.x, h.r - H.z) < 40) near.push([h.c + 0.5, h.r + 0.5, 1]);
+  for (const g of grottos) if (GROTTO.light > 0 && Math.hypot(g.x - H.x, g.z - H.z) < 40) near.push([g.x, g.z, 2, g]);
   near.sort((a, b) => Math.hypot(a[0] - H.x, a[1] - H.z) - Math.hypot(b[0] - H.x, b[1] - H.z));
   const night = 1 - daylight();
   lampLights.forEach((l, k) => {
     const p = near[k];
     if (!p) { l.intensity = 0; return; }
+    if (p[2] === 2) {
+      // a grotto's pool, glowing, a slow swell
+      l.color.set(GROTTO.lightColor); l.distance = GROTTO.lightRange;
+      l.position.set(p[0], p[3].L * STEP + 0.5, p[1]);
+      l.intensity = GROTTO.light * (0.6 + night * 0.6) * (0.9 + Math.sin(time * 0.9 + k) * 0.1);
+      return;
+    }
+    l.color.set('#ffb060'); l.distance = 4.5;
     // a hearth's fire burns low in its pit, brighter and with more flicker than a lamp
     l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : 1.2), p[1]);
     l.intensity = p[2] ? (0.7 + night * 1.5) * (0.85 + Math.sin(time * 13 + k) * 0.08 + Math.sin(time * 31) * 0.05) : (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + k) * 0.06);
@@ -11664,6 +11966,7 @@ function tileRGB(i) {
   // cliff edges a shade darker so the terraces read
   if (c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) f *= 0.72;
   if (FIELD[i]) { R = 176; Gc = 146; B = 70; f = 1; }
+  if (GROT[i] === 1) { R = 90; Gc = 220; B = 200; f = 1; }
   if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; }
   if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; }
   return [R * f, Gc * f, B * f];
@@ -12287,6 +12590,21 @@ const TUNING = [
     [AMBIENT, 'snowFall', 'Snow: how fast it falls', 0.1, 4, 0.05],
     [AMBIENT, 'snowColor', 'Snow: colour', 'color'],
     [AMBIENT, 'wind', 'Wind (embers and snow)', 0, 2, 0.05],
+    [AMBIENT, 'fairies', 'Fairies at the grottos (0 off)', 0, 2, 0.05],
+    [AMBIENT, 'fairySize', 'Fairies: size of their glow', 0.01, 0.3, 0.005],
+    [AMBIENT, 'fairyGlow', 'Fairies: glow', 0, 8, 0.1],
+  ]],
+  ['Fairy grotto', [
+    [GROTTO, 'color', 'Pool: water colour', 'color'],
+    [GROTTO, 'clarity', 'Pool: clarity', 0.05, 4, 0.05],
+    [GROTTO, 'glow', 'Pool: glow', 0, 2, 0.01],
+    [GROTTO, 'glowColor', 'Pool: glow colour', 'color'],
+    [GROTTO, 'light', 'Light it casts round it (0 off)', 0, 4, 0.05],
+    [GROTTO, 'lightRange', 'Light: reach (tiles)', 1, 15, 0.5],
+    [GROTTO, 'lightColor', 'Light: colour', 'color'],
+    [GROTTO, 'fall', 'Waterfall: how much it shows', 0, 2, 0.05],
+    [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
+    [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
   ['Heat shimmer', [
     [HEAT, 'strength', 'Strength (0 off)', 0, 4, 0.05],
@@ -12690,9 +13008,9 @@ window.GAME = {
   openStation: (c, r) => { openStation(stations.get(T(c, r))); return !$('station').hidden; },
   stationClick: (k, i) => clickCell([k, i]),
   ambient: () => {
-    const kinds = [0, 0, 0, 0, 0], a = ambMesh && ambMesh.geometry.attributes.sPart;
+    const kinds = [0, 0, 0, 0, 0, 0, 0], a = ambMesh && ambMesh.geometry.attributes.sPart;
     if (a) for (let i = 0; i < a.count; i += 6) kinds[Math.round(a.array[i * 4 + 1])] += 1;
-    kinds[0] /= 2; kinds[4] /= 5;   // (a butterfly is two wings, a dragonfly four and a body)
+    kinds[0] /= 2; kinds[4] /= 5; kinds[6] /= 3;   // (a butterfly is two wings, a dragonfly four and a body, a fairy two and its glow)
     let webs = 0;
     let spiders = 0;
     for (const ch of chunks.values()) { if (ch.web) webs += ch.web.geometry.attributes.position.count; if (ch.spider) spiders += ch.spider.geometry.attributes.position.count; }
@@ -12800,6 +13118,9 @@ window.GAME = {
   farmTile: (c, r) => ({ farm: FARM[T(c, r)], field: FIELD[T(c, r)], grass: [...grassTex.image.data.slice(T(c, r) * 4, T(c, r) * 4 + 4)], grown: wheatGrown(T(c, r)) }),
   reap: (x, z, r) => { cutGrass(x, z, r, 0, 1); },
   wheatCut: () => wheatCut.size,
+  grottos: () => grottos.map(g => ({ c: g.c, r: g.r, L: g.L, top: g.top, pool: g.pool.length, wading: g.pool.every(([c, r]) => WT[T(c, r)] === 1 && GROT[T(c, r)] === 1),
+    anchor: OB[g.anchor] === O.GROTTO, built: !!(chunks.get(Math.floor(g.r / CH) * NC + Math.floor(g.c / CH)) || {}).grot, mesh: !!g.mesh })),
+  grottoLights: () => lampLights.filter(l => l.intensity > 0).map(l => [l.color.r.toFixed(2), l.color.g.toFixed(2), l.distance]),
   spikeReset: () => { chunkTime.parts.fill(0); giStepMax.fill(0); },
   spikeParts: () => ({ gi: giStepMax.map(v => +v.toFixed(1)), chunk: chunkTime.parts.map(v => +v.toFixed(1)), chunkAvg: +(chunkTime.ms / Math.max(1, chunkTime.n)).toFixed(1) }),
   ghTime: (n = 3) => { let tot = 0, max = 0, steps = 0; for (let k = 0; k < n; k++) { const job = groundHazeSiteJob(Math.round(camTarget.x) + k, Math.round(camTarget.z)); for (;;) { const t = performance.now(), d = job.next().done, e = performance.now() - t; tot += e; max = Math.max(max, e); steps++; if (d) break; } } return [+(tot / n).toFixed(1), +max.toFixed(1), steps / n]; },
@@ -12849,7 +13170,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT },
   gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
   moveItem: (from, to) => moveItem(from, to),
   clickCell: c => clickCell(c),
