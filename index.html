@@ -3292,13 +3292,13 @@ const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
 // sparkles, caustics or bending; just its body, what it lets through of the bed, the hero's torch, and ripples
 // running off the banks, and the waves you make wading through it (the wake). It shares the sun, sky, lamp and
 // wave texture with the lakes.
-const SWAMP_WATER = { color: '#80b602', clarity: 0.61, turbidity: 3.1, waveSpeed: 2.25, shoreRipples: 0.45, rippleReach: 0.75,
-  wake: 1, wakeSpread: 0.9, wakeFade: 1.2 };
+const SWAMP_WATER = { color: '#80b602', clarity: 0.61, turbidity: 3.1, waveSpeed: 1.4, shoreRipples: 0.35, rippleReach: 0.75,
+  wake: 0.25, wakeSpread: 0.45, wakeFade: 1.2, wakeWidth: 1 };
 // The wake is simulated (src/gfx/ripples.js): a sheet of water round you that your body pushes aside as you wade
 // and your legs stir, its waves running out, off the banks and away. Its crests are drawn as the bank ripples are.
 const ripples = new GFX.Ripples(renderer);
 const BOG_U = { time: { value: 0 }, waterCol: { value: new GFX.Vector3() }, absorb: { value: new GFX.Vector3() }, shoreRipples: { value: 0 }, ripReach: { value: 1 },
-  tWake: { value: ripples.texture }, wakeV: { value: { x: 0, y: 0, z: 10, w: 0 } }, wakeOn: { value: 0 } };
+  tWake: { value: ripples.texture }, wakeV: { value: { x: 0, y: 0, z: 10, w: 0 } }, wakeOn: { value: 0 }, wakeWidth: { value: 1 } };
 for (const k of ['tWave', 'sunDir', 'sunCol', 'skyCol', 'viewDir', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) BOG_U[k] = WATER_U[k];
 const BOG_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) depth: f32, @location(2) fogZ: f32 }
@@ -3340,7 +3340,8 @@ fn wakeH(xz: vec2f) -> f32 {
   let rp = fract(d * 7.0 - t * 0.32 + fp * 0.6);
   // the wake's crests drawn the same way: thin lines along their tops (where the slope is small against the
   // height), broken up as the bank ripples are, fading as the waves die down
-  let crest = (1.0 - smoothstep(2.0, 5.0, length(wg) / max(hw, 1e-4))) * smoothstep(0.02, 0.1, hw);
+  // (wakeWidth widens the lines: how far down from the top they reach)
+  let crest = (1.0 - smoothstep(2.0 * U.wakeWidth, 5.0 * U.wakeWidth, length(wg) / max(hw, 1e-4))) * smoothstep(0.02, 0.1, hw);
   let fm = sat(max(step(rp, 0.08) * (1.0 - smoothstep(0.05 * U.ripReach, 0.3 * U.ripReach, d)) * U.shoreRipples, crest) * step(0.4, fp) * smoothstep(0.02, 0.04, d) * 0.8);
   let foamLit = vec3f(0.82, 0.87, 0.92) * (sunE * max(L.y, 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
   let add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr) * (1.0 - fm) + foamLit * fm;
@@ -3492,7 +3493,7 @@ function updateWake(dt) {
   ripples.update({ on, hero: [H.x, H.z], dt, body: inside ? SW.wake : 0, stir: 0.05, speed: SW.wakeSpread, fade: SW.wakeFade,
     site: (c, r) => WT[T(c, r)] === 1 });
   const v = BOG_U.wakeV.value, w = ripples.view;
-  v.x = w[0]; v.y = w[1]; v.z = w[2]; v.w = w[3]; BOG_U.wakeOn.value = ripples.on ? 1 : 0;
+  v.x = w[0]; v.y = w[1]; v.z = w[2]; v.w = w[3]; BOG_U.wakeOn.value = ripples.on ? 1 : 0; BOG_U.wakeWidth.value = SW.wakeWidth;
 }
 
 // ---------- Scenery ----------
@@ -8128,6 +8129,7 @@ const TUNING = [
     [SWAMP_WATER, 'wake', 'Wake: the waves you make wading', 0, 3, 0.05],
     [SWAMP_WATER, 'wakeSpread', 'Wake: how fast its waves run', 0.2, 2.5, 0.05],
     [SWAMP_WATER, 'wakeFade', 'Wake: how fast its waves die away', 0.2, 4, 0.05],
+    [SWAMP_WATER, 'wakeWidth', 'Wake: width of its crest lines', 0.2, 4, 0.05],
   ]],
   ['Health bars', [
     [HPBAR, 'hold', 'Bar over the head stays this long after you look away (seconds)', 0, 10, 0.1],
