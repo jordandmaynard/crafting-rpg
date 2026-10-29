@@ -2219,7 +2219,7 @@ const outlineMat = new GFX.ShaderMaterial({
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new GFX.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
-    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 } },
+    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -2260,8 +2260,10 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
       col = mix(col, U.sColor, e2 * U.sStrength * haze);
     }
   }
-  // grass tufts mark themselves with alpha 0 (see grassMat) and, unless GRASS.outline, get no depth stroke
-  let grass = U.grassLine < 0.5 && textureLoad(tColor, mid(px), 0).a < 0.5;
+  // grass tufts mark themselves with alpha 0 (see grassMat) and, unless GRASS.outline, get no depth stroke;
+  // deep snow and sand with alpha 0.25 (driftMat), none unless DRIFT.outline
+  let ma = textureLoad(tColor, mid(px), 0).a;
+  let grass = (U.grassLine < 0.5 && ma < 0.125) || (U.driftLine < 0.5 && ma > 0.125 && ma < 0.5);
   if (U.useDepth > 0.5 && !grass) {
     let t = depthAt(px); let r2 = (U.thick + 0.5) * (U.thick + 0.5);
     var e = 0.0;
@@ -2662,7 +2664,7 @@ function renderWorld() {
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
-  u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0; u.grassLine.value = GRASS.outline;
+  u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0; u.grassLine.value = GRASS.outline; u.driftLine.value = DRIFT.outline;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
   u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
@@ -3689,7 +3691,7 @@ function updateCuts(dt) {
 // quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
 // layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
 // point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
-const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.16, rim: 0.27, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1 };
+const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.84, rim: 0.47, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0 };
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
@@ -3865,7 +3867,8 @@ fn dPoint(xz: vec2f) -> DP {
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let N = normalize(mix(flatNormal(i.eye), normalize(i.nrm), U.look.w));
   let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
-  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+  // (alpha 0.25 tells the outline pass this is deep snow or sand)
+  return vec4f(applyFog(c, viewDepth(i.world)), 0.25);
 }`,
 });
 // the layer's grid: DRIFT_M cells across, DRIFT_S a tile, moved to the view each frame
@@ -3906,7 +3909,8 @@ function updateDrift(dt) {
   const u = DRIFT_U;
   u.dV.value.w = 0;
   if (!driftMesh.visible) return;
-  Object.assign(u.win.value, { x: Math.floor(camTarget.x * DRIFT_S) / DRIFT_S - DRIFT_R, y: Math.floor(camTarget.z * DRIFT_S) / DRIFT_S - DRIFT_R });
+  // (moved two grid steps at a time, so its alternating diagonals stay put in the world and don't flip as you walk)
+  Object.assign(u.win.value, { x: Math.floor(camTarget.x * DRIFT_S / 2) * 2 / DRIFT_S - DRIFT_R, y: Math.floor(camTarget.z * DRIFT_S / 2) * 2 / DRIFT_S - DRIFT_R });
   Object.assign(u.depth.value, { x: D.snowMin, y: D.snowMax, z: D.sandMin, w: D.sandMax });
   Object.assign(u.look.value, { x: D.size, y: D.press, z: D.rim, w: D.smooth });
   u.edge.value.x = D.cliffs; u.edge.value.y = D.ramps;
@@ -9540,6 +9544,7 @@ const TUNING = [
     [DRIFT, 'smooth', 'Smooth normals (0 faceted, 1 smooth)', 0, 1, 0.01],
     [DRIFT, 'cliffs', 'Right up to cliff edges (1 on, 0 thins out before them)', 0, 1, 1],
     [DRIFT, 'ramps', 'Over ramps too (1 on, 0 stops at them)', 0, 1, 1],
+    [DRIFT, 'outline', 'Depth outline on it (1 on, 0 none)', 0, 1, 1],
   ]],
   ['Footprints', [
     [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
