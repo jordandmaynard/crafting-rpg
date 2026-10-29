@@ -848,6 +848,7 @@ async function generate(progress) {
   placeGrottos();
   placeStatues();
   placeMausoleums();
+  placeWillows();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1949,6 +1950,43 @@ function placeMausoleums() {
     }
   }
 }
+// The swamp's points of interest: great willows, one for every so much swamp (up to three). A willow's trunk is
+// as thick as a redwood's but it forks low, a few tiles up, into great limbs that arch out under a wide dome of
+// leaves, about WILLOW.radius tiles round, hung all round with long curtains of leaves down nearly to the ground.
+// It stands on a dry 5 x 5 of one level; no other tall tree grows under it.
+const willows = [];
+const WILLOW_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+function placeWillows() {
+  const R = WILLOW.radius;
+  const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
+  const seen = new Uint8Array(N * N);
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (BI[s0] !== SWAMP || !LV[s0] || seen[s0]) continue;
+    const patch = [s0];
+    seen[s0] = 1;
+    for (let k = 0; k < patch.length; k++) for (const dd of DI) {
+      const n = patch[k] + dd;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== SWAMP || !LV[n]) continue;
+      seen[n] = 1; patch.push(n);
+    }
+    const want = WILLOW_COUNT(patch.length);
+    for (let k = 0, tries = 0; k < want && tries < 400; tries++) {
+      const i0 = patch[Math.floor(hs(s0 % N + tries, k, 201) * patch.length)], c0 = i0 % N, r0 = (i0 - c0) / N, L = LV[i0];
+      if (c0 < R + 4 || r0 < R + 4 || c0 >= N - R - 4 || r0 >= N - R - 4) continue;
+      let ok = true;
+      for (let r = r0 - 2; r <= r0 + 2 && ok; r++) for (let c = c0 - 2; c <= c0 + 2 && ok; c++) { const i = T(c, r); if (LV[i] !== L || BI[i] !== SWAMP || !open(i)) ok = false; }
+      if (!ok || willows.some(w => Math.hypot(w.c - c0, w.r - r0) < R * 5)) continue;
+      k++;
+      for (let r = r0 - 2; r <= r0 + 2; r++) for (let c = c0 - 2; c <= c0 + 2; c++) OB[T(c, r)] = 0;
+      for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) {
+        const i = T(c, r);
+        if (Math.hypot(c - c0, r - r0) <= R + 0.5 && (OBJ[OB[i]].tree || OB[i] === O.DEAD || OB[i] === O.SEQUOIA)) OB[i] = 0;
+      }
+      OB[i0] = O.WILLOW;
+      willows.push({ anchor: i0, c: c0, r: r0, x: c0 + 0.5, z: r0 + 0.5, L, seed: hs(c0, r0, 202), mesh: null });
+    }
+  }
+}
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
@@ -1957,6 +1995,7 @@ function finishTowns() {
   }
   buildGrottoFalls();
   buildObelisks();
+  buildWillows();
   for (const m of mausoleums) {
     // the pair of doors: the first hung at its low end, the second at its high end, so they meet in the middle
     const [e1, e2] = m.doors.sort((p, q) => p[2] ? p[1] - q[1] : p[0] - q[0]);
@@ -2417,7 +2456,7 @@ const connectStats = { reached: 0 };
 const O = {
   PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8,
   ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14, COPPER: 15, IRON: 16,
-  BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26,
+  BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
   TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56,
@@ -2446,6 +2485,7 @@ def(O.STATUE, { name: 'sunken obelisk', tile: true, sunk: true });
 def(O.STATUEX, { name: 'sunken obelisk', tile: true, sunk: true });
 // the deep forest's redwoods: far too big to fell
 def(O.SEQUOIA, { name: 'redwood', solid: 0.62 });
+def(O.WILLOW, { name: 'great willow', solid: 0.85, tile: true });
 def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.ICEROCK, { name: 'ice rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.SANDROCK, { name: 'sandstone', solid: 0.3, hp: 4, give: 'stone' });
@@ -3149,6 +3189,7 @@ function renderWorld() {
   // layers: draw it once, in the world pass (the hero casts there through a stand-in), and reuse it after
   renderer.shadowMap.autoUpdate = true;
   updateTrunkCut();
+  updateWillows();
   updateCaustics();
   // the ground first, on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow
   // map is drawn in it, from the ground's and the world's casters both (shadowLayers)
@@ -3881,7 +3922,10 @@ function updateTrunkCut() {
   TRUNK_U.cutC.value.set(camTarget.x, camTarget.z); TRUNK_U.cutDir.value.set(Math.sin(yaw), Math.cos(yaw));
 }
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
-function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
+function tallVisible(v) {
+  for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; }
+  for (const w of willows) if (w.mesh) w.mesh.visible = v;
+}
 
 // ---------- Plants that bend (T > Plants) ----------
 // Grass, flowers, reeds, ferns and bushes lean away from whatever walks through them and lift back up behind it,
@@ -6758,6 +6802,150 @@ function sequoia(x, z, k) {
     part(G.ico, bark, x + Math.cos(a) * d, y + SEQ_H - 3 + hash(x, z, i + 51) * 6, z + Math.sin(a) * d, { sx: w, sy: w * 0.55, sz: w, ry: a, into: 'canopy' });
   }
 }
+// A great willow's trunk (drawn with the chunk, with the redwoods' trunks, so it's cut away the same in front
+// of you): as thick as a redwood's, flared and rooted at its foot, gnarled and twisting as it climbs, swelling
+// where it forks at WILLOW_FORK. The limbs and leaves above are its canopy (buildWillows).
+const WILLOW = { radius: 10, height: 9, sway: 0.18, fade: 1.2 };
+const WIL_RINGS = [-0.3, 0, 0.16, 0.36, 0.62, 0.95, 1.4, 2, 2.6, 3.2, 3.8, 4.5], WILLOW_FORK = 4.3, WIL_SEGS = 14;
+const WILLOW_BARK = '#5c5040';
+function willowTrunk(w) {
+  const x = w.x, z = w.z, k = w.seed, y0 = w.L * STEP, R0 = 0.5, S = WIL_SEGS, bark = shade(CC(WILLOW_BARK), 0.9 + k * 0.15), moss = CC('#56622e'), soil = CC('#2e2a1e');
+  const from = TRUNK.n;
+  const amp = new Float32Array(S), nr = 5 + Math.floor(hash(x, z, 70) * 3);
+  for (let n = 0; n < nr; n++) {
+    const j = Math.floor(hash(x, z, 71 + n) * S), a = 0.6 + hash(x, z, 80 + n) * 0.8;
+    amp[j] = Math.max(amp[j], a); amp[(j + 1) % S] = Math.max(amp[(j + 1) % S], a * 0.35); amp[(j + S - 1) % S] = Math.max(amp[(j + S - 1) % S], a * 0.35);
+  }
+  const spin = hash(x, z, 90) * 6.28;
+  const ring = WIL_RINGS.map((h, q) => {
+    const cx = x + Math.sin(h * 0.6 + k * 9) * 0.12, cz = z + Math.cos(h * 0.5 + k * 7) * 0.12;
+    const base = R0 * (1 + 0.7 * Math.exp(-Math.max(0, h) / 0.7)) * (1 + 0.3 * Math.max(0, (h - 3) / 1.5));
+    const pts = [], cols = [];
+    for (let j = 0; j < S; j++) {
+      const th = spin + j * 6.28318 / S + h * 0.22 + (hash(x * 3 + j, z, 93) - 0.5) * 0.14;
+      const rad = (base + R0 * amp[j] * (1.5 * Math.exp(-Math.max(0, h) / 1.1) + 0.12)) * (1 + (hash(x + j, z + q, 94) - 0.5) * 0.18);
+      pts.push([cx + Math.cos(th) * rad, y0 + h, cz + Math.sin(th) * rad]);
+      // furrowed grey-brown bark, moss up the ridges low down, earth at the foot
+      let c = shade(bark, (0.72 + hash(x, z, 100 + j) * 0.4) * (1 + amp[j] * 0.1));
+      if (amp[j] > 0.5 && h < 2.4) c = c.clone().lerp(moss, 0.5 * (1 - Math.max(0, h) / 2.4));
+      cols.push(h < 0.5 ? c.clone().lerp(soil, 0.45 * (0.5 - Math.max(0, h)) / 0.5) : c);
+    }
+    return { pts, cols };
+  });
+  const save = OUT; OUT = TRUNK;
+  for (let q = 0; q + 1 < ring.length; q++) {
+    const lo = ring[q], hi = ring[q + 1];
+    for (let j = 0; j < S; j++) {
+      const j2 = (j + 1) % S;
+      tri(lo.pts[j], hi.pts[j], lo.pts[j2], lo.cols[j], hi.cols[j], lo.cols[j2]);
+      tri(hi.pts[j], hi.pts[j2], lo.pts[j2], hi.cols[j], hi.cols[j2], lo.cols[j2]);
+    }
+  }
+  OUT = save;
+  // a burl or two, and the stub of a lost limb
+  for (let n = 0; n < 3; n++) {
+    const a = hash(x, z, 110 + n) * 6.28, hy = 1.2 + n * 1.0, rr = R0 * 1.15;
+    part(G.dodec, shade(bark, 0.8 + n * 0.08), x + Math.cos(a) * rr, y0 + hy, z + Math.sin(a) * rr, { sx: 0.34, sy: 0.4, sz: 0.3, ry: a, into: 'trunk' });
+  }
+  if (TRUNK.tag) TRUNK.tag(from, x, y0, z);
+}
+// The canopy: the great limbs out of the fork, a low dome of leaf clumps over them, and the hanging curtains:
+// ribbons of leaves in rings from half its radius out to the edge, the outer ones down nearly to the ground.
+// It sways in the wind (the strands more, the further down), and dissolves while you're under it (WILLOW_U.hero,
+// a dither by your distance from its trunk). Strands write alpha 0 so the outline leaves them unstroked.
+const WILLOW_U = { time: { value: 0 }, hero: { value: new GFX.Vector2() }, wind: { value: new GFX.Vector2(0.8, 0.6) }, sway: { value: WILLOW.sway },
+  radius: { value: WILLOW.radius }, fade: { value: WILLOW.fade } };
+const willowMat = new GFX.ShaderMaterial({ uniforms: WILLOW_U, vertexColors: true, side: GFX.DoubleSide, attributes: { wv: 'vec4f' }, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) wv: vec4f }
+@vertex fn vs(v: VIn) -> VOut {
+  var w = (O.model * vec4f(v.position, 1.0)).xyz;
+  let s = max(v.wv.x, 0.0) * U.sway;
+  let g = sin(U.time * 1.6 + v.wv.y) * 0.6 + sin(U.time * 0.7 + v.wv.y * 1.7) * 0.4;
+  w += vec3f(U.wind.x, 0.0, U.wind.y) * s * (g + 0.5) + vec3f(-U.wind.y, 0.0, U.wind.x) * s * 0.35 * sin(U.time * 2.3 + v.wv.y * 2.9);
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, v.wv);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let d = distance(U.hero, i.wv.zw);
+  let vis = smoothstep(U.radius - U.fade, U.radius + U.fade * 0.6, d);
+  let n = fract(sin(dot(floor(i.pos.xy), vec2f(12.9898, 78.233))) * 43758.5453);
+  if (n >= vis) { discard; }
+  let N = flatNormal(i.eye);
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), select(1.0, 0.0, i.wv.x >= 0.0));
+}`,
+});
+function updateWillows() {
+  WILLOW_U.hero.value.set(H.x, H.z);
+  WILLOW_U.time.value = time % 4000;
+  WILLOW_U.sway.value = WILLOW.sway; WILLOW_U.radius.value = WILLOW.radius; WILLOW_U.fade.value = WILLOW.fade;
+}
+function buildWillows() {
+  for (const w of willows) {
+    const x = w.x, z = w.z, y0 = w.L * STEP, R = WILLOW.radius, Hc = WILLOW.height;
+    let seed = w.seed * 1000 + 3;
+    const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+    const domeY = r => y0 + Hc - 2.6 * (r / R) * (r / R);
+    const save = OUT; OUT = bufTmp; bufTmp.n = 0;
+    const wv = [];
+    const tagTo = (sway, phase) => { while (wv.length / 4 < OUT.n / 3) wv.push(sway, phase, x, z); };
+    const bark = shade(CC(WILLOW_BARK), 0.9 + w.seed * 0.15), leaf = CC('#6f8c34'), leafLt = CC('#9db04c'), leafDk = CC('#4e6a26');
+    // the limbs: out of the fork, arching up and out, each with a pair of boughs off its end
+    const nl = 6, spin = w.seed * 6.28;
+    for (let n = 0; n < nl; n++) {
+      const a = spin + n * 6.28 / nl + (rnd() - 0.5) * 0.5, ca = Math.cos(a), sa = Math.sin(a), at = (r, y) => [x + ca * r, y, z + sa * r];
+      const p0 = at(0.2, y0 + WILLOW_FORK - 0.4), p1 = at(1.6 + rnd() * 0.4, y0 + 5.4 + rnd() * 0.5), p2 = at(3.6 + rnd() * 0.6, y0 + 6.7 + rnd() * 0.5), p3 = at(5.6 + rnd(), domeY(6) - 0.5);
+      seg(G.frust7, bark, p0, p1, 0.34); seg(G.frust7, bark, p1, p2, 0.25); seg(G.frust7, bark, p2, p3, 0.17);
+      for (const s of [-1, 1]) {
+        const b = a + s * (0.35 + rnd() * 0.3), q = [x + Math.cos(b) * (7.2 + rnd()), domeY(7.5) - 0.6, z + Math.sin(b) * (7.2 + rnd())];
+        seg(G.frust4, shade(bark, 1.08), p2, q, 0.09);
+      }
+    }
+    tagTo(-1, 0);
+    // the dome: rings of flattened leaf clumps, a darker layer under a lit one
+    for (let r = 0; r < R - 0.3; r += 1.15) {
+      const cnt = Math.max(1, Math.round(6.28 * r / 1.45));
+      for (let j = 0; j < cnt; j++) {
+        const a = j * 6.28 / cnt + rnd() * 0.5 + r, rr = r + (rnd() - 0.5) * 0.6, cx = x + Math.cos(a) * rr, cz = z + Math.sin(a) * rr, y = domeY(rr) + (rnd() - 0.5) * 0.4;
+        const wd = (2.1 - r / R * 0.6) * (0.85 + rnd() * 0.35);
+        part(G.ico, shade(leafDk, 0.85 + rnd() * 0.25), cx, y - 0.45, cz, { sx: wd * 1.05, sy: wd * 0.45, sz: wd * 1.05, ry: a });
+        part(G.ico, shade(rnd() < 0.3 ? leafLt : leaf, 0.85 + rnd() * 0.25), cx, y, cz, { sx: wd, sy: wd * 0.5, sz: wd, ry: a + 1 });
+      }
+    }
+    tagTo(-1, 0);
+    // the curtains: ribbons of leaves turned along the ring, a little zigzag down them, lighter toward the tips
+    for (let r = R * 0.5; r <= R + 0.01; r += 0.45) {
+      const cnt = Math.round(6.28 * r / 0.34), outer = Math.min(1, Math.max(0, (r / R - 0.55) / 0.4));
+      for (let j = 0; j < cnt; j++) {
+        const a = j * 6.28 / cnt + rnd() * 0.06 + r * 3.1, ca = Math.cos(a), sa = Math.sin(a), rr = r + (rnd() - 0.5) * 0.3;
+        const yT = domeY(rr) - 0.3 - rnd() * 0.3, bottom = y0 + 0.35 + rnd() * 0.9 + (1 - outer) * (2.4 + rnd() * 1.5);
+        const len = Math.max(0.8, yT - bottom), wd = 0.13 + rnd() * 0.06, phase = rnd() * 6.28;
+        const c0 = shade(leafDk, 0.9 + rnd() * 0.2), c1 = shade(rnd() < 0.5 ? leafLt : leaf, 0.85 + rnd() * 0.3);
+        const segs = 4, pts = [];
+        for (let q = 0; q <= segs; q++) {
+          const t = q / segs, off = (q % 2 ? 1 : -1) * 0.04 + t * t * 0.15, cx = x + ca * (rr + off), cz = z + sa * (rr + off), y = yT - len * t, hw = wd * (1 - t * 0.6) / 2;
+          pts.push([[cx - sa * hw, y, cz + ca * hw], [cx + sa * hw, y, cz - ca * hw], t]);
+        }
+        for (let q = 0; q < segs; q++) {
+          const [a0, b0, t0] = pts[q], [a1, b1, t1] = pts[q + 1], k0 = c0.clone().lerp(c1, t0), k1 = c0.clone().lerp(c1, t1);
+          const from = OUT.n;
+          quad(a0, b0, b1, a1, k0, k0, k1, k1);
+          for (let v = from; v < OUT.n; v += 3) { const tt = (yT - OUT.p[v + 1]) / len; wv.push(Math.pow(Math.max(0, tt), 1.4) * (0.5 + len / 6), phase, x, z); }
+        }
+      }
+    }
+    const n = OUT.n, geo = new GFX.BufferGeometry();
+    geo.setAttribute('position', new GFX.Float32BufferAttribute(OUT.p.slice(0, n), 3));
+    geo.setAttribute('color', new GFX.Float32BufferAttribute(OUT.c.slice(0, n), 3));
+    geo.setAttribute('wv', new GFX.Float32BufferAttribute(wv, 4));
+    geo.computeVertexNormals();
+    OUT = save;
+    const m = shadowy(new GFX.Mesh(geo, willowMat));
+    m.matrixAutoUpdate = false;
+    scene.add(m);
+    w.mesh = m;
+  }
+}
 // a fern: fronds round its foot, each rising from it then arching over and down, narrowing as it goes, in
 // FERN_SEGS pieces. Each frond bends on its own (a negative flex, see plantMat): pressed down and swept aside
 // about the fern's middle by whatever walks over it, while the fronds away from it stay put.
@@ -7015,6 +7203,7 @@ function drawObject(o, c, r) {
     case O.VENT: return vent(c, r, k2);
     case O.GROTTO: { const g = grottos.find(q => q.anchor === T(c, r)); return g && grotto(g); }
     case O.STATUE: { const st = statues.find(q => q.anchor === T(c, r)); return st && obelisk(st); }
+    case O.WILLOW: { const w = willows.find(q => q.anchor === T(c, r)); return w && willowTrunk(w); }
     case O.PUMICE: return pumice(x, z, k2);
     case O.ROCK: return rock(x, z, k2, BI[T(c, r)] === WASTES ? '#4a403c' : '#7a7684');
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
@@ -13149,6 +13338,10 @@ const TUNING = [
     [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
     [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
+  ['Great willows', [
+    [WILLOW, 'sway', 'Hanging leaves: how far they sway', 0, 1, 0.01],
+    [WILLOW, 'fade', 'Fading out as you walk under: over how far (tiles)', 0.2, 4, 0.1],
+  ]],
   ['Sunken obelisks', [
     [OBELISK, 'scale', 'Size (stays on its 3 x 2 tiles: bigger ones lean less). Letting go redraws them', 0.5, 2.2, 0.05, rescaleObelisks],
   ]],
@@ -13717,8 +13910,10 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
+  willows: () => willows.map(w => ({ x: w.x, z: w.z, L: w.L, anchor: OB[w.anchor] === O.WILLOW, mesh: !!w.mesh, cast: !!(w.mesh && w.mesh.castShadow),
+    verts: w.mesh ? w.mesh.geometry.attributes.position.count : 0, wv: w.mesh ? w.mesh.geometry.attributes.wv.count : 0 })),
   mausoleums: () => mausoleums.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, floors: m.tiles.filter(([c, r]) => FL[T(c, r)] === 3).length,
     doors: m.doors.map(([c, r, w]) => (w ? WW : WN)[T(c, r)]), room: !!roomOf.get(m.cellaI), roofed: !!(bldOf(m.cellaI) || {}).mesh,
     roofShown: !!((bldOf(m.cellaI) || {}).mesh || {}).visible, cols: m.cols.map(q => cutEdges.has(q.key) ? 'cut' : 'up'), open: doors.get(edgeKey(...m.doors[0])).open, open2: doors.get(edgeKey(...m.doors[1])).open,
