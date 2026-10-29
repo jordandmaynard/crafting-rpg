@@ -6388,11 +6388,11 @@ function updateLootGlow() {
   for (const m of Object.values(lootMats)) for (const k of ['beam', 'height', 'width', 'sparks', 'sparkSize', 'orbit', 'rise', 'pool']) m.uniforms[k].value = LOOT_FX[k];
 }
 
-// Loot on the ground: a hide where a wolf or boar fell, and logs or stone that didn't fit in the pack. Logs
-// and stone gather into one pile with a like pile close by, up to PILE_MAX; a hide lies on its own. Each lies
-// until you pick it up (F / A) or five minutes pass.
+// Loot on the ground: a hide where a wolf or boar fell, and logs or stone that didn't fit in the pack. Loot
+// that lands within a tile of a like pile joins it, so a pile has one beam and sparkle however much is in it
+// (more hides are laid on top, up to HIDES_SHOWN). Each lies until you pick it up (F / A) or five minutes pass.
 let drops = [];
-const PILE_MAX = 200, DROP_LIFE = 300;
+const DROP_LIFE = 300, HIDES_SHOWN = 5;
 const hideMat = flatMat({ color: '#b07a4a' }), hideSpine = flatMat({ color: '#8a5a34' });
 const hideGeo = new GFX.BoxGeometry(0.42, 0.025, 0.3), spineGeo = new GFX.BoxGeometry(0.34, 0.015, 0.08), pawGeo = new GFX.BoxGeometry(0.09, 0.02, 0.07);
 const logMat = flatMat({ color: '#8a5a32' }), logGeo = new GFX.CylinderGeometry(0.065, 0.065, 0.44, 6).rotateZ(Math.PI / 2);
@@ -6415,20 +6415,23 @@ function dropModel(id) {
   return g;
 }
 function dropLoot(id, n, x, z) {
-  const piles = !!ITEMS[id].pile;
-  while (n > 0) {
-    let d = piles ? drops.find(d => d.id === id && d.n < PILE_MAX && Math.hypot(d.x - x, d.z - z) < 1) : null;
-    if (!d) {
-      const m = dropModel(id);
-      m.position.set(x, surfaceY(x, z) + 0.02, z); m.rotation.y = Math.random() * 6.28;
-      scene.add(m);
-      d = { id, n: 0, m, x, z, t: 0, glow: lootGlow(ITEMS[id].loot, x, z) };
-      drops.push(d);
-    }
-    const k = piles ? Math.min(n, PILE_MAX - d.n) : 1;
-    d.n += k; d.t = 0; n -= k;
-    if (n > 0 && !piles) { x += (Math.random() - 0.5) * 0.5; z += (Math.random() - 0.5) * 0.5; }
+  if (n <= 0) return;
+  let d = null, best = 1;
+  for (const o of drops) { const l = Math.hypot(o.x - x, o.z - z); if (o.id === id && l < best) { d = o; best = l; } }
+  if (!d) {
+    const m = dropModel(id);
+    m.position.set(x, surfaceY(x, z) + 0.02, z); m.rotation.y = Math.random() * 6.28;
+    scene.add(m);
+    d = { id, n: 0, m, x, z, t: 0, glow: lootGlow(ITEMS[id].loot, x, z) };
+    drops.push(d);
   }
+  // another hide on the pile for each one, a little askew
+  if (id === 'hide') for (let i = Math.max(d.n, 1); i < Math.min(d.n + n, HIDES_SHOWN); i++) {
+    const h = dropModel(id);
+    h.position.set((Math.random() - 0.5) * 0.25, i * 0.03, (Math.random() - 0.5) * 0.25); h.rotation.y = (Math.random() - 0.5) * 2;
+    d.m.add(h);
+  }
+  d.n += n; d.t = 0;
 }
 const removeDrop = d => { scene.remove(d.m); lootFx.remove(d.glow); drops.splice(drops.indexOf(d), 1); };
 const LOOT_REACH = 1.3;
