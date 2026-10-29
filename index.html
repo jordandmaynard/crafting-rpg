@@ -3783,7 +3783,7 @@ function updateCuts(dt) {
 // quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
 // layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
 // point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
-const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.9, rim: 0.94, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.19, whirl: 1.6 };
+const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.9, rim: 0.94, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.19, whirl: 1.6, arrowHole: 0.4 };
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
@@ -3854,6 +3854,7 @@ function driftSlow(x, z) {
   return 1 - (sand ? DRIFT.sandSlow : DRIFT.snowSlow) * cov * clamp(deep / 0.3, 0, 1.5) / 1.5;
 }
 const drift = new GFX.Drift(renderer);
+const driftHoles = [];   // where arrows came down this frame: each pokes a little hole (DRIFT.arrowHole tiles across)
 const DRIFT_U = {
   tDrift: { value: driftTex }, tGround: { value: groundTex }, tDeform: { value: drift.texture },
   win: { value: { x: 0, y: 0, z: 0, w: 0 } },      // the mesh's corner (tiles, x z)
@@ -4040,7 +4041,7 @@ function updateDrift(dt) {
   }
   const u = DRIFT_U;
   u.dV.value.w = 0;
-  if (!driftMesh.visible) return;
+  if (!driftMesh.visible) { driftHoles.length = 0; return; }
   // (moved two grid steps at a time, so its alternating diagonals stay put in the world and don't flip as you walk)
   Object.assign(u.win.value, { x: Math.floor(camTarget.x * DRIFT_S / 2) * 2 / DRIFT_S - DRIFT_R, y: Math.floor(camTarget.z * DRIFT_S / 2) * 2 / DRIFT_S - DRIFT_R });
   Object.assign(u.depth.value, { x: D.snowMin, y: D.snowMax, z: D.sandMin, w: D.sandMax });
@@ -4049,6 +4050,8 @@ function updateDrift(dt) {
   const bodies = [];
   // (the whirlwind's blade ploughs a hollow round you, as it cuts the grass and clears the ground haze)
   if (H.alive && !H.flip) bodies.push({ x: H.x, z: H.z, radius: H.whirl >= 0 && D.whirl > 0 ? Math.max(D.radius, D.whirl) : D.radius, strength: 1 });
+  // (a hole is pressed in one frame and fills back in like a trench; any past 8 wait for the next frame)
+  for (const [x, z] of driftHoles.splice(0, 8)) if (D.arrowHole > 0) bodies.push({ x, z, radius: D.arrowHole / 2, strength: 1 });
   if (D.foes > 0.5) {
     const near = [];
     for (const f of foes) {
@@ -8303,7 +8306,11 @@ function flyArrowSteps(a, dt) {
     }
     if (!a.rain && arrowBlocked(a, x0, z0)) { stickArrow(a); sfx.thunk(); return; }
     const g = surfH(a.x, a.z);
-    if (a.y <= g) { a.y = g - 0.04; stickArrow(a); return; }
+    if (a.y <= g) {
+      a.y = g - 0.04; stickArrow(a);
+      if ((a.rain || a.falling) && driftHoles.length < 64) driftHoles.push([a.x, a.z]);
+      return;
+    }
   }
 }
 const arrowE = new Float32Array(16);
@@ -8357,14 +8364,14 @@ function updateArrows(dt) {
 // whatever the eye's exposure (steady).
 // each shape is filled faintly and edged brighter: for each, the edge's width (tiles, inside the shape), the edge's
 // and the fill's brightness, and for the shot the box's width
-const AIM_FX = { color: '#193148', steady: 1,
-  shotWidth: 0.3, shotEdge: 0.02, shotEdgeBright: 0.8, shotFill: 0.15,
-  volleyEdge: 0.04, volleyEdgeBright: 0.95, volleyFill: 0.15,
-  rainEdge: 0.03, rainEdgeBright: 0.95, rainFill: 0.15,
-  lungeWidth: 2, lungeEdge: 0.03, lungeEdgeBright: 0.95, lungeFill: 0.15 };
+const AIM_FX = { color: '#34628d', steady: 1,
+  shotWidth: 0.45, shotEdge: 0.03, shotEdgeBright: 1.5, shotFill: 0.4,
+  volleyEdge: 0.04, volleyEdgeBright: 2, volleyFill: 0.75,
+  rainEdge: 0.08, rainEdgeBright: 1.9, rainFill: 0.65,
+  lungeWidth: 1.25, lungeTaper: 1, lungeEdge: 0.08, lungeEdgeBright: 2.4, lungeFill: 0.85};
 const AIM_NU = 84, AIM_NV = 72;
 const AIM_U = { tD: { value: WATER_U.tRefrD.value }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
-  len: { value: 20 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
+  len: { value: 20 }, taper: { value: 0 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
   color: { value: new GFX.Color('#ffb347') } };
 const AIM_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) w: vec3f }
@@ -8385,8 +8392,14 @@ fn aimShape(d: vec2f) -> f32 {
   let f = U.dir.xz;
   let q = vec2f(dot(d, f), d.x * f.y - d.y * f.x);
   if (q.x < 0.45 || q.x > U.len) { return 0.0; }
-  // the shot (or the sword's lunge): a long box, edged along both its sides
-  if (U.kind < 0.5 || U.kind > 2.5) { return aimBand(U.boxW * 0.5 - abs(q.y)); }
+  // the shot (or the sword's lunge): a long box, edged along both its sides, its last \`taper\` tiles narrowing to a
+  // point (the edge running on round them at the same width)
+  if (U.kind < 0.5 || U.kind > 2.5) {
+    let hw = U.boxW * 0.5;
+    var din = hw - abs(q.y);
+    if (U.taper > 0.0) { din = min(din, (hw * (U.len - q.x) / U.taper - abs(q.y)) * U.taper / length(vec2f(U.taper, hw))); }
+    return aimBand(din);
+  }
   // the volley: its cone, edged along both its sides
   let half = U.cone * 0.5;
   return aimBand(q.x * sin(half) - abs(q.y) * cos(half));
@@ -8473,6 +8486,7 @@ function updateAimDecal() {
   U.len.value = BOW.range; U.cone.value = BOW.volleyCone * Math.PI / 180; U.radius.value = BOW.rainRadius;
   const nm = ['shot', 'volley', 'rain', 'lunge'][k], A = AIM_FX;
   if (k === 3) U.len.value = LUNGE.speed * LUNGE.time + LUNGE.reach;
+  U.taper.value = k === 3 ? Math.min(A.lungeTaper, U.len.value - 0.5) : 0;
   U.boxW.value = k === 3 ? A.lungeWidth : A.shotWidth; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
   U.color.value.set(AIM_FX.color);
 }
@@ -10330,6 +10344,7 @@ const TUNING = [
     [DRIFT, 'rim', 'Height of the heap along a trench', 0, 1, 0.01],
     [DRIFT, 'radius', 'Your trench: half its width (tiles)', 0.1, 1, 0.01],
     [DRIFT, 'whirl', 'Whirlwind: the hollow it ploughs round you (tiles; 0 none)', 0, 3, 0.05],
+    [DRIFT, 'arrowHole', 'Hole an arrow coming down pokes (tiles across; 0 none)', 0, 1.5, 0.05],
     [DRIFT, 'recover', 'Seconds a trench takes to fill back in', 5, 600, 5],
     [DRIFT, 'foes', 'Foes plough trenches too (1 on, 0 off)', 0, 1, 1],
     [DRIFT, 'snowSlow', 'How much snow slows you (0 not at all)', 0, 0.9, 0.01],
@@ -10415,6 +10430,7 @@ const TUNING = [
     [AIM_FX, 'rainEdgeBright', 'Rain: edge brightness', 0, 6, 0.05],
     [AIM_FX, 'rainFill', 'Rain: fill brightness', 0, 3, 0.05],
     [AIM_FX, 'lungeWidth', 'Lunge: box width (tiles)', 0.1, 4, 0.05],
+    [AIM_FX, 'lungeTaper', 'Lunge: length of the pointed end (tiles)', 0, 3, 0.05],
     [AIM_FX, 'lungeEdge', 'Lunge: edge width (tiles)', 0, 0.5, 0.01],
     [AIM_FX, 'lungeEdgeBright', 'Lunge: edge brightness', 0, 6, 0.05],
     [AIM_FX, 'lungeFill', 'Lunge: fill brightness', 0, 3, 0.05],
