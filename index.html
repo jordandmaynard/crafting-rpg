@@ -846,6 +846,7 @@ async function generate(progress) {
   fenceGraveyards();
   placeFarms();
   placeGrottos();
+  placeStatues();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1816,6 +1817,49 @@ function placeGrottos() {
     }
   }
 }
+// The desert's points of interest: statues of ancient warriors, one for every so much desert (up to three), each
+// half sunk in the sand and leaning over, on a 3 x 2 patch of open flat sand (b along its lean, a across it)
+const statues = [];
+const STATUE_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+function placeStatues() {
+  const seen = new Uint8Array(N * N);
+  const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (BI[s0] !== DESERT || !LV[s0] || seen[s0]) continue;
+    const patch = [s0];
+    seen[s0] = 1;
+    for (let k = 0; k < patch.length; k++) for (const dd of DI) {
+      const n = patch[k] + dd;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== DESERT || !LV[n]) continue;
+      seen[n] = 1; patch.push(n);
+    }
+    const want = STATUE_COUNT(patch.length);
+    for (let k = 0, tries = 0; k < want && tries < 300; tries++) {
+      const i0 = patch[Math.floor(hs(s0 % N + tries, k, 181) * patch.length)], c0 = i0 % N, r0 = (i0 - c0) / N, L = LV[i0];
+      const d = Math.floor(hs(c0, r0, 182) * 4);
+      const at = (a, b) => d === 0 ? [c0 + a, r0 + b] : d === 1 ? [c0 - b, r0 + a] : d === 2 ? [c0 - a, r0 - b] : [c0 + b, r0 - a];
+      let ok = true;
+      for (let b = -1; b <= 3 && ok; b++) for (let a = -1; a <= 2 && ok; a++) {
+        const [c, r] = at(a, b);
+        if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) { ok = false; break; }
+        const i = T(c, r);
+        if (LV[i] !== L || BI[i] !== DESERT || !open(i)) ok = false;
+      }
+      if (!ok) continue;
+      const [c1, r1] = at(0, 1), dx = c1 - c0, dz = r1 - r0;
+      const cx = (c0 + at(1, 2)[0]) / 2 + 0.5, cz = (r0 + at(1, 2)[1]) / 2 + 0.5;
+      if (statues.some(st => Math.hypot(st.x - cx, st.z - cz) < 40)) continue;
+      k++;
+      for (let b = -1; b <= 3; b++) for (let a = -1; a <= 2; a++) OB[T(...at(a, b))] = 0;
+      for (let b = 0; b < 3; b++) for (let a = 0; a < 2; a++) OB[T(...at(a, b))] = O.STATUEX;
+      OB[i0] = O.STATUE;
+      const h = q => hs(c0, r0, 183 + q);
+      // its waist sunk near the back of the patch, leaning over toward the front, turned a little off square
+      statues.push({ anchor: i0, L, x: cx - dx * 0.8, z: cz - dz * 0.8, yaw: Math.atan2(dx, dz) + (h(0) - 0.5) * 0.3,
+        tilt: 0.55 + h(1) * 0.25, roll: (h(2) - 0.5) * 0.4, size: 1.05 + h(3) * 0.15, seed: h(4) });
+    }
+  }
+}
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
@@ -2276,7 +2320,7 @@ const connectStats = { reached: 0 };
 const O = {
   PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8,
   ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14, COPPER: 15, IRON: 16,
-  BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24,
+  BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
   TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56,
@@ -2299,6 +2343,10 @@ def(O.VENTX, { name: 'smoking vent', tile: true });
 // toadstools, from one tile (GROTTO), the rest of the rock (GROTTOX) just standing in the way
 def(O.GROTTO, { name: 'mossy rock', tile: true });
 def(O.GROTTOX, { name: 'mossy rock', tile: true });
+// a desert's sunken statue (see placeStatues): drawn from one tile (STATUE), the rest of its 3 x 2 (STATUEX) in the
+// way; the deep sand drifts over its tiles (sunk) as over open ground
+def(O.STATUE, { name: 'sunken statue', tile: true, sunk: true });
+def(O.STATUEX, { name: 'sunken statue', tile: true, sunk: true });
 // the deep forest's redwoods: far too big to fell
 def(O.SEQUOIA, { name: 'redwood', solid: 0.62 });
 def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
@@ -4297,7 +4345,7 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
       const cc = c + dc, rr = r + dr;
       if (cc >= 0 && rr >= 0 && cc < N && rr < N && SH[T(cc, rr)] && LV[T(cc, rr)]) { nearRamp = true; break; }
     }
-    const open = kind && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile;
+    const open = kind && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk);
     const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
     for (let q = 0; q < 4; q++) {
       const lx = (c - c0) * 2 + (q & 1), lz = (r - r0) * 2 + (q >> 1), h0 = ph[(lz + 1) * W + lx + 1];
@@ -6294,6 +6342,85 @@ function grotto(g) {
     }
   }
 }
+// A desert's sunken statue: an ancient warrior in weathered sandstone, sunk to the waist and leaning over, worn
+// round at every edge, cracked and chipped, with sand drifted on whatever faces up. A crested helmet with cheek
+// guards, a muscled cuirass, layered shoulder plates and a belt; the right arm raised, its sword snapped off a way
+// up the blade; the left arm down with a round shield half in the sand. It's built upright about its waist, then
+// tipped over and sunk (partPre).
+const STATUE_FRAME = new GFX.Object3D();
+STATUE_FRAME.rotation.order = 'YXZ';
+function warriorStatue(st) {
+  const F = STATUE_FRAME, y0 = st.L * STEP;
+  F.position.set(st.x, y0 - 0.32, st.z); F.rotation.set(st.tilt, st.yaw, st.roll); F.scale.setScalar(st.size); F.updateMatrix();
+  let seed = st.seed * 1000 + 11;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const stone = (k = rnd()) => shade(CC('#c6a068'), 0.8 + k * 0.28), deep = (k = rnd()) => shade(CC('#8e6a40'), 0.85 + k * 0.25), sand = (k = rnd()) => shade(CC('#dcc088'), 0.92 + k * 0.12);
+  const box = (x, y, z, sx, sy, sz, o = {}) => part(G.box, o.c || stone(), x, y, z, Object.assign({ sx, sy, sz }, o));
+  // (worn: a box's edges rounded off by a squashed dodecahedron a touch smaller round it)
+  const worn = (x, y, z, sx, sy, sz, o = {}) => { box(x, y, z, sx * 0.9, sy * 0.92, sz * 0.86, o); part(G.dodec, o.c || stone(), x, y, z, Object.assign({}, o, { sx: sx * 1.08, sy: sy * 1.04, sz: sz * 1.02 })); };
+  partPre = F.matrix;
+  try {
+    // hips, the skirt of strips under the belt, and the belt
+    worn(0, -0.2, 0, 0.88, 0.5, 0.54);
+    for (let n = 0; n < 6; n++) box(-0.36 + n * 0.145, -0.5, 0.27, 0.12, 0.42, 0.06, { rx: -0.08 });
+    box(0, 0.08, 0, 0.98, 0.13, 0.62, { c: deep() });
+    // the cuirass: the waist, then the chest, its muscles carved in, a crack running down
+    worn(0, 0.36, 0, 0.84, 0.46, 0.52);
+    worn(0, 0.78, 0, 1.02, 0.5, 0.6);
+    for (const sx of [-1, 1]) box(sx * 0.22, 0.86, 0.3, 0.36, 0.2, 0.06);
+    box(0, 0.42, 0.27, 0.05, 0.4, 0.04, { c: deep() });
+    for (const yy of [0.32, 0.48]) box(0, yy, 0.27, 0.42, 0.04, 0.04, { c: deep() });
+    seg(G.box, deep(0.2), [0.18, 1.0, 0.31], [0.05, 0.6, 0.29], 0.012);
+    // the shoulder plates, in layers
+    for (const sx of [-1, 1]) {
+      part(G.dodec, stone(), sx * 0.6, 1.02, 0, { sx: 0.44, sy: 0.3, sz: 0.56 });
+      box(sx * 0.66, 0.88, 0, 0.34, 0.09, 0.54, { rz: sx * -0.45 });
+      box(sx * 0.7, 0.76, 0, 0.3, 0.08, 0.5, { rz: sx * -0.55 });
+    }
+    // the neck and head: brow, nose and dark eyes, under a domed helmet with cheek guards and a crest
+    part(G.cyl6, stone(), 0, 1.16, 0, { sx: 0.26, sy: 0.2, sz: 0.26 });
+    worn(0, 1.42, 0.01, 0.38, 0.44, 0.42);
+    box(0, 1.5, 0.22, 0.34, 0.06, 0.06);
+    box(0, 1.41, 0.24, 0.07, 0.13, 0.07);
+    for (const sx of [-1, 1]) box(sx * 0.1, 1.46, 0.215, 0.08, 0.04, 0.03, { c: deep(0.1) });
+    box(0, 1.31, 0.22, 0.16, 0.03, 0.03, { c: deep(0.3) });
+    part(G.dodec, stone(), 0, 1.6, -0.01, { sx: 0.52, sy: 0.38, sz: 0.52 });
+    for (const sx of [-1, 1]) box(sx * 0.21, 1.37, 0.08, 0.06, 0.3, 0.3, { rz: sx * 0.12 });
+    box(0, 1.56, 0.25, 0.4, 0.06, 0.06);
+    box(0, 1.85, -0.04, 0.09, 0.26, 0.62);
+    box(0, 1.98, -0.22, 0.07, 0.12, 0.26);   // (the crest's tail broken short)
+    // the right arm raised, the sword snapped off up the blade
+    seg(G.cyl6, stone(), [0.62, 0.98, 0], [0.95, 1.42, 0.12], 0.16);
+    part(G.dodec, stone(), 0.95, 1.42, 0.12, { s: 0.3 });
+    seg(G.cyl6, stone(), [0.95, 1.42, 0.12], [0.92, 1.92, 0.2], 0.13);
+    worn(0.92, 1.98, 0.21, 0.2, 0.18, 0.2);
+    box(0.92, 2.1, 0.21, 0.48, 0.07, 0.1, { c: deep() });
+    seg(G.box, stone(), [0.92, 2.13, 0.21], [0.93, 2.68, 0.23], 0.065);
+    part(G.box, stone(), 0.93, 2.7, 0.23, { sx: 0.13, sy: 0.08, sz: 0.04, rz: 0.6 });
+    // the left arm down on the shield, which sits half in the sand
+    seg(G.cyl6, stone(), [-0.62, 0.98, 0], [-0.86, 0.6, 0.12], 0.16);
+    seg(G.cyl6, stone(), [-0.86, 0.6, 0.12], [-0.74, 0.3, 0.42], 0.13);
+    part(G.cyl8, stone(), -0.98, 0.42, 0.3, { sx: 1.06, sy: 0.09, sz: 1.06, rz: Math.PI / 2 - 0.25, ry: -0.5 });
+    part(G.cyl8, deep(), -1.02, 0.42, 0.32, { sx: 0.82, sy: 0.04, sz: 0.82, rz: Math.PI / 2 - 0.25, ry: -0.5 });
+    part(G.dodec, stone(), -1.05, 0.44, 0.33, { s: 0.2 });
+    // chips knocked out of it, darker where the fresh stone shows
+    for (let n = 0; n < 5; n++) {
+      const yy = 0.3 + rnd() * 1.4, sx = rnd() < 0.5 ? -1 : 1;
+      part(G.dodec, deep(), sx * (0.3 + rnd() * 0.2), yy, 0.27 + rnd() * 0.04, { sx: 0.1 + rnd() * 0.06, sy: 0.08, sz: 0.04, ry: rnd() * 3 });
+    }
+    // sand drifted onto it where it faces up: its back, the backs of its shoulders and helmet, the belt's ledge
+    for (const [x, y, z, w] of [[0, 0.75, -0.32, 0.9], [0, 0.35, -0.29, 0.7], [-0.6, 1.0, -0.22, 0.36], [0.6, 1.0, -0.22, 0.36], [0, 1.62, -0.24, 0.36], [0, 0.12, -0.33, 0.8]])
+      part(G.dodec, sand(), x, y, z, { sx: w, sy: 0.22, sz: 0.12 + rnd() * 0.06, rx: 0.2 });
+  } finally { partPre = null; }
+  // a mound of sand round it where it goes in, and a broken bit of the crest lying by it
+  const fx = Math.sin(st.yaw), fz = Math.cos(st.yaw), sxx = Math.cos(st.yaw), szz = -Math.sin(st.yaw);
+  for (let n = 0; n < 7; n++) {
+    const a = (n / 7) * 6.28, x = st.x + sxx * Math.cos(a) * 0.75 + fx * Math.sin(a) * 0.5, z = st.z + szz * Math.cos(a) * 0.75 + fz * Math.sin(a) * 0.5;
+    part(G.dodec, sand(), x, y0 + 0.02, z, { sx: 0.6 + rnd() * 0.3, sy: 0.22, sz: 0.5 + rnd() * 0.2, ry: rnd() * 6 });
+  }
+  const bx = st.x + fx * 1.6 + sxx * 0.7, bz = st.z + fz * 1.6 + szz * 0.7;
+  part(G.box, stone(), bx, y0 + 0.04, bz, { sx: 0.1, sy: 0.22, sz: 0.3, rx: 1.2, ry: rnd() * 6 });
+}
 function vent(c, r, k) {
   const x = c + 1, z = r + 1, y = LV[T(c, r)] * STEP;
   part(G.cyl8, shade(CC('#241c1a'), 0.9 + k * 0.1), x, y + 0.006, z, { sx: 1.62, sy: 0.012, sz: 1.5, ry: k * 3 });
@@ -6715,6 +6842,7 @@ function drawObject(o, c, r) {
     case O.BURNT: return burntTree(x, z, k2);
     case O.VENT: return vent(c, r, k2);
     case O.GROTTO: { const g = grottos.find(q => q.anchor === T(c, r)); return g && grotto(g); }
+    case O.STATUE: { const st = statues.find(q => q.anchor === T(c, r)); return st && warriorStatue(st); }
     case O.PUMICE: return pumice(x, z, k2);
     case O.ROCK: return rock(x, z, k2, BI[T(c, r)] === WASTES ? '#4a403c' : '#7a7684');
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
@@ -12001,6 +12129,7 @@ function tileRGB(i) {
   if (c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) f *= 0.72;
   if (FIELD[i]) { R = 176; Gc = 146; B = 70; f = 1; }
   if (GROT[i] === 1) { R = 90; Gc = 220; B = 200; f = 1; }
+  if (OB[i] === O.STATUE || OB[i] === O.STATUEX) { R = 150; Gc = 112; B = 64; f = 1; }
   if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; }
   if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; }
   return [R * f, Gc * f, B * f];
@@ -13185,6 +13314,7 @@ window.GAME = {
   wheatCut: () => wheatCut.size,
   grottos: () => grottos.map(g => ({ c: g.c, r: g.r, L: g.L, top: g.top, pool: g.pool.length, wading: g.pool.every(([c, r]) => WT[T(c, r)] === 1 && GROT[T(c, r)] === 1),
     anchor: OB[g.anchor] === O.GROTTO, built: !!(chunks.get(Math.floor(g.r / CH) * NC + Math.floor(g.c / CH)) || {}).grot, mesh: !!g.mesh })),
+  statues: () => statues.map(st => ({ x: +st.x.toFixed(1), z: +st.z.toFixed(1), L: st.L, tilt: +st.tilt.toFixed(2), anchor: OB[st.anchor] === O.STATUE })),
   grottoLights: () => lampLights.filter(l => l.intensity > 0).map(l => [l.color.r.toFixed(2), l.color.g.toFixed(2), l.distance]),
   spikeReset: () => { chunkTime.parts.fill(0); giStepMax.fill(0); },
   spikeParts: () => ({ gi: giStepMax.map(v => +v.toFixed(1)), chunk: chunkTime.parts.map(v => +v.toFixed(1)), chunkAvg: +(chunkTime.ms / Math.max(1, chunkTime.n)).toFixed(1) }),
