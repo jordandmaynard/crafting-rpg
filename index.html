@@ -773,6 +773,7 @@ async function generate(progress) {
   fenceTowns();
   pourLava();
   settleWater();
+  keepApart();
   progress(0.88, 'GROWING THE WILDS'); await nextFrame();
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) placeScenery(c, r);
@@ -790,6 +791,34 @@ async function generate(progress) {
   nameRegions();
   progress(0.97, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
+}
+
+// Lava and swamp water never touch water. Each body of lava and water (tiles touching side or corner) runs all
+// with one or the other, whichever most of it already is (so a river running into the wastes is water there, or
+// lava all the way back, by which it mostly is), and no swamp pool comes within a tile of either.
+function keepApart() {
+  const NN = N * N, seen = new Uint8Array(NN), q = new Int32Array(NN);
+  const wet = i => WT[i] >= 2;
+  for (let s = 0; s < NN; s++) {
+    if (!wet(s) || seen[s]) continue;
+    let n = 1, lava = 0; q[0] = s; seen[s] = 1;
+    for (let h = 0; h < n; h++) {
+      const i = q[h], c = i % N, r = (i - c) / N;
+      lava += LAVA[i];
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const cc = c + dc, rr = r + dr, j = rr * N + cc;
+        if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && wet(j) && !seen[j]) { seen[j] = 1; q[n++] = j; }
+      }
+    }
+    if (lava && lava < n) { const v = lava * 2 >= n ? 1 : 0; for (let h = 0; h < n; h++) LAVA[q[h]] = v; }
+  }
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r);
+    if (WT[i] !== 1) continue;
+    let near = false;
+    for (let dr = -1; dr <= 1 && !near; dr++) for (let dc = -1; dc <= 1; dc++) if (wet(T(c + dc, r + dr))) { near = true; break; }
+    if (near) WT[i] = 0;
+  }
 }
 
 // Cut the world into regions and name them (see REGION_MIN above). Each region also gets the spots its name can
@@ -7790,7 +7819,8 @@ function toggleMap() {
   mapOpen = !mapOpen;
   $('mapModal').hidden = !mapOpen;
   keys.clear(); mouse.down = false;
-  if (mapOpen) { bigView.zoom = 1; bigView.x = N / 2; bigView.z = N / 2; drawBigMap(); }
+  // (it opens at the zoom you left it at, on you)
+  if (mapOpen) { bigView.x = H.x; bigView.z = H.z; bigClamp(); drawBigMap(); }
 }
 // The big map: the wheel zooms in and out about the cursor, and dragging pans it.
 const bigView = { zoom: 1, x: N / 2, z: N / 2, drag: null };
