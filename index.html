@@ -3387,7 +3387,7 @@ function updateTrample(dt) {
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
 const GRASS = { on: 1, density: 16, range: 20, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.37, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 0.65, reedHeight: 1.2,
-  variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
+  variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
 const GRASS_KIND = { [MEADOW]: 1, [FOREST]: 2, [TOWN]: 3, [SWAMP]: 4, [DEEP]: 6, [GRAVE]: 7 };
@@ -3501,6 +3501,13 @@ fn grassColor(kind: u32) -> vec3f {
   let pick = gRand(h, 3u) * tot;
   let variant = select(select(2u, 1u, pick < wts.x + wts.y), 0u, pick < wts.x);
   let grassC = grassColor(kind) * (1.0 + U.look.x * (gRand(h, 5u) * 2.0 - 1.0));
+  // cut by your blade: down to a stub (see cutGrass), growing back
+  var cut = 0.0;
+  if (U.cutV.w > 0.5) {
+    let cuv = (foot.xz - U.cutV.xy) / U.cutV.z;
+    if (all(cuv > vec2f(0.0)) && all(cuv < vec2f(1.0))) { cut = clamp(textureSampleLevel(tCut, tCutS, cuv, 0.0).x, 0.0, 1.0); }
+  }
+  let hs = mix(1.0, U.cutS.x, cut);
   var p = vec3f(0.0);
   var col = vec3f(0.0);
   if (vi < 36u) {
@@ -3510,7 +3517,7 @@ fn grassColor(kind: u32) -> vec3f {
     var c = grassC;
     if (variant == 2u) { c = U.cReed * (0.9 + 0.2 * gRand(h, b + 20u)); }
     var up = 0.0;
-    if (j == 2u) { p = vec3f(bl.off.x + bl.tip.x, bl.h, bl.off.y + bl.tip.y); up = 1.0; }
+    if (j == 2u) { p = vec3f(bl.off.x + bl.tip.x * hs, bl.h * hs, bl.off.y + bl.tip.y * hs); up = 1.0; }
     else { let k = gRand(h, b + 10u) * 2.0944 + f32(side + j) * 2.0944; p = vec3f(bl.off.x + cos(k) * bl.w, -0.03, bl.off.y + sin(k) * bl.w); }
     col = c * mix(0.62, 1.12, up);
   } else {
@@ -3539,6 +3546,8 @@ fn grassColor(kind: u32) -> vec3f {
       p = ctr + vec3f(cos(a) * rad, 0.0, sin(a) * rad);
       col = c * select(mix(lit.x, lit.y, 0.35), lit.x, variant == 0u);
     }
+    // (a cut flower or reed loses its head; a cut grass's middle blade is a stub like the rest)
+    if (variant != 0u && cut > 0.4) { p = vec3f(0.0, -0.05, 0.0); } else { p.y *= hs; }
   }
   // turned and sized, then bent about its foot as the plants are (see plantMat)
   let yaw = gRand(h, 9u) * 6.2832;
@@ -3594,6 +3603,67 @@ function updateGrass() {
   Object.assign(u.look.value, { x: g.variation, y: g.soft, z: g.flowerSize, w: g.reedHeight });
   Object.assign(u.share.value, { x: g.grass, y: g.flowers, z: g.reeds, w: g.flowerHeight });
   u.cMeadow.value.set(g.meadowColor); u.cForest.value.set(g.forestColor); u.cSwamp.value.set(g.swampColor); u.cReed.value.set(g.reedColor);
+}
+
+// Your blade cuts the grass it passes through: a swing its arc in front of you, the whirlwind a ring round you,
+// a lunge a lane along it. Each cut presses into a cut map round you (another src/gfx/drift.js grid: its first
+// channel how far the grass there is cut, easing back over GRASS.regrow seconds), which grassMat reads to shrink
+// the tufts there to stubs that grow back; and where it's freshly cut, bits of blade fly up and flutter down.
+const cuts = new GFX.Drift(renderer);
+GRASS_U.tCut = { value: cuts.texture };
+GRASS_U.cutV = { value: { x: 0, y: 0, z: 48, w: 0 } };   // the cut map's corner (tiles), width (tiles), on
+GRASS_U.cutS = { value: { x: 0.15, y: 0, z: 0, w: 0 } };  // how tall cut grass stands (share of its height)
+const cutQueue = [];   // circles still to press into the map (16 a frame)
+let cutLog = [];       // recent cuts { x, z, r, t }, so grass already cut sends no more bits up
+const bladeBitGeo = new GFX.BoxGeometry(0.025, 0.13, 0.015);
+const bladeBitMats = {};
+// the grass at (x, z): its colour, or null if none grows there
+function grassColorAt(x, z) {
+  const c = Math.floor(x), r = Math.floor(z);
+  if (c < 0 || r < 0 || c >= N || r >= N) return null;
+  const v = grassTex.image.data[T(c, r) * 4], kind = v >> 4, q = (x - c >= 0.5 ? 1 : 0) + (z - r >= 0.5 ? 2 : 0);
+  if (!kind || !(v >> q & 1)) return null;
+  return kind === 2 || kind === 6 ? GRASS.forestColor : kind === 4 || kind === 5 || kind === 7 ? GRASS.swampColor : GRASS.meadowColor;
+}
+// cut the grass within r of (x, z); fling: which way the bits fly (from where the blade came)
+function cutGrass(x, z, r, fx, fz) {
+  if (GRASS.on < 0.5 || GRASS.cut < 0.5) return;
+  cutQueue.push({ x, z, radius: r, strength: 1 });
+  // (fresh unless an earlier stroke cut here; this one's other cuts don't count)
+  const fresh = !cutLog.some(e => e.t < time && time - e.t < GRASS.regrow * 0.5 && Math.hypot(e.x - x, e.z - z) < e.r * 0.7);
+  cutLog.push({ x, z, r, t: time });
+  if (cutLog.length > 300) cutLog = cutLog.slice(-200);
+  if (!fresh) return;
+  const n = Math.round((1 + r * 4) * GRASS.bits);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.28, l = Math.sqrt(Math.random()) * r, px = x + Math.cos(a) * l, pz = z + Math.sin(a) * l;
+    const col = grassColorAt(px, pz);
+    if (!col) continue;
+    const mat = (bladeBitMats[col] || (bladeBitMats[col] = flatMat({ color: col }))).clone();
+    mat.transparent = true;
+    const m = new GFX.Mesh(bladeBitGeo, mat);
+    m.position.set(px, surfaceY(px, pz) + 0.1 + Math.random() * 0.15, pz); m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    m.scale.setScalar(0.7 + Math.random() * 0.6);
+    scene.add(m);
+    debris.push({ m, vx: fx * (1 + Math.random() * 1.5) + (Math.random() - 0.5) * 1.6, vz: fz * (1 + Math.random() * 1.5) + (Math.random() - 0.5) * 1.6, vy: 1.6 + Math.random() * 1.6,
+      ax: (Math.random() - 0.5) * 16, az: (Math.random() - 0.5) * 16, life: 0, fall: 0.3 });
+  }
+}
+// a sword stroke's cuts: an arc of it from your middle (range, arc in radians about face), or a ring round you
+function cutArc(range, arc, face) {
+  const rows = [range * 0.45, range * 0.85], k = Math.max(3, Math.round(arc * 2.4));
+  for (const d of rows) for (let i = 0; i < k; i++) {
+    const a = face + (i / (k - 1) - 0.5) * arc, sx = Math.sin(a), sz = Math.cos(a);
+    cutGrass(H.x + sx * d, H.z + sz * d, range * 0.32, sx, sz);
+  }
+}
+function updateCuts(dt) {
+  const u = GRASS_U.cutV.value;
+  u.w = 0;
+  if (GRASS.on < 0.5 || !grassMesh.visible) { cutQueue.length = 0; return; }
+  cuts.update({ hero: [H.x, H.z], dt, bodies: cutQueue.splice(0, 16), recover: GRASS.regrow });
+  Object.assign(u, { x: cuts.view[0], y: cuts.view[1], z: cuts.view[2], w: GRASS.cut });
+  GRASS_U.cutS.value.x = GRASS.stub;
 }
 
 // ---------- Deep snow and sand (T > Deep snow and sand) ----------
@@ -8384,6 +8454,7 @@ function update(dt) {
       H.lunge += dt;
       const sp = H.lunge < 0.24 ? 14 : 0;
       vx = Math.sin(H.face) * sp; vz = Math.cos(H.face) * sp;
+      if (H.lunge < 0.3) cutGrass(H.x + Math.sin(H.face) * 0.5, H.z + Math.cos(H.face) * 0.5, 0.55, Math.sin(H.face), Math.cos(H.face));
       for (const f of foes.slice()) {
         if (H.lungeHit.has(f) || Math.hypot(f.x - H.x, f.z - H.z) > 1.0 + f.def.rad) continue;
         H.lungeHit.add(f); hurtFoe(f, 26, H.x - Math.sin(H.face), H.z - Math.cos(H.face), 4.5);
@@ -8421,6 +8492,7 @@ function update(dt) {
         if (H.punch) swingHit(PUNCH.range, PUNCH.arc, PUNCH.dmg);
         else {
           swingHit(H.combo === 2 ? 1.5 : 1.35, H.combo === 2 ? 1.6 : 2.1, SWING_DMG[H.combo]);
+          cutArc(H.combo === 2 ? 1.5 : 1.35, H.combo === 2 ? 1.6 : 2.1, H.face);
           arcT = 0; arcMesh.rotation.y = H.face; arcMesh.scale.set(H.combo === 1 ? -1 : 1, 1, 1);
         }
       }
@@ -8433,6 +8505,7 @@ function update(dt) {
         H.whirlTick = 0.25; ringT = 0;
         for (const f of foes.slice()) if (Math.hypot(f.x - H.x, f.z - H.z) < 1.75 + f.def.rad && Math.abs(f.y - H.y) < 1.2) hurtFoe(f, 9, H.x, H.z, 3.5);
         propsNear(1.75, (i, c, r, dx, dz) => strikeProp(i, c, r, dx, dz, 9));
+        cutArc(1.75, 6.0, H.face);
       }
       if (H.whirl > 1.0) { H.whirl = -1; H.face = Math.atan2(aim.x, aim.z); }
     }
@@ -8502,7 +8575,9 @@ function update(dt) {
   ringMesh.visible = ringMesh.material.opacity > 0;
   for (let i = debris.length - 1; i >= 0; i--) {
     const d = debris[i]; d.life += dt;
-    d.vy -= GRAV * dt;
+    d.vy -= GRAV * dt * (d.fall || 1);
+    // (light things, cut grass, flutter down)
+    if (d.fall) { d.vy = Math.max(d.vy, -1.2); d.vx *= 1 - Math.min(1, dt * 1.5); d.vz *= 1 - Math.min(1, dt * 1.5); }
     d.m.position.x += d.vx * dt; d.m.position.y += d.vy * dt; d.m.position.z += d.vz * dt;
     const fl = surfaceY(d.m.position.x, d.m.position.z) + 0.03;
     if (d.m.position.y < fl) { d.m.position.y = fl; d.vy *= -0.3; d.vx *= 0.55; d.vz *= 0.55; d.ax *= 0.5; d.az *= 0.5; }
@@ -9352,6 +9427,10 @@ const TUNING = [
     [GRASS, 'variation', 'How much each tuft\'s shade varies', 0, 0.5, 0.01],
     [GRASS, 'soft', 'Lit like the ground (0: each blade by its own sides)', 0, 1, 0.01],
     [GRASS, 'outline', 'Depth outline on grass and flowers (1 on, 0 off)', 0, 1, 1],
+    [GRASS, 'cut', 'Your blade cuts grass (1 on, 0 off)', 0, 1, 1],
+    [GRASS, 'stub', 'How tall cut grass stands (share of its height)', 0, 1, 0.01],
+    [GRASS, 'regrow', 'Seconds cut grass takes to grow back', 2, 600, 1],
+    [GRASS, 'bits', 'Bits of grass flung up (times)', 0, 4, 0.05],
     [GRASS, 'meadowColor', 'Meadow grass colour', 'color'],
     [GRASS, 'forestColor', 'Forest grass colour', 'color'],
     [GRASS, 'swampColor', 'Swamp grass colour', 'color'],
@@ -9624,6 +9703,7 @@ function frame(now) {
   updateTrample(dt);
   updateGrass();
   updateDrift(dt);
+  updateCuts(dt);
   updatePrints();
   remakeOres(dt);
   updateHearths(dt);
@@ -9710,6 +9790,8 @@ window.GAME = {
   groundQ: (x2, z2) => { const d = groundTex.image.data, o = (z2 * N * 2 + x2) * 4; return [d[o], d[o + 1], d[o + 2], d[o + 3]]; },
   drift: () => ({ visible: driftMesh.visible, cov: driftCov(H.x, H.z), slow: driftSlow(H.x, H.z), view: [...drift.view], on: drift.on }),
   driftAt: (x, z) => ({ cov: driftCov(x, z), slow: driftSlow(x, z) }),
+  cutGrass: (x, z, r) => cutGrass(x, z, r ?? 0.5, 1, 0),
+  cuts: () => ({ queue: cutQueue.length, log: cutLog.length, on: cuts.on, bits: debris.filter(d => d.fall).length }),
   grassAt: (c, r) => { const d = grassTex.image.data, o = T(c, r) * 4; return { mask: d[o] & 15, kind: d[o] >> 4, y: (d[o + 1] * 256 + d[o + 2]) / 1024 - 16 }; },
   plants: () => { let n = 0; for (const ch of chunks.values()) if (ch.plant) n += ch.plant.geometry.attributes.position.array.length / 3; return { verts: n, trample: trample.on, view: [...trample.view] }; },
   prints: () => ({ n: prints.length, list: prints.slice(-6).map(p => ({ feet: p.feet, snow: p.snow, x: +p.x.toFixed(2), z: +p.z.toFixed(2) })), corner: prCorner, on: PRINT_U.prV.value.w }),
