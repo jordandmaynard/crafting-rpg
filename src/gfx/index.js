@@ -5,7 +5,7 @@ export * from './scene.js';
 export * from './geometry.js';
 export * from './materials.js';
 export { createRenderer } from './renderer.js';
-export { HeightProbes, rasterGround, rasterChunk } from './probes.js';
+export { HeightProbes, rasterGround, rasterChunk, rasterStart, rasterPart, rasterEnd, rasterTris } from './probes.js';
 export { LitHaze } from './haze.js';
 export { EyeAdaptation } from './exposure.js';
 export { Bloom } from './bloom.js';

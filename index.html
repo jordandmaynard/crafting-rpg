@@ -2545,24 +2545,50 @@ function updateHaze() {
     tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10] });
 }
 let giVersion = 0;
-// a chunk's block of the height field (worked out when it's first wanted, and again after its meshes change)
+// A chunk's block of the height field is worked out when it's first wanted, and again after its meshes change,
+// a step at a time: its ground, then its things GI_RUN triangles at a time. Each frame steps on for GI_BUDGET ms
+// (at least one step), so chunks streaming into the window or a big rebuild are spread over frames instead of
+// stalling one; until a block's done, the old one (or none) stands.
+const GI_BUDGET = 2.5, GI_RUN = 4000;
+let giUntil = 0, giStepped = false;
+function giMayStep() {
+  if (!giStepped) { giStepped = true; return true; }
+  return performance.now() < giUntil;
+}
 function chunkGI(cx, cz) {
   if (cx < 0 || cz < 0 || cx >= NC || cz >= NC) return null;
   const ch = chunks.get(cz * NC + cx);
   if (!ch) return null;
   if (ch.gi && !ch.giStale) return ch.gi;
   const geo = m => m && m.geometry;
-  if (!ch.giGround || ch.giStale === 2) ch.giGround = GFX.rasterGround(cx, cz, [
-    { geo: geo(ch.ground) }, { geo: geo(ch.bog), color: [0.06, 0.07, 0.03] }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
-    { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }]);
-  // and the roofs over it (each building's is one mesh of its own)
-  const roofs = [];
-  for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
-  ch.gi = GFX.rasterChunk(cx, cz, ch.giGround, [
-    { geo: geo(ch.obj), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
-    { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs], ++giVersion);
-  ch.giStale = 0;
-  return ch.gi;
+  const job = ch.giJob || (ch.giJob = { stage: 0, ground: null, st: null, runs: null, k: 0, redoGround: !ch.giGround || ch.giStale === 2 });
+  while (giMayStep()) {
+    if (job.stage === 0) {
+      job.ground = job.redoGround ? GFX.rasterGround(cx, cz, [
+        { geo: geo(ch.ground) }, { geo: geo(ch.bog), color: [0.06, 0.07, 0.03] }, { geo: geo(ch.water), color: [0.05, 0.12, 0.13] },
+        { geo: geo(ch.lava), color: [0.85, 0.22, 0.04], emit: Math.min(1, LAVA_FX.glow / 4) }]) : ch.giGround;
+      job.stage = 1;
+    } else if (job.stage === 1) {
+      // what stands on it, and the roofs over it (each building's is one mesh of its own), cut into runs
+      const roofs = [];
+      for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
+      const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
+        { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs];
+      job.st = GFX.rasterStart(cx, cz, job.ground);
+      job.runs = [];
+      for (const part of parts) { const n = GFX.rasterTris(part); for (let t = 0; t < n; t += GI_RUN) job.runs.push([part, t, t + GI_RUN]); }
+      job.stage = 2;
+    } else if (job.k < job.runs.length) {
+      const [part, t0, t1] = job.runs[job.k++];
+      GFX.rasterPart(job.st, part, t0, t1);
+    } else {
+      ch.giGround = job.ground;
+      ch.gi = GFX.rasterEnd(job.st, ++giVersion);
+      ch.giStale = 0; ch.giJob = null;
+      return ch.gi;
+    }
+  }
+  return ch.gi || null;
 }
 // a building's roof went up or came down: the chunks under it work their blocks out again
 function giTouch(tiles) {
@@ -2572,7 +2598,7 @@ function giTouch(tiles) {
     if (seen.has(key)) continue;
     seen.add(key);
     const ch = chunks.get(key);
-    if (ch) ch.giStale = Math.max(ch.giStale || 0, 1);
+    if (ch) { ch.giStale = Math.max(ch.giStale || 0, 1); ch.giJob = null; }
   }
 }
 // the view over the ground: the screen's corners carried down to a little under the target and a little over it,
@@ -2598,6 +2624,7 @@ function updateGI() {
   const lights = [heroLight, ...lampLights].filter(l => l.intensity > 0).map(l => ({
     pos: [l.position.x, l.position.y, l.position.z], color: [l.color.r * l.intensity, l.color.g * l.intensity, l.color.b * l.intensity], distance: l.distance, decay: l.decay }));
   const sd = giRay.copy(sun.position).sub(sun.target.position).normalize();
+  giUntil = performance.now() + GI_BUDGET; giStepped = false;
   gi.update(Object.assign({}, GI, {
     mode: GI.on, target: [camTarget.x, camTarget.z], radius, view: v, top: MAXL * STEP + 30,
     sun: { dir: [sd.x, sd.y, sd.z], color: [sun.color.r * sun.intensity, sun.color.g * sun.intensity, sun.color.b * sun.intensity], shadow: sun.castShadow ? CLOUD_U.shadowAmt.value : 0 },
@@ -5902,7 +5929,7 @@ function buildChunk(cx, cz) {
   return ch;
 }
 function swapMesh(ch, key, m) {
-  ch.giStale = Math.max(ch.giStale || 0, key === 'ground' || key === 'water' || key === 'lava' || key === 'bog' ? 2 : 1);
+  ch.giStale = Math.max(ch.giStale || 0, key === 'ground' || key === 'water' || key === 'lava' || key === 'bog' ? 2 : 1); ch.giJob = null;
   if (ch[key]) { scene.remove(ch[key]); ch[key].geometry.dispose(); }
   ch[key] = m;
   if (m) { m.matrixAutoUpdate = false; m.updateMatrix(); scene.add(m); }
@@ -10116,6 +10143,7 @@ window.GAME = {
   drift: () => ({ visible: driftMesh.visible, cov: driftCov(H.x, H.z), slow: driftSlow(H.x, H.z), view: [...drift.view], on: drift.on }),
   driftAt: (x, z) => ({ cov: driftCov(x, z), slow: driftSlow(x, z) }),
   driftSet: o => Object.assign(DRIFT, o),
+  giBlocks: () => { let done = 0, jobs = 0; for (const ch of chunks.values()) { if (ch.gi && !ch.giStale) done++; if (ch.giJob) jobs++; } return { done, jobs, chunks: chunks.size }; },
   driftBits: () => { const d = driftTex.image.data, n = [0, 0, 0, 0, 0, 0, 0]; for (let t = 0; t < d.length; t += 4) for (let b = 0; b < 7; b++) if (d[t] >> b & 1) n[b]++; return n; },
   cutGrass: (x, z, r) => cutGrass(x, z, r ?? 0.5, 1, 0),
   cuts: () => ({ queue: cutQueue.length, log: cutLog.length, on: cuts.on, bits: debris.filter(d => d.fall).length }),

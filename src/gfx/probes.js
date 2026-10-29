@@ -167,15 +167,17 @@ fn update(@builtin(global_invocation_id) id: vec3u) {
   }
   let slices = max(i32(P.cfg2.w), 1);
   let refresh = P.cfg2.x > 1.5 && ((c.x * 7 + c.y * 13 + layer * 3) % slices + slices) % slices == i32(P.cfg2.z);
+  // (sky visibility alone, mode 1, never reads or writes the bounce light)
+  let bounce = P.cfg2.x > 1.5;
   if (!inView || (same && !dirty && !refresh)) {
     if (same) {
       textureStore(keyB, vi, k);
       textureStore(visB, vi, textureLoad(visA, vi, 0));
-      for (var j = 0; j < 3; j++) { textureStore(lightB, li + vec3i(j, 0, 0), textureLoad(lightA, li + vec3i(j, 0, 0), 0)); }
+      if (bounce) { for (var j = 0; j < 3; j++) { textureStore(lightB, li + vec3i(j, 0, 0), textureLoad(lightA, li + vec3i(j, 0, 0), 0)); } }
     } else {
       textureStore(keyB, vi, vec4i(0));
       textureStore(visB, vi, vec4f(-1.0, 0.0, 0.0, 0.0));
-      for (var j = 0; j < 3; j++) { textureStore(lightB, li + vec3i(j, 0, 0), vec4f(0.0)); }
+      if (bounce) { for (var j = 0; j < 3; j++) { textureStore(lightB, li + vec3i(j, 0, 0), vec4f(0.0)); } }
     }
     return;
   }
@@ -184,11 +186,10 @@ fn update(@builtin(global_invocation_id) id: vec3u) {
   let y = floorY + giLayerH(layer);
   if (floorY < -1000.0 || giInsideBand(c, y)) {
     textureStore(visB, vi, vec4f(-1.0, 0.0, 0.0, 0.0));
-    for (var j = 0; j < 3; j++) { textureStore(lightB, li + vec3i(j, 0, 0), vec4f(0.0)); }
+    if (bounce) { for (var j = 0; j < 3; j++) { textureStore(lightB, li + vec3i(j, 0, 0), vec4f(0.0)); } }
     return;
   }
   let ro = vec3f(f32(c.x) + 0.5, y, f32(c.y) + 0.5);
-  let bounce = P.cfg2.x > 1.5;
   let n = u32(max(select(P.cfg.x, P.cfg3.x, bounce), 1.0));
   let spin = hash2(c * 3 + vec2i(layer)) * 6.2832;
   var a = 0.0;
@@ -216,9 +217,11 @@ fn update(@builtin(global_invocation_id) id: vec3u) {
   }
   let kn = 1.0 / f32(n);
   textureStore(visB, vi, vec4f(a, b) * kn);
-  textureStore(lightB, li, vec4f(la.r, lx.r, ly.r, lz.r) * kn);
-  textureStore(lightB, li + vec3i(1, 0, 0), vec4f(la.g, lx.g, ly.g, lz.g) * kn);
-  textureStore(lightB, li + vec3i(2, 0, 0), vec4f(la.b, lx.b, ly.b, lz.b) * kn);
+  if (bounce) {
+    textureStore(lightB, li, vec4f(la.r, lx.r, ly.r, lz.r) * kn);
+    textureStore(lightB, li + vec3i(1, 0, 0), vec4f(la.g, lx.g, ly.g, lz.g) * kn);
+    textureStore(lightB, li + vec3i(2, 0, 0), vec4f(la.b, lx.b, ly.b, lz.b) * kn);
+  }
 }
 `;
 
@@ -381,16 +384,32 @@ export function rasterGround(cx, cz, parts) {
 // written) covers the texels under its triangles' bounding boxes. One whose bottom is near the ground under it
 // stands on it and raises the ground to its top; one higher up joins the floating layer (letting light through
 // if its part `leaks`). parts: [{ geo, leaks?: bool, emit?: 0-1, color?: [r, g, b] }]. Returns the block, ready
-// for HeightProbes.
+// for HeightProbes. It can also be done a piece at a time (rasterStart, rasterPart for each part or a run of its
+// triangles, rasterEnd), so a chunk's block can be spread over frames.
 export function rasterChunk(cx, cz, ground, parts, version) {
-  const B = GI_BLOCK, x0 = cx * GI_CHUNK, z0 = cz * GI_CHUNK, n = B * B;
-  const top = Float32Array.from(ground.h), g = Uint8Array.from(ground.c);
-  const lo = new Float32Array(n).fill(1e9), hi = new Float32Array(n).fill(-1e9), leak = new Uint8Array(n).fill(1), bc = new Uint8Array(n * 4);
+  const st = rasterStart(cx, cz, ground);
+  for (const part of parts) rasterPart(st, part);
+  return rasterEnd(st, version);
+}
+export function rasterStart(cx, cz, ground) {
+  const B = GI_BLOCK, n = B * B;
+  return { B, x0: cx * GI_CHUNK, z0: cz * GI_CHUNK, ground, top: Float32Array.from(ground.h), g: Uint8Array.from(ground.c),
+    lo: new Float32Array(n).fill(1e9), hi: new Float32Array(n).fill(-1e9), leak: new Uint8Array(n).fill(1), bc: new Uint8Array(n * 4) };
+}
+// how many triangles a part has (for cutting it into runs)
+export function rasterTris(part) {
+  const geo = part.geo;
+  if (!geo || !geo.attributes.position) return 0;
+  return Math.floor((geo.index ? geo.index.array.length : geo.attributes.position.count) / 3);
+}
+// one part, or its triangles t0 to t1 (a thing cut across two runs is taken as two things)
+export function rasterPart(st, part, t0 = 0, t1 = Infinity) {
+  const { B, x0, z0, ground, top, g, lo, hi, leak, bc } = st;
   const groundAt = (x, z) => {
     const i = Math.min(B - 1, Math.max(0, Math.floor((x - x0) * GI_TPT))), j = Math.min(B - 1, Math.max(0, Math.floor((z - z0) * GI_TPT)));
     return Math.max(ground.h[j * B + i], -100);
   };
-  for (const part of parts) {
+  {
     const e = Math.round((part.emit || 0) * 255);
     let tris = [], corners = new Set(), lowY = 1e9, lowX = 0, lowZ = 0;
     const flush = () => {
@@ -421,9 +440,12 @@ export function rasterChunk(cx, cz, ground, parts, version) {
       corners.add(ka); corners.add(kb); corners.add(kq);
       tris.push(t);
       for (let v = 0; v < 9; v += 3) if (t[v + 1] < lowY) { lowY = t[v + 1]; lowX = t[v]; lowZ = t[v + 2]; }
-    });
+    }, t0, t1);
     flush();
   }
+}
+export function rasterEnd(st, version) {
+  const { B, top, g, lo, hi, leak, bc } = st, n = B * B;
   const h = new Float32Array(n * 4);
   for (let k = 0; k < n; k++) {
     const band = hi[k] > lo[k] && hi[k] > top[k];
@@ -435,13 +457,13 @@ export function rasterChunk(cx, cz, ground, parts, version) {
   return { h, g, b: bc, version };
 }
 
-// every triangle of a part's geometry, with its colour as bytes
-function eachTri(part, fn) {
+// every triangle of a part's geometry (or those from t0 to t1), with its colour as bytes
+function eachTri(part, fn, t0 = 0, t1 = Infinity) {
   const geo = part.geo;
   if (!geo || !geo.attributes.position) return;
   const p = geo.attributes.position.array, col = geo.attributes.color ? geo.attributes.color.array : null, idx = geo.index ? geo.index.array : null;
   const count = idx ? idx.length : geo.attributes.position.count, fixed = part.color && part.color.map(v => Math.round(v * 255));
-  for (let t = 0; t + 2 < count; t += 3) {
+  for (let t = t0 * 3; t + 2 < Math.min(count, t1 * 3); t += 3) {
     const a = idx ? idx[t] : t, b = idx ? idx[t + 1] : t + 1, q = idx ? idx[t + 2] : t + 2;
     let r, g, bl;
     if (fixed) [r, g, bl] = fixed;
