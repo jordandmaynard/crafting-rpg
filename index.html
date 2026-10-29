@@ -233,6 +233,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 #mapModal .sheet { width: auto; align-items: center; gap: 12px; padding: 16px; }
 #bigmap { display: block; image-rendering: pixelated; border: 3px solid #000; }
+.mapview { position: relative; }
+#bigLabels { position: absolute; left: 3px; top: 3px; pointer-events: none; }
 .maprow { display: flex; gap: 10px; align-items: center; justify-content: space-between; width: 100%; font-family: var(--display); font-size: 8px; color: var(--dim); }
 
 @media (max-width: 720px) {
@@ -343,7 +345,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 <div class="modal" id="mapModal" hidden>
   <div class="sheet">
-    <canvas id="bigmap" width="640" height="640"></canvas>
+    <div class="mapview"><canvas id="bigmap" width="640" height="640"></canvas><canvas id="bigLabels"></canvas></div>
     <div class="maprow"><span id="mapSeed">SEED</span><span class="kb-only">WHEEL ZOOMS · DRAG PANS · M OR ESC CLOSES</span><span class="pad-only"><g-p>LS</g-p> PANS · <g-p>RT</g-p> <g-p>LT</g-p> ZOOM · <g-p>B</g-p> CLOSES</span><button id="plotsBtn">PLOTS: OFF</button><button id="newWorld">NEW WORLD</button></div>
   </div>
 </div>
@@ -7837,22 +7839,9 @@ function drawBigMap() {
   ctx.drawImage(fogCv, 0, 0, N, N);
   if (showPlots && bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // markers and labels stay their own size at any zoom
-  // (labels are sized in screen pixels: k canvas pixels to one on screen; each is ringed with a pixel of black)
-  const k = N / side, label = (t, x, y, ink) => { ctx.strokeText(t, x, y); ctx.fillStyle = ink; ctx.fillText(t, x, y); };
-  ctx.font = `${Math.round(12 * k)}px "Press Start 2P", monospace`; ctx.textAlign = 'center';
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 2 * k; ctx.lineJoin = 'round';
-  const boxes = [];
-  for (const t of towns) {
-    const seen = fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] < 128, [x, z] = worldToBig(t.c, t.r);
-    ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8);
-    boxes.push([x - 6, z - 6, 12, 12]);
-    if (seen) {
-      label(t.name, x, z - 8 * k, '#efe4c8');
-      const w = ctx.measureText(t.name).width + 4 * k; boxes.push([x - w / 2, z - 22 * k, w, 18 * k]);
-    }
-  }
-  drawRegionNames(ctx, boxes, k, label);
+  // markers stay their own size at any zoom
+  for (const t of towns) { const [x, z] = worldToBig(t.c, t.r); ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8); }
+  drawMapLabels(side);
   ctx.fillStyle = '#8de8dc';
   for (const rm of rooms.values()) { const [x, z] = worldToBig(rm.tiles[0][0], rm.tiles[0][1]); ctx.fillRect(x - 3, z - 3, 6, 6); }
   for (const h of hearths.values()) { const [x, z] = worldToBig(h.c + 0.5, h.r + 0.5); ctx.fillStyle = '#000'; ctx.fillRect(x - 7, z - 7, 14, 14); ctx.fillStyle = '#ffa040'; ctx.fillRect(x - 5, z - 5, 10, 10); }
@@ -7864,41 +7853,55 @@ function drawBigMap() {
   ctx.stroke(); ctx.fill(); ctx.restore();
   $('mapSeed').textContent = 'WORLD SEED ' + SEED + ' · ' + Math.floor(H.x) + ', ' + Math.floor(H.z);
 }
-// The names of the regions you've found, biggest first, each at the first of its spots where it overlaps nothing
-// already drawn (town names and markers, other regions' names) and stays on the map; failing that, where it
-// overlaps least. Long names go on two lines.
+// The map's names, drawn on a canvas of their own over it at the screen's own pixels (so the pixel font stays
+// crisp, at 16px, its grid twice over), each ringed with a pixel of black: the towns you've seen, then the
+// regions you've found, biggest first, each at the first of its spots where it overlaps nothing already there
+// (town markers, other names) and stays on the map. A name that fits nowhere isn't drawn: zoomed out, the
+// smaller regions drop off, and come back as you zoom in. Long names go on two lines.
 const REGION_INK = ['#ece2a4', '#bfe2a2', '#cfdc96', '#cdc6dc', '#e4f2ff', '#f2d29a', '#efe4c8', '#a9dcae', '#ffb488'];
-function drawRegionNames(ctx, boxes, k, label) {
-  ctx.font = `${Math.round(10 * k)}px "Press Start 2P", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const lh = 13 * k;
-  const overlap = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
-  const shown = regions.filter(g => g.found).sort((a, b) => b.n - a.n);
-  for (const g of shown) {
-    const words = g.name.split(' ');
-    let lines = [g.name];
-    if (g.name.length > 13 && words.length > 1) {
-      // split where the two lines come out most even
-      let best = 1, bd = 1e9;
-      for (let m = 1; m < words.length; m++) { const d = Math.abs(words.slice(0, m).join(' ').length - words.slice(m).join(' ').length); if (d < bd) { bd = d; best = m; } }
-      lines = [words.slice(0, best).join(' '), words.slice(best).join(' ')];
+const LABEL_PX = 16;
+function drawMapLabels(side) {
+  const cv = $('bigLabels'), dpr = Math.max(1, Math.round(devicePixelRatio || 1)), W = side * dpr;
+  cv.style.width = cv.style.height = side + 'px';
+  if (cv.width !== W) cv.width = cv.height = W;
+  const ctx = cv.getContext('2d'), u = dpr, at = (x, z) => { const [bx, bz] = worldToBig(x, z); return [bx / N * W, bz / N * W]; };
+  ctx.clearRect(0, 0, W, W);
+  ctx.font = `${LABEL_PX * u}px "Press Start 2P", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lh = (LABEL_PX + 4) * u;
+  const label = (t, x, y, ink) => {
+    x = Math.round(x); y = Math.round(y);
+    ctx.fillStyle = '#000';
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) ctx.fillText(t, x + dx * u, y + dy * u);
+    ctx.fillStyle = ink; ctx.fillText(t, x, y);
+  };
+  const overlaps = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+  const fits = box => box[0] >= 0 && box[1] >= 0 && box[0] + box[2] <= W && box[1] + box[3] <= W && !boxes.some(b => overlaps(box, b));
+  const boxes = towns.map(t => { const [x, z] = at(t.c, t.r); return [x - 6 * u, z - 6 * u, 12 * u, 12 * u]; });
+  { const [x, z] = at(H.x, H.z), r = 18 * side / N * u; boxes.push([x - r, z - r, r * 2, r * 2]); }   // (and off your arrow)
+  // a name's lines: two when it's long, split where they come out most even
+  const linesOf = name => {
+    const words = name.split(' ');
+    if (name.length <= 12 || words.length < 2) return [name];
+    let best = 1, bd = 1e9;
+    for (let m = 1; m < words.length; m++) { const d = Math.abs(words.slice(0, m).join(' ').length - words.slice(m).join(' ').length); if (d < bd) { bd = d; best = m; } }
+    return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
+  };
+  const place = (lines, spots, ink) => {
+    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 4 * u, h = lines.length * lh;
+    for (const [x, z] of spots) {
+      const box = [x - w / 2, z - h / 2, w, h];
+      if (!fits(box)) continue;
+      boxes.push(box);
+      lines.forEach((l, j) => label(l, x, z + (j - (lines.length - 1) / 2) * lh, ink));
+      return;
     }
-    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 4 * k, h = lines.length * lh + 3 * k;
-    let at = null, least = Infinity;
-    for (const [sx, sz] of g.spots) {
-      const [x, z] = worldToBig(sx, sz), box = [x - w / 2, z - h / 2, w, h];
-      const off = box[0] < 0 || box[1] < 0 || box[0] + w > N || box[1] + h > N;
-      const ov = boxes.reduce((t, b) => t + overlap(box, b), 0) + (off ? w * h : 0);
-      if (ov < least) { least = ov; at = [x, z, box]; }
-      if (!ov) break;
-    }
-    if (!at) continue;
-    const [x, z, box] = at;
-    boxes.push(box);
-    lines.forEach((l, j) => {
-      label(l, x, z + (j - (lines.length - 1) / 2) * lh, REGION_INK[g.biome]);
-    });
+  };
+  for (const t of towns) {
+    if (fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] >= 128) continue;
+    const [x, z] = at(t.c, t.r);
+    place([t.name], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
-  ctx.textBaseline = 'alphabetic';
+  for (const g of regions.filter(g => g.found).sort((a, b) => b.n - a.n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), REGION_INK[g.biome]);
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123)
 $('newWorld').onclick = () => {
