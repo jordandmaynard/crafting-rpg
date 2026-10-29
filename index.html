@@ -2365,7 +2365,7 @@ function updateBloom() {
 // whirlSpin (tiles a second round you), whirlClear (a second): how your whirlwind stirs it, even standing still.
 // poolAway: in swamps and the Wastes, the share of it left away from water and lava (thickest by them, thinning to
 // this poolReach tiles off). None lies over water (Jordan's ask, v109); lava keeps it.
-const GROUND_HAZE = { on: 1, amount: 0.99, density: 3.49, height: 0.25, slices: 8, patchiness: 1, patchSize: 17.3, relax: 0,
+const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.41, slices: 1, patchiness: 1, patchSize: 17.3, relax: 0,
   windSpeed: 0, settle: 1.19, swirl: 28.5, smooth: 0.15, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 100, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400'};
@@ -3016,8 +3016,10 @@ function roughCell(P, K, Q, flip, lifted) {
 // it is (1 open ground, 2 a path or street, 3 the plaza) and its level; 0 for slopes, cliffs, ramps, water and
 // lava. The ground's shader looks up the colour a little way off, pushed about by smooth noise, and takes it
 // when that quarter is the same sort of ground on the same level, so the squares' edges wander and round off
-// while paths keep their straight edges and nothing bleeds over a cliff.
-const GROUND_SHAPE = { on: 1, wobble: 0.6, size: 1.3 };
+// while paths keep their straight edges and nothing bleeds over a cliff. blend (0-1) fades each quarter's colour
+// into its neighbours' (of the same sort, on the same level) across that much of the way between their middles,
+// until at 1 the ground is one continuous, noisy run of colour with no edges at all.
+const GROUND_SHAPE = { on: 1, wobble: 0.6, size: 1.3, blend: 0 };
 const groundTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 groundTex.regions = [];
 function buildGround(cx, cz, ch) {
@@ -3615,7 +3617,7 @@ function drawPrints() {
 // the hero's feet (a print at each step of the walk), the foes' (one each stride), and the map redrawn as needed
 function updatePrints() {
   const U = PRINT_U, on = PRINTS.on > 0.5;
-  Object.assign(U.gsV.value, { x: GROUND_SHAPE.on, y: GROUND_SHAPE.wobble, z: GROUND_SHAPE.size });
+  Object.assign(U.gsV.value, { x: GROUND_SHAPE.on, y: GROUND_SHAPE.wobble, z: GROUND_SHAPE.size, w: GROUND_SHAPE.blend });
   U.prV.value.w = on && prints.length ? 1 : 0;
   if (!on) return;
   if (H.alive && H.moving && H.dash < 0 && !H.flip) {
@@ -3650,7 +3652,7 @@ const PRINT_U = {
   prV: { value: { x: 0, y: 0, z: PR_TILES, w: 0 } },   // the map's corner (tiles), width (tiles), on
   prE: { value: { x: 1 / PR_W, y: 0.035, z: 0.3, w: 0 } },   // a texel (of the map), dent depth (tiles), darkening
   tGround: { value: groundTex },
-  gsV: { value: { x: 1, y: 0.6, z: 1.3, w: 0 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile
+  gsV: { value: { x: 1, y: 0.6, z: 1.3, w: 0 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
 };
 const groundPrintMat = new GFX.ShaderMaterial({ uniforms: PRINT_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -3680,8 +3682,26 @@ fn gsNoise(p: vec2f) -> f32 {
     if (t0.a > 0.002 && distance(t0.rgb * 2.0, albedo) < 0.03) {
       let p = i.world.xz * U.gsV.z;
       let w = vec2f(gsNoise(p), gsNoise(p + vec2f(17.3, 5.1))) + 0.5 * vec2f(gsNoise(p * 2.3 + vec2f(31.7, 8.2)), gsNoise(p * 2.3 + vec2f(3.9, 47.5)));
-      let t = textureLoad(tGround, clamp(vec2i(floor(i.world.xz * 2.0 + w * U.gsV.y)), vec2i(0), lim), 0);
-      if (abs(t.a - t0.a) < 0.002) { albedo = t.rgb * 2.0; }
+      let qp = i.world.xz * 2.0 + w * U.gsV.y;
+      if (U.gsV.w <= 0.001) {
+        let t = textureLoad(tGround, clamp(vec2i(floor(qp)), vec2i(0), lim), 0);
+        if (abs(t.a - t0.a) < 0.002) { albedo = t.rgb * 2.0; }
+      } else {
+        // blended: the four quarters round the point, weighted by how near their middles are (ramping over
+        // blend of the way between them), leaving out any of another sort or level
+        let qc = qp - 0.5;
+        let base = vec2i(floor(qc));
+        let r = clamp((fract(qc) - 0.5) / U.gsV.w + 0.5, vec2f(0.0), vec2f(1.0));
+        let sw = r * r * (3.0 - 2.0 * r);
+        var sum = vec3f(0.0); var wsum = 0.0;
+        for (var k = 0; k < 4; k++) {
+          let o = vec2i(k & 1, k >> 1);
+          let t = textureLoad(tGround, clamp(base + o, vec2i(0), lim), 0);
+          let wt = select(1.0 - sw.x, sw.x, o.x == 1) * select(1.0 - sw.y, sw.y, o.y == 1);
+          if (abs(t.a - t0.a) < 0.002) { sum += t.rgb * 2.0 * wt; wsum += wt; }
+        }
+        if (wsum > 1e-4) { albedo = sum / wsum; }
+      }
     }
   }
   if (U.prV.w > 0.5 && N.y > 0.7) {
@@ -9093,6 +9113,7 @@ const TUNING = [
     [GROUND_SHAPE, 'on', 'Rounded, irregular ground squares (1 on, 0 off)', 0, 1, 1],
     [GROUND_SHAPE, 'wobble', 'How far their edges wander (quarter tiles)', 0, 2, 0.05],
     [GROUND_SHAPE, 'size', 'How tight the wiggles are (waves a tile)', 0.2, 5, 0.05],
+    [GROUND_SHAPE, 'blend', 'Blend the colours together (0 hard edges, 1 one smooth noisy gradient)', 0, 1, 0.01],
   ]],
   ['Footprints', [
     [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
