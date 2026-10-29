@@ -6150,8 +6150,32 @@ function makeHuman() {
   box(sword, 0.16, 0.03, 0.035, 0, 0, 0.08, goldMat);
   box(sword, 0.045, 0.015, 0.46, 0, 0, 0.32, steelMat);
   box(sword, 0.05, 0.05, 0.05, 0, 0, -0.08, goldMat);
+  // the bow, in the left hand: its limbs run along the hand's z (stood upright at rest by turning its pivot), bowed
+  // back toward its string on the hand's +y, which is toward you when the arm is raised to shoot. The string is two
+  // halves from the tips, each turned and stretched to meet where it's drawn, with an arrow nocked there.
+  const bow = pivot(armL, 0, -0.25, 0.02);
+  wear('bow', bow);
+  const bowWood = flatMat({ color: '#7a4a26' }), bowString = flatMat({ color: '#e8dcc0' });
+  box(bow, 0.045, 0.045, 0.1, 0, 0, 0, hiltMat);
+  for (const k of [1, -1]) {
+    const pts = [[0, 0.05], [0.035, 0.19], [0.12, 0.32]];
+    for (let j = 0; j < 2; j++) {
+      const [y0, z0] = pts[j], [y1, z1] = pts[j + 1], len = Math.hypot(y1 - y0, z1 - z0);
+      box(bow, 0.032, 0.026, len + 0.02, 0, (y0 + y1) / 2, k * (z0 + z1) / 2, bowWood, Math.atan2(-(y1 - y0) * k, z1 - z0));
+    }
+  }
+  const bowStr = [1, -1].map(k => {
+    const half = pivot(bow, 0, 0.12, 0.32 * k);
+    box(half, 0.008, 0.008, 0.32, 0, 0, -0.16 * k, bowString);
+    return half;
+  });
+  const nock = pivot(bow, 0, 0.12, 0);
+  box(nock, 0.014, 0.46, 0.014, 0, -0.23, 0, hiltMat);
+  box(nock, 0.03, 0.06, 0.012, 0, -0.47, 0, steelMat);
+  box(nock, 0.004, 0.08, 0.04, 0, -0.03, 0, bowString);
+  bow.rotation.x = -Math.PI / 2;
   g.scale.setScalar(1.12);
-  return { g, parts, body, legL, legR, armL, armR, head, sword };
+  return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock };
 }
 
 // the Bone Road skeleton, box for box
@@ -6601,7 +6625,7 @@ const H = {
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
   cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
-  kx: 0, kz: 0,
+  kx: 0, kz: 0, bow: null,
 };
 const CD = { Q: 8, E: 7 };
 // the dash is a tumble: a forward roll you can steer, untouchable the whole way, and a burst of extra run
@@ -6743,6 +6767,9 @@ const ICON = {
   stone: pixelSvg(['..GGG...', '.GgggGG.', 'GgggggGG', 'GggwggGG', 'GgggggGG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', w: '#c8c6d0' }),
   sword: pixelSvg(['.......ww', '......wsw', '.....wsw.', '....wsw..', '.y.wsw...', '..yww....', '..by.....', '.b..y....', 'b........'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
   whirl: pixelSvg(['...www...', '.ww...ww.', 'w..sss..w', 'w.s...s.w', 'w.s.y.s.w', 'w.s...s.w', 'w..sss..w', '.ww...ww.', '...www...'], { w: '#8de8dc', s: '#efe4c8', y: '#f2c14e' }),
+  bow: pixelSvg(['......b..', '....bbs..', '...b..s..', '..b...s..', 'hwgwwwsff', '..b...s..', '...b..s..', '....bbs..', '......b..'], { b: '#8a5a32', g: '#5a3a22', s: '#efe4c8', w: '#c89a62', h: '#a8acb8', f: '#d8443a' }),
+  volley: pixelSvg(['h...h...h', '.w..w..w.', '..w.w.w..', '...www...', '....w....', '....w....', '...fwf...', '...f.f...', '.........'], { h: '#a8acb8', w: '#c89a62', f: '#d8443a' }),
+  rain: pixelSvg(['f...f...f', 'w...w...w', 'w.f.w.f.w', 'h.w.h.w.h', '..w...w..', '..h...h..', '.........', '.rrrrrrr.', '..rrrrr..'], { h: '#a8acb8', w: '#c89a62', f: '#efe4c8', r: '#e8642a' }),
   lunge: pixelSvg(['.........', '....w....', '...www...', '..wwwww..', '....s....', '....s....', '...yyy...', '....b....', '....b....'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
   dash: pixelSvg(['.........', '..bbbb...', '..bbbb...', '..bbbb...', '..bbbbbb.', '.bbbbbbbb', '.........', 'w.w.w....', '.........'], { b: '#8a5a32', w: '#8de8dc' }),
   hammer: pixelSvg(['.GGGGG...', '.GgggG...', '.GGGGG...', '...b.....', '...b.....', '...b.....', '...b.....', '...b.....'], { G: '#5a5664', g: '#a8a6b0', b: '#8a5a32' }),
@@ -6790,6 +6817,7 @@ const ITEMS = {
   clothPants: { name: 'Cloth Pants', slot: 'legs', icon: 'pants', armor: 0, mat: 'pants' },
   clothBoots: { name: 'Cloth Boots', slot: 'boots', icon: 'boots', armor: 0, mat: 'boots' },
   basicSword: { name: 'Basic Sword', slot: 'weapon', icon: 'sword', strike: 'slash', q: 'whirl', e: 'lunge' },
+  hunterBow: { name: 'Hunting Bow', slot: 'weapon', icon: 'bow', strike: 'shoot', q: 'volley', e: 'rain' },
   leatherArmor: { name: 'Leather Armor', slot: 'chest', icon: 'leatherArmor', armor: 3, mat: 'leather', trim: 'leatherDark' },
   leatherPants: { name: 'Leather Pants', slot: 'legs', icon: 'leatherPants', armor: 2, mat: 'leatherPants' },
   leatherBoots: { name: 'Leather Boots', slot: 'boots', icon: 'leatherBoots', armor: 1, mat: 'leatherBoots' },
@@ -6803,10 +6831,12 @@ const ITEMS = {
 const ARMOR_PER = 0.04;
 const armor = () => Object.values(GEAR).reduce((a, id) => a + (id && ITEMS[id].armor || 0), 0);
 const FISTS = { name: 'Bare Fists', strike: 'punch' };
-const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' } };
+const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' }, shoot: { name: 'SHOOT', icon: 'bow' } };
 const ABILITY = {
   whirl: { name: 'WHIRL', icon: 'whirl', cast: () => castWhirl() },
   lunge: { name: 'LUNGE', icon: 'lunge', cast: () => castLunge() },
+  volley: { name: 'VOLLEY', icon: 'volley', cast: () => castVolley(), cd: () => BOW.volleyCd },
+  rain: { name: 'RAIN', icon: 'rain', cast: () => castRain(), cd: () => BOW.rainCd },
 };
 // the doll's slots, where each sits on its 3 x 4 grid, and the icon an empty one shows
 const GEAR_SLOTS = [
@@ -6816,6 +6846,7 @@ const GEAR_SLOTS = [
 ];
 const GEAR = { head: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'basicSword' };
 const PACK = new Array(20).fill(null), PACK_N = new Array(20).fill(0);
+PACK[0] = 'hunterBow'; PACK_N[0] = 1;
 // building materials are counted out of the pack (H.wood and H.stone read it; addItem and takeItem change it)
 Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') } });
 const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
@@ -6832,6 +6863,7 @@ const DRESS = {
   boots: () => GEAR.boots, feet: () => !GEAR.boots, cuffs: () => GEAR.boots === 'leatherBoots',
   helmet: () => GEAR.head === 'leatherHelmet',
   sword: () => GEAR.weapon === 'basicSword',
+  bow: () => GEAR.weapon === 'hunterBow',
 };
 const DRESS_MAT = {
   shirt: () => GEAR.chest && ITEMS[GEAR.chest].mat, hood: () => GEAR.chest && ITEMS[GEAR.chest].trim,
@@ -6908,7 +6940,7 @@ function clickCell(c) {
 let wornWeapon = GEAR.weapon;
 function gearChanged() {
   // a new weapon cuts off whatever the old one was doing
-  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.comboT = 0; arcT = 9; }
+  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.bow = null; H.comboT = 0; arcT = 9; }
   dressHero(); renderBar(); renderInv();
   sfx.equip();
 }
@@ -7088,7 +7120,7 @@ function playSlots() {
   const w = weapon(), st = STRIKE[w.strike];
   const ability = (id, key, pad, cd, CDk) => {
     const a = ABILITY[w[id]];
-    return a ? { id, key, pad, name: a.name, icon: a.icon, cd: () => H[cd] / CD[CDk], left: () => H[cd] }
+    return a ? { id, key, pad, name: a.name, icon: a.icon, cd: () => H[cd] / (a.cd ? a.cd() : CD[CDk]), left: () => H[cd] }
       : { id, key, pad, name: 'NONE', icon: 'lock', locked: true };
   };
   return [
@@ -7236,6 +7268,8 @@ function beep(freq, dur, { type = 'square', vol = 0.06, slide = 0, at = 0 } = {}
 }
 const sfx = {
   swing: () => beep(520, 0.07, { type: 'triangle', slide: -380, vol: 0.04 }),
+  bow: () => { beep(260, 0.05, { type: 'triangle', slide: 420, vol: 0.05 }); beep(900, 0.04, { type: 'sine', slide: -500, vol: 0.02, at: 0.02 }); },
+  thunk: () => beep(150, 0.04, { type: 'square', vol: 0.03, slide: -50 }),
   punch: () => beep(160, 0.05, { type: 'square', vol: 0.05, slide: -60 }),
   equip: () => { beep(330, 0.05, { type: 'triangle', vol: 0.05 }); beep(494, 0.06, { type: 'triangle', vol: 0.05, at: 0.05 }); },
   whirl: () => [0, 0.12, 0.24].forEach(a => beep(600, 0.1, { type: 'triangle', slide: -420, vol: 0.035, at: a })),
@@ -7632,7 +7666,7 @@ function respawn() {
   }
   [H.x, H.z] = at || [spawn.x, spawn.z];
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.alive = true; H.invuln = 2;
-  H.swing = H.whirl = H.lunge = H.dash = -1;
+  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = null;
   renderHp();
   camTarget.set(H.x, surfaceY(H.x, H.z), H.z);
   toast(at ? 'You wake by your hearth.' : 'You wake by the well in ' + titleCase(towns[0].name) + '.', 'calm');
@@ -8026,7 +8060,7 @@ function updateAim() {
     const m = moveInput();
     if (TOUCH.aim) {
       aim.x = TOUCH.aim[0]; aim.z = TOUCH.aim[1];
-      if (!m && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip) H.face = Math.atan2(aim.x, aim.z);
+      if (!m && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip && !H.bow) H.face = Math.atan2(aim.x, aim.z);
     } else if (m) { aim.x = m[0]; aim.z = m[1]; }
     else { aim.x = Math.sin(H.face); aim.z = Math.cos(H.face); }
     return;
@@ -8054,6 +8088,7 @@ function updateAim() {
 // ---------- Abilities ----------
 // the sword's three-stroke combo, or with bare hands a right and a left jab
 function startSwing() {
+  if (weapon().strike === 'shoot') { startShot('shot'); return; }
   if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
   H.punch = weapon().strike === 'punch';
   H.combo = H.comboT > 0 ? (H.combo + 1) % (H.punch ? 2 : 3) : 0;
@@ -8075,12 +8110,210 @@ function castLunge() {
   H.face = Math.atan2(aim.x, aim.z);
   sfx.dash();
 }
+// ---------- The bow ----------
+// The bow's shot is an arrow flown dead straight (no arc) at chest height the way you aim, up to `range` tiles,
+// where it drops. It sticks in whatever it meets first: a foe (any size: it only has to be on your level), a tree,
+// rock, wall, fence, closed door or cliff, but it never harvests or harms trees and rocks. Q looses a volley fanned
+// over `volleyCone` degrees that knocks foes back `volleyKnock` tiles; E shoots one up, and `rainDelay` seconds
+// later `rainArrows` fall in a ring `rainRadius` tiles across round where the cursor was. Spent arrows stay
+// stuck for `stuckLife` seconds. Knock-backs are in tiles (a foe's push dies away over an eighth of a second).
+const BOW = { dmg: 10, time: 0.5, speed: 32, range: 20, height: 0.55, knock: 0.2,
+  volleyArrows: 5, volleyCone: 45, volleyDmg: 8, volleyKnock: 1, volleyCd: 5,
+  rainArrows: 10, rainRadius: 2, rainDelay: 1, rainDmg: 12, rainKnock: 0.3, rainCd: 8, rainReach: 8, stuckLife: 20 };
+const STUCK_MAX = 150;
+const arrows = [];
+// an arrow, its tip at the origin pointing along +z: shaft, broadhead and fletching, each drawn as one instanced mesh
+const arrowMeshes = (() => {
+  const one = g => mergeShards(g.map(geo => ({ geo, local: new GFX.Matrix4() })));
+  const parts = [
+    [one([new GFX.BoxGeometry(0.018, 0.018, 0.44).translate(0, 0, -0.27)]), flatMat({ color: '#a07a4a' })],
+    [one([new GFX.BoxGeometry(0.045, 0.012, 0.07).translate(0, 0, -0.04), new GFX.BoxGeometry(0.012, 0.03, 0.05).translate(0, 0, -0.05)]), steelMat],
+    [one([new GFX.BoxGeometry(0.004, 0.055, 0.1).translate(0, 0, -0.43), new GFX.BoxGeometry(0.055, 0.004, 0.1).translate(0, 0, -0.43)]), flatMat({ color: '#c8443a' })],
+  ];
+  return parts.map(([geo, mat]) => { const m = new GFX.InstancedMesh(geo, mat, 64); m.castShadow = true; scene.add(m); return m; });
+})();
+// the ring on the ground where a rain of arrows will fall
+const rainRing = new GFX.Mesh(new GFX.RingGeometry(0.9, 1, 40).rotateX(-Math.PI / 2), new GFX.MeshBasicMaterial({ color: '#ff8a3a', transparent: true, opacity: 0.55, depthWrite: false }));
+rainRing.visible = false; scene.add(rainRing);
+let rainRingT = 0;
+const rotY = (x, z, a) => { const c = Math.cos(a), s = Math.sin(a); return [x * c + z * s, -x * s + z * c]; };
+// draw, nock, loose: the shot, the volley and the rain each pull the string, then fire partway through
+function startShot(kind) {
+  if (H.bow || H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip || !H.alive) return false;
+  H.bow = { t: 0, len: kind === 'shot' ? BOW.time : 0.45, kind, fired: false, target: null };
+  H.face = Math.atan2(aim.x, aim.z);
+  return true;
+}
+function castVolley() {
+  if (mode !== 'play' || !H.alive || H.cdQ > 0) return;
+  if (H.bow && H.bow.kind === 'shot') H.bow = null;
+  if (startShot('volley')) H.cdQ = BOW.volleyCd;
+}
+function castRain() {
+  if (mode !== 'play' || !H.alive || H.cdE > 0) return;
+  if (H.bow && H.bow.kind === 'shot') H.bow = null;
+  // where the cursor is (with a pad or touch, a way along your aim), no further than the bow's reach
+  let tx, tz;
+  const g = !TOUCH.on && !PAD.on ? pickGround(false) : null;
+  if (g) { tx = g.x; tz = g.z; } else { tx = H.x + aim.x * BOW.rainReach; tz = H.z + aim.z * BOW.rainReach; }
+  const dx = tx - H.x, dz = tz - H.z, l = Math.hypot(dx, dz);
+  if (l > BOW.range) { tx = H.x + dx / l * BOW.range; tz = H.z + dz / l * BOW.range; }
+  tx = clamp(tx, 1, N - 1); tz = clamp(tz, 1, N - 1);
+  if (!startShot('rain')) return;
+  H.bow.target = [tx, tz]; H.cdE = BOW.rainCd;
+  H.face = Math.atan2(tx - H.x, tz - H.z);
+}
+function updateBow(dt) {
+  const b = H.bow;
+  b.t += dt;
+  if (b.kind !== 'rain') H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 20);
+  if (!b.fired && b.t >= b.len * (b.kind === 'shot' ? 0.6 : 0.5)) {
+    b.fired = true;
+    sfx.bow();
+    if (b.kind === 'shot') shootArrow(aim.x, aim.z, BOW.dmg, BOW.knock);
+    else if (b.kind === 'volley') {
+      const n = Math.max(1, Math.round(BOW.volleyArrows)), cone = BOW.volleyCone * Math.PI / 180, a0 = Math.atan2(aim.x, aim.z);
+      for (let k = 0; k < n; k++) {
+        const a = a0 + (n > 1 ? (k / (n - 1) - 0.5) * cone : 0);
+        shootArrow(Math.sin(a), Math.cos(a), BOW.volleyDmg, BOW.volleyKnock);
+      }
+    } else {
+      // one straight up out of sight, then the rain over the ring
+      arrows.push({ state: 'up', x: H.x, y: H.y + BOW.height + 0.3, z: H.z, vx: 0, vy: 28, vz: 0, life: 0 });
+      const [tx, tz] = b.target, R = BOW.rainRadius;
+      rainRingT = BOW.rainDelay + 0.35;
+      rainRing.position.set(tx, surfH(tx, tz) + 0.06, tz); rainRing.scale.set(R, 1, R);
+      for (let k = 0; k < BOW.rainArrows; k++) {
+        const r = R * Math.sqrt((k + Math.random()) / BOW.rainArrows), th = Math.random() * Math.PI * 2;
+        const x = tx + Math.sin(th) * r, z = tz + Math.cos(th) * r, sl = (Math.random() - 0.5) * 2;
+        arrows.push({ state: 'wait', wait: BOW.rainDelay + Math.random() * 0.25, rain: true, x: x - sl * 0.3, y: surfH(x, z) + 9, z: z - sl * 0.15,
+          vx: sl * 0.8, vy: -26, vz: sl * 0.4, flown: 0, range: Infinity, dmg: BOW.rainDmg, knock: BOW.rainKnock, fromX: tx, fromZ: tz, life: 0 });
+      }
+    }
+  }
+  if (b.t >= b.len) H.bow = null;
+}
+function shootArrow(dx, dz, dmg, knock) {
+  const l = Math.hypot(dx, dz) || 1;
+  dx /= l; dz /= l;
+  arrows.push({ state: 'fly', x: H.x, y: H.y + BOW.height, z: H.z, vx: dx * BOW.speed, vy: 0, vz: dz * BOW.speed, flown: 0, range: BOW.range,
+    dmg, knock, life: 0 });
+}
+// what a flying arrow runs into this step (from x0, z0): a foe, or something solid
+function arrowFoe(a) {
+  for (const f of foes) {
+    if (f.hp <= 0) continue;
+    const up = a.y - f.y;
+    if (up < -0.2 || up > (a.rain ? 1.0 : 1.4)) continue;
+    const dx = f.x - a.x, dz = f.z - a.z, r = f.def.rad + 0.08;
+    if (dx * dx + dz * dz < r * r) return f;
+  }
+  return null;
+}
+function arrowWall(c, r, d, y) {
+  const w = wallOn(c, r, d);
+  if (!w) return false;
+  const [ec, er, ew] = edgeOf(c, r, d);
+  if (isDoorVal(w) && openDoors.has(edgeKey(ec, er, ew))) return false;
+  const j = ew ? T(ec - 1, er) : T(ec, er - 1), base = Math.max(LV[T(ec, er)], LV[j]) * STEP;
+  return y >= base - 0.1 && y <= base + (isFenceVal(w) ? FENCE_H : WALL_H);
+}
+function arrowBlocked(a, x0, z0) {
+  const c0 = Math.floor(x0), r0 = Math.floor(z0), c1 = Math.floor(a.x), r1 = Math.floor(a.z);
+  if (c1 !== c0 && arrowWall(c0, r0, c1 > c0 ? 1 : 3, a.y)) return true;
+  if (r1 !== r0 && arrowWall(c1, r0, r1 > r0 ? 2 : 0, a.y)) return true;
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+    const c = c1 + dc, r = r1 + dr;
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const i = T(c, r), o = OB[i], d = OBJ[o];
+    if ((!d.solid && !d.tile) || o === O.VENT || o === O.VENTX) continue;
+    const up = a.y - LV[i] * STEP;
+    if (up < -0.1 || up > (d.tree || o === O.SEQUOIA ? 4 : 1.4)) continue;
+    if (d.tile) { if (dc === 0 && dr === 0) return true; continue; }
+    const [ox, oz] = objPos(c, r, o);
+    if (Math.hypot(a.x - ox, a.z - oz) < d.solid) return true;
+  }
+  return false;
+}
+function stickArrow(a) {
+  const l = Math.hypot(a.vx, a.vy, a.vz) || 1;
+  a.dx = a.vx / l; a.dy = a.vy / l; a.dz = a.vz / l;
+  a.state = 'stuck'; a.life = 0;
+}
+function flyArrow(a, dt) {
+  const sp = Math.hypot(a.vx, a.vy, a.vz), steps = Math.max(1, Math.ceil(sp * dt / 0.2)), h = dt / steps;
+  for (let k = 0; k < steps; k++) {
+    if (a.flown >= a.range && !a.falling) { a.falling = true; a.vx *= 0.3; a.vz *= 0.3; }
+    if (a.falling) a.vy -= 30 * h;
+    const x0 = a.x, z0 = a.z;
+    a.x += a.vx * h; a.y += a.vy * h; a.z += a.vz * h; a.flown += Math.hypot(a.vx, a.vz) * h;
+    if (a.x < 1 || a.z < 1 || a.x >= N - 1 || a.z >= N - 1) { a.dead = true; return; }
+    const f = arrowFoe(a);
+    if (f) {
+      const hl = Math.hypot(a.vx, a.vz) || 1;
+      hurtFoe(f, a.dmg, a.rain ? a.fromX : f.x - a.vx / hl, a.rain ? a.fromZ : f.z - a.vz / hl, a.knock * 8);
+      if (f.hp <= 0) { a.dead = true; return; }
+      // stuck in its side (or its back, from above), riding along with it as it turns
+      stickArrow(a);
+      const tipX = a.rain ? a.x : f.x - a.dx * f.def.rad * 0.4, tipZ = a.rain ? a.z : f.z - a.dz * f.def.rad * 0.4;
+      const tipY = clamp(a.y - f.y, 0.15, Math.max(0.2, f.def.rad * 1.6));
+      [a.ox, a.oz] = rotY(tipX - f.x, tipZ - f.z, -f.face); a.oy = tipY;
+      [a.ddx, a.ddz] = rotY(a.dx, a.dz, -f.face);
+      a.foe = f;
+      return;
+    }
+    if (!a.rain && arrowBlocked(a, x0, z0)) { stickArrow(a); sfx.thunk(); return; }
+    const g = surfH(a.x, a.z);
+    if (a.y <= g) { a.y = g - 0.04; stickArrow(a); return; }
+  }
+}
+const arrowE = new Float32Array(16);
+function updateArrows(dt) {
+  let stuck = 0;
+  for (let i = arrows.length - 1; i >= 0; i--) {
+    const a = arrows[i];
+    if (a.state === 'wait') { a.wait -= dt; if (a.wait <= 0) a.state = 'fly'; continue; }
+    if (a.state === 'up') { a.y += a.vy * dt; a.life += dt; if (a.life > 0.6) arrows.splice(i, 1); continue; }
+    if (a.state === 'fly') flyArrow(a, dt);
+    else {
+      a.life += dt; stuck++;
+      if (a.foe && (a.foe.hp <= 0 || !foes.includes(a.foe))) a.dead = true;
+      if (a.life > BOW.stuckLife || stuck > STUCK_MAX) a.dead = true;
+    }
+    if (a.dead) arrows.splice(i, 1);
+  }
+  rainRingT -= dt;
+  rainRing.visible = rainRingT > 0;
+  if (rainRing.visible) rainRing.material.opacity = 0.55 * Math.min(1, rainRingT / 0.35);
+  // every arrow into the three instanced meshes
+  let n = 0;
+  for (const m of arrowMeshes) m.reserve(arrows.length);
+  for (const a of arrows) {
+    if (a.state === 'wait') continue;
+    let x = a.x, y = a.y, z = a.z, fx, fy, fz;
+    if (a.state === 'stuck' && a.foe) {
+      const f = a.foe, p = f.g.position, [ox, oz] = rotY(a.ox, a.oz, f.face), [ddx, ddz] = rotY(a.ddx, a.ddz, f.face);
+      x = p.x + ox; y = p.y + a.oy; z = p.z + oz; fx = ddx; fy = a.dy; fz = ddz;
+    } else if (a.state === 'stuck') { fx = a.dx; fy = a.dy; fz = a.dz; }
+    else { const l = Math.hypot(a.vx, a.vy, a.vz) || 1; fx = a.vx / l; fy = a.vy / l; fz = a.vz / l; }
+    // a frame with the arrow along +z: right = up × forward, up' = forward × right
+    let ux = 0, uy = 1, uz = 0;
+    if (Math.abs(fy) > 0.98) { ux = 1; uy = 0; }
+    let rx = uy * fz - uz * fy, ry = uz * fx - ux * fz, rz = ux * fy - uy * fx;
+    const rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
+    const vx = fy * rz - fz * ry, vy = fz * rx - fx * rz, vz = fx * ry - fy * rx;
+    arrowE.set([rx, ry, rz, 0, vx, vy, vz, 0, fx, fy, fz, 0, x, y, z, 1]);
+    for (const m of arrowMeshes) m.instanceMatrix.set(arrowE, n * 16);
+    n++;
+  }
+  for (const m of arrowMeshes) { m.count = n; m.needsUpdate = true; }
+}
 function castDash() {
   if (!H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
-  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = TUMBLE.cooldown; H.invuln = Math.max(H.invuln, TUMBLE.time); H.swing = -1; H.boost = 0;
+  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = TUMBLE.cooldown; H.invuln = Math.max(H.invuln, TUMBLE.time); H.swing = -1; H.bow = null; H.boost = 0;
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
 }
@@ -8109,7 +8342,7 @@ function jumpEdge(dir = moveInput()) {
 function castJump() {
   const f = H.canJump;
   if (!f || H.flip) return;
-  H.flip = f; H.canJump = null; H.swing = -1; H.invuln = Math.max(H.invuln, f.dur);
+  H.flip = f; H.canJump = null; H.swing = -1; H.bow = null; H.invuln = Math.max(H.invuln, f.dur);
   sfx.dash();
 }
 // Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at)
@@ -8304,7 +8537,7 @@ function showGhosts(spots) {
 }
 function setMode(m) {
   mode = m;
-  H.swing = -1; drag = null;
+  H.swing = -1; H.bow = null; drag = null;
   renderBar();
   showGhosts([]); showPlotHover(0);
   if (m === 'build') toast(PAD.on ? 'Build mode. Claim a plot with a hearth (RB), then build on it: X floors, Y walls, A doors. Hold RT and move to lay rows.'
@@ -8908,10 +9141,10 @@ function update(dt) {
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
     } else if (m) {
-      const slow = (H.swing >= 0 ? 0.45 : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
+      const slow = (H.swing >= 0 ? 0.45 : H.bow ? 0.6 : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
       // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
-      if (H.swing < 0 && H.whirl < 0) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
+      if (H.swing < 0 && H.whirl < 0 && !H.bow) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
     }
     vx += H.kx; vz += H.kz;
     H.kx *= Math.max(0, 1 - dt * 9); H.kz *= Math.max(0, 1 - dt * 9);
@@ -8929,7 +9162,8 @@ function update(dt) {
     if (!H.flip) H.y = surfaceY(H.x, H.z);
 
     // attacks
-    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0) startSwing();
+    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow) startSwing();
+    if (H.bow) updateBow(dt);
     if (H.swing >= 0) {
       H.swing += dt;
       const len = swingTime();
@@ -8975,6 +9209,7 @@ function update(dt) {
   // ----- foes -----
   const night = daylight() < 0.35;
   for (const f of foes.slice()) updateFoe(f, dt, night);
+  updateArrows(dt);
   separateFoes();
   if (H.alive) spawnTick(dt);
 
@@ -9112,8 +9347,16 @@ function animateHero(dt) {
   hero.body.rotation.z = on ? -sd * WALK.lean : 0;
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
-  let jab = 0;
-  if (H.swing >= 0 && H.punch) {
+  let jab = 0, pull = 0;
+  if (H.bow) {
+    // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin
+    const b = H.bow, rel = b.len * (b.kind === 'shot' ? 0.6 : 0.5), u = smooth(0, 1, Math.min(1, b.t / rel));
+    const raise = smooth(0, 1, Math.min(1, b.t / 0.12)), lift = b.kind === 'rain' ? 0.95 : 0;
+    const out = -(Math.PI / 2 + lift) * raise;
+    hero.armL.rotation.set(out, -0.3 * raise, 0.08);
+    ax = out + 0.15 * raise; ay = (0.5 + 0.55 * u) * raise;
+    pull = b.fired ? 0 : 0.2 * u;
+  } else if (H.swing >= 0 && H.punch) {
     // a straight jab from the shoulder, the other fist up on guard
     jab = Math.sin(Math.min(1, H.swing / PUNCH.time) * Math.PI);
     const out = -0.35 - 1.25 * jab, guard = -0.6;
@@ -9130,6 +9373,10 @@ function animateHero(dt) {
   else if (H.lunge >= 0) { ax = -1.55; ay = 0; sx = Math.PI / 2; }
   else if (mode === 'build') { ax = -0.3; }
   hero.armR.rotation.set(ax, ay, -0.08);
+  // the bow stands upright at your side, and turns to face its string to you as it's raised
+  hero.bow.rotation.x += ((H.bow ? 0 : -Math.PI / 2) - hero.bow.rotation.x) * Math.min(1, dt * 18);
+  hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
+  hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
   hero.body.rotation.y = H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
@@ -9978,6 +10225,27 @@ const TUNING = [
     [HPBAR, 'hot', 'Health just lost when hit (white-hot)', 'color'],
     [HPBAR, 'back', 'Empty bar', 'color'],
   ]],
+  ['Bow', [
+    [BOW, 'dmg', 'Shot damage', 1, 60, 1],
+    [BOW, 'time', 'Shot time: draw and loose (seconds)', 0.15, 1.5, 0.01],
+    [BOW, 'speed', 'Arrow speed (tiles a second)', 5, 80, 1],
+    [BOW, 'range', 'Range (tiles)', 4, 40, 0.5],
+    [BOW, 'height', 'Flight height above the ground (tiles)', 0.15, 1.2, 0.01],
+    [BOW, 'knock', 'Shot knock-back (tiles)', 0, 2, 0.05],
+    [BOW, 'volleyArrows', 'Volley arrows', 1, 15, 1],
+    [BOW, 'volleyCone', 'Volley cone (degrees)', 0, 180, 1],
+    [BOW, 'volleyDmg', 'Volley damage an arrow', 1, 60, 1],
+    [BOW, 'volleyKnock', 'Volley knock-back (tiles)', 0, 4, 0.05],
+    [BOW, 'volleyCd', 'Volley cooldown (seconds)', 0.5, 30, 0.5],
+    [BOW, 'rainArrows', 'Rain arrows', 1, 40, 1],
+    [BOW, 'rainRadius', 'Rain radius (tiles)', 0.5, 6, 0.1],
+    [BOW, 'rainDelay', 'Rain delay (seconds)', 0, 3, 0.05],
+    [BOW, 'rainDmg', 'Rain damage an arrow', 1, 60, 1],
+    [BOW, 'rainKnock', 'Rain knock-back (tiles)', 0, 2, 0.05],
+    [BOW, 'rainCd', 'Rain cooldown (seconds)', 0.5, 30, 0.5],
+    [BOW, 'rainReach', 'Rain distance with a pad or touch (tiles)', 2, 20, 0.5],
+    [BOW, 'stuckLife', 'Spent arrows last (seconds)', 1, 120, 1],
+  ]],
   ['Tumble', [
     [TUMBLE, 'time', 'How long the tumble lasts (seconds)', 0.15, 1.5, 0.01],
     [TUMBLE, 'speed', 'Speed going in (tiles a second)', 2, 20, 0.1],
@@ -10382,6 +10650,9 @@ window.GAME = {
   gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
   moveItem: (from, to) => moveItem(from, to),
   clickCell: c => clickCell(c),
+  arrows: () => { const n = { fly: 0, stuck: 0, foe: 0, wait: 0, up: 0 }; for (const a of arrows) { n[a.state]++; if (a.foe) n.foe++; } return n; },
+  bowCast: k => k === 'q' ? castVolley() : k === 'e' ? castRain() : startShot('shot'),
+  aimNow: () => [aim.x, aim.z],
   inv: open => toggleInv(open),
   pack: () => PACK.map((id, i) => id && [id, PACK_N[i]]),
   addItem: (id, n) => addItem(id, n),
