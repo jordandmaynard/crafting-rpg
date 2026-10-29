@@ -3386,7 +3386,7 @@ function updateTrample(dt) {
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
-const GRASS = { on: 1, density: 16, range: 20, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.37, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 0.65, reedHeight: 1.2,
+const GRASS = { on: 1, density: 16, range: 20, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
   variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
@@ -3639,14 +3639,16 @@ function cutGrass(x, z, r, fx, fz) {
     const a = Math.random() * 6.28, l = Math.sqrt(Math.random()) * r, px = x + Math.cos(a) * l, pz = z + Math.sin(a) * l;
     const col = grassColorAt(px, pz);
     if (!col) continue;
-    const mat = (bladeBitMats[col] || (bladeBitMats[col] = flatMat({ color: col }))).clone();
-    mat.transparent = true;
-    const m = new GFX.Mesh(bladeBitGeo, mat);
+    // (drawn with the grass: in its pass, out of the normals pass, and marked alpha 0 so the outline leaves
+    // them be, as it does the tufts; a little glow, as the tufts are lit softly; they shrink away, not fade)
+    if (!bladeBitMats[col]) { bladeBitMats[col] = flatMat({ color: col, opacity: 0 }); bladeBitMats[col].emissive.set(col).multiplyScalar(0.3); }
+    const m = new GFX.Mesh(bladeBitGeo, bladeBitMats[col]);
+    m.layers.set(4);
     m.position.set(px, surfaceY(px, pz) + 0.1 + Math.random() * 0.15, pz); m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
     m.scale.setScalar(0.7 + Math.random() * 0.6);
     scene.add(m);
     debris.push({ m, vx: fx * (1 + Math.random() * 1.5) + (Math.random() - 0.5) * 1.6, vz: fz * (1 + Math.random() * 1.5) + (Math.random() - 0.5) * 1.6, vy: 1.6 + Math.random() * 1.6,
-      ax: (Math.random() - 0.5) * 16, az: (Math.random() - 0.5) * 16, life: 0, fall: 0.3 });
+      ax: (Math.random() - 0.5) * 16, az: (Math.random() - 0.5) * 16, life: 0, fall: 0.3, bit: m.scale.x });
   }
 }
 // a sword stroke's cuts: an arc of it from your middle (range, arc in radians about face), or a ring round you
@@ -8628,8 +8630,8 @@ function update(dt) {
     const fl = surfaceY(d.m.position.x, d.m.position.z) + 0.03;
     if (d.m.position.y < fl) { d.m.position.y = fl; d.vy *= -0.3; d.vx *= 0.55; d.vz *= 0.55; d.ax *= 0.5; d.az *= 0.5; }
     d.m.rotation.x += d.ax * dt; d.m.rotation.z += d.az * dt;
-    if (d.life > 1.8) d.m.material.opacity = Math.max(0, 1 - (d.life - 1.8) / 0.6);
-    if (d.life > 2.4) { scene.remove(d.m); d.m.material.dispose(); debris.splice(i, 1); }
+    if (d.life > 1.8) { const k = Math.max(0, 1 - (d.life - 1.8) / 0.6); if (d.bit) d.m.scale.setScalar(d.bit * k); else d.m.material.opacity = k; }
+    if (d.life > 2.4) { scene.remove(d.m); if (!d.bit) d.m.material.dispose(); debris.splice(i, 1); }
   }
   for (let i = dust.length - 1; i >= 0; i--) {
     const d = dust[i]; d.life += dt;
