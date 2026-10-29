@@ -1867,6 +1867,7 @@ function finishTowns() {
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
   }
   buildGrottoFalls();
+  buildObelisks();
   for (const f of farms) {
     if (f.door) makeDoor(...f.door);
     if (f.gate) makeDoor(...f.gate, 'gate');
@@ -6343,72 +6344,30 @@ function grotto(g) {
   }
 }
 // A desert's sunken obelisk: a tall, tapering shaft of weathered sandstone capped by a pyramid, sunk a good way
-// into the sand and leaning over, carved all down each face with columns of glyphs in a frame. Its edges are worn
-// and chipped, and sand has drifted onto its upper side. It's built upright about its foot, then tipped over and
-// sunk (partPre).
+// into the sand and leaning over, carved all down each face with columns of glyphs in a frame. The shaft is a mesh
+// of its own (buildObelisks), its carving a normal map over flat faces (obeliskMat); what's drawn with the chunk
+// is the sand drifted on its upper side, the mound round its foot and a slab broken off it.
 const STATUE_FRAME = new GFX.Object3D();
 STATUE_FRAME.rotation.order = 'YXZ';
-const OBELISK = { h: 3.6, w0: 0.78, w1: 0.5, cap: 0.42 };
+const OBELISK = { h: 3.6, w0: 0.78, w1: 0.5, cap: 0.42, carve: 1.6, color: '#c6a068' };
+const OB_Y0 = -0.9;   // (the shaft's foot, well under the sand)
+function statueFrame(st) {
+  const F = STATUE_FRAME;
+  F.position.set(st.x, st.L * STEP - 0.75, st.z); F.rotation.set(st.tilt, st.yaw, st.roll); F.scale.setScalar(st.size); F.updateMatrix();
+  return F.matrix;
+}
+const obHalf = y => (OBELISK.w0 + (OBELISK.w1 - OBELISK.w0) * y / OBELISK.h) / 2;
 function obelisk(st) {
-  const F = STATUE_FRAME, y0 = st.L * STEP, { h: Hh, w0, w1, cap } = OBELISK;
-  F.position.set(st.x, y0 - 0.75, st.z); F.rotation.set(st.tilt, st.yaw, st.roll); F.scale.setScalar(st.size); F.updateMatrix();
+  const y0 = st.L * STEP;
   let seed = st.seed * 1000 + 11;
   const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
-  const stone = (k = rnd()) => shade(CC('#c6a068'), 0.82 + k * 0.22), deep = (k = rnd()) => shade(CC('#7e5c36'), 0.85 + k * 0.25), sand = (k = rnd()) => shade(CC('#dcc088'), 0.92 + k * 0.12);
-  // (the matrix by hand for the shaft's own faces, which are drawn as quads, not pieces)
-  const e = F.matrix.elements, W = p => [e[0] * p[0] + e[4] * p[1] + e[8] * p[2] + e[12], e[1] * p[0] + e[5] * p[1] + e[9] * p[2] + e[13], e[2] * p[0] + e[6] * p[1] + e[10] * p[2] + e[14]];
-  const half = y => (w0 + (w1 - w0) * y / Hh) / 2, slope = (w0 - w1) / 2 / Hh;
-  // the shaft: four tapering faces, each a column of bands a shade apart (the weathering), meeting the pyramid
-  const bands = 9;
-  for (let f = 0; f < 4; f++) {
-    // (corners of face f, going round: +z, +x, -z, -x)
-    const corner = (y, side) => { const hw = half(y), u = side * hw; return f === 0 ? [u, y, hw] : f === 1 ? [hw, y, -u] : f === 2 ? [-u, y, -hw] : [-hw, y, u]; };
-    for (let n = 0; n < bands; n++) {
-      const ya = -0.9 + (Hh + 0.9) * n / bands, yb = -0.9 + (Hh + 0.9) * (n + 1) / bands, c = stone(0.35 + rnd() * 0.5);
-      const A = W(corner(ya, -1)), B = W(corner(ya, 1)), C2 = W(corner(yb, 1)), D = W(corner(yb, -1));
-      tri(A, B, C2, c); tri(A, C2, D, c);
-    }
-  }
-  // the pyramid on top
-  const apex = W([0, Hh + cap, 0]), capC = stone(0.9);
-  for (let f = 0; f < 4; f++) {
-    const hw = half(Hh), q = [[-hw, hw], [hw, hw], [hw, -hw], [-hw, -hw], [-hw, hw]];
-    tri(W([q[f][0], Hh, q[f][1]]), W([q[f + 1][0], Hh, q[f + 1][1]]), apex, capC, capC, shade(capC, 1.08));
-  }
-  partPre = F.matrix;
+  const stone = (k = rnd()) => shade(CC(OBELISK.color), 0.82 + k * 0.22), sand = (k = rnd()) => shade(CC('#dcc088'), 0.92 + k * 0.12);
+  partPre = statueFrame(st);
   try {
-    // carved into each face: a frame, and two columns of glyphs (bars, eyes, suns, birds, zigzags, ankh-like
-    // crosses), each a shallow dark cut lying on the face
-    for (let f = 0; f < 4; f++) {
-      const ry = f * Math.PI / 2;
-      // a point on face f, u across it and up at y, `out` off it (negative: cut into it)
-      const on = (u, y, out = 0) => { const d = half(y) + out; return f === 0 ? [u, y, d] : f === 1 ? [d, y, -u] : f === 2 ? [-u, y, -d] : [-d, y, u]; };
-      const cut = (u, y, sx, sy, o = {}) => { const [x, yy, z] = on(u, y, -0.012); part(o.geo || G.box, deep(), x, yy, z, { sx, sy, sz: o.sz || 0.04, ry: ry + (o.ry || 0), rx: -slope * (f === 0 || f === 2 ? 1 : 1), rz: o.rz || 0 }); };
-      const top = Hh - 0.25, hw = half(0.6) - 0.08;
-      // the frame
-      for (const u of [-hw, hw]) cut(u, (0.1 + top) / 2, 0.035, top - 0.1);
-      cut(0, top, hw * 2 + 0.035, 0.035);
-      cut(0, top - 0.12, hw * 2 + 0.035, 0.025);
-      for (const col of [-0.5, 0.5]) for (let y = 0.15; y < top - 0.3; y += 0.24) {
-        const u = col * hw * 0.95, s = 0.09 + rnd() * 0.03, kind = Math.floor(rnd() * 6);
-        if (rnd() < 0.08) continue;   // (worn away)
-        if (kind === 0) { cut(u, y, s * 1.6, 0.03); cut(u, y + 0.06, s * 1.2, 0.03); }
-        else if (kind === 1) { cut(u, y, s * 1.5, 0.05, { geo: G.oct, sz: 0.05 }); cut(u, y, 0.03, 0.03); }
-        else if (kind === 2) { cut(u, y, s * 1.1, s * 1.1, { geo: G.cyl8, sz: 0.02, rz: 0, ry: 0 }); }
-        else if (kind === 3) { cut(u - 0.03, y, s, 0.03, { rz: 0.5 }); cut(u + 0.03, y + 0.03, s * 0.8, 0.03, { rz: -0.4 }); cut(u - 0.05, y + 0.05, 0.03, 0.05); }
-        else if (kind === 4) { for (let z = 0; z < 3; z++) cut(u - 0.05 + z * 0.05, y, 0.06, 0.025, { rz: z % 2 ? 0.7 : -0.7 }); }
-        else { cut(u, y - 0.02, 0.03, s * 1.2); cut(u, y + 0.01, s * 1.1, 0.03); part(G.cyl8, deep(), ...on(u, y + 0.07, -0.01), { sx: 0.06, sy: 0.02, sz: 0.06, rx: Math.PI / 2, rz: ry }); }
-      }
-    }
-    // chips off its edges and corners, the fresh stone darker, and the pyramid's tip worn
-    for (let n = 0; n < 6; n++) {
-      const y = 0.2 + rnd() * (Hh - 0.4), hw = half(y), sx = rnd() < 0.5 ? -1 : 1, sz = rnd() < 0.5 ? -1 : 1;
-      part(G.dodec, deep(), sx * hw, y, sz * hw, { sx: 0.12 + rnd() * 0.08, sy: 0.14 + rnd() * 0.1, sz: 0.12, ry: rnd() * 3 });
-    }
     // sand drifted on its upper side (the back, tipped up as it leans forward)
     for (let n = 0; n < 4; n++) {
       const y = 0.15 + n * 0.45 + rnd() * 0.2;
-      part(G.dodec, sand(), (rnd() - 0.5) * 0.2, y, -half(y) - 0.02, { sx: half(y) * 1.7, sy: 0.3 + rnd() * 0.2, sz: 0.1, rx: 0.15 });
+      part(G.dodec, sand(), (rnd() - 0.5) * 0.2, y, -obHalf(y) - 0.02, { sx: obHalf(y) * 1.7, sy: 0.3 + rnd() * 0.2, sz: 0.1, rx: 0.15 });
     }
   } finally { partPre = null; }
   // a mound of sand round its foot, and a slab broken off it lying by it
@@ -6419,6 +6378,116 @@ function obelisk(st) {
   }
   const bx = st.x + fx * 1.4 + sxx * 0.75, bz = st.z + fz * 1.4 + szz * 0.75;
   part(G.box, stone(), bx, y0 + 0.05, bz, { sx: 0.34, sy: 0.14, sz: 0.24, rx: 0.3, ry: rnd() * 6 });
+}
+// The carving: glyphs drawn into a height map (a column of the texture for each face: a frame, a band under the
+// top, and two columns of bars, eyes, suns, birds, zigzags, ankh-like crosses and waves, a few worn away), turned
+// into a normal map, with the depth in a for shading the grooves darker. A row of it is a height on the shaft.
+const CARVE_W = 512, CARVE_H = 512;
+const carveRow = y => (1 - (y - OB_Y0) / (OBELISK.h - OB_Y0)) * CARVE_H;
+function makeCarveTex() {
+  const cv = document.createElement('canvas'); cv.width = CARVE_W; cv.height = CARVE_H;
+  const g = cv.getContext('2d', { willReadFrequently: true });
+  g.fillStyle = '#fff'; g.fillRect(0, 0, CARVE_W, CARVE_H);
+  g.strokeStyle = g.fillStyle = '#000'; g.lineWidth = 4; g.lineCap = g.lineJoin = 'round';
+  let seed = 7;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const line = (...p) => { g.beginPath(); g.moveTo(p[0], p[1]); for (let k = 2; k < p.length; k += 2) g.lineTo(p[k], p[k + 1]); g.stroke(); };
+  const ring = (x, y, r) => { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke(); };
+  const W = CARVE_W / 4, top = carveRow(OBELISK.h - 0.22), bot = carveRow(0.05);
+  for (let f = 0; f < 4; f++) {
+    const x0 = f * W;
+    g.lineWidth = 3;
+    g.strokeRect(x0 + 12, top, W - 24, bot - top);
+    line(x0 + 12, top + 20, x0 + W - 12, top + 20);
+    g.lineWidth = 4;
+    const cell = 28;
+    for (const cx of [x0 + W * 0.33, x0 + W * 0.67]) for (let y = top + 40; y < bot - 20; y += cell) {
+      const s = 9, kind = Math.floor(rnd() * 7);
+      if (rnd() < 0.08) continue;
+      if (kind === 0) { line(cx - s, y - 3, cx + s, y - 3); line(cx - s * 0.7, y + 5, cx + s * 0.7, y + 5); }
+      else if (kind === 1) { g.beginPath(); g.ellipse(cx, y, s, s * 0.5, 0, 0, Math.PI * 2); g.stroke(); g.beginPath(); g.arc(cx, y, 2.5, 0, Math.PI * 2); g.fill(); }
+      else if (kind === 2) { ring(cx, y, s * 0.8); g.beginPath(); g.arc(cx, y, 2, 0, Math.PI * 2); g.fill(); }
+      else if (kind === 3) line(cx - s, y + 4, cx - 2, y - 2, cx + s * 0.4, y - 2, cx + s, y - 7, cx + 3, y + 3, cx - 2, y + 8);
+      else if (kind === 4) line(cx - s, y + 3, cx - s / 2, y - 4, cx, y + 3, cx + s / 2, y - 4, cx + s, y + 3);
+      else if (kind === 5) { ring(cx, y - 5, 4); line(cx, y - 1, cx, y + 9); line(cx - 6, y + 2, cx + 6, y + 2); }
+      else { for (const dy of [-4, 3]) line(cx - s, y + dy, cx - s / 3, y + dy - 3, cx + s / 3, y + dy, cx + s, y + dy - 3); }
+    }
+  }
+  const src = g.getImageData(0, 0, CARVE_W, CARVE_H).data, h = new Float32Array(CARVE_W * CARVE_H);
+  // (softened a little, so the grooves have sloping sides)
+  for (let y = 0; y < CARVE_H; y++) for (let x = 0; x < CARVE_W; x++) {
+    let t = 0, n = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= CARVE_W || yy >= CARVE_H) continue;
+      t += src[(yy * CARVE_W + xx) * 4]; n++;
+    }
+    h[y * CARVE_W + x] = t / n / 255;
+  }
+  const out = new Uint8Array(CARVE_W * CARVE_H * 4), at = (x, y) => h[clamp(y, 0, CARVE_H - 1) * CARVE_W + clamp(x, 0, CARVE_W - 1)];
+  for (let y = 0; y < CARVE_H; y++) for (let x = 0; x < CARVE_W; x++) {
+    // (x across the face, up the shaft: rows run down)
+    const nx = -(at(x + 1, y) - at(x - 1, y)) * 2.2, ny = -(at(x, y - 1) - at(x, y + 1)) * 2.2, l = Math.hypot(nx, ny, 1), o = (y * CARVE_W + x) * 4;
+    out[o] = Math.round((nx / l * 0.5 + 0.5) * 255); out[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255); out[o + 2] = Math.round((1 / l * 0.5 + 0.5) * 255);
+    out[o + 3] = Math.round(at(x, y) * 255);
+  }
+  return new GFX.DataTexture(out, CARVE_W, CARVE_H);
+}
+// the shaft's stone, lit, its face normal bent by the carving (oT: the way across the face, world)
+const OBELISK_U = { carve: { value: OBELISK.carve } };
+const obeliskMat = new GFX.ShaderMaterial({ uniforms: OBELISK_U, vertexColors: true, attributes: { oUV: 'vec2f', oT: 'vec3f' }, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) uv: vec2f, @location(4) tan: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, v.oUV, v.oT);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N0 = flatNormal(i.eye);
+  let Tn = normalize(i.tan - N0 * dot(i.tan, N0));
+  let Bn = cross(N0, Tn);
+  let t = textureSample(tCarve, tCarveS, i.uv);
+  let m = vec3f((t.xy * 2.0 - 1.0) * U.carve, t.z * 2.0 - 1.0);
+  let N = normalize(Tn * m.x + Bn * m.y + N0 * m.z);
+  let c = shadeLit(i.color * mix(0.7, 1.0, t.a), vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+// every obelisk's shaft and cap, once the scene exists: four tapering faces in bands a shade apart (the weathering),
+// each mapped to its column of the carving, and a pyramid on top (on the carving's blank margin)
+function buildObelisks() {
+  if (!statues.length) return;
+  OBELISK_U.tCarve = { value: makeCarveTex() };
+  for (const st of statues) {
+    const M = statueFrame(st), e = M.elements, W = p => [e[0] * p[0] + e[4] * p[1] + e[8] * p[2] + e[12], e[1] * p[0] + e[5] * p[1] + e[9] * p[2] + e[13], e[2] * p[0] + e[6] * p[1] + e[10] * p[2] + e[14]];
+    const dir = p => { const v = [e[0] * p[0] + e[4] * p[1] + e[8] * p[2], e[1] * p[0] + e[5] * p[1] + e[9] * p[2], e[2] * p[0] + e[6] * p[1] + e[10] * p[2]], l = Math.hypot(...v); return v.map(q => q / l); };
+    const pos = [], col = [], uv = [], tan = [], Hh = OBELISK.h, bands = 9;
+    let seed = st.seed * 1000 + 5;
+    const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+    const put = (p, c, u, v, t) => { pos.push(...p); col.push(c.r, c.g, c.b); uv.push(u, v); tan.push(...t); };
+    for (let f = 0; f < 4; f++) {
+      const corner = (y, side) => { const hw = obHalf(y), u = side * hw; return f === 0 ? [u, y, hw] : f === 1 ? [hw, y, -u] : f === 2 ? [-u, y, -hw] : [-hw, y, u]; };
+      const t = dir(f === 0 ? [1, 0, 0] : f === 1 ? [0, 0, -1] : f === 2 ? [-1, 0, 0] : [0, 0, 1]);
+      for (let n = 0; n < bands; n++) {
+        const ya = OB_Y0 + (Hh - OB_Y0) * n / bands, yb = OB_Y0 + (Hh - OB_Y0) * (n + 1) / bands, c = shade(CC(OBELISK.color), 0.88 + rnd() * 0.16);
+        const ua = f * 0.25 + 0.002, ub = f * 0.25 + 0.248, va = carveRow(ya) / CARVE_H, vb = carveRow(yb) / CARVE_H;
+        const A = W(corner(ya, -1)), B = W(corner(ya, 1)), C2 = W(corner(yb, 1)), D = W(corner(yb, -1));
+        for (const [p, u, v] of [[A, ua, va], [B, ub, va], [C2, ub, vb], [A, ua, va], [C2, ub, vb], [D, ua, vb]]) put(p, c, u, v, t);
+      }
+    }
+    const apex = W([0, Hh + OBELISK.cap, 0]), capC = shade(CC(OBELISK.color), 1.02), hw = obHalf(Hh), q = [[-hw, hw], [hw, hw], [hw, -hw], [-hw, -hw], [-hw, hw]];
+    for (let f = 0; f < 4; f++) for (const p of [W([q[f][0], Hh, q[f][1]]), W([q[f + 1][0], Hh, q[f + 1][1]]), apex]) put(p, capC, 0.125, 0.004, [1, 0, 0]);
+    const geo = new GFX.BufferGeometry();
+    geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new GFX.Float32BufferAttribute(col, 3));
+    geo.setAttribute('oUV', new GFX.Float32BufferAttribute(uv, 2));
+    geo.setAttribute('oT', new GFX.Float32BufferAttribute(tan, 3));
+    geo.computeVertexNormals();
+    const m = shadowy(new GFX.Mesh(geo, obeliskMat));
+    m.matrixAutoUpdate = false;
+    scene.add(m);
+    st.mesh = m;
+  }
 }
 function vent(c, r, k) {
   const x = c + 1, z = r + 1, y = LV[T(c, r)] * STEP;
@@ -13313,7 +13382,7 @@ window.GAME = {
   wheatCut: () => wheatCut.size,
   grottos: () => grottos.map(g => ({ c: g.c, r: g.r, L: g.L, top: g.top, pool: g.pool.length, wading: g.pool.every(([c, r]) => WT[T(c, r)] === 1 && GROT[T(c, r)] === 1),
     anchor: OB[g.anchor] === O.GROTTO, built: !!(chunks.get(Math.floor(g.r / CH) * NC + Math.floor(g.c / CH)) || {}).grot, mesh: !!g.mesh })),
-  statues: () => statues.map(st => ({ x: +st.x.toFixed(1), z: +st.z.toFixed(1), L: st.L, tilt: +st.tilt.toFixed(2), anchor: OB[st.anchor] === O.STATUE })),
+  statues: () => statues.map(st => ({ x: +st.x.toFixed(1), z: +st.z.toFixed(1), L: st.L, tilt: +st.tilt.toFixed(2), anchor: OB[st.anchor] === O.STATUE, mesh: !!st.mesh, cast: !!(st.mesh && st.mesh.castShadow) })),
   grottoLights: () => lampLights.filter(l => l.intensity > 0).map(l => [l.color.r.toFixed(2), l.color.g.toFixed(2), l.distance]),
   spikeReset: () => { chunkTime.parts.fill(0); giStepMax.fill(0); },
   spikeParts: () => ({ gi: giStepMax.map(v => +v.toFixed(1)), chunk: chunkTime.parts.map(v => +v.toFixed(1)), chunkAvg: +(chunkTime.ms / Math.max(1, chunkTime.n)).toFixed(1) }),
