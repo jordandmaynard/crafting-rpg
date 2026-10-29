@@ -3011,8 +3011,18 @@ function roughCell(P, K, Q, flip, lifted) {
   }
 }
 
+// Rounded ground patches (T > Ground patches): the ground's quarter-tile squares of colour drawn with wavy,
+// rounded edges. groundTex holds each quarter's colour (halved, so brighter than white fits) and, in alpha, what
+// it is (1 open ground, 2 a path or street, 3 the plaza) and its level; 0 for slopes, cliffs, ramps, water and
+// lava. The ground's shader looks up the colour a little way off, pushed about by smooth noise, and takes it
+// when that quarter is the same sort of ground on the same level, so the squares' edges wander and round off
+// while paths keep their straight edges and nothing bleeds over a cliff.
+const GROUND_SHAPE = { on: 1, wobble: 0.6, size: 1.3 };
+const groundTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
+groundTex.regions = [];
 function buildGround(cx, cz, ch) {
   OUT = bufGround; bufGround.n = 0;
+  const gd = groundTex.image.data;
   const c0 = cx * CH, r0 = cz * CH, GW = CH * 2 + 1;
   const grid = new Float32Array(GW * GW);
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) grid[j * GW + k] = pointH(c0 * 2 + k, r0 * 2 + j);
@@ -3035,6 +3045,7 @@ function buildGround(cx, cz, ch) {
     const scorch = !L && LAVA[i];
     const rockTop = shade(L || cy || scorch ? pal.cliffA : pal.road, strata * (scorch ? 0.7 : 1));
     const rockLow = cy ? shade(pal.cliffB, strata * 0.3) : scorch ? shade(pal.cliffB, strata * 1.4) : shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
+    const tc = BI[i] === TOWN ? townCell(c, r) : null, sort = tc === 'plaza' ? 3 : tc === 'street' || PATH[i] ? 2 : 1;
     for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
       const n00 = b * 3 + a, n10 = n00 + 1, n01 = n00 + 3, n11 = n00 + 4;
       const lifted = up[n00] + up[n10] + up[n01] + up[n11];
@@ -3058,6 +3069,9 @@ function buildGround(cx, cz, ch) {
         else cc = groundColor(c, r, a, b);
         k00 = k10 = k01 = k11 = cc;
       }
+      const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
+      if (lifted || cy || !L || s || LAVA[i] || WT[i]) gd[go + 3] = 0;
+      else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + sort; }
       // split through the odd corner out, so slope corners come out as clean hips and valleys
       const odd = lifted === 1 || lifted === 3;
       const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
@@ -3086,6 +3100,8 @@ function buildGround(cx, cz, ch) {
       }
     }
   }
+  groundTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
+  groundTex.needsUpdate = true;
   ch.ground = bufGround.mesh(groundPrintMat);
   buildBog(c0, r0, grid, GW, ch);
   if (wet) buildWater(c0, r0, grid, GW, ch);
@@ -3324,8 +3340,8 @@ function updateTrample(dt) {
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
-const GRASS = { on: 1, density: 16, range: 23, grass: 4, flowers: 0.5, reeds: 0.1, height: 0.37, width: 3, lean: 0.8, flowerSize: 1.15, reedHeight: 1.2,
-  variation: 0.1, soft: 0.81, outline: 0, poolReeds: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
+const GRASS = { on: 1, density: 16, range: 23, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.37, width: 3, lean: 0.8, flowerSize: 1.15, reedHeight: 1.2,
+  variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
 const GRASS_KIND = { [MEADOW]: 1, [FOREST]: 2, [TOWN]: 3, [SWAMP]: 4, [DEEP]: 6, [GRAVE]: 7 };
@@ -3599,6 +3615,7 @@ function drawPrints() {
 // the hero's feet (a print at each step of the walk), the foes' (one each stride), and the map redrawn as needed
 function updatePrints() {
   const U = PRINT_U, on = PRINTS.on > 0.5;
+  Object.assign(U.gsV.value, { x: GROUND_SHAPE.on, y: GROUND_SHAPE.wobble, z: GROUND_SHAPE.size });
   U.prV.value.w = on && prints.length ? 1 : 0;
   if (!on) return;
   if (H.alive && H.moving && H.dash < 0 && !H.flip) {
@@ -3632,6 +3649,8 @@ const PRINT_U = {
   tPrints: { value: prTex },
   prV: { value: { x: 0, y: 0, z: PR_TILES, w: 0 } },   // the map's corner (tiles), width (tiles), on
   prE: { value: { x: 1 / PR_W, y: 0.035, z: 0.3, w: 0 } },   // a texel (of the map), dent depth (tiles), darkening
+  tGround: { value: groundTex },
+  gsV: { value: { x: 1, y: 0.6, z: 1.3, w: 0 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile
 };
 const groundPrintMat = new GFX.ShaderMaterial({ uniforms: PRINT_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -3641,9 +3660,30 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   return VOut(F.viewProj * w, w.xyz, v.color, w.xyz - F.camPos.xyz);
 }
 fn printAt(uv: vec2f) -> vec2f { return textureSampleLevel(tPrints, tPrintsS, uv, 0.0).rg; }
+fn gsHash(p: vec2i) -> f32 {
+  var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
+  h = (h ^ (h >> 13u)) * 1274126177u;
+  return f32((h ^ (h >> 16u)) & 0xffffffu) / 16777216.0;
+}
+fn gsNoise(p: vec2f) -> f32 {
+  let i = vec2i(floor(p)); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(gsHash(i), gsHash(i + vec2i(1, 0)), u.x), mix(gsHash(i + vec2i(0, 1)), gsHash(i + vec2i(1, 1)), u.x), u.y) * 2.0 - 1.0;
+}
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   var N = flatNormal(i.eye);
   var albedo = i.color;
+  // rounded patches: this quarter's colour from a little way off, if that's the same sort of ground on this level
+  if (U.gsV.x > 0.5 && N.y > 0.7) {
+    let lim = vec2i(${N * 2 - 1});
+    let q0 = clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), lim);
+    let t0 = textureLoad(tGround, q0, 0);
+    if (t0.a > 0.002 && distance(t0.rgb * 2.0, albedo) < 0.03) {
+      let p = i.world.xz * U.gsV.z;
+      let w = vec2f(gsNoise(p), gsNoise(p + vec2f(17.3, 5.1))) + 0.5 * vec2f(gsNoise(p * 2.3 + vec2f(31.7, 8.2)), gsNoise(p * 2.3 + vec2f(3.9, 47.5)));
+      let t = textureLoad(tGround, clamp(vec2i(floor(i.world.xz * 2.0 + w * U.gsV.y)), vec2i(0), lim), 0);
+      if (abs(t.a - t0.a) < 0.002) { albedo = t.rgb * 2.0; }
+    }
+  }
   if (U.prV.w > 0.5 && N.y > 0.7) {
     let uv = (i.world.xz - U.prV.xy) / U.prV.z;
     if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) {
@@ -9049,6 +9089,11 @@ const TUNING = [
     [GRASS, 'swampColor', 'Swamp grass colour', 'color'],
     [GRASS, 'reedColor', 'Reed colour', 'color'],
   ]],
+  ['Ground patches', [
+    [GROUND_SHAPE, 'on', 'Rounded, irregular ground squares (1 on, 0 off)', 0, 1, 1],
+    [GROUND_SHAPE, 'wobble', 'How far their edges wander (quarter tiles)', 0, 2, 0.05],
+    [GROUND_SHAPE, 'size', 'How tight the wiggles are (waves a tile)', 0.2, 5, 0.05],
+  ]],
   ['Footprints', [
     [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
     [PRINTS, 'life', 'Seconds they last', 5, 600, 5],
@@ -9377,6 +9422,7 @@ window.GAME = {
     }
     return { kinds, quarters, instances: grassGeo.instanceCount, visible: grassMesh.visible };
   },
+  groundQ: (x2, z2) => { const d = groundTex.image.data, o = (z2 * N * 2 + x2) * 4; return [d[o], d[o + 1], d[o + 2], d[o + 3]]; },
   grassAt: (c, r) => { const d = grassTex.image.data, o = T(c, r) * 4; return { mask: d[o] & 15, kind: d[o] >> 4, y: (d[o + 1] * 256 + d[o + 2]) / 1024 - 16 }; },
   plants: () => { let n = 0; for (const ch of chunks.values()) if (ch.plant) n += ch.plant.geometry.attributes.position.array.length / 3; return { verts: n, trample: trample.on, view: [...trample.view] }; },
   prints: () => ({ n: prints.length, list: prints.slice(-6).map(p => ({ feet: p.feet, snow: p.snow, x: +p.x.toFixed(2), z: +p.z.toFixed(2) })), corner: prCorner, on: PRINT_U.prV.value.w }),
