@@ -8336,10 +8336,15 @@ function updateArrows(dt) {
 // through each of its pixels (a copy of the depth so far) and lights the shape there, if that surface is near
 // the sheet's height (so it lies on snow over the ground, but not up a tree or a foe). It stays as bright
 // whatever the eye's exposure (steady).
-const AIM_FX = { color: '#ffb347', strength: 1.4, width: 0.12, steady: 1 };
+// each shape is filled faintly and edged brighter: for each, the edge's width (tiles, inside the shape), the edge's
+// and the fill's brightness, and for the shot the box's width
+const AIM_FX = { color: '#ffb347', steady: 1,
+  shotWidth: 0.5, shotEdge: 0.06, shotEdgeBright: 1.6, shotFill: 0.3,
+  volleyEdge: 0.08, volleyEdgeBright: 1.6, volleyFill: 0.25,
+  rainEdge: 0.1, rainEdgeBright: 1.6, rainFill: 0.3 };
 const AIM_NU = 84, AIM_NV = 72;
 const AIM_U = { tD: { value: WATER_U.tRefrD.value }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
-  len: { value: 20 }, cone: { value: 0.78 }, radius: { value: 2 }, width: { value: 0.12 }, time: { value: 0 }, strength: { value: 1 }, steady: { value: 1 },
+  len: { value: 20 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
   color: { value: new GFX.Color('#ffb347') } };
 const AIM_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) w: vec3f }
@@ -8348,47 +8353,23 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) w: vec3f }
   o.pos = F.viewProj * vec4f(v.position, 1.0); o.w = v.position;
   return o;
 }
-fn aimLine(d: f32) -> f32 { return 1.0 - smoothstep(U.width * 0.5, U.width, d); }
+// how bright a point is, from how far inside the shape it lies (d < 0 outside): the edge band, then the fill
+fn aimBand(d: f32) -> f32 {
+  if (d < 0.0) { return 0.0; }
+  return select(U.fillB, U.edgeB, d < U.edgeW);
+}
 fn aimShape(d: vec2f) -> f32 {
-  let t = U.time;
-  if (U.kind > 1.5) {
-    // the rain: its ring, a faint floor, and a ring closing in on the middle
-    let r = length(d);
-    if (r > U.radius + U.width) { return 0.0; }
-    let k = fract(t * 0.9);
-    let rr = U.radius * (1.0 - k);
-    return aimLine(abs(r - U.radius)) + 0.12 + aimLine(abs(r - rr)) * 0.5 * (1.0 - k) + aimLine(r) * 0.6;
-  }
+  // the rain: a disc round where it falls
+  if (U.kind > 1.5) { return aimBand(U.radius - length(d)); }
   // along the aim and across it
   let f = U.dir.xz;
   let q = vec2f(dot(d, f), d.x * f.y - d.y * f.x);
-  let start = smoothstep(0.45, 1.4, q.x);
-  if (U.kind < 0.5) {
-    // the shot: a line out to its range, with chevrons running out along it and a head at the end
-    let sd = abs(q.y);
-    let L = U.len;
-    if (q.x < 0.4 || q.x > L + 0.1) { return 0.0; }
-    let c = fract((q.x - sd * 0.9 - t * 7.0) / 1.6);
-    let chev = smoothstep(0.0, 0.08, c) * (1.0 - smoothstep(0.18, 0.28, c)) * (1.0 - smoothstep(0.3, 0.45, sd));
-    var a = aimLine(sd) + exp(-sd * sd / (U.width * U.width * 8.0)) * 0.35 + chev * 0.7;
-    let back = L - q.x;
-    if (back < 0.8) { a = max(a, aimLine(abs(sd - back * 0.55)) * 1.2 + select(0.0, 0.2, sd < back * 0.55)); }
-    return a * start;
-  }
-  // the volley: its cone's sides and far edge, a faint floor, an arrow's path down each spoke, and waves going out
-  let r = length(q);
+  if (q.x < 0.45 || q.x > U.len) { return 0.0; }
+  // the shot: a long thin box, edged along both its sides
+  if (U.kind < 0.5) { return aimBand(U.boxW * 0.5 - abs(q.y)); }
+  // the volley: its cone, edged along both its sides
   let half = U.cone * 0.5;
-  let ang = atan2(q.y, q.x);
-  if (r < 0.4 || r > U.len + U.width || abs(ang) > half + 0.05) { return 0.0; }
-  let side = abs(abs(q.y) * cos(half) - q.x * sin(half));
-  var a = aimLine(side) + aimLine(abs(r - U.len)) + 0.1;
-  for (var k = 0; k < 5; k++) {
-    let sa = (f32(k) / 4.0 - 0.5) * U.cone;
-    a += aimLine(abs(q.y * cos(sa) - q.x * sin(sa)) * 1.6) * 0.35;
-  }
-  let wv = fract((r - t * 7.0) / 2.5);
-  a += smoothstep(0.0, 0.06, wv) * (1.0 - smoothstep(0.1, 0.18, wv)) * 0.35;
-  return a * start * select(1.0, 0.0, abs(ang) > half + 0.01 && side > U.width);
+  return aimBand(q.x * sin(half) - abs(q.y) * cos(half));
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let dims = vec2i(textureDimensions(tD));
@@ -8405,7 +8386,7 @@ fn aimShape(d: vec2f) -> f32 {
   let a = aimShape(s.xz - U.origin.xz);
   if (a < 0.003) { discard; }
   let ex = select(1.0, max(eyeState[0], 1e-3), F.post.x > 0.5);
-  return vec4f(U.color * a * U.strength * pow(ex, -U.steady), 1.0);
+  return vec4f(U.color * a * pow(ex, -U.steady), 1.0);
 }`;
 const aimMat = new GFX.ShaderMaterial({ uniforms: AIM_U, code: AIM_WGSL, transparent: true, depthTest: false, depthWrite: false,
   blending: GFX.AdditiveBlending, side: GFX.DoubleSide });
@@ -8447,7 +8428,7 @@ function updateAimDecal() {
   const k = aimKind();
   aimMesh.visible = k >= 0;
   if (k < 0) return;
-  let ox = H.x, oz = H.z, fx = aim.x, fz = aim.z, a0 = 0, a1 = BOW.range + 1, hw = 1.2;
+  let ox = H.x, oz = H.z, fx = aim.x, fz = aim.z, a0 = 0, a1 = BOW.range + 1, hw = AIM_FX.shotWidth / 2 + 1;
   if (k === 2) { [ox, oz] = rainTarget(); fx = 0; fz = 1; a0 = -BOW.rainRadius - 1.2; a1 = BOW.rainRadius + 1.2; hw = a1; }
   else if (k === 1) hw = a1 * Math.tan(Math.min(BOW.volleyCone, 170) * Math.PI / 360) + 1.2;
   const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
@@ -8465,7 +8446,8 @@ function updateAimDecal() {
   const U = AIM_U;
   U.origin.value.set(ox, 0, oz); U.dir.value.set(fx, 0, fz); U.kind.value = k;
   U.len.value = BOW.range; U.cone.value = BOW.volleyCone * Math.PI / 180; U.radius.value = BOW.rainRadius;
-  U.width.value = AIM_FX.width; U.time.value = time; U.strength.value = AIM_FX.strength; U.steady.value = AIM_FX.steady;
+  const nm = ['shot', 'volley', 'rain'][k], A = AIM_FX;
+  U.boxW.value = A.shotWidth; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
   U.color.value.set(AIM_FX.color);
 }
 function castDash() {
@@ -10388,9 +10370,17 @@ const TUNING = [
   ]],
   ['Aim decal', [
     [AIM_FX, 'color', 'Colour', 'color'],
-    [AIM_FX, 'strength', 'Brightness', 0, 6, 0.05],
-    [AIM_FX, 'width', 'Line width (tiles)', 0.03, 0.5, 0.01],
     [AIM_FX, 'steady', 'Steady against eye exposure', 0, 1, 0.05],
+    [AIM_FX, 'shotWidth', 'Shot: box width (tiles)', 0.1, 3, 0.05],
+    [AIM_FX, 'shotEdge', 'Shot: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'shotEdgeBright', 'Shot: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'shotFill', 'Shot: fill brightness', 0, 3, 0.05],
+    [AIM_FX, 'volleyEdge', 'Volley: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'volleyEdgeBright', 'Volley: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'volleyFill', 'Volley: fill brightness', 0, 3, 0.05],
+    [AIM_FX, 'rainEdge', 'Rain: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'rainEdgeBright', 'Rain: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'rainFill', 'Rain: fill brightness', 0, 3, 0.05],
   ]],
   ['Bow', [
     [BOW, 'dmg', 'Shot damage', 1, 60, 1],
