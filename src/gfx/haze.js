@@ -10,9 +10,10 @@
 //   ground-thick haze all the way up it) and lava's light, blurred (what the ground within a few tiles gives off,
 //   falling away with distance), so a step reads both in one lookup;
 // - march: for each mosaic pixel, the stretch of its ray between `top` and `bottom` (world y) and nearer than what
-//   it sees, cut into `steps` even steps. At each, how much haze (thickest on the ground under it, thinning with
-//   height, stirred by slow drifting wisps) and the light it scatters toward the camera: the sun's or moon's
-//   through its shadow map (so tall trees and buildings throw shafts) and the clouds, more forward than back
+//   it sees, cut into `steps` steps (crowded low down where the haze is thick: see warpW). At each step's ends,
+//   how much haze (thickest on the ground under it, thinning with height, stirred by slow drifting wisps) and
+//   the light it scatters toward the camera: the sun's or moon's through its shadow map (so tall trees and
+//   buildings throw shafts) and the clouds, more forward than back
 //   (Henyey-Greenstein); the sky's, by what the GI probes say reaches there (all the light arriving with bounce
 //   light; read at the ends and middle of the stretch and blended between, as it changes slowly), or half the sky
 //   and half the ground without them; the point lights' (lamps, the torch), unshadowed; and lava's glow. It keeps
@@ -108,17 +109,23 @@ fn groundAt(xz: vec2f) -> f32 {
   let g = textureSampleLevel(glowTex, linSamp, xz * f32(GI_TPT) / f32(S), 0.0).a;
   return select(g, H.dens.w, g < -1000.0);
 }
-// how thick the haze is at p, over ground g (groundAt(p.xz))
-fn densityAt(p: vec3f, g: f32) -> f32 {
-  let over = max(p.y - g, 0.0);
-  var d = H.dens.x * mix(exp(-over / max(H.dens.y, 0.05)), 1.0, H.dens.z);
-  if (H.more.y > 0.0) {
-    let q = (p - H.wind.xyz * H.more.w) / max(H.more.z, 0.5);
-    let n = 0.65 * noise3(q) + 0.35 * noise3(q * 2.3 + 17.0);
-    d *= max(1.0 - H.more.y + H.more.y * 2.0 * n, 0.0);
-  }
-  return d;
+// the wisps at p: what share of the haze's thickness is left there (1 without them)
+fn wispAt(p: vec3f) -> f32 {
+  if (H.more.y <= 0.0) { return 1.0; }
+  let q = (p - H.wind.xyz * H.more.w) / max(H.more.z, 0.5);
+  let n = 0.65 * noise3(q) + 0.35 * noise3(q * 2.3 + 17.0);
+  return max(1.0 - H.more.y + H.more.y * 2.0 * n, 0.0);
 }
+// Where the steps fall: evenly in a measure that runs WARP_A + exp(-u) along the stretch, u its height over the
+// ground (in the haze's thinning heights), u0 + beta s at s (0 to 1 along it). So the steps crowd low down where
+// the haze is thick, and still come every so often in the thin air above, for the shafts. The same for every
+// pixel looking through the same air: no jitter. warpW is the measure up to s, warpD its rate there.
+const WARP_A = 0.3;
+fn warpW(s: f32, u0: f32, beta: f32) -> f32 {
+  if (abs(beta) < 1e-4) { return (WARP_A + exp(-u0)) * s; }
+  return WARP_A * s + (exp(-u0) - exp(-max(u0 + beta * s, -10.0))) / beta;
+}
+fn warpD(s: f32, u0: f32, beta: f32) -> f32 { return WARP_A + exp(-max(u0 + beta * s, -10.0)); }
 // the sun's shadow at p: one tap (the comparison sampler's own 2 × 2 filtering), none off the map
 fn shadowAt(p: vec3f) -> f32 {
   if (F.sunColor.w < 0.5) { return 1.0; }
@@ -207,7 +214,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
   } else if (a.y > H.range.z || a.y < H.range.w) { t1 = 0.0; }
   if (t1 <= t0) { textureStore(hazeOut, vec2i(id.xy), vec4f(0.0, 0.0, 0.0, 1.0)); return; }
   let n = max(i32(H.dims.w), 1);
-  let ds = length(b - a) * (t1 - t0) / f32(n);
+  let pa = mix(a, b, t0); let seg = mix(a, b, t1) - pa; let len = length(seg);
   let V = normalize(a - b);
   // the sun's share, the same all along the ray but for shadow and cloud
   var sunC = vec3f(0.0);
@@ -226,7 +233,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
   // nothing beyond it), so the steps only add those
   var lamps = 0u;
   if (H.light.w > 0.0) {
-    let pa = mix(a, b, t0); let seg = mix(a, b, t1) - pa; let sl = max(dot(seg, seg), 1e-8);
+    let sl = max(dot(seg, seg), 1e-8);
     for (var j = 0; j < ${MAX_POINTS}; j++) {
       if (j >= np) { break; }
       let pl = F.points[j];
@@ -234,21 +241,37 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       if (pl.pos.w <= 0.0 || pl.color.w <= 0.0 || length(pa + seg * h - pl.pos.xyz) < pl.pos.w) { lamps |= 1u << u32(j); }
     }
   }
+  // the steps' spacing, from the ground where the stretch ends (see warpW)
+  let hh = max(H.dens.y, 0.05);
+  let gEnd = groundAt(pa.xz + seg.xz);
+  let u0 = clamp((pa.y - gEnd) / hh, -10.0, 60.0);
+  let beta = clamp(seg.y / hh, -200.0, 200.0);
+  let total = warpW(1.0, u0, beta);
+  // The light and the haze are read at the steps' ends and blended across each step: the light evenly, the
+  // haze's thinning with height exactly (its mean over the step), so neither shows as bands between steps.
   var S = vec3f(0.0);
   var T = 1.0;
-  for (var i = 0; i < n; i++) {
-    let f = (f32(i) + 0.5) / f32(n);
-    let p = mix(a, b, mix(t0, t1, f));
+  var sP = 0.0; var uP = 0.0; var wP = 1.0; var LP = vec3f(0.0);
+  for (var i = 0; i <= n; i++) {
+    var s = 0.0;
+    if (i == n) { s = 1.0; }
+    else if (i > 0) {
+      // where the measure reaches i/n of its whole (Newton, from the last end)
+      let aim = total * f32(i) / f32(n);
+      s = sP;
+      for (var it = 0; it < 3; it++) { s = clamp(s - (warpW(s, u0, beta) - aim) / warpD(s, u0, beta), sP, 1.0); }
+    }
+    let p = pa + seg * s;
     let g = groundAt(p.xz);
-    let k = densityAt(p, g);
-    if (k <= 1e-6) { continue; }
+    let u = max(p.y - g, 0.0) / hh;
+    let w = wispAt(p);
     var L = vec3f(0.0);
     if (useSky) {
-      let kf = f * f32(K);
+      let kf = s * f32(K);
       let ki = min(i32(floor(kf)), K - 1);
       if (ki != knot) {
-        if (ki == knot + 1) { ambA = ambB; } else { ambA = ambientAt(mix(a, b, mix(t0, t1, f32(ki) / f32(K)))) * H.light.z; }
-        ambB = ambientAt(mix(a, b, mix(t0, t1, f32(ki + 1) / f32(K)))) * H.light.z;
+        if (ki == knot + 1) { ambA = ambB; } else { ambA = ambientAt(pa + seg * (f32(ki) / f32(K))) * H.light.z; }
+        ambB = ambientAt(pa + seg * (f32(ki + 1) / f32(K))) * H.light.z;
         knot = ki;
       }
       L = mix(ambA, ambB, kf - f32(ki));
@@ -266,10 +289,17 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       }
     }
     if (H.more.x > 0.0) { L += glowAt(p, g) * H.more.x; }
-    // what the step scatters toward the camera, less what it loses again before it leaves the step
-    let t = exp(-k * ds);
-    S += T * H.tint.rgb * L * (1.0 - t);
-    T *= t;
+    if (i > 0) {
+      // the step from the last end to this one: exp(-u)'s mean over it (u runs straight between its ends)
+      var e = exp(-0.5 * (u + uP));
+      if (abs(u - uP) > 1e-3) { e = (exp(-uP) - exp(-u)) / (u - uP); }
+      let k = H.dens.x * mix(e, 1.0, H.dens.z) * 0.5 * (w + wP);
+      // what the step scatters toward the camera, less what it loses again before it leaves the step
+      let t = exp(-k * len * (s - sP));
+      S += T * H.tint.rgb * 0.5 * (L + LP) * (1.0 - t);
+      T *= t;
+    }
+    sP = s; uP = u; wP = w; LP = L;
   }
   textureStore(hazeOut, vec2i(id.xy), vec4f(S * H.tint.w, T));
 }
