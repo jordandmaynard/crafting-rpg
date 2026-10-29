@@ -60,6 +60,9 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 
 #mini { display: block; width: 168px; height: 168px; padding: 0; image-rendering: pixelated; cursor: pointer; }
 #dayStrip { display: block; width: 168px; height: 24px; padding: 0; image-rendering: pixelated; }
+/* where you are and the time of day, between the map and the day strip, as wide as they are */
+#placePlate { width: 148px; }
+#placePlate .card-row { margin: 4px 0 0; }
 
 #bar { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); transform: translateX(-50%); display: flex; gap: 8px; pointer-events: none; }
 .slot { pointer-events: auto; cursor: pointer; position: relative; width: 64px; height: 64px; box-sizing: border-box; padding: 6px 4px 4px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; overflow: hidden; }
@@ -245,6 +248,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   .slot .name { font-size: 6px; }
   #mini { width: 120px; height: 120px; }
   #dayStrip { width: 120px; height: 17px; }
+  #placePlate { width: 100px; }
   .hp { width: 150px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -260,13 +264,13 @@ button:disabled { opacity: 0.45; cursor: default; }
     <div class="card-row" style="margin:0;justify-content:space-between"><span>HEALTH</span><b id="hpText">100 / 100</b></div>
     <div class="meter" role="img" id="hpMeter" aria-label="Health 100 of 100"><i class="lag" id="hpLag"></i><i id="hpFill"></i></div>
   </div>
-  <div class="plate">
-    <div class="card-title" id="region">EMBERBROOK</div>
-    <div class="card-row"><span>DAY</span><b id="day">1</b><span id="clock">MORNING</span></div>
-  </div>
 </div>
 <div class="hud tr">
   <canvas class="plate" id="mini" width="168" height="168" title="Map (M)"></canvas>
+  <div class="plate" id="placePlate">
+    <div class="card-title" id="region">EMBERBROOK</div>
+    <div class="card-row"><span id="clock">MORNING</span></div>
+  </div>
   <canvas class="plate" id="dayStrip" width="84" height="12" title="Time of day: the sun's way across the sky, and the moon's"></canvas>
   <button id="optsBtn" title="Options (O)">OPTIONS</button>
   <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
@@ -332,7 +336,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     <h1 id="optsTitle">OPTIONS</h1>
     <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
-    <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
+    <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's or spear's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
     <button class="go" id="optsClose">DONE</button>
   </div>
 </div>
@@ -6189,8 +6193,18 @@ function makeHuman() {
   box(nock, 0.03, 0.06, 0.012, 0, -0.47, 0, steelMat);
   box(nock, 0.004, 0.08, 0.04, 0, -0.03, 0, bowString);
   bow.rotation.x = -Math.PI / 2;
+  // the spear, in the right hand: its shaft runs along the hand's z (stood upright at rest), on a slide (spearShaft)
+  // the pokes thrust out along it
+  const spear = pivot(armR, 0, -0.25, 0.02);
+  wear('spear', spear);
+  const spearShaft = pivot(spear, 0, 0, 0);
+  box(spearShaft, 0.032, 0.032, 1.3, 0, 0, 0.35, flatMat({ color: '#8a6440' }));
+  box(spearShaft, 0.045, 0.045, 0.08, 0, 0, 0.98, hiltMat);
+  box(spearShaft, 0.07, 0.02, 0.16, 0, 0, 1.09, steelMat);
+  box(spearShaft, 0.04, 0.04, 0.06, 0, 0, 1.19, steelMat);
+  spear.rotation.x = -Math.PI / 2;
   g.scale.setScalar(1.12);
-  return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock };
+  return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock, spear, spearShaft };
 }
 
 // the Bone Road skeleton, box for box
@@ -6640,7 +6654,7 @@ const H = {
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
   cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
-  kx: 0, kz: 0, bow: null,
+  kx: 0, kz: 0, bow: null, spear: null,
 };
 const CD = { Q: 8, E: 7 };
 // the dash is a tumble: a forward roll you can steer, untouchable the whole way, and a burst of extra run
@@ -6783,6 +6797,9 @@ const ICON = {
   sword: pixelSvg(['.......ww', '......wsw', '.....wsw.', '....wsw..', '.y.wsw...', '..yww....', '..by.....', '.b..y....', 'b........'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
   whirl: pixelSvg(['...www...', '.ww...ww.', 'w..sss..w', 'w.s...s.w', 'w.s.y.s.w', 'w.s...s.w', 'w..sss..w', '.ww...ww.', '...www...'], { w: '#8de8dc', s: '#efe4c8', y: '#f2c14e' }),
   bow: pixelSvg(['......b..', '....bbs..', '...b..s..', '..b...s..', 'hwgwwwsff', '..b...s..', '...b..s..', '....bbs..', '......b..'], { b: '#8a5a32', g: '#5a3a22', s: '#efe4c8', w: '#c89a62', h: '#a8acb8', f: '#d8443a' }),
+  spear: pixelSvg(['.......sS', '......sss', '.....bs..', '....b....', '...b.....', '..b......', '.b.......', 'b........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }),
+  flurry: pixelSvg(['.s..S..s.', '.s..s..s.', '..b.b.b..', '..b.b.b..', '...bbb...', '....b....', '....b....', '.........', '.........'], { s: '#a8acb8', S: '#efe4c8', b: '#8a5a32' }),
+  harpoon: pixelSvg(['.....sSs.', '......ss.', '.....s.s.', '....c....', '...c.....', '..c......', '.c.......', 'c........', '.........'], { s: '#a8acb8', S: '#efe4c8', c: '#6a6674' }),
   volley: pixelSvg(['h...h...h', '.w..w..w.', '..w.w.w..', '...www...', '....w....', '....w....', '...fwf...', '...f.f...', '.........'], { h: '#a8acb8', w: '#c89a62', f: '#d8443a' }),
   rain: pixelSvg(['f...f...f', 'w...w...w', 'w.f.w.f.w', 'h.w.h.w.h', '..w...w..', '..h...h..', '.........', '.rrrrrrr.', '..rrrrr..'], { h: '#a8acb8', w: '#c89a62', f: '#efe4c8', r: '#e8642a' }),
   lunge: pixelSvg(['.........', '....w....', '...www...', '..wwwww..', '....s....', '....s....', '...yyy...', '....b....', '....b....'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }),
@@ -6833,6 +6850,7 @@ const ITEMS = {
   clothBoots: { name: 'Cloth Boots', slot: 'boots', icon: 'boots', armor: 0, mat: 'boots' },
   basicSword: { name: 'Basic Sword', slot: 'weapon', icon: 'sword', strike: 'slash', q: 'whirl', e: 'lunge' },
   hunterBow: { name: 'Hunting Bow', slot: 'weapon', icon: 'bow', strike: 'shoot', q: 'volley', e: 'rain' },
+  ironSpear: { name: 'Iron Spear', slot: 'weapon', icon: 'spear', strike: 'poke', q: 'flurry', e: 'harpoon' },
   leatherArmor: { name: 'Leather Armor', slot: 'chest', icon: 'leatherArmor', armor: 3, mat: 'leather', trim: 'leatherDark' },
   leatherPants: { name: 'Leather Pants', slot: 'legs', icon: 'leatherPants', armor: 2, mat: 'leatherPants' },
   leatherBoots: { name: 'Leather Boots', slot: 'boots', icon: 'leatherBoots', armor: 1, mat: 'leatherBoots' },
@@ -6846,12 +6864,14 @@ const ITEMS = {
 const ARMOR_PER = 0.04;
 const armor = () => Object.values(GEAR).reduce((a, id) => a + (id && ITEMS[id].armor || 0), 0);
 const FISTS = { name: 'Bare Fists', strike: 'punch' };
-const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' }, shoot: { name: 'SHOOT', icon: 'bow' } };
+const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' }, shoot: { name: 'SHOOT', icon: 'bow' }, poke: { name: 'POKE', icon: 'spear' } };
 const ABILITY = {
   whirl: { name: 'WHIRL', icon: 'whirl', cast: () => castWhirl() },
   lunge: { name: 'LUNGE', icon: 'lunge', cast: () => castLunge() },
   volley: { name: 'VOLLEY', icon: 'volley', cast: () => castVolley(), cd: () => BOW.volleyCd },
   rain: { name: 'RAIN', icon: 'rain', cast: () => castRain(), cd: () => BOW.rainCd },
+  flurry: { name: 'FLURRY', icon: 'flurry', cast: () => castFlurry(), cd: () => SPEAR.flurryCd },
+  harpoon: { name: 'HARPOON', icon: 'harpoon', cast: () => castHarpoon(), cd: () => SPEAR.harpoonCd },
 };
 // the doll's slots, where each sits on its 3 x 4 grid, and the icon an empty one shows
 const GEAR_SLOTS = [
@@ -6861,7 +6881,7 @@ const GEAR_SLOTS = [
 ];
 const GEAR = { head: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'basicSword' };
 const PACK = new Array(20).fill(null), PACK_N = new Array(20).fill(0);
-PACK[0] = 'hunterBow'; PACK_N[0] = 1;
+PACK[0] = 'hunterBow'; PACK_N[0] = 1; PACK[1] = 'ironSpear'; PACK_N[1] = 1;
 // building materials are counted out of the pack (H.wood and H.stone read it; addItem and takeItem change it)
 Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') } });
 const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
@@ -6879,6 +6899,7 @@ const DRESS = {
   helmet: () => GEAR.head === 'leatherHelmet',
   sword: () => GEAR.weapon === 'basicSword',
   bow: () => GEAR.weapon === 'hunterBow',
+  spear: () => GEAR.weapon === 'ironSpear',
 };
 const DRESS_MAT = {
   shirt: () => GEAR.chest && ITEMS[GEAR.chest].mat, hood: () => GEAR.chest && ITEMS[GEAR.chest].trim,
@@ -6955,7 +6976,7 @@ function clickCell(c) {
 let wornWeapon = GEAR.weapon;
 function gearChanged() {
   // a new weapon cuts off whatever the old one was doing
-  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.bow = null; H.comboT = 0; arcT = 9; }
+  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.bow = H.spear = null; H.comboT = 0; arcT = 9; }
   dressHero(); renderBar(); renderInv();
   sfx.equip();
 }
@@ -7681,7 +7702,7 @@ function respawn() {
   }
   [H.x, H.z] = at || [spawn.x, spawn.z];
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.alive = true; H.invuln = 2;
-  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = null;
+  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon();
   renderHp();
   camTarget.set(H.x, surfaceY(H.x, H.z), H.z);
   toast(at ? 'You wake by your hearth.' : 'You wake by the well in ' + titleCase(towns[0].name) + '.', 'calm');
@@ -8083,7 +8104,7 @@ function updateAim() {
     const m = moveInput();
     if (TOUCH.aim) {
       aim.x = TOUCH.aim[0]; aim.z = TOUCH.aim[1];
-      if (!m && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip && !H.bow) H.face = Math.atan2(aim.x, aim.z);
+      if (!m && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip && !H.bow && !H.spear) H.face = Math.atan2(aim.x, aim.z);
     } else if (m) { aim.x = m[0]; aim.z = m[1]; }
     else { aim.x = Math.sin(H.face); aim.z = Math.cos(H.face); }
     return;
@@ -8112,6 +8133,7 @@ function updateAim() {
 // the sword's three-stroke combo, or with bare hands a right and a left jab
 function startSwing() {
   if (weapon().strike === 'shoot') { startShot('shot'); return; }
+  if (weapon().strike === 'poke') { startSpear('poke'); return; }
   if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
   H.punch = weapon().strike === 'punch';
   H.combo = H.comboT > 0 ? (H.combo + 1) % (H.punch ? 2 : 3) : 0;
@@ -8390,7 +8412,9 @@ const AIM_FX = { color: '#34628d', steady: 1,
   shotWidth: 0.45, shotEdge: 0.03, shotEdgeBright: 1.5, shotFill: 0.4,
   volleyEdge: 0.04, volleyEdgeBright: 2, volleyFill: 0.75,
   rainEdge: 0.08, rainEdgeBright: 1.9, rainFill: 0.65,
-  lungeWidth: 1.25, lungeTaper: 1, lungeEdge: 0.08, lungeEdgeBright: 2.4, lungeFill: 0.85};
+  lungeWidth: 1.25, lungeTaper: 1, lungeEdge: 0.08, lungeEdgeBright: 2.4, lungeFill: 0.85,
+  flurryEdge: 0.04, flurryEdgeBright: 2, flurryFill: 0.75,
+  harpoonWidth: 0.45, harpoonEdge: 0.03, harpoonEdgeBright: 1.5, harpoonFill: 0.4 };
 const AIM_NU = 84, AIM_NV = 72;
 const AIM_U = { tD: { value: WATER_U.tRefrD.value }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
   len: { value: 20 }, taper: { value: 0 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
@@ -8463,8 +8487,8 @@ const aimMesh = (() => {
 })();
 // Q and E held to aim (with the bow, when the option's on), and the touch button held
 const abilHeld = { q: false, e: false };
-// (the bow's Q and E, and the sword's lunge: the whirl and the swing are point blank)
-const AIMED = new Set(['volley', 'rain', 'lunge']);
+// (the bow's Q and E, the spear's, and the sword's lunge: the whirl and the swing are point blank)
+const AIMED = new Set(['volley', 'rain', 'lunge', 'flurry', 'harpoon']);
 const onRelease = key => OPTIONS.attackOnRelease && AIMED.has(weapon()[key]);
 function pressAbility(key) { if (onRelease(key)) abilHeld[key] = true; else useAbility(key); }
 function releaseAbility(key) {
@@ -8472,25 +8496,36 @@ function releaseAbility(key) {
   abilHeld[key] = false;
   if (AIMED.has(weapon()[key])) useAbility(key);
 }
-let aimForce = -1;   // (the test hook's stand-in for a held button)
-function aimKind() {
-  if (aimForce >= 0) return aimForce;
-  if (mode !== 'play' || !H.alive || invOpen) return -1;
-  if (weapon().e === 'lunge' && (abilHeld.e || TOUCH.hold === 'e')) return 3;
-  if (weapon().strike !== 'shoot') return -1;
-  if (abilHeld.e || TOUCH.hold === 'e') return 2;
-  if (abilHeld.q || TOUCH.hold === 'q') return 1;
-  if (mouse.down || PAD.attack || TOUCH.attack) return 0;
-  return -1;
+let aimForce = -1;   // (the test hook's stand-in for a held button: an index into AIM_NAMES)
+const AIM_NAMES = ['shot', 'volley', 'rain', 'lunge', 'flurry', 'harpoon'];
+// which shape shows now: a held aimed ability's, else the bow's shot while the attack's held
+function aimName() {
+  if (aimForce >= 0) return AIM_NAMES[aimForce];
+  if (mode !== 'play' || !H.alive || invOpen) return null;
+  const w = weapon();
+  for (const key of ['e', 'q']) if ((abilHeld[key] || TOUCH.hold === key) && AIMED.has(w[key])) return w[key];
+  if (w.strike === 'shoot' && (mouse.down || PAD.attack || TOUCH.attack)) return 'shot';
+  return null;
+}
+// each shape: a box (0) along the aim `len` long and `boxW` wide (its end pointed over `taper`), a cone (1) `cone`
+// degrees across and `len` long, or a disc (2) of `radius` round `at`
+function aimSpec(nm) {
+  const A = AIM_FX;
+  if (nm === 'shot') return { shape: 0, len: BOW.range, boxW: A.shotWidth };
+  if (nm === 'volley') return { shape: 1, len: BOW.range, cone: BOW.volleyCone };
+  if (nm === 'rain') return { shape: 2, radius: BOW.rainRadius, at: rainTarget() };
+  if (nm === 'lunge') return { shape: 0, len: LUNGE.speed * LUNGE.time + LUNGE.reach, boxW: A.lungeWidth, taper: A.lungeTaper };
+  if (nm === 'flurry') return { shape: 1, len: SPEAR.flurryReach, cone: SPEAR.flurryCone };
+  return { shape: 0, len: SPEAR.harpoonRange, boxW: A.harpoonWidth };
 }
 function updateAimDecal() {
-  const k = aimKind();
-  aimMesh.visible = k >= 0;
-  if (k < 0) return;
-  let ox = H.x, oz = H.z, fx = aim.x, fz = aim.z, a0 = 0, a1 = BOW.range + 1, hw = AIM_FX.shotWidth / 2 + 1;
-  if (k === 2) { [ox, oz] = rainTarget(); fx = 0; fz = 1; a0 = -BOW.rainRadius - 1.2; a1 = BOW.rainRadius + 1.2; hw = a1; }
-  else if (k === 1) hw = a1 * Math.tan(Math.min(BOW.volleyCone, 170) * Math.PI / 360) + 1.2;
-  else if (k === 3) { a1 = LUNGE.speed * LUNGE.time + LUNGE.reach + 1; hw = AIM_FX.lungeWidth / 2 + 1; }
+  const nm = aimName();
+  aimMesh.visible = !!nm;
+  if (!nm) return;
+  const S = aimSpec(nm), A = AIM_FX;
+  let ox = H.x, oz = H.z, fx = aim.x, fz = aim.z, a0 = 0, a1 = (S.len || 0) + 1, hw = (S.boxW || 0) / 2 + 1;
+  if (S.shape === 2) { [ox, oz] = S.at; fx = 0; fz = 1; a0 = -S.radius - 1.2; a1 = S.radius + 1.2; hw = a1; }
+  else if (S.shape === 1) hw = a1 * Math.tan(Math.min(S.cone, 170) * Math.PI / 360) + 1.2;
   const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
   // the sheet: a grid over the shape's box, along the aim (a) and across it (s, to the right: (fz, -fx))
   let o = 0;
@@ -8504,20 +8539,157 @@ function updateAimDecal() {
   }
   aimMesh.geometry.attributes.position.needsUpdate = true;
   const U = AIM_U;
-  U.origin.value.set(ox, 0, oz); U.dir.value.set(fx, 0, fz); U.kind.value = k;
-  U.len.value = BOW.range; U.cone.value = BOW.volleyCone * Math.PI / 180; U.radius.value = BOW.rainRadius;
-  const nm = ['shot', 'volley', 'rain', 'lunge'][k], A = AIM_FX;
-  if (k === 3) U.len.value = LUNGE.speed * LUNGE.time + LUNGE.reach;
-  U.taper.value = k === 3 ? Math.min(A.lungeTaper, U.len.value - 0.5) : 0;
-  U.boxW.value = k === 3 ? A.lungeWidth : A.shotWidth; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
+  U.origin.value.set(ox, 0, oz); U.dir.value.set(fx, 0, fz); U.kind.value = S.shape;
+  U.len.value = S.len || 0; U.cone.value = (S.cone || 0) * Math.PI / 180; U.radius.value = S.radius || 0;
+  U.taper.value = S.taper ? Math.min(S.taper, S.len - 0.5) : 0;
+  U.boxW.value = S.boxW || 0; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
   U.color.value.set(AIM_FX.color);
+}
+// ---------- The spear ----------
+// The poke stabs straight out the way you aim, striking every foe along a line `reach` tiles long and `width`
+// across. Q is a flurry: `flurryTime` seconds of jabs, one every `flurryRate`, into a cone `flurryCone` degrees
+// across and `flurryReach` long, set the way you aimed when it began (you can walk, slowly, but it doesn't turn).
+// E throws the harpoon on its chain out to `harpoonRange` tiles: the first foe it meets is struck and reeled
+// back to you, then slowed by `slow` (a share of its speed) for `slowTime` seconds. Knock-backs are in tiles.
+const SPEAR = { dmg: 11, time: 0.32, reach: 2.2, width: 0.5, knock: 0.25,
+  flurryTime: 2, flurryRate: 0.13, flurryReach: 2.4, flurryCone: 70, flurryDmg: 4, flurryKnock: 0.1, flurryMove: 0.7, flurryCd: 8,
+  harpoonRange: 9, harpoonSpeed: 26, harpoonPull: 14, harpoonDmg: 8, slow: 0.9, slowTime: 2, harpoonCd: 7 };
+function startSpear(kind) {
+  if (H.spear || H.bow || H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip || !H.alive) return false;
+  const a = Math.atan2(aim.x, aim.z);
+  H.spear = { t: 0, kind, dir: a, len: kind === 'poke' ? SPEAR.time : kind === 'flurry' ? SPEAR.flurryTime : 0.3, hit: false, next: 0 };
+  H.face = a;
+  if (kind !== 'flurry') sfx.swing();
+  return true;
+}
+function castFlurry() {
+  if (mode !== 'play' || !H.alive || H.cdQ > 0) return;
+  if (H.spear && H.spear.kind === 'poke') H.spear = null;
+  if (startSpear('flurry')) H.cdQ = SPEAR.flurryCd;
+}
+function castHarpoon() {
+  if (mode !== 'play' || !H.alive || H.cdE > 0 || harpoon) return;
+  if (H.spear && H.spear.kind === 'poke') H.spear = null;
+  if (startSpear('throw')) H.cdE = SPEAR.harpoonCd;
+}
+// the foes in a strip from the hero along angle a: `from` to `to` tiles out, half-width hw (or in a cone of half-angle ha)
+function foesAhead(a, to, hw, ha) {
+  const fx = Math.sin(a), fz = Math.cos(a), out = [];
+  for (const f of foes) {
+    if (f.hp <= 0 || Math.abs(f.y - H.y) > 1.2) continue;
+    const dx = f.x - H.x, dz = f.z - H.z, al = dx * fx + dz * fz, sd = Math.abs(dx * fz - dz * fx);
+    if (al < -f.def.rad || al > to + f.def.rad) continue;
+    if (ha !== undefined ? Math.hypot(dx, dz) > f.def.rad + 0.3 && Math.atan2(sd, Math.max(al, 1e-3)) > ha : sd > hw + f.def.rad) continue;
+    out.push(f);
+  }
+  return out;
+}
+function updateSpear(dt) {
+  const sp = H.spear;
+  sp.t += dt;
+  H.face = sp.dir;
+  const fx = Math.sin(sp.dir), fz = Math.cos(sp.dir);
+  if (sp.kind === 'poke') {
+    if (!sp.hit && sp.t > sp.len * 0.4) {
+      sp.hit = true;
+      for (const f of foesAhead(sp.dir, SPEAR.reach, SPEAR.width / 2)) hurtFoe(f, SPEAR.dmg, H.x, H.z, SPEAR.knock * 8);
+      cutGrass(H.x + fx * 1.2, H.z + fz * 1.2, 0.35, fx, fz);
+    }
+  } else if (sp.kind === 'flurry') {
+    // a jab every flurryRate seconds, each striking whatever's in the cone then
+    while (sp.next <= sp.t && sp.next < sp.len) {
+      sp.next += SPEAR.flurryRate;
+      sfx.punch();
+      for (const f of foesAhead(sp.dir, SPEAR.flurryReach, 0, SPEAR.flurryCone * Math.PI / 360)) hurtFoe(f, SPEAR.flurryDmg, H.x, H.z, SPEAR.flurryKnock * 8);
+      cutGrass(H.x + fx * 1.3, H.z + fz * 1.3, 0.5, fx, fz);
+    }
+  } else if (!sp.hit && sp.t > sp.len * 0.4) {
+    sp.hit = true;
+    harpoon = { x: H.x + fx * 0.4, y: H.y + 0.62, z: H.z + fz * 0.4, dx: fx, dz: fz, out: true, dist: 0, foe: null, stuck: 0 };
+    sfx.dash();
+  }
+  if (sp.t >= sp.len) H.spear = null;
+}
+// The harpoon: its head flies out, then comes back on the chain, dragging its catch (through moveEntity, so the foe
+// can't be pulled through walls; if it snags for a moment it's let go there)
+let harpoon = null;
+const HARPOON_LINKS = 64;
+const harpoonHead = (() => {
+  const g = new GFX.Group();
+  for (const [w, h, d, z] of [[0.03, 0.03, 0.22, -0.06], [0.1, 0.02, 0.09, 0.07], [0.05, 0.05, 0.06, 0.13]]) {
+    const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), steelMat); m.position.z = z; m.castShadow = true; g.add(m);
+  }
+  g.visible = false; scene.add(g);
+  return g;
+})();
+const chainLinks = (() => { const m = new GFX.InstancedMesh(new GFX.BoxGeometry(0.035, 0.012, 0.11), flatMat({ color: '#4a4652', roughness: 0.5, metalness: 0.5 }), HARPOON_LINKS); m.castShadow = true; scene.add(m); return m; })();
+function dropHarpoon() {
+  if (harpoon && harpoon.foe) harpoon.foe.grabbed = null;
+  harpoon = null;
+}
+function updateHarpoon(dt) {
+  const hp = harpoon;
+  harpoonHead.visible = !!hp;
+  if (!hp) { chainLinks.count = 0; chainLinks.needsUpdate = true; return; }
+  if (!H.alive) { dropHarpoon(); harpoonHead.visible = false; chainLinks.count = 0; chainLinks.needsUpdate = true; return; }
+  const hx = H.x + Math.sin(H.face) * 0.3, hy = H.y + 0.62, hz = H.z + Math.cos(H.face) * 0.3;
+  if (hp.out) {
+    const steps = Math.max(1, Math.ceil(SPEAR.harpoonSpeed * dt / 0.2)), h = dt / steps;
+    for (let k = 0; k < steps && hp.out; k++) {
+      const x0 = hp.x, z0 = hp.z;
+      hp.x += hp.dx * SPEAR.harpoonSpeed * h; hp.z += hp.dz * SPEAR.harpoonSpeed * h; hp.dist += SPEAR.harpoonSpeed * h;
+      const f = arrowFoe(hp);
+      if (f) {
+        hurtFoe(f, SPEAR.harpoonDmg, f.x - hp.dx, f.z - hp.dz, 0);
+        hp.out = false;
+        if (f.hp > 0) { if (!f.def.rooted) { hp.foe = f; f.grabbed = hp; } else f.slowT = SPEAR.slowTime; }
+      } else if (hp.dist >= SPEAR.harpoonRange || arrowBlocked(hp, x0, z0) || hp.y < surfH(hp.x, hp.z)) { hp.out = false; if (hp.dist < SPEAR.harpoonRange) sfx.thunk(); }
+    }
+  } else {
+    // reeling in, to just in front of you
+    const f = hp.foe;
+    const dx = hx - hp.x, dz = hz - hp.z, l = Math.hypot(dx, dz), stop = f ? 0.75 + f.def.rad : 0.2;
+    const step = Math.min(SPEAR.harpoonPull * dt, Math.max(0, l - stop));
+    if (f) {
+      if (f.hp <= 0 || !foes.includes(f)) { hp.foe = null; }
+      else {
+        const got = moveEntity(f, dx / l * step, dz / l * step, f.def.rad, true);
+        f.face = Math.atan2(dx, dz);
+        hp.stuck = got < step * 0.3 && step > 1e-3 ? hp.stuck + dt : 0;
+        hp.x = f.x; hp.z = f.z;
+        if (l - step <= stop + 0.02 || hp.stuck > 0.3) { f.grabbed = null; f.slowT = SPEAR.slowTime; hp.foe = null; harpoon = null; }
+      }
+    } else {
+      hp.x += dx / (l || 1) * step; hp.z += dz / (l || 1) * step;
+      if (l - step <= stop + 0.02) harpoon = null;
+    }
+    hp.y += (hy - hp.y) * Math.min(1, dt * 8);
+  }
+  if (!harpoon) { harpoonHead.visible = false; chainLinks.count = 0; chainLinks.needsUpdate = true; return; }
+  // the head points away from you along the chain; the links lie between, every other one turned a quarter
+  const cx = hp.x - hx, cy = hp.y - hy, cz = hp.z - hz, cl = Math.hypot(cx, cy, cz) || 1e-3;
+  harpoonHead.position.set(hp.x, hp.y, hp.z);
+  harpoonHead.rotation.order = 'YXZ'; harpoonHead.rotation.set(-Math.asin(cy / cl), Math.atan2(cx, cz), 0);
+  const n = Math.min(HARPOON_LINKS, Math.floor(cl / 0.09));
+  const fx = cx / cl, fy = cy / cl, fz = cz / cl;
+  let rx = fz, ry = 0, rz = -fx; const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
+  const ux = fy * rz - fz * ry, uy = fz * rx - fx * rz, uz = fx * ry - fy * rx;
+  for (let k = 0; k < n; k++) {
+    const t = (k + 0.5) / n, sag = Math.sin(t * Math.PI) * Math.min(0.25, cl * 0.03) * (hp.out ? 0.3 : 1);
+    const px = hx + cx * t, py = hy + cy * t - sag, pz = hz + cz * t;
+    const tw = k % 2;
+    const ax = tw ? ux : rx, ay = tw ? uy : ry, az = tw ? uz : rz, bx = tw ? -rx : ux, by = tw ? -ry : uy, bz = tw ? -rz : uz;
+    arrowE.set([ax, ay, az, 0, bx, by, bz, 0, fx, fy, fz, 0, px, py, pz, 1]);
+    chainLinks.instanceMatrix.set(arrowE, k * 16);
+  }
+  chainLinks.count = n; chainLinks.needsUpdate = true;
 }
 function castDash() {
   if (!H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
-  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = TUMBLE.cooldown; H.invuln = Math.max(H.invuln, TUMBLE.time); H.swing = -1; H.bow = null; H.boost = 0;
+  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = TUMBLE.cooldown; H.invuln = Math.max(H.invuln, TUMBLE.time); H.swing = -1; H.bow = H.spear = null; H.boost = 0;
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
 }
@@ -8546,7 +8718,7 @@ function jumpEdge(dir = moveInput()) {
 function castJump() {
   const f = H.canJump;
   if (!f || H.flip) return;
-  H.flip = f; H.canJump = null; H.swing = -1; H.bow = null; H.invuln = Math.max(H.invuln, f.dur);
+  H.flip = f; H.canJump = null; H.swing = -1; H.bow = H.spear = null; H.invuln = Math.max(H.invuln, f.dur);
   sfx.dash();
 }
 // Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at)
@@ -8741,7 +8913,7 @@ function showGhosts(spots) {
 }
 function setMode(m) {
   mode = m;
-  H.swing = -1; H.bow = null; drag = null;
+  H.swing = -1; H.bow = H.spear = null; drag = null;
   renderBar();
   showGhosts([]); showPlotHover(0);
   if (m === 'build') toast(PAD.on ? 'Build mode. Claim a plot with a hearth (RB), then build on it: X floors, Y walls, A doors. Hold RT and move to lay rows.'
@@ -9184,7 +9356,6 @@ function updateSky() {
   }
   const hour = clock * 24;
   $('clock').textContent = hour < 5 ? 'NIGHT' : hour < 8 ? 'DAWN' : hour < 12 ? 'MORNING' : hour < 17 ? 'AFTERNOON' : hour < 20 ? 'DUSK' : 'NIGHT';
-  $('day').textContent = dayNum;
   drawDayStrip(y);
 }
 // The time-of-day strip under the map, an old watch's sun and moon window laid out flat: the sun crosses it from
@@ -9345,10 +9516,10 @@ function update(dt) {
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
     } else if (m) {
-      const slow = (H.swing >= 0 ? 0.45 : H.bow ? 0.6 : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
+      const slow = (H.swing >= 0 ? 0.45 : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
       // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
-      if (H.swing < 0 && H.whirl < 0 && !H.bow) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
+      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
     }
     vx += H.kx; vz += H.kz;
     H.kx *= Math.max(0, 1 - dt * 9); H.kz *= Math.max(0, 1 - dt * 9);
@@ -9366,8 +9537,9 @@ function update(dt) {
     if (!H.flip) H.y = surfaceY(H.x, H.z);
 
     // attacks
-    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow) startSwing();
+    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear) startSwing();
     if (H.bow) updateBow(dt);
+    if (H.spear) updateSpear(dt);
     if (H.swing >= 0) {
       H.swing += dt;
       const len = swingTime();
@@ -9414,6 +9586,7 @@ function update(dt) {
   const night = daylight() < 0.35;
   for (const f of foes.slice()) updateFoe(f, dt, night);
   updateArrows(dt);
+  updateHarpoon(dt);
   updateAimDecal();
   separateFoes();
   if (H.alive) spawnTick(dt);
@@ -9552,8 +9725,17 @@ function animateHero(dt) {
   hero.body.rotation.z = on ? -sd * WALK.lean : 0;
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
-  let jab = 0, pull = 0;
-  if (H.bow) {
+  let jab = 0, pull = 0, thrust = 0;
+  if (H.spear) {
+    // the spear held out level: a poke thrusts it out and back; the flurry jabs again and again, a little to
+    // either side; the harpoon's throw is a short shove
+    const sp = H.spear;
+    if (sp.kind === 'poke') thrust = Math.sin(Math.min(1, sp.t / sp.len) * Math.PI) * 0.45;
+    else if (sp.kind === 'flurry') { const n = Math.floor(sp.t / SPEAR.flurryRate); thrust = Math.abs(Math.sin(sp.t / SPEAR.flurryRate * Math.PI)) * 0.4; ay = (n % 2 ? 0.12 : -0.12); }
+    else thrust = Math.sin(Math.min(1, sp.t / sp.len) * Math.PI) * 0.3;
+    ax = -1.5; sx = Math.PI / 2;
+    hero.armL.rotation.set(-0.7, 0, 0.1);
+  } else if (H.bow) {
     // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin
     const b = H.bow, rel = b.len * (b.kind === 'shot' ? 0.6 : 0.5), u = smooth(0, 1, Math.min(1, b.t / rel));
     const raise = smooth(0, 1, Math.min(1, b.t / 0.12)), lift = b.kind === 'rain' ? 0.95 : 0;
@@ -9583,6 +9765,8 @@ function animateHero(dt) {
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
+  hero.spear.rotation.x += ((H.spear ? Math.PI / 2 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 30);
+  hero.spearShaft.position.z = thrust;
   hero.body.rotation.y = H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
   hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
@@ -9612,6 +9796,13 @@ function updateFoe(f, dt, night) {
   const dx = H.x - f.x, dz = H.z - f.z, dist = Math.hypot(dx, dz);
   if (dist > 60) { removeFoe(f); return; }
   f.cd -= dt; f.hitT += dt;
+  // reeled in on the harpoon's chain: it's dragged (updateHarpoon), and does nothing itself
+  if (f.grabbed) {
+    f.atk = -1; f.y = surfaceY(f.x, f.z);
+    f.g.position.set(f.x, f.y, f.z); f.g.rotation.set(0, f.face, 0); f.shadow.position.set(f.x, f.y + 0.02, f.z);
+    f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
+    return;
+  }
   const aggroR = d.aggro * (night ? 1.35 : 1);
   const safe = heroInTown();
   f.calm -= dt;
@@ -9670,6 +9861,7 @@ function updateFoe(f, dt, night) {
       else { vx = wx / wl * d.speed * 0.35; vz = wz / wl * d.speed * 0.35; want = d.speed * 0.35 * dt; f.face += angDiff(Math.atan2(wx, wz), f.face) * Math.min(1, dt * 5); }
     }
   }
+  if (f.slowT > 0) { f.slowT -= dt; vx *= 1 - SPEAR.slow; vz *= 1 - SPEAR.slow; }
   if (d.rooted) f.kx = f.kz = 0;
   vx += f.kx; vz += f.kz;
   f.kx *= Math.max(0, 1 - dt * 8); f.kz *= Math.max(0, 1 - dt * 8);
@@ -10456,6 +10648,35 @@ const TUNING = [
     [AIM_FX, 'lungeEdge', 'Lunge: edge width (tiles)', 0, 0.5, 0.01],
     [AIM_FX, 'lungeEdgeBright', 'Lunge: edge brightness', 0, 6, 0.05],
     [AIM_FX, 'lungeFill', 'Lunge: fill brightness', 0, 3, 0.05],
+    [AIM_FX, 'flurryEdge', 'Flurry: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'flurryEdgeBright', 'Flurry: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'flurryFill', 'Flurry: fill brightness', 0, 3, 0.05],
+    [AIM_FX, 'harpoonWidth', 'Harpoon: box width (tiles)', 0.1, 3, 0.05],
+    [AIM_FX, 'harpoonEdge', 'Harpoon: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'harpoonEdgeBright', 'Harpoon: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'harpoonFill', 'Harpoon: fill brightness', 0, 3, 0.05],
+  ]],
+  ['Spear', [
+    [SPEAR, 'dmg', 'Poke damage', 1, 60, 1],
+    [SPEAR, 'time', 'Poke time (seconds)', 0.1, 1, 0.01],
+    [SPEAR, 'reach', 'Poke reach (tiles)', 0.5, 5, 0.05],
+    [SPEAR, 'width', 'Poke width (tiles)', 0.1, 2, 0.05],
+    [SPEAR, 'knock', 'Poke knock-back (tiles)', 0, 2, 0.05],
+    [SPEAR, 'flurryTime', 'Flurry: how long (seconds)', 0.3, 5, 0.1],
+    [SPEAR, 'flurryRate', 'Flurry: seconds between jabs', 0.04, 0.5, 0.01],
+    [SPEAR, 'flurryReach', 'Flurry: reach (tiles)', 0.5, 5, 0.05],
+    [SPEAR, 'flurryCone', 'Flurry: cone (degrees)', 10, 180, 1],
+    [SPEAR, 'flurryDmg', 'Flurry: damage a jab', 1, 30, 1],
+    [SPEAR, 'flurryKnock', 'Flurry: knock-back a jab (tiles)', 0, 1, 0.01],
+    [SPEAR, 'flurryMove', 'Flurry: walking speed (share)', 0, 1, 0.05],
+    [SPEAR, 'flurryCd', 'Flurry: cooldown (seconds)', 0.5, 30, 0.5],
+    [SPEAR, 'harpoonRange', 'Harpoon: range (tiles)', 2, 20, 0.5],
+    [SPEAR, 'harpoonSpeed', 'Harpoon: speed out (tiles a second)', 5, 60, 1],
+    [SPEAR, 'harpoonPull', 'Harpoon: reeling speed (tiles a second)', 2, 40, 1],
+    [SPEAR, 'harpoonDmg', 'Harpoon: damage', 0, 40, 1],
+    [SPEAR, 'slow', 'Harpoon: slow after (share of speed taken)', 0, 1, 0.05],
+    [SPEAR, 'slowTime', 'Harpoon: slow lasts (seconds)', 0, 10, 0.1],
+    [SPEAR, 'harpoonCd', 'Harpoon: cooldown (seconds)', 0.5, 30, 0.5],
   ]],
   ['Bow', [
     [BOW, 'dmg', 'Shot damage', 1, 60, 1],
@@ -10886,6 +11107,9 @@ window.GAME = {
   arrows: () => { const n = { fly: 0, stuck: 0, foe: 0, wait: 0, up: 0 }; for (const a of arrows) { n[a.state]++; if (a.foe) n.foe++; } return n; },
   bowCast: k => k === 'q' ? castVolley() : k === 'e' ? castRain() : startShot('shot'),
   aimNow: () => [aim.x, aim.z],
+  spearCast: k => k === 'q' ? castFlurry() : k === 'e' ? castHarpoon() : startSpear('poke'),
+  harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
+  foeSlow: () => foes.map(f => +(f.slowT || 0).toFixed(2)),
   rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
   aimForce: k => { aimForce = k; },
   aimShown: () => aimMesh.visible,
