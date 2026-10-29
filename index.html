@@ -2985,7 +2985,7 @@ const WATER_U = {
   absorb: { value: new GFX.Vector3() }, lampPos: { value: new GFX.Vector3() }, lampCol: { value: new GFX.Color() }, lampRange: { value: 9 },
   fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
   swellAmp: { value: 0.11 }, swellLen: { value: 1.5 }, rippleLen: { value: 1 }, swellShade: { value: 0 }, crests: { value: 1 }, sparkle: { value: 1 },
-  caustics: { value: 1 }, shallows: { value: 1 }, shoreLine: { value: 1 }, shoreRipples: { value: 1 },
+  caustics: { value: 1 }, shallows: { value: 1 }, shoreLine: { value: 1 }, shoreRipples: { value: 1 }, ripReach: { value: 1 },
   tCaus: { value: null }, causTile: { value: 11.25 }, tRefr: { value: null }, tRefrD: { value: null }, refr: { value: 0 }, refract: { value: 0.25 },
 };
 const WATER_WGSL = /* wgsl */ `
@@ -3106,7 +3106,9 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   // a crisp line of foam right at the waterline, and thin ripples running out from it, broken up and fading
   let line = (1.0 - smoothstep(0.012, 0.018, d)) * U.shoreLine;
   let rp = fract(d * 7.0 - t * 0.32 + fp * 0.6);
-  let ring = step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05, 0.3, d)) * smoothstep(0.02, 0.04, d) * U.shoreRipples * 0.8;
+  // (they die out by 0.3 × ripReach deep: water no deeper than that all over, as a swamp pool is, would have
+  // them everywhere, flickering in blotches as their phase sweeps by)
+  let ring = step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05 * U.ripReach, 0.3 * U.ripReach, d)) * smoothstep(0.02, 0.04, d) * U.shoreRipples * 0.8;
   fm = sat(max(fm, max(line, ring)));
   let foamLit = vec3f(0.82, 0.87, 0.92) * (sunE * max(dot(N, L), 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
   var add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr + spec) * (1.0 - fm) + foamLit * fm;
@@ -3143,10 +3145,10 @@ const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
 // only a little way into it, it barely ripples, and nothing bends or focuses in it. It shares the sun, sky,
 // lamp and textures with the rest; the rest is its own.
 const SWAMP_WATER = { color: '#3c4a1c', clarity: 0.3, turbidity: 1.6, waves: 0.35, waveSpeed: 0.8, rippleSize: 1.4, glitter: 1, roughness: 0.02,
-  sparkle: 0, shoreRipples: 0.3 };
+  sparkle: 0, shoreRipples: 0.3, rippleReach: 0.5 };
 const BOG_U = Object.assign({}, WATER_U);
 for (const k of ['time', 'waveAmp', 'flowSpeed', 'glitter', 'rough', 'foamAmt', 'shoreFoam', 'swellAmp', 'swellLen', 'rippleLen', 'swellShade', 'crests', 'sparkle',
-  'caustics', 'shallows', 'shoreLine', 'shoreRipples', 'refr', 'refract']) BOG_U[k] = { value: 0 };
+  'caustics', 'shallows', 'shoreLine', 'shoreRipples', 'ripReach', 'refr', 'refract']) BOG_U[k] = { value: 0 };
 BOG_U.waterCol = { value: new GFX.Vector3() }; BOG_U.absorb = { value: new GFX.Vector3() };
 BOG_U.swellLen.value = BOG_U.rippleLen.value = 1;
 const bogMulMat = makeWaterMat(false, BOG_U, false), bogAddMat = makeWaterMat(true, BOG_U, false);
@@ -3268,6 +3270,7 @@ function updateWater(dt) {
   B.time.value = (B.time.value + dt * SW.waveSpeed) % 4000;
   B.waveAmp.value = SW.waves; B.glitter.value = SW.glitter; B.rough.value = Math.max(0.004, SW.roughness);
   B.rippleLen.value = Math.max(0.2, SW.rippleSize); B.sparkle.value = SW.sparkle; B.shoreRipples.value = SW.shoreRipples;
+  B.ripReach.value = Math.min(SW.rippleReach, 0.75);   // (the pools are 0.24 deep: past that they'd cover them)
   tmpC2.set(SW.color);
   const bt = SW.turbidity * 0.3, bc = Math.max(0.02, SW.clarity);
   B.waterCol.value.set(tmpC2.r * bt, tmpC2.g * bt, tmpC2.b * bt);
@@ -7864,6 +7867,7 @@ const TUNING = [
     [SWAMP_WATER, 'roughness', 'Glitter spread', 0.004, 0.2, 0.001],
     [SWAMP_WATER, 'sparkle', 'Sparkles', 0, 3, 0.05],
     [SWAMP_WATER, 'shoreRipples', 'Ripples off the banks', 0, 2, 0.05],
+    [SWAMP_WATER, 'rippleReach', 'Ripples: how far out from the banks they run', 0.1, 0.75, 0.01],
   ]],
   ['Health bars', [
     [HPBAR, 'hold', 'Bar over the head stays this long after you look away (seconds)', 0, 10, 0.1],
