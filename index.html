@@ -6157,6 +6157,10 @@ const HERO_MAT = {
   wpnWood: flatMat({ color: '#8a5a32' }), wpnBone: flatMat({ color: '#e4dac0' }),
   wpnCopper: flatMat({ color: '#d4773e', roughness: 0.4, metalness: 0.5 }), wpnIron: flatMat({ color: '#d8dce8', roughness: 0.35, metalness: 0.55 }),
 };
+// the spear, butt to tip along z from the hand: [w, h, d, z, part], its tip SPEAR_TIP out
+const SPEAR_BOXES = [[0.032, 0.032, 0.82, 0.19, 'shaft'], [0.045, 0.045, 0.06, 0.6, 'collar'], [0.07, 0.02, 0.14, 0.69, 'head'], [0.04, 0.04, 0.05, 0.785, 'head']];
+const SPEAR_TIP = 0.81, SPEAR_BUTT = 0.22;
+const spearWood = flatMat({ color: '#8a6440' });
 function makeHuman() {
   const g = new GFX.Group(), parts = [];
   const { pants, boots, hood, leather, leatherDark } = HERO_MAT, hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
@@ -6236,9 +6240,7 @@ function makeHuman() {
   const spear = pivot(armR, 0, -0.25, 0.02);
   wear('spear', spear);
   const spearShaft = pivot(spear, 0, 0, 0);
-  box(spearShaft, 0.032, 0.032, 1.3, 0, 0, 0.35, flatMat({ color: '#8a6440' }));
-  box(spearShaft, 0.045, 0.045, 0.08, 0, 0, 0.98, hiltMat);
-  wear('wpn', box(spearShaft, 0.07, 0.02, 0.16, 0, 0, 1.09, HERO_MAT.wpnIron), box(spearShaft, 0.04, 0.04, 0.06, 0, 0, 1.19, HERO_MAT.wpnIron));
+  for (const [w, h, d, z, k] of SPEAR_BOXES) { const m = box(spearShaft, w, h, d, 0, 0, z, k === 'shaft' ? spearWood : k === 'collar' ? hiltMat : HERO_MAT.wpnIron); if (k === 'head') wear('wpn', m); }
   spear.rotation.x = -Math.PI / 2;
   g.scale.setScalar(1.12);
   return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock, spear, spearShaft };
@@ -8636,7 +8638,7 @@ function updateAimDecal() {
 // E throws the harpoon on its chain out to `harpoonRange` tiles: the first foe it meets is struck and reeled
 // back to you, then slowed by `slow` (a share of its speed) for `slowTime` seconds. Knock-backs are in tiles.
 const SPEAR = { holdTip: 0.6, thrustTip: 1.36, dmg: 11, time: 0.32, reach: 2.2, width: 0.5, knock: 0.25,
-  flurryTime: 2, flurryRate: 0.13, flurryReach: 2.4, flurryCone: 70, flurryDmg: 4, flurryKnock: 0.1, flurryMove: 0.7, flurryCd: 8,
+  flurryTime: 2, flurryRate: 0.13, flurryReach: 2.4, flurryCone: 70, flurryDmg: 4, flurryKnock: 0.1, flurryMove: 0.7, flurryCd: 8, flurryGhosts: 2, ghostLife: 0.2, ghostGlow: 0.6,
   harpoonRange: 9, harpoonSpeed: 26, harpoonPull: 14, harpoonDmg: 8, slow: 0.9, slowTime: 2, harpoonCd: 7 };
 function startSpear(kind) {
   if (H.spear || H.bow || H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip || !H.alive) return false;
@@ -8680,8 +8682,11 @@ function updateSpear(dt) {
       cutGrass(H.x + fx * 1.2, H.z + fz * 1.2, 0.35, fx, fz);
     }
   } else if (sp.kind === 'flurry') {
-    // a jab every flurryRate seconds, each striking whatever's in the cone then
+    // a jab every flurryRate seconds, each striking whatever's in the cone then; the hero's own spear goes in at
+    // one spot in it and ghost spears flicker in at others
     while (sp.next <= sp.t && sp.next < sp.len) {
+      const n = Math.round(sp.next / SPEAR.flurryRate), ha = SPEAR.flurryCone * Math.PI / 360;
+      for (let k = 1; k <= SPEAR.flurryGhosts; k++) ghostJab(sp.dir + flurryAt(n + k * 7 + 3) * ha, k * SPEAR.flurryRate / (SPEAR.flurryGhosts + 1));
       sp.next += SPEAR.flurryRate;
       sfx.punch();
       for (const f of foesAhead(sp.dir, SPEAR.flurryReach, 0, SPEAR.flurryCone * Math.PI / 360)) hurtFoe(f, wdmg(SPEAR.flurryDmg), H.x, H.z, SPEAR.flurryKnock * 8);
@@ -8689,7 +8694,8 @@ function updateSpear(dt) {
     }
   } else if (!sp.hit && sp.t > sp.len * 0.4) {
     sp.hit = true;
-    harpoon = { x: H.x + fx * 0.4, y: H.y + 0.62, z: H.z + fz * 0.4, dx: fx, dz: fz, out: true, dist: 0, foe: null, stuck: 0 };
+    harpoon = { x: H.x + fx * 0.8, y: H.y + 0.62, z: H.z + fz * 0.8, dx: fx, dz: fz, out: true, dist: 0, foe: null, stuck: 0 };
+    harpoonTip.forEach(m => { m.material = HERO_MAT[TIERS[ITEMS[GEAR.weapon]?.tier || 'iron'].part]; });
     sfx.dash();
   }
   if (sp.t >= sp.len) H.spear = null;
@@ -8698,14 +8704,44 @@ function updateSpear(dt) {
 // can't be pulled through walls; if it snags for a moment it's let go there)
 let harpoon = null;
 const HARPOON_LINKS = 64;
+// the thrown spear itself, its tip at the group's origin and the chain made fast to its butt
+const harpoonTip = [];
 const harpoonHead = (() => {
   const g = new GFX.Group();
-  for (const [w, h, d, z] of [[0.03, 0.03, 0.22, -0.06], [0.1, 0.02, 0.09, 0.07], [0.05, 0.05, 0.06, 0.13]]) {
-    const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), steelMat); m.position.z = z; m.castShadow = true; g.add(m);
+  for (const [w, h, d, z, k] of SPEAR_BOXES) {
+    const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), k === 'shaft' ? spearWood : k === 'collar' ? hiltMat : steelMat); m.position.z = z - SPEAR_TIP; m.castShadow = true; g.add(m);
+    if (k === 'head') harpoonTip.push(m);
   }
   g.visible = false; scene.add(g);
   return g;
 })();
+// The flurry's ghost spears: pale after-images that dart out across the cone between the real jabs, as though they
+// come too fast to see. Each lives SPEAR.ghostLife seconds from its start (after a little wait).
+const ghostSpears = Array.from({ length: 12 }, () => {
+  const mat = new GFX.MeshBasicMaterial({ color: '#d8ecff', transparent: true, opacity: 0, depthWrite: false, blending: GFX.AdditiveBlending });
+  const g = new GFX.Group();
+  for (const [w, h, d, z] of SPEAR_BOXES) { const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), mat); m.position.z = z; g.add(m); }
+  g.renderOrder = 3; g.visible = false; scene.add(g);
+  return { g, mat, t: 9, a: 0, y: 0 };
+});
+function ghostJab(a, wait) {
+  const gs = ghostSpears.reduce((b, x) => x.t > b.t ? x : b);
+  gs.t = -wait; gs.a = a; gs.y = 0.3 + Math.random() * 0.3; gs.side = (Math.random() - 0.5) * 0.2;
+}
+function updateGhostSpears(dt) {
+  for (const gs of ghostSpears) {
+    gs.t += dt;
+    const u = gs.t / SPEAR.ghostLife;
+    gs.g.visible = u >= 0 && u < 1 && H.alive;
+    if (!gs.g.visible) continue;
+    // from the hand (on the right), thrust from where the spear is held back out a little past a full thrust
+    const fx = Math.sin(gs.a), fz = Math.cos(gs.a), c = Math.cos(H.face), sn = Math.sin(H.face);
+    const tip = SPEAR.holdTip + (SPEAR.thrustTip + 0.25 - SPEAR.holdTip) * spearDrive(u), back = tip - SPEAR_TIP;
+    gs.g.position.set(H.x - 0.175 * c + fx * back - fz * gs.side, H.y + gs.y, H.z + 0.175 * sn + fz * back + fx * gs.side);
+    gs.g.rotation.set(0, gs.a, 0);
+    gs.mat.opacity = SPEAR.ghostGlow * Math.min(1, u * 6) * (1 - u);
+  }
+}
 const chainLinks = (() => { const m = new GFX.InstancedMesh(new GFX.BoxGeometry(0.035, 0.012, 0.11), flatMat({ color: '#4a4652', roughness: 0.5, metalness: 0.5 }), HARPOON_LINKS); m.castShadow = true; scene.add(m); return m; })();
 function dropHarpoon() {
   if (harpoon && harpoon.foe) harpoon.foe.grabbed = null;
@@ -8750,10 +8786,12 @@ function updateHarpoon(dt) {
     hp.y += (hy - hp.y) * Math.min(1, dt * 8);
   }
   if (!harpoon) { harpoonHead.visible = false; chainLinks.count = 0; chainLinks.needsUpdate = true; return; }
-  // the head points away from you along the chain; the links lie between, every other one turned a quarter
-  const cx = hp.x - hx, cy = hp.y - hy, cz = hp.z - hz, cl = Math.hypot(cx, cy, cz) || 1e-3;
+  // the spear points away from you along the chain, which runs from your hand to its butt; the links lie between,
+  // every other one turned a quarter
+  const tx = hp.x - hx, ty = hp.y - hy, tz = hp.z - hz, tl = Math.hypot(tx, ty, tz) || 1e-3;
   harpoonHead.position.set(hp.x, hp.y, hp.z);
-  harpoonHead.rotation.order = 'YXZ'; harpoonHead.rotation.set(-Math.asin(cy / cl), Math.atan2(cx, cz), 0);
+  harpoonHead.rotation.order = 'YXZ'; harpoonHead.rotation.set(-Math.asin(ty / tl), Math.atan2(tx, tz), 0);
+  const cs = Math.max(0, tl - SPEAR_TIP - SPEAR_BUTT) / tl, cx = tx * cs, cy = ty * cs, cz = tz * cs, cl = Math.max(tl * cs, 1e-3);
   const n = Math.min(HARPOON_LINKS, Math.floor(cl / 0.09));
   const fx = cx / cl, fy = cy / cl, fz = cz / cl;
   let rx = fz, ry = 0, rz = -fx; const rl = Math.hypot(rx, rz) || 1; rx /= rl; rz /= rl;
@@ -9671,6 +9709,7 @@ function update(dt) {
   for (const f of foes.slice()) updateFoe(f, dt, night);
   updateArrows(dt);
   updateHarpoon(dt);
+  updateGhostSpears(dt);
   updateAimDecal();
   separateFoes();
   if (H.alive) spawnTick(dt);
@@ -9792,7 +9831,10 @@ function update(dt) {
   spikes.exit();
 }
 
-const SPEAR_TIP = 1.22;
+// a thrust's reach over its time (0..1): driven out hard, held a moment, drawn back slower
+const spearDrive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 : 1 - smooth(0.45, 1, v);
+// the flurry's nth jab, as a share of the cone's half-angle: spread across it in no order (by the golden ratio)
+const flurryAt = n => ((n * 0.618034 + 0.31) % 1) * 2 - 1;
 function animateHero(dt) {
   // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
@@ -9816,10 +9858,9 @@ function animateHero(dt) {
     // hard (the arm swinging forward a little, the shoulder turned into it) and draws it back slower; the flurry
     // jabs again and again, a little to either side; the harpoon's throw is a shorter shove
     const sp = H.spear, u = Math.min(1, sp.t / sp.len);
-    const drive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 : 1 - smooth(0.45, 1, v);
     let out;
-    if (sp.kind === 'flurry') { const n = Math.floor(sp.t / SPEAR.flurryRate); out = drive((sp.t / SPEAR.flurryRate) % 1) * 0.85; ay = (n % 2 ? 0.12 : -0.12); }
-    else out = drive(u) * (sp.kind === 'poke' ? 1 : 0.7);
+    if (sp.kind === 'flurry') { const n = Math.floor(sp.t / SPEAR.flurryRate); out = spearDrive((sp.t / SPEAR.flurryRate) % 1) * 0.85; ay = flurryAt(n) * SPEAR.flurryCone * Math.PI / 360 * 0.8; }
+    else out = spearDrive(u) * (sp.kind === 'poke' ? 1 : 0.7);
     twist = 0.22 * out;
     ax = 0.18 - out * 0.55; ay -= twist;
     // slid along its shaft so the tip is SPEAR.holdTip ahead of you drawn back and thrustTip at full stretch, wherever
@@ -9859,6 +9900,7 @@ function animateHero(dt) {
   // (level against the arm's swing while attacking, tipped up a touch; upright at rest)
   hero.spear.rotation.x += ((H.spear ? -ax - 0.08 : -Math.PI / 2) - hero.spear.rotation.x) * Math.min(1, dt * 40);
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
+  hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
   hero.body.rotation.y = H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = on && f < 0 ? f * WALK.lean * 0.85 : 0;
   hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
@@ -10764,6 +10806,9 @@ const TUNING = [
     [SPEAR, 'flurryKnock', 'Flurry: knock-back a jab (tiles)', 0, 1, 0.01],
     [SPEAR, 'flurryMove', 'Flurry: walking speed (share)', 0, 1, 0.05],
     [SPEAR, 'flurryCd', 'Flurry: cooldown (seconds)', 0.5, 30, 0.5],
+    [SPEAR, 'flurryGhosts', 'Flurry: ghost spears a jab', 0, 6, 1],
+    [SPEAR, 'ghostLife', 'Flurry: a ghost spear lasts (seconds)', 0.05, 0.6, 0.01],
+    [SPEAR, 'ghostGlow', 'Flurry: ghost spear brightness', 0, 2, 0.05],
     [SPEAR, 'harpoonRange', 'Harpoon: range (tiles)', 2, 20, 0.5],
     [SPEAR, 'harpoonSpeed', 'Harpoon: speed out (tiles a second)', 5, 60, 1],
     [SPEAR, 'harpoonPull', 'Harpoon: reeling speed (tiles a second)', 2, 40, 1],
@@ -11210,6 +11255,7 @@ window.GAME = {
   aimNow: () => [aim.x, aim.z],
   spearCast: k => k === 'q' ? castFlurry() : k === 'e' ? castHarpoon() : startSpear('poke'),
   harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
+  ghosts: () => ghostSpears.filter(g => g.g.visible).length + " shown, spear in hand " + hero.spearShaft.visible + ", chain " + chainLinks.count,
   foeSlow: () => foes.map(f => +(f.slowT || 0).toFixed(2)),
   rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
   aimForce: k => { aimForce = k; },
