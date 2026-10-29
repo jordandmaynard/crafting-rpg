@@ -171,6 +171,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune label { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; margin: 3px 0 8px; }
 .tune label .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
 .tune input[type=range] { grid-column: 1 / 3; width: 100%; accent-color: var(--gold); }
+.tune select { grid-column: 1 / 3; width: 100%; padding: 2px 4px; font: inherit; color: inherit; background: var(--panel-edge); border: 2px solid var(--panel-edge); cursor: pointer; }
 .tune input[type=color] { grid-column: 1 / 3; width: 100%; height: 22px; padding: 0; border: 2px solid var(--panel-edge); background: none; cursor: pointer; }
 .tune .tune-row { display: flex; gap: 8px; margin-top: 10px; }
 .tune textarea { width: 100%; height: 80px; margin-top: 8px; font: 12px ui-monospace, monospace; background: rgba(0, 0, 0, 0.35); color: var(--bone); border: 2px solid var(--panel-edge); box-sizing: border-box; }
@@ -6231,7 +6232,9 @@ function detach(i, c, r) {
 }
 // Every blow takes toughness off a prop in proportion to its damage (a plain swing takes one point), and
 // each point taken off yields one wood, stone or ore, fractions carried over to the next blow.
-const harvestCarry = { wood: 0, stone: 0, copperOre: 0, ironOre: 0 };
+// RESOURCES.amount (T > Resources) scales everything gathered or dropped: these, and the hides foes leave.
+const RESOURCES = { amount: 1 };
+const harvestCarry = { wood: 0, stone: 0, copperOre: 0, ironOre: 0, hide: 0 };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const o = OB[i], od = OBJ[o];
   const d = detach(i, c, r);
@@ -6243,11 +6246,11 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   chips(d.x, top, d.z, res === 'wood' ? 'wood' : 'stone', od.tree ? 4 : od.ore ? 3 : 6);
   if (od.ore) chips(d.x, top, d.z, res, 3);
   if (res === 'wood') sfx.chop(); else sfx.clink();
-  harvestCarry[res] += before - d.hp;
-  let gain = Math.floor(harvestCarry[res] + 1e-6);
+  // (and 2 more for breaking it), times RESOURCES.amount
+  harvestCarry[res] += (before - d.hp + (d.hp <= 0 ? 2 : 0)) * RESOURCES.amount;
+  const gain = Math.floor(harvestCarry[res] + 1e-6);
   harvestCarry[res] -= gain;
   if (d.hp <= 0) {
-    gain += 2;
     OB[i] = 0;
     paintMapTile(c, r);
     if (od.tree) {
@@ -6301,7 +6304,12 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats(); bump('killPlate');
     if (Math.random() < 0.35) dropOrb(f.x, f.z);
-    if (f.def.hide) dropLoot('hide', 1, f.x, f.z);
+    if (f.def.hide) {
+      harvestCarry.hide += RESOURCES.amount;
+      const n = Math.floor(harvestCarry.hide + 1e-6);
+      harvestCarry.hide -= n;
+      if (n) dropLoot('hide', n, f.x, f.z);
+    }
   }
 }
 // a sword stroke: foes in the arc, and the one nearest tree or rock in front
@@ -8310,6 +8318,9 @@ const TUNING = [
   ['World', [
     [WORLD, 'tileHeight', 'Tile height per level (1 old, 0.5 half). Letting go rebuilds this world from scratch', 0.5, 1, 0.25, rebuildWorld],
   ]],
+  ['Resources', [
+    [RESOURCES, 'amount', 'How much everything gives: rocks, trees, ore, hides (× normal)', 'choice', [0.5, 1, 2, 4], 0.1],
+  ]],
   ['Pixels', [
     [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto; shrinks to 2 zoomed out)', 0, 10, 1],
     [PIXEL, 'autoDiv', 'Auto: screen px per mosaic px', 120, 520, 10],
@@ -8658,6 +8669,16 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
           sec.append(row);
           continue;
         }
+        // one of a few values (max: the list)
+        if (min === 'choice') {
+          val.textContent = obj[key] + '×';
+          const pick = document.createElement('select');
+          for (const v of max) pick.append(Object.assign(document.createElement('option'), { value: v, textContent: v + '×', selected: v === obj[key] }));
+          pick.addEventListener('change', () => { obj[key] = parseFloat(pick.value); val.textContent = obj[key] + '×'; pick.blur(); if (apply) apply(obj[key]); });
+          row.append(text, val, pick);
+          sec.append(row);
+          continue;
+        }
         if (min === 'color') {
           val.textContent = obj[key];
           const pick = Object.assign(document.createElement('input'), { type: 'color', value: obj[key] });
@@ -8818,6 +8839,7 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
+  resources: a => { if (a) RESOURCES.amount = a; return RESOURCES.amount; },
   ores: () => { const n = {}; for (let i = 0; i < N * N; i++) { const o = OB[i]; if (o === O.ROCK || o === O.ICEROCK || o === O.SANDROCK || o === O.COPPER || o === O.IRON) n[o] = (n[o] || 0) + 1; } return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), copper: n[O.COPPER] || 0, iron: n[O.IRON] || 0, ids: [O.COPPER, O.IRON] }; },
   findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
   strike: (c, r) => { const i = T(c, r); strikeProp(i, c, r, 1, 0); return OB[i]; },
