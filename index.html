@@ -5240,51 +5240,6 @@ function updateAmbient() {
   U.dayK.value = smoothstep(-0.05, 0.2, sunDir[1]);
   if (ambMesh) ambMesh.visible = A.butterflies + A.dragonflies + A.fireflies + A.embers + A.snow > 0;
 }
-// Now and then a clump of snow slides off a frost pine's bough near you and drops into the deep snow below,
-// bursting into powder and punching a hole in it (T > Ambient life: SNOWFALL).
-const SNOWFALL = { every: 3, size: 1.6, hole: 0.8 };
-const snowClumpMat = flatMat({ color: '#eef4fa', emissive: '#3a4048' }), snowClumpGeo = new GFX.DodecahedronGeometry(0.07, 0);
-const snowfalls = [];
-let snowfallT = 2, snowfallN = 0;
-function updateSnowfalls(dt) {
-  for (let n = snowfalls.length - 1; n >= 0; n--) {
-    const f = snowfalls[n];
-    f.vy -= GRAV * dt; f.g.position.y += f.vy * dt; f.g.rotation.x += dt * 3;
-    // (shedding powder as it falls)
-    if ((f.trail -= dt) < 0) { f.trail = 0.06; puff(f.g.position.x, f.g.position.y - 0.1, f.g.position.z, '#f4f8fc', 1, 0.15); }
-    if (f.g.position.y > f.land) continue;
-    scene.remove(f.g);
-    snowfalls.splice(n, 1);
-    puff(f.g.position.x, f.land - 0.1, f.g.position.z, '#f4f8fc', 14, 0.6 * SNOWFALL.size);
-    if (driftHoles.length < 64) driftHoles.push([f.g.position.x, f.g.position.z, SNOWFALL.hole * SNOWFALL.size]);
-  }
-  if (SNOWFALL.every <= 0 || (snowfallT -= dt) > 0) return;
-  snowfallT = SNOWFALL.every * (0.4 + Math.random() * 1.2);
-  // a frost pine standing in deep snow, near you (well on screen)
-  const c0 = Math.floor(camTarget.x), r0 = Math.floor(camTarget.z);
-  for (let tries = 0; tries < 60; tries++) {
-    const c = c0 + Math.floor((Math.random() - 0.5) * 18), r = r0 + Math.floor((Math.random() - 0.5) * 14), i = T(clamp(c, 0, N - 1), clamp(r, 0, N - 1));
-    if (OB[i] !== O.SNOWPINE) continue;
-    // where its tiers are (as pine() builds it), and a spot on the rim of one
-    const [x, z] = objPos(c, r, O.SNOWPINE), k = hs(c, r, 6), P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P;
-    const tier = Math.floor(Math.random() * 3), w = (0.75 - tier * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + tier * hgt * 0.24 + hgt * 0.2;
-    // (off the side toward you, where it can be seen falling)
-    const a = Math.atan2(camera.position.x - x, camera.position.z - z) + (Math.random() - 0.5) * 2.2, rad = w * 0.5 * 1.15, fx = x + Math.sin(a) * rad, fz = z + Math.cos(a) * rad;
-    if (driftCov(fx, fz) < 0.3) continue;
-    const g = new GFX.Group();
-    for (let q = 0; q < 6; q++) {
-      const m = new GFX.Mesh(snowClumpGeo, snowClumpMat);
-      m.position.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.12); m.scale.setScalar((0.7 + Math.random() * 0.6) * SNOWFALL.size);
-      g.add(m);
-    }
-    g.position.set(fx, yy - hgt * 0.2, fz);
-    scene.add(g);
-    puff(fx, yy - hgt * 0.25, fz, '#f4f8fc', 5, 0.3);
-    snowfallN++;
-    snowfalls.push({ g, vy: 0, trail: 0, land: groundAt(fx, fz) + (DRIFT.snowMin + DRIFT.snowMax) * 0.5 * driftCov(fx, fz) });
-    break;
-  }
-}
 // Heat rising (T > Heat shimmer): over the lava, and faintly over the desert's deep sand, the world behind
 // wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and are drawn
 // last (layer 8) into heatRT, each pixel an offset in mosaic pixels by ripples rising up the sheet, strongest in
@@ -5293,7 +5248,7 @@ function updateSnowfalls(dt) {
 // with the weights in z) and where they come to more than one the outline pass takes their weighted mean, so the shimmer runs on unbroken from
 // sheet to sheet over the sand instead of in pockets. Anything nearer than the sheet is left as it is (and isn't pulled in from beside it), so the
 // hot air never smears what stands in front of it.
-const HEAT = { lava: 1.2, sand: 0.7, strength: 0.55, speed: 1, height: 3.1 };
+const HEAT = { lava: 1.2, sand: 0.7, strength: 0.3, speed: 1, height: 3.1 };
 const HEAT_DENSITY = { lava: 0.35, sand: 0.3 };
 const HEAT_U = { tD: { value: null }, res: { value: new GFX.Vector2(1, 1) }, ss: { value: 1 }, strength: { value: 1 }, speed: { value: 1 }, height: { value: 1 }, lava: { value: 1 }, sand: { value: 0.5 } };
 const HEAT_WGSL = /* wgsl */ `
@@ -5543,23 +5498,88 @@ function pine(x, z, k, snow = false) {
     }
   }
 }
+// An oak: a short, stout trunk flaring into a few roots at its foot and forking low into thick limbs that reach
+// up and out, each ending in a clump of leaves; together with one over the fork they make the broad, round
+// crown, its lower clumps in shade and a few small sunlit ones on top.
 function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
   const y = groundAt(x, z), S = TS * TREE_SIZE.oak * (0.9 + k * 0.25);
-  part(G.box, bark, x, y + 0.32 * S, z, { sx: 0.16 * S, sy: 0.64 * S, sz: 0.16 * S });
-  // a broad, spreading crown: a wide main mass, a lobe out to each side and one on top
-  const w = (0.98 + k * 0.2) * S, a = k * 6.28;
-  part(G.ico, shade(CC(leaf), 0.9 + k * 0.2), x, y + 0.94 * S, z, { sx: w, sy: (0.7 + k * 0.12) * S, sz: w * 0.92, ry: k * 5 });
-  for (const sd of [-1, 1]) part(G.ico, shade(CC(leaf), 0.96 + sd * 0.05), x + Math.cos(a) * 0.36 * sd * S, y + 0.86 * S, z + Math.sin(a) * 0.36 * sd * S, { s: 0.5 * S, ry: k * 3 + sd });
-  part(G.ico, shade(CC(leaf), 1.1), x + 0.12 * S, y + 1.2 * S, z - 0.06 * S, { sx: 0.5 * S, sy: 0.38 * S, sz: 0.46 * S, ry: k * 2 });
+  let seed = k * 1000 + 3;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const barkC = shade(CC(bark), 0.9 + k * 0.2), barkD = shade(barkC, 0.72), L = CC(leaf);
+  // the foot and its roots
+  seg(G.frust7, barkD, [x, y - 0.05, z], [x, y + 0.24 * S, z], 0.14 * S);
+  for (let n = 0; n < 3; n++) {
+    const a = k * 9 + n * 2.09 + (rnd() - 0.5) * 0.5, dx = Math.sin(a), dz = Math.cos(a);
+    seg(G.frust4, barkD, [x + dx * 0.05 * S, y + 0.12 * S, z + dz * 0.05 * S], [x + dx * 0.24 * S, y - 0.03, z + dz * 0.24 * S], 0.055 * S);
+  }
+  // the trunk, leaning a little, up to the fork
+  const f = [x + (rnd() - 0.5) * 0.1 * S, y + 0.56 * S, z + (rnd() - 0.5) * 0.1 * S];
+  seg(G.frust7, barkC, [x, y + 0.15 * S, z], f, 0.1 * S);
+  // the limbs, each with a clump of leaves at its end and a twig to one side
+  const limbs = 3 + (k > 0.45 ? 1 : 0), ends = [];
+  for (let n = 0; n < limbs; n++) {
+    const a = k * 6.28 + n * 6.28 / limbs + (rnd() - 0.5) * 0.5, dx = Math.sin(a), dz = Math.cos(a), reach = (0.3 + rnd() * 0.12) * S;
+    const e = [f[0] + dx * reach, f[1] + (0.24 + rnd() * 0.14) * S, f[2] + dz * reach];
+    seg(G.frust7, barkC, f, e, 0.055 * S);
+    const ta = a + (rnd() < 0.5 ? 0.9 : -0.9), m = [(f[0] + e[0]) / 2, (f[1] + e[1]) / 2, (f[2] + e[2]) / 2];
+    seg(G.frust4, barkD, m, [m[0] + Math.sin(ta) * 0.16 * S, m[1] + 0.1 * S, m[2] + Math.cos(ta) * 0.16 * S], 0.025 * S);
+    ends.push([e, a]);
+  }
+  // the crown: a clump over the fork, one at each limb's end, darker ones tucked in under them, and a few small
+  // light ones on top where the sun catches it
+  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5 });
+  for (const [e, a] of ends) {
+    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd() });
+    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2 });
+    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a });
+  }
+  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2 });
 }
+// A birch: one slender white trunk (or two, splaying from one foot), dark and rough at its foot and marked with
+// black up its length, a few thin dark branches angling up, and an airy, tall crown of small leaf clusters along
+// the top of it; now and then one already turning gold.
 function birch(x, z, k) {
   const y = groundAt(x, z), S = TS * TREE_SIZE.birch * (0.85 + k * 0.3);
-  part(G.box, '#e8e4d8', x, y + 0.45 * S, z, { sx: 0.11 * S, sy: 0.9 * S, sz: 0.11 * S });
-  part(G.box, '#3a3430', x, y + 0.3 * S, z, { sx: 0.115 * S, sy: 0.04 * S, sz: 0.115 * S });
-  part(G.box, '#3a3430', x, y + 0.62 * S, z, { sx: 0.115 * S, sy: 0.04 * S, sz: 0.115 * S });
-  // a tall, narrow crown
-  part(G.ico, shade(CC('#9ab84a'), 0.9 + k * 0.2), x, y + 1.22 * S, z, { sx: 0.5 * S, sy: 1.08 * S, sz: 0.5 * S, ry: k * 4 });
-  part(G.ico, shade(CC('#9ab84a'), 1.06 + k * 0.1), x + 0.05 * S, y + 1.62 * S, z - 0.03 * S, { sx: 0.3 * S, sy: 0.5 * S, sz: 0.3 * S, ry: k * 2 });
+  let seed = k * 1000 + 11;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const white = CC('#e8e4d8'), mark = CC('#3a3430'), twig = CC('#5a5048');
+  const leaf = k > 0.9 ? CC('#c8b84a') : shade(CC('#9ab84a'), 0.92 + k * 0.16);
+  seg(G.frust7, CC('#5a544c'), [x, y - 0.04, z], [x, y + 0.14 * S, z], 0.075 * S);
+  const twin = k > 0.62, stems = twin ? [-1, 1] : [0];
+  for (const sd of stems) {
+    // the trunk: three pieces, leaning out (apart, if two) and kinking a little
+    const lean = k * 6.28 + (sd < 0 ? Math.PI : 0), lx = Math.sin(lean), lz = Math.cos(lean), out = twin ? 0.1 : 0.04;
+    const pts = [[x, y + 0.08 * S, z]];
+    for (let n = 0; n < 3; n++) {
+      const p = pts[n];
+      pts.push([p[0] + lx * out * S + (rnd() - 0.5) * 0.05 * S, p[1] + (twin ? 0.42 : 0.48) * S, p[2] + lz * out * S + (rnd() - 0.5) * 0.05 * S]);
+    }
+    for (let n = 0; n < 3; n++) seg(G.frust7, white, pts[n], pts[n + 1], (0.06 - n * 0.012) * S * (twin ? 0.85 : 1));
+    // its black marks, on the bark's surface round it
+    for (let n = 0; n < 6; n++) {
+      const t = 0.12 + n * 0.14 + rnd() * 0.05, seg3 = Math.min(2, Math.floor(t * 3)), u = t * 3 - seg3, a = pts[seg3], b = pts[seg3 + 1];
+      const r = (0.06 - seg3 * 0.012) * S * (twin ? 0.85 : 1), ma = rnd() * 6.28;
+      part(G.box, mark, a[0] + (b[0] - a[0]) * u + Math.sin(ma) * r * 0.85, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u + Math.cos(ma) * r * 0.85,
+        { sx: r * 1.1, sy: 0.022 * S, sz: r * 0.5, ry: ma + Math.PI / 2 });
+    }
+    // thin branches angling up from the upper trunk, each with a cluster at its tip
+    const top = pts[3], crown = [];
+    for (let n = 0; n < 3; n++) {
+      const t = 0.45 + n * 0.17, s3 = Math.min(2, Math.floor(t * 3)), u = t * 3 - s3, a = pts[s3], b = pts[s3 + 1];
+      const from = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u], ba = k * 4 + n * 2.3 + sd, len = (0.26 - n * 0.04) * S;
+      const tip = [from[0] + Math.sin(ba) * len, from[1] + len * 0.9, from[2] + Math.cos(ba) * len];
+      seg(G.frust4, twig, from, tip, 0.016 * S);
+      crown.push(tip);
+    }
+    crown.push([top[0], top[1] + 0.08 * S, top[2]]);
+    // the crown: a tall loose mass up the top of the trunk, with clusters at the branch tips and its peak
+    const mid = [pts[2][0] * 0.5 + top[0] * 0.5, pts[2][1] * 0.4 + top[1] * 0.6, pts[2][2] * 0.5 + top[2] * 0.5], cs = twin ? 0.8 : 1;
+    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd });
+    for (const [n, c] of crown.entries()) {
+      const sz = (0.2 + rnd() * 0.08) * S * cs;
+      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6 });
+    }
+  }
 }
 // A swamp tree, after a live oak in a misty bayou: a short trunk that flares at its foot and kinks as it climbs,
 // gnarled limbs reaching out wide and sagging at their ends, bare twigs, moss in lumps on its foot and along its
@@ -9179,7 +9199,7 @@ function castLunge() {
 // over `volleyCone` degrees that knocks foes back `volleyKnock` tiles; E shoots one up, and `rainDelay` seconds
 // later `rainArrows` fall in a ring `rainRadius` tiles across round where the cursor was. Spent arrows stay
 // stuck for `stuckLife` seconds. Knock-backs are in tiles (a foe's push dies away over an eighth of a second).
-const BOW = { turn: 45, draw: 0.3, dmg: 10, time: 0.5, speed: 32, range: 20, height: 0.55, knock: 0.2,
+const BOW = { trail: 0.5, trailLife: 0.3, trailGap: 0.02, turn: 45, draw: 0.3, dmg: 10, time: 0.5, speed: 32, range: 20, height: 0.55, knock: 0.2,
   volleyArrows: 5, volleyCone: 45, volleyDmg: 8, volleyKnock: 1, volleyCd: 5,
   rainArrows: 10, rainRadius: 2, rainDelay: 1, rainDmg: 12, rainKnock: 0.3, rainCd: 8, rainReach: 8, rainSeek: 0.5, stuckLife: 20 };
 const STUCK_MAX = 150;
@@ -9373,6 +9393,30 @@ function flyArrowSteps(a, dt) {
   }
 }
 const arrowE = new Float32Array(16);
+// An arrow in flight leaves a trail of pale after-images, like the flurry's ghost spears, each fading out over
+// BOW.trailLife. An after-image is the arrow's whole shape; they're drawn in TRAIL_STEPS instanced meshes, each a
+// step dimmer, every one moved to the next as it ages.
+const TRAIL_STEPS = 6;
+const arrowTrails = [];   // { e: matrix elements, t }
+const trailMeshes = (() => {
+  const geo = mergeShards([new GFX.BoxGeometry(0.018, 0.018, 0.44).translate(0, 0, -0.27), new GFX.BoxGeometry(0.045, 0.012, 0.07).translate(0, 0, -0.04),
+    new GFX.BoxGeometry(0.004, 0.055, 0.1).translate(0, 0, -0.43), new GFX.BoxGeometry(0.055, 0.004, 0.1).translate(0, 0, -0.43)].map(g => ({ geo: g, local: new GFX.Matrix4() })));
+  return Array.from({ length: TRAIL_STEPS }, () => {
+    const m = new GFX.InstancedMesh(geo, new GFX.MeshBasicMaterial({ color: '#d8ecff', transparent: true, opacity: 0, depthWrite: false, blending: GFX.AdditiveBlending }), 64);
+    m.renderOrder = 3; m.frustumCulled = false; scene.add(m);
+    return m;
+  });
+})();
+function drawTrails(dt) {
+  for (let i = arrowTrails.length - 1; i >= 0; i--) if ((arrowTrails[i].t += dt) >= BOW.trailLife) arrowTrails.splice(i, 1);
+  const n = new Array(TRAIL_STEPS).fill(0), at = arrowTrails.map(g => Math.min(TRAIL_STEPS - 1, Math.floor(g.t / BOW.trailLife * TRAIL_STEPS)));
+  trailMeshes.forEach((m, k) => {
+    m.reserve(at.filter(l => l === k).length);
+    m.material.opacity = BOW.trail * (1 - (k + 0.5) / TRAIL_STEPS);
+  });
+  arrowTrails.forEach((g, i) => { const k = at[i]; trailMeshes[k].instanceMatrix.set(g.e, n[k]++ * 16); });
+  trailMeshes.forEach((m, k) => { m.count = n[k]; m.needsUpdate = true; });
+}
 function updateArrows(dt) {
   let stuck = 0;
   for (let i = arrows.length - 1; i >= 0; i--) {
@@ -9410,8 +9454,13 @@ function updateArrows(dt) {
     arrowE.set([rx, ry, rz, 0, vx, vy, vz, 0, fx, fy, fz, 0, x, y, z, 1]);
     for (const m of arrowMeshes) m.instanceMatrix.set(arrowE, n * 16);
     n++;
+    // (a flying arrow drops an after-image every BOW.trailGap seconds)
+    if ((a.state === 'fly' || a.state === 'up') && BOW.trail > 0 && ((a.trailT = (a.trailT || 0) - dt) <= 0) && arrowTrails.length < 400) {
+      a.trailT = BOW.trailGap; arrowTrails.push({ e: Float32Array.from(arrowE), t: 0 });
+    }
   }
   for (const m of arrowMeshes) { m.count = n; m.needsUpdate = true; }
+  drawTrails(dt);
 }
 // ---------- Aim decal ----------
 // Where the bow's shot will go, glowing on whatever's underfoot (ground, water, deep snow and sand): the line of
@@ -11899,9 +11948,6 @@ const TUNING = [
     [AMBIENT, 'snowFall', 'Snow: how fast it falls', 0.1, 4, 0.05],
     [AMBIENT, 'snowColor', 'Snow: colour', 'color'],
     [AMBIENT, 'wind', 'Wind (embers and snow)', 0, 2, 0.05],
-    [SNOWFALL, 'every', 'Snow falling off pines: about every (seconds, 0 never)', 0, 60, 0.5],
-    [SNOWFALL, 'size', 'Snow falling off pines: clump size', 0.2, 4, 0.05],
-    [SNOWFALL, 'hole', 'Snow falling off pines: hole it leaves (tiles across)', 0, 3, 0.05],
   ]],
   ['Heat shimmer', [
     [HEAT, 'strength', 'Strength (0 off)', 0, 4, 0.05],
@@ -12022,6 +12068,9 @@ const TUNING = [
     [BOW, 'rainReach', 'Rain distance with a pad or touch (tiles)', 2, 20, 0.5],
     [BOW, 'rainSeek', 'Rain: share of the spare arrows that seek a foe too (each foe in the ring gets one first)', 0, 1, 0.05],
     [BOW, 'stuckLife', 'Spent arrows last (seconds)', 1, 120, 1],
+    [BOW, 'trail', 'Trail: brightness of the after-images (0 none)', 0, 2, 0.05],
+    [BOW, 'trailLife', 'Trail: how long each lasts (seconds)', 0.05, 2, 0.01],
+    [BOW, 'trailGap', 'Trail: seconds between after-images', 0.005, 0.2, 0.005],
   ]],
   ['Weapon materials', [
     [WEAPON_TIER, 'wood', 'Wooden weapons: damage (times)', 0.1, 5, 0.05],
@@ -12232,7 +12281,6 @@ function frame(now) {
   updateSpray();
   updateSmoke();
   updateAmbient();
-  updateSnowfalls(dt);
   updateHeat();
   updateTrample(dt);
   updateGrass();
@@ -12407,7 +12455,7 @@ window.GAME = {
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
   wildFences: () => wildFence.size,
-  snowfalls: () => [snowfallN, snowfalls.length, driftHoles.length],
+  trails: () => arrowTrails.length + ' after-images, ' + trailMeshes.map(m => m.count).join('/'),
   fenceCount: () => { const n = new Array(11).fill(0); for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp, homing: f.homing, calm: +f.calm.toFixed(1), path: f.path ? f.path.length : -1 })),
