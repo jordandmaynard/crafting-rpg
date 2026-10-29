@@ -2218,7 +2218,7 @@ const outlineMat = new GFX.ShaderMaterial({
     useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new GFX.Color() },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
-    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 } },
+    gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -2259,7 +2259,9 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
       col = mix(col, U.sColor, e2 * U.sStrength * haze);
     }
   }
-  if (U.useDepth > 0.5) {
+  // grass tufts mark themselves with alpha 0 (see grassMat) and, unless GRASS.outline, get no depth stroke
+  let grass = U.grassLine < 0.5 && textureLoad(tColor, mid(px), 0).a < 0.5;
+  if (U.useDepth > 0.5 && !grass) {
     let t = depthAt(px); let r2 = (U.thick + 0.5) * (U.thick + 0.5);
     var e = 0.0;
     for (var dy = -6; dy <= 6; dy++) {
@@ -2646,7 +2648,7 @@ function renderWorld() {
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
-  u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0;
+  u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0; u.grassLine.value = GRASS.outline;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
   u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
@@ -3321,8 +3323,9 @@ function updateTrample(dt) {
 // built or changed (grassChunk): r, which quarters of the tile are flat open ground (bits 0-3; not on or next to
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
+// They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
 const GRASS = { on: 1, density: 8, range: 28, grass: 1, flowers: 0.15, reeds: 1, height: 0.2, width: 1, lean: 1, flowerSize: 1, reedHeight: 0.55,
-  variation: 0.12, soft: 0.5, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
+  variation: 0.12, soft: 0.5, outline: 0, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
 const GRASS_KIND = { [MEADOW]: 1, [FOREST]: 2, [TOWN]: 3, [SWAMP]: 4, [DEEP]: 6, [GRAVE]: 7 };
@@ -3502,7 +3505,8 @@ fn grassColor(kind: u32) -> vec3f {
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let N = normalize(mix(flatNormal(i.eye), vec3f(0.0, 1.0, 0.0), U.look.y));
   let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
-  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+  // (alpha 0 tells the outline pass this is grass)
+  return vec4f(applyFog(c, viewDepth(i.world)), 0.0);
 }`,
 });
 // one tuft's 60 corners (four blades of three sides, and an eight-sided head), made up in the shader
@@ -9031,6 +9035,7 @@ const TUNING = [
     [GRASS, 'reedHeight', 'Reed height (tiles)', 0.2, 1.2, 0.01],
     [GRASS, 'variation', 'How much each tuft\'s shade varies', 0, 0.5, 0.01],
     [GRASS, 'soft', 'Lit like the ground (0: each blade by its own sides)', 0, 1, 0.01],
+    [GRASS, 'outline', 'Depth outline on grass and flowers (1 on, 0 off)', 0, 1, 1],
     [GRASS, 'meadowColor', 'Meadow grass colour', 'color'],
     [GRASS, 'forestColor', 'Forest grass colour', 'color'],
     [GRASS, 'swampColor', 'Swamp grass colour', 'color'],
