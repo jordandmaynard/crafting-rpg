@@ -2555,7 +2555,7 @@ function chunkGI(cx, cz) {
   const roofs = [];
   for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
   ch.gi = GFX.rasterChunk(cx, cz, ch.giGround, [
-    { geo: geo(ch.obj), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
+    { geo: geo(ch.obj), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
     { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs], ++giVersion);
   ch.giStale = 0;
   return ch.gi;
@@ -2736,7 +2736,7 @@ class Buf {
     return shadowy(new GFX.Mesh(g, mat));
   }
 }
-let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf();
+let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null;
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
@@ -2750,6 +2750,30 @@ class TreeBuf extends Buf {
   }
 }
 const bufTrunk = new TreeBuf(), bufCanopy = new Buf();
+// plants that bend (grass, flowers, reeds, ferns, bushes) carry, for every vertex, the foot of the stem it's on and
+// how freely that bends (see plantMat)
+class PlantBuf extends Buf {
+  constructor() { super(); this.r = new Float32Array(Math.ceil(this.p.length / 3) * 4); }
+  need(k) {
+    super.need(k);
+    const want = Math.ceil(this.p.length / 3) * 4;
+    if (this.r.length < want) { const r = new Float32Array(want); r.set(this.r); this.r = r; }
+  }
+  tag(from, x, y, z, flex) { for (let v = from / 3; v < this.n / 3; v++) { const o = v * 4; this.r[o] = x; this.r[o + 1] = y; this.r[o + 2] = z; this.r[o + 3] = flex; } }
+  mesh(mat) {
+    const m = super.mesh(mat);
+    if (m) m.geometry.setAttribute('plant', new GFX.BufferAttribute(this.r.slice(0, this.n / 3 * 4), 4));
+    return m;
+  }
+}
+const bufPlant = new PlantBuf();
+PLANT = bufPlant;
+// a piece of a plant, bending from (rx, ry, rz), its stem's foot, as freely as flex (1 grass, less for stiffer ones)
+function stem(geo, color, x, y, z, o, rx, ry, rz, flex) {
+  const from = PLANT.n;
+  part(geo, color, x, y, z, Object.assign({ into: 'plant' }, o));
+  PLANT.tag(from, rx, ry, rz, flex);
+}
 function tri(a, b, c, ca, cb = ca, cc = ca) {
   const B = OUT; B.need(9);
   const p = B.p, k = B.c; let n = B.n;
@@ -2779,7 +2803,7 @@ for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attrib
 function part(geo, color, x, y, z, { ry = 0, rx = 0, rz = 0, s = 1, sx = s, sy = s, sz = s, into = 'world' } = {}) {
   dummy.position.set(x, y, z); dummy.rotation.set(rx, ry, rz); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : OUT;
+  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -3060,7 +3084,7 @@ function buildGround(cx, cz, ch) {
       }
     }
   }
-  ch.ground = bufGround.mesh(groundMat);
+  ch.ground = bufGround.mesh(groundPrintMat);
   buildBog(c0, r0, grid, GW, ch);
   if (wet) buildWater(c0, r0, grid, GW, ch);
   if (molten) buildLava(c0, r0, grid, GW, ch);
@@ -3204,6 +3228,218 @@ function updateTrunkCut() {
 }
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
 function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; } }
+
+// ---------- Plants that bend (T > Plants) ----------
+// Grass, flowers, reeds, ferns and bushes lean away from whatever walks through them and lift back up behind it,
+// and sway in the wind. Whatever is walking (you, and the foes near you, not ghosts) presses into the trample
+// map (src/gfx/trample.js), a grid round you of which way the plants lean and how far, that eases back upright
+// over `recover` seconds; the whirlwind sweeps them round you. Each piece of a plant is drawn turned about the
+// foot of its stem by that lean (and the wind's), so a blade's tip swings over and down while its foot stays put.
+// Their shadows don't bend.
+const FOLIAGE = { on: 1, bend: 1.25, recover: 1.6, radius: 0.32, foes: 1, wind: 0.12, windSpeed: 1.6 };
+const trample = new GFX.Trample(renderer);
+const PLANT_U = {
+  tTrample: { value: trample.texture },
+  trV: { value: { x: 0, y: 0, z: 40, w: 0 } },       // the trample map's corner (tiles), width (tiles), on
+  windV: { value: { x: 1, y: 0, z: 0, w: 0 } },      // the wind's way (x z), how far it leans them, its phase
+  bend: { value: 1 },                                // how far a full push leans a plant (radians)
+};
+const plantMat = new GFX.ShaderMaterial({ uniforms: PLANT_U, vertexColors: true, side: GFX.DoubleSide, attributes: { plant: 'vec4f' }, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w0 = (O.model * vec4f(v.position, 1.0)).xyz;
+  let root = v.plant.xyz;
+  var push = vec2f(0.0);
+  if (U.trV.w > 0.5) {
+    let uv = (root.xz - U.trV.xy) / U.trV.z;
+    if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) { push = textureSampleLevel(tTrample, tTrampleS, uv, 0.0).xy; }
+  }
+  // the wind: gusts that run across the ground, each plant a little behind its neighbour upwind
+  let ph = U.windV.w - dot(root.xz, U.windV.xy) * 0.6 + sin(root.x * 1.7 + root.z * 2.3) * 0.8;
+  let gust = 0.35 + 0.65 * (sin(ph) * 0.6 + sin(ph * 2.3 + 1.7) * 0.4);
+  let b = push * U.bend + U.windV.xy * U.windV.z * gust;
+  let a = min(length(b) * v.plant.w, 1.45);
+  var w = w0;
+  if (a > 1e-4) {
+    // turned about the stem's foot, toward b: about the level axis across it
+    let d = normalize(b);
+    let k = vec3f(d.y, 0.0, -d.x);
+    let rel = w0 - root;
+    let ca = cos(a); let sa = sin(a);
+    w = root + rel * ca + cross(k, rel) * sa + k * dot(k, rel) * (1.0 - ca);
+  }
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N = flatNormal(i.eye);
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+// what presses into the trample map this frame: you (a wide sweep while whirling), and the foes walking near you
+function updateTrample(dt) {
+  const F = FOLIAGE, on = F.on > 0.5;
+  PLANT_U.trV.value.w = on ? 1 : 0;
+  const wa = CLOUDS.direction * Math.PI / 180, wv = PLANT_U.windV.value;
+  wv.x = Math.cos(wa); wv.y = Math.sin(wa); wv.z = F.wind; wv.w = (wv.w + dt * F.windSpeed * 2) % 1e4;
+  PLANT_U.bend.value = F.bend;
+  if (!on) return;
+  const bodies = [], way = (o, x, z) => {
+    const was = o.trWas || [x, z], dx = x - was[0], dz = z - was[1], l = Math.hypot(dx, dz);
+    o.trWas = [x, z];
+    return l > 1e-4 && l < 1 ? [dx / l, dz / l] : [0, 0];
+  };
+  const hdir = way(H, H.x, H.z);
+  if (H.alive && !H.flip) bodies.push({ x: H.x, z: H.z, radius: H.whirl >= 0 ? Math.max(F.radius, GROUND_HAZE.whirlWake) : F.radius, strength: 1, dir: hdir, spin: H.whirl >= 0 ? 1 : 0 });
+  if (F.foes > 0.5) {
+    const near = [];
+    for (const f of foes) {
+      if (f.ghost || f.hp <= 0 || f.def.rooted) continue;
+      const d = Math.hypot(f.x - H.x, f.z - H.z);
+      if (d < 18) near.push([d, f]);
+    }
+    near.sort((a, b) => a[0] - b[0]);
+    for (const [, f] of near) bodies.push({ x: f.x, z: f.z, radius: f.def.rad * 1.2, strength: 1, dir: way(f, f.x, f.z) });
+  }
+  trample.update({ hero: [H.x, H.z], dt, bodies, recover: F.recover });
+  const v = trample.view, tv = PLANT_U.trV.value;
+  tv.x = v[0]; tv.y = v[1]; tv.z = v[2];
+}
+
+// ---------- Footprints (T > Footprints) ----------
+// You and the foes that walk (wolves' paws, boars' hooves, the scorpions' and spiders' many feet, slimes' smears)
+// leave prints in sand and snow, dents that shade as dents (the ground's light comes off their sloping sides) and,
+// in snow, go blue at the bottom. They last PRINTS.life seconds, fading. They're kept as a list in the world, and
+// drawn (soft ovals, the deepest wins where they overlap) into a map round you, PR_TILES across at PR_TPT texels a
+// tile, that the ground's shader reads; it's drawn anew as prints are made, as they fade, and when you've walked
+// far enough from its middle.
+const PRINTS = { on: 1, life: 180, depth: 0.035, shade: 0.3, size: 1 };
+const PR_TILES = 32, PR_TPT = 16, PR_W = PR_TILES * PR_TPT, PR_MAX = 1500;
+const prCanvas = document.createElement('canvas'); prCanvas.width = prCanvas.height = PR_W;
+const prCtx = prCanvas.getContext('2d', { willReadFrequently: true });
+const prTex = new GFX.DataTexture(new Uint8Array(PR_W * PR_W * 4), PR_W, PR_W);
+const prints = [];
+let prCorner = null, prDirty = true, prDrawn = 0;
+// each kind of foot: its prints' half-width and half-length (tiles), how deep, and how far apart the feet fall
+const PRINT_FEET = {
+  boot: { rs: 0.06, rf: 0.085, d: 1, gap: 0.075 }, paw: { rs: 0.05, rf: 0.055, d: 0.9, gap: 0.06 },
+  hoof: { rs: 0.035, rf: 0.05, d: 1, gap: 0.06 }, dots: { rs: 0.09, rf: 0.04, d: 0.6, gap: 0.1 }, smear: { rs: 0.14, rf: 0.16, d: 0.45, gap: 0 },
+};
+const FOE_FEET = { wolf: 'paw', frostwolf: 'paw', hellhound: 'paw', boar: 'hoof', scorpion: 'dots', spider: 'dots', slime: 'smear', goblin: 'boot', zombie: 'boot', skeleton: 'boot' };
+// sand or snow, open to the sky, flat enough to take a print
+function printable(x, z) {
+  const c = Math.floor(x), r = Math.floor(z);
+  if (c < 0 || r < 0 || c >= N || r >= N) return 0;
+  const i = T(c, r), b = BI[i];
+  if ((b !== DESERT && b !== SNOW) || !LV[i] || WT[i] || PATH[i] || FL[i] || BR[i] || CY[i] || OBJ[OB[i]].tile) return 0;
+  return b === SNOW ? 2 : 1;
+}
+// a foot comes down at (x, z), facing a (radians, as H.face), on side (+1 left, -1 right)
+function footDown(x, z, a, feet, side, scale = 1) {
+  if (PRINTS.on < 0.5) return;
+  const f = PRINT_FEET[feet], sx = Math.cos(a), sz = -Math.sin(a);
+  x += sx * f.gap * side * scale; z += sz * f.gap * side * scale;
+  const ground = printable(x, z);
+  if (!ground) return;
+  prints.push({ x, z, a, feet, scale, snow: ground === 2, t: time });
+  if (prints.length > PR_MAX) prints.splice(0, prints.length - PR_MAX);
+  prDirty = true;
+}
+function drawPrints() {
+  const P = PRINTS, g = prCtx;
+  g.globalCompositeOperation = 'source-over';
+  g.fillStyle = '#000'; g.fillRect(0, 0, PR_W, PR_W);
+  g.globalCompositeOperation = 'lighten';
+  const [cx0, cz0] = prCorner;
+  for (const p of prints) {
+    const age = (time - p.t) / Math.max(P.life, 1);
+    if (age >= 1) continue;
+    const px = (p.x - cx0) * PR_TPT, pz = (p.z - cz0) * PR_TPT, f = PRINT_FEET[p.feet], s = P.size * p.scale * PR_TPT;
+    if (px < -8 || pz < -8 || px > PR_W + 8 || pz > PR_W + 8) continue;
+    // deep at first, fading through its last half
+    const v = Math.round(255 * f.d * Math.min(1, 2 - 2 * age)), gch = p.snow ? v : 0;
+    const gr = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+    gr.addColorStop(0, `rgb(${v},${gch},0)`); gr.addColorStop(0.6, `rgb(${v * 0.8 | 0},${gch * 0.8 | 0},0)`); gr.addColorStop(1, 'rgb(0,0,0)');
+    g.save();
+    g.translate(px, pz); g.rotate(-p.a); g.scale(Math.max(f.rs * s, 0.75), Math.max(f.rf * s, 0.75));
+    g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+  // (the old ones gone for good)
+  while (prints.length && time - prints[0].t > P.life) prints.shift();
+  prTex.image.data.set(g.getImageData(0, 0, PR_W, PR_W).data);
+  prTex.needsUpdate = true;
+}
+// the hero's feet (a print at each step of the walk), the foes' (one each stride), and the map redrawn as needed
+function updatePrints() {
+  const U = PRINT_U, on = PRINTS.on > 0.5;
+  U.prV.value.w = on && prints.length ? 1 : 0;
+  if (!on) return;
+  if (H.alive && H.moving && H.dash < 0 && !H.flip) {
+    const k = Math.floor(H.walkPhase / Math.PI);
+    if (H.prStep !== undefined && k !== H.prStep) footDown(H.x, H.z, H.face, 'boot', k % 2 ? 1 : -1);
+    H.prStep = k;
+  }
+  for (const f of foes) {
+    const feet = FOE_FEET[f.kind];
+    if (!feet || f.hp <= 0 || Math.abs(f.x - H.x) > PR_TILES || Math.abs(f.z - H.z) > PR_TILES) continue;
+    const was = f.prWas || [f.x, f.z], dx = f.x - was[0], dz = f.z - was[1], l = Math.hypot(dx, dz), stride = 0.25 + f.def.rad;
+    if (!f.prWas || l > 3) { f.prWas = [f.x, f.z]; continue; }
+    if (l < stride) continue;
+    f.prWas = [f.x, f.z]; f.prSide = -(f.prSide || 1);
+    footDown(f.x, f.z, Math.atan2(dx, dz), feet, f.prSide, f.def.rad / 0.28);
+  }
+  if (!prints.length) return;
+  // a fresh middle when you've walked a quarter of the way to its edge
+  if (!prCorner || Math.abs(H.x - (prCorner[0] + PR_TILES / 2)) > PR_TILES / 4 || Math.abs(H.z - (prCorner[1] + PR_TILES / 2)) > PR_TILES / 4) {
+    prCorner = [Math.floor(H.x) - PR_TILES / 2, Math.floor(H.z) - PR_TILES / 2]; prDirty = true;
+  }
+  if (prDirty || time - prDrawn > 2) {
+    prDirty = false; prDrawn = time;
+    drawPrints();
+    Object.assign(U.prV.value, { x: prCorner[0], y: prCorner[1], z: PR_TILES });
+  }
+  Object.assign(U.prE.value, { x: 1 / PR_W, y: PRINTS.depth, z: PRINTS.shade });
+}
+// the ground: lit as the other flat-shaded things are, with the prints pressed into sand and snow
+const PRINT_U = {
+  tPrints: { value: prTex },
+  prV: { value: { x: 0, y: 0, z: PR_TILES, w: 0 } },   // the map's corner (tiles), width (tiles), on
+  prE: { value: { x: 1 / PR_W, y: 0.035, z: 0.3, w: 0 } },   // a texel (of the map), dent depth (tiles), darkening
+};
+const groundPrintMat = new GFX.ShaderMaterial({ uniforms: PRINT_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = O.model * vec4f(v.position, 1.0);
+  return VOut(F.viewProj * w, w.xyz, v.color, w.xyz - F.camPos.xyz);
+}
+fn printAt(uv: vec2f) -> vec2f { return textureSampleLevel(tPrints, tPrintsS, uv, 0.0).rg; }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  var N = flatNormal(i.eye);
+  var albedo = i.color;
+  if (U.prV.w > 0.5 && N.y > 0.7) {
+    let uv = (i.world.xz - U.prV.xy) / U.prV.z;
+    if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) {
+      let s = printAt(uv);
+      if (s.x > 0.004) {
+        // the dent's floor slopes, so it takes the light as a dent does: its depth's slope tilts the normal
+        let e = U.prE.x;
+        let tiles = e * U.prV.z;
+        let gx = (printAt(uv + vec2f(e, 0.0)).x - printAt(uv - vec2f(e, 0.0)).x) / (2.0 * tiles);
+        let gz = (printAt(uv + vec2f(0.0, e)).x - printAt(uv - vec2f(0.0, e)).x) / (2.0 * tiles);
+        N = normalize(N + vec3f(gx, 0.0, gz) * U.prE.y);
+        let snow = clamp(s.y / max(s.x, 0.01), 0.0, 1.0);
+        albedo = albedo * (1.0 - s.x * U.prE.z);
+        albedo = mix(albedo, albedo * vec3f(0.72, 0.82, 1.0), s.x * snow * 0.8);
+      }
+    }
+  }
+  let c = shadeLit(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
 const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 
 // ---------- Water (T > Water) ----------
@@ -3864,7 +4100,7 @@ function cactus(x, z, k) {
   if (k > 0.4) { part(G.cyl6, g, x - 0.15, y + h * 0.38, z, { sx: 0.11, sy: 0.11, sz: 0.11, rz: Math.PI / 2 }); part(G.cyl6, g, x - 0.21, y + h * 0.5, z, { sx: 0.11, sy: 0.26, sz: 0.11 }); }
   if (k > 0.7) part(G.box, '#e86a8a', x, y + h + 0.02, z, { s: 0.08 });
 }
-function bush(x, z, k, c = '#3f7a34') { const y = groundAt(x, z); part(G.ico, shade(CC(c), 0.85 + k * 0.3), x, y + 0.14, z, { sx: 0.5 + k * 0.15, sy: 0.36, sz: 0.46, ry: k * 4 }); }
+function bush(x, z, k, c = '#3f7a34') { const y = groundAt(x, z); stem(G.ico, shade(CC(c), 0.85 + k * 0.3), x, y + 0.14, z, { sx: 0.5 + k * 0.15, sy: 0.36, sz: 0.46, ry: k * 4 }, x, y, z, 0.3); }
 // a stone node to mine, after V Rising's: a tall standing boulder with a leaning shard, set into a sunken
 // footing whose foot takes the colour of the ground round it, with half-buried chunks and the biome's small
 // plants at its base, so it plainly grows out of the ground and can't be mistaken for the cliffs' rocks
@@ -3996,7 +4232,7 @@ function fern(x, z, k) {
   const y = groundAt(x, z), g = shade(CC('#4a7a2e'), 0.82 + k * 0.3), n = 6 + Math.floor(k * 3);
   for (let i = 0; i < n; i++) {
     const a = k * 5 + i * 6.28 / n + hash(x, z, i) * 0.3, l = 0.3 + hash(x, z, i + 9) * 0.14;
-    part(G.box, i % 2 ? g : shade(g, 1.12), x + Math.cos(a) * l * 0.45, y + 0.09, z + Math.sin(a) * l * 0.45, { sx: l, sy: 0.02, sz: 0.11, ry: -a, rz: 0.45 });
+    stem(G.box, i % 2 ? g : shade(g, 1.12), x + Math.cos(a) * l * 0.45, y + 0.09, z + Math.sin(a) * l * 0.45, { sx: l, sy: 0.02, sz: 0.11, ry: -a, rz: 0.45 }, x, y, z, 0.6);
   }
 }
 function mushroom(x, z, k) {
@@ -4004,20 +4240,28 @@ function mushroom(x, z, k) {
   part(G.cyl6, '#e8dcc0', x, y + 0.06, z, { sx: 0.05, sy: 0.12, sz: 0.05 });
   part(G.cone6, k > 0.5 ? '#d8443a' : '#c87a3a', x, y + 0.16, z, { sx: 0.18, sy: 0.1, sz: 0.18 });
 }
+// flowers: a head on a short stem each, so they nod over as you push through
 function flowers(x, z) {
   const y = groundAt(x, z);
-  for (let i = 0; i < 4; i++) part(G.box, FLOWER[Math.floor(hash(x, z, i) * 4)], x + (hash(x, z, i + 5) - 0.5) * 0.7, y + 0.05, z + (hash(x, z, i + 8) - 0.5) * 0.7, { s: 0.07 });
+  for (let i = 0; i < 4; i++) {
+    const fx = x + (hash(x, z, i + 5) - 0.5) * 0.7, fz = z + (hash(x, z, i + 8) - 0.5) * 0.7, h = 0.08 + hash(x, z, i + 11) * 0.05;
+    stem(G.box, '#4f7a34', fx, y + h / 2, fz, { sx: 0.02, sy: h, sz: 0.02 }, fx, y, fz, 1);
+    stem(G.box, FLOWER[Math.floor(hash(x, z, i) * 4)], fx, y + h + 0.02, fz, { s: 0.07 }, fx, y, fz, 1);
+  }
 }
 function grass(x, z, k, c) {
   const y = groundAt(x, z), g = shade(c, 0.8 + k * 0.2);
-  for (let i = 0; i < 3; i++) part(G.box, g, x + (hash(x, z, i) - 0.5) * 0.5, y + 0.07, z + (hash(x, z, i + 3) - 0.5) * 0.5, { sx: 0.04, sy: 0.14 + hash(x, z, i + 6) * 0.08, sz: 0.04, rz: (hash(x, z, i + 9) - 0.5) * 0.5 });
+  for (let i = 0; i < 3; i++) {
+    const bx = x + (hash(x, z, i) - 0.5) * 0.5, bz = z + (hash(x, z, i + 3) - 0.5) * 0.5;
+    stem(G.box, g, bx, y + 0.07, bz, { sx: 0.04, sy: 0.14 + hash(x, z, i + 6) * 0.08, sz: 0.04, rz: (hash(x, z, i + 9) - 0.5) * 0.5 }, bx, y, bz, 1);
+  }
 }
 function reeds(x, z) {
   const y = groundAt(x, z);
   for (let i = 0; i < 4; i++) {
     const ox = (hash(x, z, i) - 0.5) * 0.35, oz = (hash(x, z, i + 4) - 0.5) * 0.35, h = 0.35 + hash(x, z, i + 2) * 0.3;
-    part(G.box, '#6a7a3a', x + ox, y + h / 2, z + oz, { sx: 0.035, sy: h, sz: 0.035, rz: (hash(x, z, i + 9) - 0.5) * 0.3 });
-    if (i % 2) part(G.box, '#5a3a22', x + ox, y + h - 0.04, z + oz, { sx: 0.06, sy: 0.12, sz: 0.06 });
+    stem(G.box, '#6a7a3a', x + ox, y + h / 2, z + oz, { sx: 0.035, sy: h, sz: 0.035, rz: (hash(x, z, i + 9) - 0.5) * 0.3 }, x + ox, y, z + oz, 0.8);
+    if (i % 2) stem(G.box, '#5a3a22', x + ox, y + h - 0.04, z + oz, { sx: 0.06, sy: 0.12, sz: 0.06 }, x + ox, y, z + oz, 0.8);
   }
 }
 function lily(x, z, k) { const y = groundAt(x, z) + 0.06; part(G.cyl8, k > 0.7 ? '#7ab84a' : '#4f8a3a', x, y, z, { sx: 0.28, sy: 0.01, sz: 0.28 }); if (k > 0.8) part(G.box, '#f0c0d0', x, y + 0.03, z, { s: 0.07 }); }
@@ -4284,7 +4528,7 @@ function shrine(x, z, k) {
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 function buildObjects(cx, cz, ch) {
-  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = 0;
+  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; PLANT = bufPlant; bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = bufPlant.n = 0;
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
@@ -4295,6 +4539,7 @@ function buildObjects(cx, cz, ch) {
   ch.obj = bufObj.mesh(groundMat);
   ch.glow = bufGlow.mesh(glowMat);
   ch.trunk = bufTrunk.mesh(trunkMat);
+  ch.plant = bufPlant.mesh(plantMat);
   ch.canopy = bufCanopy.mesh(castOnlyMat);
   if (ch.canopy) ch.canopy.castShadow = true;
 }
@@ -4735,7 +4980,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.canopy, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0 };
 function buildChunk(cx, cz) {
   const t0 = performance.now();
@@ -4759,7 +5004,7 @@ function rebuildObjects(c, r) {
   if (!ch) return;
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'canopy', tmp.canopy);
+  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy);
 }
 function rebuildPieces(c, r) {
   const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
@@ -8537,6 +8782,22 @@ const TUNING = [
     [ORE_LOOK, 'chunks', 'Chunks round each rock', 2, 14, 1],
     [ORE_LOOK, 'size', 'Chunk size', 0.4, 2, 0.05],
   ]],
+  ['Plants', [
+    [FOLIAGE, 'on', 'Plants bend (1 on, 0 off)', 0, 1, 1],
+    [FOLIAGE, 'bend', 'How far a plant leans as you push through (radians)', 0, 1.45, 0.05],
+    [FOLIAGE, 'recover', 'Seconds they take to stand back up', 0.1, 10, 0.1],
+    [FOLIAGE, 'radius', 'How far round you they lean away (tiles)', 0.1, 1.5, 0.01],
+    [FOLIAGE, 'foes', 'Foes push them over too (1 on, 0 off)', 0, 1, 1],
+    [FOLIAGE, 'wind', 'Sway in the wind (radians)', 0, 0.6, 0.01],
+    [FOLIAGE, 'windSpeed', 'Wind: how fast the gusts come', 0, 6, 0.05],
+  ]],
+  ['Footprints', [
+    [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
+    [PRINTS, 'life', 'Seconds they last', 5, 600, 5],
+    [PRINTS, 'depth', 'How deep they look (shading)', 0, 0.2, 0.005],
+    [PRINTS, 'shade', 'How much darker they are', 0, 1, 0.01],
+    [PRINTS, 'size', 'Size', 0.3, 3, 0.05],
+  ]],
   ['Waterfall spray', [
     [FALL_SPRAY, 'amount', 'Amount (0 off)', 0, 3, 0.05],
     [FALL_SPRAY, 'size', 'Puff size', 0.2, 3, 0.05],
@@ -8773,6 +9034,8 @@ function frame(now) {
   updateClouds(dt);
   updateWater(dt);
   updateSpray();
+  updateTrample(dt);
+  updatePrints();
   remakeOres(dt);
   updateHearths(dt);
   ventSmoke(dt);
@@ -8820,7 +9083,7 @@ window.GAME = {
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
@@ -8847,6 +9110,8 @@ window.GAME = {
   },
   // tests: the world's arrays and helpers, to check them in bulk
   resources: a => { if (a) RESOURCES.amount = a; return RESOURCES.amount; },
+  plants: () => { let n = 0; for (const ch of chunks.values()) if (ch.plant) n += ch.plant.geometry.attributes.position.array.length / 3; return { verts: n, trample: trample.on, view: [...trample.view] }; },
+  prints: () => ({ n: prints.length, list: prints.slice(-6).map(p => ({ feet: p.feet, snow: p.snow, x: +p.x.toFixed(2), z: +p.z.toFixed(2) })), corner: prCorner, on: PRINT_U.prV.value.w }),
   ghPoint: (x, z) => { groundHazeSite(Math.round(camTarget.x), Math.round(camTarget.z)); const c0 = Math.round(camTarget.x) - GH_TILES / 2, r0 = Math.round(camTarget.z) - GH_TILES / 2, k = (Math.floor((z - r0) * GH_TPT) * GH_N + Math.floor((x - c0) * GH_TPT)) * 4; return { y: ghSite[k], share: ghSite[k + 2] }; },
   ores: () => { const n = {}; for (let i = 0; i < N * N; i++) { const o = OB[i]; if (o === O.ROCK || o === O.ICEROCK || o === O.SANDROCK || o === O.COPPER || o === O.IRON) n[o] = (n[o] || 0) + 1; } return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), copper: n[O.COPPER] || 0, iron: n[O.IRON] || 0, ids: [O.COPPER, O.IRON] }; },
   findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
