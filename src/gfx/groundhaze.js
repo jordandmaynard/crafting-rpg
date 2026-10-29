@@ -59,7 +59,7 @@ struct GH {
   g1: vec4f,   // origin shift since last frame (cells), dt, time
   p0: vec4f,   // resting haze amount, patchiness, patch frequency (a tile), relax rate (a second)
   p1: vec4f,   // wind (tiles a second, x z), air settling rate (a second), swirl
-  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (4: fill with resting haze), _, _
+  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (4: fill with resting haze), smoothing, _
   pl0: vec4f,  // hero position xz, velocity xz
   pl1: vec4f,  // wake radius (tiles), drag, haze cleared a tile walked, the air spun round the hero (tiles a second)
   s0: vec4f,   // site map: first texel x, z, texels across, texels a tile
@@ -136,7 +136,15 @@ fn oldCell(cf: vec2f) -> Cell {
   let dt = hu.g1.z;
   let oc = vec2f(c) + hu.g1.xy;                       // this cell in last frame's grid
   let src = oc - oldCell(oc).a.xy * dt * CPM;
-  let s = oldCell(src);
+  var s = oldCell(src);
+  // smoothing: some of the neighbours' average mixed in (a share of p2.z each sixtieth of a second), so ripples a
+  // cell or two across die away. The pressure solve's wide differences can't see a pattern that flips cell to cell,
+  // and swirl feeds it; drawn, it showed the grid.
+  let k = 1.0 - pow(1.0 - clamp(hu.p2.z, 0.0, 0.95), dt * 60.0);
+  if (k > 0.0) {
+    let n = (oldCell(src + vec2f(1.0, 0.0)).a + oldCell(src - vec2f(1.0, 0.0)).a + oldCell(src + vec2f(0.0, 1.0)).a + oldCell(src - vec2f(0.0, 1.0)).a) * 0.25;
+    s.a = mix(s.a, n, k);
+  }
   var vel = s.a.xy;
   let haze = s.a.z + (rest - s.a.z) * (1.0 - exp(-hu.p0.w * dt));   // drifts back to the resting haze
   vel = mix(vel, hu.p1.xy, 1.0 - exp(-hu.p1.z * dt));               // the air settles back to the wind
@@ -251,6 +259,24 @@ const CPM = ${CPT}.0;
 ${NOISE}
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) slice: f32 }
 fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz * U.site.w - U.site.xy) / U.site.z, 0.0); }
+// the sim's haze, read through a cubic B-spline (four bilinear taps) rather than plain bilinear, whose creases along
+// every cell's edges showed the grid as the haze moved
+fn stateHaze(uv: vec2f) -> f32 {
+  let size = U.grid.zw;
+  let p = uv * size - 0.5;
+  let i = floor(p); let f = p - i;
+  let f2 = f * f; let f3 = f2 * f;
+  let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  let w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+  let w3 = f3 / 6.0;
+  let g0 = w0 + w1; let g1 = w2 + w3;
+  let t0 = (i + 0.5 - 1.0 + w1 / g0) / size;
+  let t1 = (i + 0.5 + 1.0 + w3 / g1) / size;
+  let a = textureSampleLevel(stateTex, stateTexS, vec2f(t0.x, t0.y), 0.0).x * g0.x + textureSampleLevel(stateTex, stateTexS, vec2f(t1.x, t0.y), 0.0).x * g1.x;
+  let b = textureSampleLevel(stateTex, stateTexS, vec2f(t0.x, t1.y), 0.0).x * g0.x + textureSampleLevel(stateTex, stateTexS, vec2f(t1.x, t1.y), 0.0).x * g1.x;
+  return a * g0.y + b * g1.y;
+}
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position.x, 0.0, v.position.z, 1.0)).xyz;
   let y = siteAt(w.xz).x + U.look.x * 2.0 * (v.slice + 0.5) / U.look.z;
@@ -315,7 +341,7 @@ fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz
   var haze = 0.0;
   if (inside < 1.0) { haze = ghPatches(wp, U.wind.xy, U.wind.z, U.rest.x * site.z, U.rest.y, U.rest.z); }
   if (inside > 0.0) {
-    haze = mix(haze, textureSampleLevel(stateTex, stateTexS, uv, 0.0).x, inside);
+    haze = mix(haze, stateHaze(uv), inside);
   }
   let H = max(U.look.x, 0.02);
   // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
@@ -420,7 +446,7 @@ export class GroundHaze {
   // Each frame, before drawing. f: { on, target: [x, z] (the camera's), hero: [x, z], dt, amount, patchiness,
   // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear, spin
   // (tiles a second the air's spun round the hero, whirling), spinClear (haze swept aside round them a second),
-  // height, density, slices, brightness }
+  // smooth (0-0.95: the neighbours' average mixed in each sixtieth of a second), height, density, slices, brightness }
   update(f) {
     this.on = !!f.on && !!this.siteOrigin;
     this.mesh.visible = this.on;
@@ -442,7 +468,7 @@ export class GroundHaze {
     this.device.queue.writeBuffer(this.params, 0, new Float32Array([
       origin[0], origin[1], GRID, GRID, shift[0], shift[1], dt, this.time,
       f.amount, f.patchiness, freq, f.relax, f.wind[0], f.wind[1], f.settle, f.swirl,
-      f.spinClear || 0, flags, 0, 0, f.hero[0], f.hero[1], vel[0], vel[1],
+      f.spinClear || 0, flags, f.smooth || 0, 0, f.hero[0], f.hero[1], vel[0], vel[1],
       f.wakeRadius, f.wakeDrag, f.wakeClear, f.spin || 0, so[0], so[1], GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT]));
     const U = this.material.uniforms;
     Object.assign(U.grid.value, { x: origin[0], y: origin[1] });
