@@ -464,6 +464,7 @@ class Renderer {
     const x = e[0] * s.x + e[4] * s.y + e[8] * s.z + e[12], y = e[1] * s.x + e[5] * s.y + e[9] * s.z + e[13], z = e[2] * s.x + e[6] * s.y + e[10] * s.z + e[14];
     return fr.intersectsSphere(x, y, z, s.r * mesh.matrixWorld.getMaxScaleOnAxis());
   }
+  // (casters are the meshes on the camera's layers, or on shadowLayers when that's set)
   _renderShadow(scene, camera, sun) {
     const sh = sun.shadow, cam = sh.camera;
     this._ensureShadow(Math.max(1, sh.mapSize.x | 0));
@@ -480,7 +481,7 @@ class Renderer {
     const casters = [];
     const visit = o => {
       if (!o.visible) return;
-      if (o.isMesh && o.castShadow && o.layers.test(camera.layers) && o.material && !(o.isInstancedMesh && !o.count) && (!o.frustumCulled || this._inFrustum(o, fr))) casters.push(o);
+      if (o.isMesh && o.castShadow && o.layers.test(this.shadowLayers || camera.layers) && o.material && !(o.isInstancedMesh && !o.count) && (!o.frustumCulled || this._inFrustum(o, fr))) casters.push(o);
       for (const c of o.children) visit(c);
     };
     visit(scene);

@@ -2603,6 +2603,9 @@ function updateGI() {
     points: lights, chunk: chunkGI,
   }));
 }
+// the shadow map's casters: the world's (layer 0) and the ground's (5)
+const shadowLayers = new GFX.Layers(); shadowLayers.enable(5);
+renderer.shadowLayers = shadowLayers;
 function renderWorld() {
   drawCrowds();
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
@@ -2614,9 +2617,13 @@ function renderWorld() {
   renderer.shadowMap.autoUpdate = true;
   updateTrunkCut();
   updateCaustics();
-  renderer.passName = 'world';   // (the profiler's names for each render's pass)
-  camera.layers.set(0); renderer.render(scene, camera);
+  // the ground first, on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow
+  // map is drawn in it, from the ground's and the world's casters both (shadowLayers)
+  renderer.passName = 'ground';   // (the profiler's names for each render's pass)
+  camera.layers.set(5); renderer.render(scene, camera);
   renderer.shadowMap.autoUpdate = false;
+  renderer.passName = 'world';
+  camera.layers.set(0); renderer.render(scene, camera);
   // the grass tufts on their own (layer 4: they cast no shadow), so the profiler shows what they cost
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
@@ -2642,6 +2649,7 @@ function renderWorld() {
     const grassOn = grassMesh.visible; grassMesh.visible = false;
     const sprayOn = sprayMesh && sprayMesh.visible; if (sprayMesh) sprayMesh.visible = false;
     renderer.passName = 'normals (Sobel)';
+    camera.layers.set(5); renderer.render(scene, camera);
     camera.layers.set(0); renderer.render(scene, camera);
     camera.layers.set(2); renderer.render(scene, camera);
     camera.layers.set(1); renderer.render(scene, camera);
@@ -3108,6 +3116,7 @@ function buildGround(cx, cz, ch) {
   groundTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
   groundTex.needsUpdate = true;
   ch.ground = bufGround.mesh(groundPrintMat);
+  if (ch.ground) ch.ground.layers.set(5);   // drawn in a pass of its own (see renderWorld)
   buildBog(c0, r0, grid, GW, ch);
   if (wet) buildWater(c0, r0, grid, GW, ch);
   if (molten) buildLava(c0, r0, grid, GW, ch);
