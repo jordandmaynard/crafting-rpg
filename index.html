@@ -3238,7 +3238,7 @@ function tallVisible(v) { for (const ch of chunks.values()) { if (ch.trunk) ch.t
 // over `recover` seconds; the whirlwind sweeps them round you. Each piece of a plant is drawn turned about the
 // foot of its stem by that lean (and the wind's), so a blade's tip swings over and down while its foot stays put.
 // Their shadows don't bend.
-const FOLIAGE = { on: 1, bend: 1.25, recover: 1.6, radius: 0.32, foes: 1, wind: 0.12, windSpeed: 1.6 };
+const FOLIAGE = { on: 1, bend: 1.45, recover: 1.6, radius: 0.45, foes: 1, wind: 0.02, windSpeed: 1};
 const trample = new GFX.Trample(renderer);
 const PLANT_U = {
   tTrample: { value: trample.texture },
@@ -3324,8 +3324,8 @@ function updateTrample(dt) {
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
-const GRASS = { on: 1, density: 8, range: 28, grass: 1, flowers: 0.15, reeds: 1, height: 0.2, width: 1, lean: 1, flowerSize: 1, reedHeight: 0.55,
-  variation: 0.12, soft: 0.5, outline: 0, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
+const GRASS = { on: 1, density: 16, range: 23, grass: 4, flowers: 0.5, reeds: 0.1, height: 0.37, width: 3, lean: 0.8, flowerSize: 1.15, reedHeight: 1.2,
+  variation: 0.1, soft: 0.81, outline: 0, poolReeds: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
 const GRASS_KIND = { [MEADOW]: 1, [FOREST]: 2, [TOWN]: 3, [SWAMP]: 4, [DEEP]: 6, [GRAVE]: 7 };
@@ -3361,7 +3361,7 @@ const GRASS_U = {
   tGrass: { value: grassTex },
   tTrample: PLANT_U.tTrample, trV: PLANT_U.trV, windV: PLANT_U.windV, bend: PLANT_U.bend,
   win: { value: { x: 0, y: 0, z: 1, w: 28 } },        // the window's corner tile (x z), tiles across, how far out they're drawn
-  at: { value: { x: 0, y: 0, z: 1, w: 0 } },          // the view's middle (x z), places a tile
+  at: { value: { x: 0, y: 0, z: 1, w: 1 } },          // the view's middle (x z), places a tile, how thick reeds grow in pools
   tuft: { value: { x: 8, y: 0.2, z: 1, w: 1 } },      // density, height, width, lean
   look: { value: { x: 0.12, y: 0.5, z: 1, w: 0.55 } },// shade variation, how much they're lit like the ground, flower size, reed height
   share: { value: { x: 1, y: 0.15, z: 1, w: 0 } },    // how much grass, flowers, reeds
@@ -3422,7 +3422,8 @@ fn grassColor(kind: u32) -> vec3f {
   var kd = array<f32, 8>(0.0, 1.0, 0.55, 0.7, 0.6, 0.45, 0.3, 0.25);
   var km = array<vec3f, 8>(vec3f(0.0), vec3f(1.0, 1.0, 0.0), vec3f(1.0, 0.25, 0.0), vec3f(1.0, 0.8, 0.0), vec3f(1.0, 0.0, 0.7), vec3f(0.0, 0.0, 1.0), vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.0, 0.0));
   let h = gHash((u32(tile.x) * 73856093u) ^ (u32(tile.y) * 19349663u) ^ (slot * 83492791u));
-  if (gRand(h, 0u) >= clamp(U.tuft.x * kd[kind] - f32(slot), 0.0, 1.0)) { return o; }
+  let dens = U.tuft.x * kd[kind] * select(1.0, U.at.w, kind == 5u);
+  if (gRand(h, 0u) >= clamp(dens - f32(slot), 0.0, 1.0)) { return o; }
   // where on the tile (in a pool, away from its banks), and only on its open quarters
   let spread = select(0.84, 0.5, kind == 5u);
   let uv = vec2f(gRand(h, 1u), gRand(h, 2u)) * spread + (1.0 - spread) * 0.5;
@@ -3524,7 +3525,7 @@ function updateGrass() {
   if (!on) return;
   const u = GRASS_U;
   Object.assign(u.win.value, { x: Math.floor(camTarget.x) - R, y: Math.floor(camTarget.z) - R, z: n, w: R });
-  Object.assign(u.at.value, { x: camTarget.x, y: camTarget.z, z: S });
+  Object.assign(u.at.value, { x: camTarget.x, y: camTarget.z, z: S, w: g.poolReeds });
   Object.assign(u.tuft.value, { x: Math.min(g.density, 16), y: g.height, z: g.width, w: g.lean });
   Object.assign(u.look.value, { x: g.variation, y: g.soft, z: g.flowerSize, w: g.reedHeight });
   Object.assign(u.share.value, { x: g.grass, y: g.flowers, z: g.reeds });
@@ -4244,6 +4245,8 @@ function updateWake(dt) {
 // ---------- Scenery ----------
 // Bone Road's props, a size up so they stand right against a human adventurer
 const TS = 1.3;
+// oaks' and birches' sizes on top of that (T > Trees)
+const TREE_SIZE = { oak: 1, birch: 1 };
 function pine(x, z, k, snow = false) {
   const y = groundAt(x, z), hgt = (1 + k * 0.7) * TS, g = shade(CC(snow ? '#2f5048' : '#2f5a34'), 0.85 + k * 0.3);
   part(G.box, '#5a3a22', x, y + 0.2, z, { sx: 0.16, sy: 0.4, sz: 0.16 });
@@ -4254,7 +4257,7 @@ function pine(x, z, k, snow = false) {
   }
 }
 function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
-  const y = groundAt(x, z), S = TS * (0.9 + k * 0.25);
+  const y = groundAt(x, z), S = TS * TREE_SIZE.oak * (0.9 + k * 0.25);
   part(G.box, bark, x, y + 0.32 * S, z, { sx: 0.16 * S, sy: 0.64 * S, sz: 0.16 * S });
   // a broad, spreading crown: a wide main mass, a lobe out to each side and one on top
   const w = (0.98 + k * 0.2) * S, a = k * 6.28;
@@ -4263,7 +4266,7 @@ function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
   part(G.ico, shade(CC(leaf), 1.1), x + 0.12 * S, y + 1.2 * S, z - 0.06 * S, { sx: 0.5 * S, sy: 0.38 * S, sz: 0.46 * S, ry: k * 2 });
 }
 function birch(x, z, k) {
-  const y = groundAt(x, z), S = TS * (0.85 + k * 0.3);
+  const y = groundAt(x, z), S = TS * TREE_SIZE.birch * (0.85 + k * 0.3);
   part(G.box, '#e8e4d8', x, y + 0.45 * S, z, { sx: 0.11 * S, sy: 0.9 * S, sz: 0.11 * S });
   part(G.box, '#3a3430', x, y + 0.3 * S, z, { sx: 0.115 * S, sy: 0.04 * S, sz: 0.115 * S });
   part(G.box, '#3a3430', x, y + 0.62 * S, z, { sx: 0.115 * S, sy: 0.04 * S, sz: 0.115 * S });
@@ -4351,10 +4354,10 @@ function rock(x, z, k, c = '#7a7684') {
     if (b === MEADOW || b === TOWN) { if (n % 3 === 0) part(G.box, pb, px, y + hgt, pz, { s: 0.06 }); }
   }
 }
-// ORE_LOOK changed (the panel, a paste, Reset): every built chunk's objects are made again, once it's settled
+// ORE_LOOK or TREE_SIZE changed (the panel, a paste, Reset): every built chunk's objects are made again, once it's settled
 let oreLookKey = '', oreRemakeT = 0;
 function remakeOres(dt) {
-  const key = Object.values(ORE_LOOK).join();
+  const key = Object.values(ORE_LOOK).join() + '|' + Object.values(TREE_SIZE).join();
   if (!oreLookKey) oreLookKey = key;
   if (key !== oreLookKey) { oreLookKey = key; oreRemakeT = 0.3; }
   if (oreRemakeT > 0 && (oreRemakeT -= dt) <= 0) for (const ch of chunks.values()) rebuildObjects(ch.cx * CH, ch.cz * CH);
@@ -9006,6 +9009,10 @@ const TUNING = [
     [WATER, 'foam', 'Foam', 0, 3, 0.05],
     [WATER, 'shoreFoam', 'Shore foam', 0, 2, 0.05],
   ]],
+  ['Trees', [
+    [TREE_SIZE, 'oak', 'Oak size', 0.4, 2.5, 0.05],
+    [TREE_SIZE, 'birch', 'Birch size', 0.4, 2.5, 0.05],
+  ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
     [ORE_LOOK, 'iron', 'Iron colour', 'color'],
@@ -9026,7 +9033,8 @@ const TUNING = [
     [GRASS, 'density', 'How thick: tufts a tile on a meadow (less in forest, swamp, the deep forest and graveyards)', 0, 16, 0.25],
     [GRASS, 'grass', 'Share of grass', 0, 4, 0.05],
     [GRASS, 'flowers', 'Share of flowers (meadows, towns, forest)', 0, 4, 0.05],
-    [GRASS, 'reeds', 'Share of reeds (swamps)', 0, 4, 0.05],
+    [GRASS, 'reeds', 'Share of reeds on swamp ground', 0, 4, 0.05],
+    [GRASS, 'poolReeds', 'How thick reeds grow in swamp water (times density)', 0, 2, 0.01],
     [GRASS, 'range', 'How far out from the middle of the view (tiles)', 8, 60, 1],
     [GRASS, 'height', 'Grass height (tiles)', 0.05, 0.6, 0.01],
     [GRASS, 'width', 'Blade width', 0.3, 3, 0.05],
