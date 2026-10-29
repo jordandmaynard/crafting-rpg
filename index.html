@@ -3204,6 +3204,9 @@ fn swell(p: vec2f) -> vec3f {
 fn wave(uv: vec2f) -> vec4f { return textureSampleLevel(tWave, tWaveS, uv, 0.0); }
 fn slopeAt(uv: vec2f) -> vec2f { return wave(uv).rg * 2.0 - 1.0; }
 fn heightAt(uv: vec2f) -> f32 { return wave(uv).b; }
+fn windSlope(p: vec2f, t: f32) -> vec2f {
+  return slopeAt(p / (9.0 * U.rippleLen) + vec2f(0.021, 0.013) * t) * 0.6 + slopeAt(ROT_A * p / (4.5 * U.rippleLen) - vec2f(0.017, -0.029) * t) * 0.4;
+}
 // where the view ray through the surface at wp (fragment fp) meets the bed: from the copy's depth when there is
 // one and the bed is behind the surface there, else the depth d straight down, carried along the view's slant
 fn bedPoint(wp: vec3f, fp: vec4f, d: f32) -> vec3f {
@@ -3233,11 +3236,12 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   let xz = i.wpos.xz;
   let d = max(i.depth, 0.0); let spd = length(i.flow);
   // wind waves: two layers of slope noise crossing
-  var s = slopeAt(xz / (9.0 * U.rippleLen) + vec2f(0.021, 0.013) * t) * 0.6 + slopeAt(ROT_A * xz / (4.5 * U.rippleLen) - vec2f(0.017, -0.029) * t) * 0.4;
-  // rivers: the flow map's two phases
+  var s = windSlope(xz, t);
+  // rivers: the same waves, carried along by the flow map's two phases (so they're the size the lakes' are, and
+  // two layers crossing at an angle, which hides the texture's repeat)
   let ph0 = fract(t * 0.3); let ph1 = fract(t * 0.3 + 0.5); let wb = abs(ph0 * 2.0 - 1.0);
   let fl = i.flow * U.flowSpeed * 1.6;
-  let fsl = mix(slopeAt(xz / (4.0 * U.rippleLen) - fl * ph0), slopeAt(xz / (4.0 * U.rippleLen) - fl * ph1 + 0.37), wb);
+  let fsl = mix(windSlope(xz - fl * ph0 * 4.0 * U.rippleLen, t), windSlope(xz - fl * ph1 * 4.0 * U.rippleLen + vec2f(3.1, 1.7), t), wb);
   s = mix(s, fsl, clamp(spd * 1.4, 0.0, 0.85)) * U.waveAmp * (0.22 + spd * 0.3 + i.fall * 0.5);
   let Nf = normalize(i.swellN);
   let N = normalize(Nf + vec3f(-s.x, 0.0, -s.y)); let V = -U.viewDir; let L = normalize(U.sunDir);
