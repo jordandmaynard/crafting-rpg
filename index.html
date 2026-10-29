@@ -3012,14 +3012,14 @@ function roughCell(P, K, Q, flip, lifted) {
 }
 
 // Rounded ground patches (T > Ground patches): the ground's quarter-tile squares of colour drawn with wavy,
-// rounded edges. groundTex holds each quarter's colour (halved, so brighter than white fits) and, in alpha, what
-// it is (1 open ground, 2 a path or street, 3 the plaza) and its level; 0 for slopes, cliffs, ramps, water and
+// rounded edges. groundTex holds each quarter's colour (halved, so brighter than white fits) and, in alpha, its
+// level × 4 + 1, or + 2 on a ramp (which joins its level to the one above); 0 for cliffs and slopes, water and
 // lava. The ground's shader looks up the colour a little way off, pushed about by smooth noise, and takes it
-// when that quarter is the same sort of ground on the same level, so the squares' edges wander and round off
-// while paths keep their straight edges and nothing bleeds over a cliff. blend (0-1) fades each quarter's colour
-// into its neighbours' (of the same sort, on the same level) across that much of the way between their middles,
-// until at 1 the ground is one continuous, noisy run of colour with no edges at all.
-const GROUND_SHAPE = { on: 1, wobble: 0.6, size: 1.3, blend: 0 };
+// when that quarter is joined to this one (the same level, or up or down a ramp), so the squares' edges wander
+// and round off, paths and streets melt into the ground round them as biomes do, and nothing bleeds over a
+// cliff. blend (0-1) fades each quarter's colour into its neighbours' across that much of the way between their
+// middles, until at 1 the ground is one continuous, noisy run of colour with no edges at all.
+const GROUND_SHAPE = { on: 1, wobble: 1.1, size: 1.2, blend: 1 };
 const groundTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 groundTex.regions = [];
 function buildGround(cx, cz, ch) {
@@ -3047,7 +3047,6 @@ function buildGround(cx, cz, ch) {
     const scorch = !L && LAVA[i];
     const rockTop = shade(L || cy || scorch ? pal.cliffA : pal.road, strata * (scorch ? 0.7 : 1));
     const rockLow = cy ? shade(pal.cliffB, strata * 0.3) : scorch ? shade(pal.cliffB, strata * 1.4) : shade(L ? pal.cliffA.clone().lerp(pal.cliffB, 0.7) : pal.roadB, strata * 0.85);
-    const tc = BI[i] === TOWN ? townCell(c, r) : null, sort = tc === 'plaza' ? 3 : tc === 'street' || PATH[i] ? 2 : 1;
     for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
       const n00 = b * 3 + a, n10 = n00 + 1, n01 = n00 + 3, n11 = n00 + 4;
       const lifted = up[n00] + up[n10] + up[n01] + up[n11];
@@ -3072,8 +3071,8 @@ function buildGround(cx, cz, ch) {
         k00 = k10 = k01 = k11 = cc;
       }
       const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
-      if (lifted || cy || !L || s || LAVA[i] || WT[i]) gd[go + 3] = 0;
-      else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + sort; }
+      if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
+      else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1); }
       // split through the odd corner out, so slope corners come out as clean hips and valleys
       const odd = lifted === 1 || lifted === 3;
       const flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
@@ -3652,7 +3651,7 @@ const PRINT_U = {
   prV: { value: { x: 0, y: 0, z: PR_TILES, w: 0 } },   // the map's corner (tiles), width (tiles), on
   prE: { value: { x: 1 / PR_W, y: 0.035, z: 0.3, w: 0 } },   // a texel (of the map), dent depth (tiles), darkening
   tGround: { value: groundTex },
-  gsV: { value: { x: 1, y: 0.6, z: 1.3, w: 0 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
+  gsV: { value: { x: 1, y: 1.1, z: 1.2, w: 1 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
 };
 const groundPrintMat = new GFX.ShaderMaterial({ uniforms: PRINT_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -3671,24 +3670,31 @@ fn gsNoise(p: vec2f) -> f32 {
   let i = vec2i(floor(p)); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
   return mix(mix(gsHash(i), gsHash(i + vec2i(1, 0)), u.x), mix(gsHash(i + vec2i(0, 1)), gsHash(i + vec2i(1, 1)), u.x), u.y) * 2.0 - 1.0;
 }
+// whether quarter b's colour may run into quarter a's (alphas as bytes): the same level, or a ramp's to the level above
+fn gsJoin(a: u32, b: u32) -> bool {
+  if (b == 0u) { return false; }
+  let la = a >> 2u; let lb = b >> 2u;
+  return la == lb || ((a & 3u) == 2u && lb == la + 1u) || ((b & 3u) == 2u && la == lb + 1u);
+}
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   var N = flatNormal(i.eye);
   var albedo = i.color;
   // rounded patches: this quarter's colour from a little way off, if that's the same sort of ground on this level
-  if (U.gsV.x > 0.5 && N.y > 0.7) {
+  if (U.gsV.x > 0.5 && N.y > 0.5) {
     let lim = vec2i(${N * 2 - 1});
     let q0 = clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), lim);
     let t0 = textureLoad(tGround, q0, 0);
-    if (t0.a > 0.002 && distance(t0.rgb * 2.0, albedo) < 0.03) {
+    let a0 = u32(round(t0.a * 255.0));
+    if (a0 != 0u && distance(t0.rgb * 2.0, albedo) < 0.03) {
       let p = i.world.xz * U.gsV.z;
       let w = vec2f(gsNoise(p), gsNoise(p + vec2f(17.3, 5.1))) + 0.5 * vec2f(gsNoise(p * 2.3 + vec2f(31.7, 8.2)), gsNoise(p * 2.3 + vec2f(3.9, 47.5)));
       let qp = i.world.xz * 2.0 + w * U.gsV.y;
       if (U.gsV.w <= 0.001) {
         let t = textureLoad(tGround, clamp(vec2i(floor(qp)), vec2i(0), lim), 0);
-        if (abs(t.a - t0.a) < 0.002) { albedo = t.rgb * 2.0; }
+        if (gsJoin(a0, u32(round(t.a * 255.0)))) { albedo = t.rgb * 2.0; }
       } else {
         // blended: the four quarters round the point, weighted by how near their middles are (ramping over
-        // blend of the way between them), leaving out any of another sort or level
+        // blend of the way between them), leaving out any not joined to this one
         let qc = qp - 0.5;
         let base = vec2i(floor(qc));
         let r = clamp((fract(qc) - 0.5) / U.gsV.w + 0.5, vec2f(0.0), vec2f(1.0));
@@ -3698,7 +3704,7 @@ fn gsNoise(p: vec2f) -> f32 {
           let o = vec2i(k & 1, k >> 1);
           let t = textureLoad(tGround, clamp(base + o, vec2i(0), lim), 0);
           let wt = select(1.0 - sw.x, sw.x, o.x == 1) * select(1.0 - sw.y, sw.y, o.y == 1);
-          if (abs(t.a - t0.a) < 0.002) { sum += t.rgb * 2.0 * wt; wsum += wt; }
+          if (gsJoin(a0, u32(round(t.a * 255.0)))) { sum += t.rgb * 2.0 * wt; wsum += wt; }
         }
         if (wsum > 1e-4) { albedo = sum / wsum; }
       }
