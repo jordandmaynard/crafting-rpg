@@ -2653,6 +2653,7 @@ function renderWorld() {
     scene.overrideMaterial = normalMat; tallVisible(false); groundHaze.mesh.visible = false; lootFx.visible = false;
     const grassOn = grassMesh.visible, driftOn = driftMesh.visible; grassMesh.visible = driftMesh.visible = false;
     const sprayOn = sprayMesh && sprayMesh.visible; if (sprayMesh) sprayMesh.visible = false;
+    const smokeOn = smokeMesh && smokeMesh.visible; if (smokeMesh) smokeMesh.visible = false;
     renderer.passName = 'normals (Sobel)';
     camera.layers.set(5); renderer.render(scene, camera);
     camera.layers.set(0); renderer.render(scene, camera);
@@ -2662,6 +2663,7 @@ function renderWorld() {
     scene.overrideMaterial = null; tallVisible(true); groundHaze.mesh.visible = groundHaze.on; lootFx.visible = true;
     grassMesh.visible = grassOn; driftMesh.visible = driftOn;
     if (sprayMesh) sprayMesh.visible = sprayOn;
+    if (smokeMesh) smokeMesh.visible = smokeOn;
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
@@ -4542,6 +4544,7 @@ const sprayMat = new GFX.ShaderMaterial({
   transparent: true, depthWrite: false, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
   blendSrc: GFX.OneFactor, blendDst: GFX.OneFactor,
 });
+sprayMat.keepAlpha = true;
 let sprayMesh = null;
 const sprayAt = { x: -1e9, z: -1e9 };
 const SPRAY_R = 36;   // tiles round you whose falls spray
@@ -4573,6 +4576,116 @@ function updateSpray() {
   const S = FALL_SPRAY, U = SPRAY_U;
   U.amount.value = S.amount; U.size.value = S.size; U.speed.value = S.speed; U.color.value.set(S.color);
   if (sprayMesh) sprayMesh.visible = S.amount > 0;
+}
+// ---------- Smoke (T > Smoke) ----------
+// Smoke curls up out of the wastes' vents and the hearths' chimneys as the waterfall spray does: soft round puffs,
+// lit by the sky, the sun through its shadow and the torch, and fogged, each worked out in the vertex shader from
+// its source, its own random seed and the time, so it loops forever with nothing stepped on the CPU. A puff rises,
+// leans off with the wind, swells and thins away. The vents' is sulphur yellow and orange, and glows a little of
+// itself; the hearths' is grey. The sources round you are gathered into one mesh, built again when you've walked
+// a way or a hearth is lit or put out. Unlike the spray it's blended over what's behind it (premultiplied), so it
+// can be darker than the world, and it leaves the target's alpha alone (the outline's grass mark).
+const SMOKE = { amount: 1, size: 1, speed: 1, rise: 1, wind: 0.3, glow: 0.35, ventColor: '#f0b83a', ventColor2: '#e0702a', hearthColor: '#9a96a0' };
+const SMOKE_U = { amount: { value: 1 }, size: { value: 1 }, speed: { value: 1 }, rise: { value: 1 }, wind: { value: 0.3 }, glow: { value: 0.35 },
+  ventA: { value: new GFX.Color(SMOKE.ventColor) }, ventB: { value: new GFX.Color(SMOKE.ventColor2) }, hearthCol: { value: new GFX.Color(SMOKE.hearthColor) } };
+for (const k of ['sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar', 'tRefrD', 'refr']) SMOKE_U[k] = WATER_U[k];
+const SMOKE_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32, @location(2) wpos: vec3f, @location(3) pix: vec3f, @location(4) col: vec3f, @location(5) glow: f32 }
+fn smokeHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
+@vertex fn vs(v: VIn) -> VOut {
+  // sPart: its seed, which source it is (0 a hearth, 1 a vent), how strong, how far it may wander at the foot
+  let vent = v.sPart.y > 0.5;
+  let life = select(2.6, 3.4, vent);
+  let ph = F.camDir.w * U.speed / life + v.sPart.x * 17.0;
+  let cyc = floor(ph); let k = ph - cyc;   // how far through its life, this time round
+  let r = v.sPart.x * 91.7 + cyc * 13.37;
+  let a = smokeHash(r); let b = smokeHash(r + 1.3); let c = smokeHash(r + 2.7); let e = smokeHash(r + 4.1); let g = smokeHash(r + 5.9);
+  let age = k * life;
+  // up at a slowing pace, leaning off with the wind more the higher it goes, and wandering a little
+  let up = (0.45 + a * 0.35) * U.rise * (age - 0.12 * age * age / life);
+  let foot = (vec2f(b, c) - 0.5) * 2.0 * v.sPart.w;
+  let wander = (vec2f(e, g) - 0.5) * 0.35 * age;
+  let lean = vec2f(1.0, 0.35) * U.wind * age * age * 0.35;
+  let at = v.position + vec3f(foot.x + wander.x + lean.x, up + 0.05, foot.y + wander.y + lean.y);
+  let size = mix(0.12, 0.55, sqrt(k)) * select(1.0, 1.25, vent) * U.size;
+  let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
+  let upv = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
+  let w = at + (right * v.corner.x + upv * v.corner.y) * size;
+  var o: VOut;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.uv = v.corner; o.wpos = at; o.pix = w;
+  let fade = smoothstep(0.0, 0.12, k) * (1.0 - smoothstep(0.35, 1.0, k));
+  let fog = 1.0 - sat((viewDepth(at) - U.fogNear) / (U.fogFar - U.fogNear));
+  o.a = fade * select(0.42, 0.5, vent) * U.amount * v.sPart.z * fog;
+  o.col = select(U.hearthCol, mix(U.ventA, U.ventB, smokeHash(r + 7.3) * (0.4 + 0.6 * k)), vent);
+  o.glow = select(0.0, U.glow * (1.0 - k), vent);
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let r2 = dot(i.uv, i.uv);
+  if (r2 > 1.0) { discard; }
+  var m = exp(-r2 * 3.0) * (1.0 - r2);
+  // soft where it meets things behind it (the world's depth, copied before the water drew)
+  if (U.refr > 0.5) {
+    let dims = vec2i(textureDimensions(tRefrD));
+    let zb = textureLoad(tRefrD, clamp(vec2i(i.pos.xy), vec2i(0), dims - 1), 0);
+    let P = F.proj;
+    let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+    let vs = (F.view * vec4f(i.pix, 1.0)).z;
+    m *= smoothstep(0.0, 0.4, vs - vb);
+  }
+  let L = normalize(U.sunDir);
+  let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
+  let light = U.skyCol * 0.9 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
+  let al = sat(m * i.a);
+  return vec4f(i.col * (light + i.glow) * al, al);
+}`;
+const smokeMat = new GFX.ShaderMaterial({
+  uniforms: SMOKE_U, attributes: { sPart: 'vec4f', corner: 'vec2f' }, code: SMOKE_WGSL,
+  transparent: true, depthWrite: false, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+  blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
+});
+smokeMat.keepAlpha = true;
+let smokeMesh = null, smokeKey = '';
+const smokeAt = { x: -1e9, z: -1e9 };
+const SMOKE_R = 36;   // tiles round you whose vents and chimneys smoke
+function buildSmoke() {
+  smokeAt.x = H.x; smokeAt.z = H.z;
+  if (smokeMesh) { scene.remove(smokeMesh); smokeMesh.geometry.dispose(); smokeMesh = null; }
+  const pos = [], part = [], corner = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  let seed = 0;
+  const add = (x, y, z, vent, n, strength, spread) => {
+    for (let k = 0; k < n; k++) {
+      const sd = (++seed * 0.6180339887) % 1;
+      for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, vent, strength, spread); corner.push(cx, cz); }
+    }
+  };
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+  for (let r = Math.max(1, r0 - SMOKE_R); r <= Math.min(N - 2, r0 + SMOKE_R); r++) for (let c = Math.max(1, c0 - SMOKE_R); c <= Math.min(N - 2, c0 + SMOKE_R); c++) {
+    const i = T(c, r);
+    if (OB[i] === O.VENT) add(c + 1, LV[i] * STEP + 0.05, r + 1, 1, 12, 1, 0.3);
+  }
+  for (const h of hearths.values()) {
+    if (Math.abs(h.c - H.x) > SMOKE_R || Math.abs(h.r - H.z) > SMOKE_R) continue;
+    const [sx, sz] = stackAt(h.c, h.r, h.side);
+    add(sx, hearthTop(h.c, h.r, h.side) + 0.05, sz, 0, 9, 1, 0.05);
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('sPart', new GFX.Float32BufferAttribute(part, 4));
+  g.setAttribute('corner', new GFX.Float32BufferAttribute(corner, 2));
+  smokeMesh = new GFX.Mesh(g, smokeMat);
+  smokeMesh.frustumCulled = false; smokeMesh.renderOrder = 11; smokeMesh.layers.set(3);
+  scene.add(smokeMesh);
+}
+function updateSmoke() {
+  const key = [...hearths.values()].map(h => h.c + ',' + h.r + ',' + h.side).join(';');
+  if (key !== smokeKey || Math.hypot(H.x - smokeAt.x, H.z - smokeAt.z) > 8) { smokeKey = key; buildSmoke(); }
+  const S = SMOKE, U = SMOKE_U;
+  for (const k of ['amount', 'size', 'speed', 'rise', 'wind', 'glow']) U[k].value = S[k];
+  U.ventA.value.set(S.ventColor); U.ventB.value.set(S.ventColor2); U.hearthCol.value.set(S.hearthColor);
+  if (smokeMesh) smokeMesh.visible = S.amount > 0;
 }
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
@@ -6974,12 +7087,6 @@ function puff(x, y, z, color = '#c8bca0', n = 8, spread = 0.9) {
     dust.push({ m, vx: Math.cos(a) * spread, vz: Math.sin(a) * spread, vy: 0.6 + Math.random() * 0.6, life: 0 });
   }
 }
-// a slow wisp of smoke: drifts up and spreads for a couple of seconds
-function wisp(x, y, z, color) {
-  const m = new GFX.Mesh(dustGeo, new GFX.MeshBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false }));
-  m.position.set(x, y, z); m.rotation.set(Math.random() * 3, Math.random() * 3, 0); scene.add(m);
-  dust.push({ m, vx: 0.15 + (Math.random() - 0.5) * 0.2, vz: (Math.random() - 0.5) * 0.2, vy: 0.45 + Math.random() * 0.25, life: 0, max: 2.4, grow: 1.6, op: 0.6 });
-}
 // chips of bark or stone flying off a hit
 const chipMats = { wood: flatMat({ color: '#8a5a32' }), stone: flatMat({ color: '#8c8a96' }), copperOre: flatMat({ color: '#d4773e' }), ironOre: flatMat({ color: '#b9bfc9' }) };
 function chips(x, y, z, kind, n = 5) {
@@ -8216,7 +8323,7 @@ function lightHearth(c, r) {
   }
   fire.position.set(c + 0.5, surfaceY(c + 0.5, r + 0.5), r + 0.5);
   scene.add(fire);
-  const h = { c, r, plot: pl.id, fire, smoke: 0, side: -1 };
+  const h = { c, r, plot: pl.id, fire, side: -1 };
   hearths.set(i, h);
   shapeHearth(h);
   pl.claimed = true; pl.hearth = i;
@@ -8251,7 +8358,7 @@ function putOutHearth(i) {
 }
 // flames that flicker, smoke from the chimney, a crackle close by, and warmth that heals
 let crackleT = 0;
-// the wastes breathe: smoke curling up out of the vents near you, and now and then a bubble of lava bursting
+// the wastes breathe: now and then a bubble of lava bursting (the vents' smoke is drawn on the GPU: buildSmoke)
 let ventT = 0;
 function ventSmoke(dt) {
   ventT -= dt;
@@ -8262,7 +8369,7 @@ function ventSmoke(dt) {
   for (let r = Math.max(1, r0 - R); r <= Math.min(N - 2, r0 + R); r++) for (let c = Math.max(1, c0 - R); c <= Math.min(N - 2, c0 + R); c++) {
     const i = T(c, r);
     if (OB[i] === O.VENT) {
-      for (let n = 0; n < 2; n++) if (Math.random() < 0.7) wisp(c + 1 + (Math.random() - 0.5) * 0.7, LV[i] * STEP + 0.05, r + 1 + (Math.random() - 0.5) * 0.7, Math.random() < 0.5 ? '#c8c098' : '#a8a49a');
+      // (their smoke: see buildSmoke)
     } else if (LAVA[i] && !LV[i] && Math.random() < 0.012 * LAVA_FX.spatter) puff(c + Math.random(), WL[i] * STEP - LAVA_DROP, r + Math.random(), Math.random() < 0.5 ? '#ff8a30' : '#ffc040', 2, 0.25);
   }
 }
@@ -8285,8 +8392,7 @@ function updateHearths(dt) {
       const k = m.userData.k, f = 0.75 + 0.25 * Math.sin(time * (11 + k * 3) + k * 1.7) + 0.12 * Math.sin(time * 23 + k);
       m.scale.set(1, f * (k ? 0.8 : 1.25), 1); m.position.y = 0.12 + f * 0.06 * (k ? 0.8 : 1.25);
     }
-    h.smoke -= dt;
-    if (h.smoke < 0 && d < 30) { h.smoke = 0.45 + Math.random() * 0.3; const [sx, sz] = stackAt(h.c, h.r, h.side); puff(sx, hearthTop(h.c, h.r, h.side) + 0.05, sz, '#9a96a0', 1, 0.12); }
+    // (the chimney's smoke: see buildSmoke)
   }
   if (near < HEARTH_REACH && H.alive) {
     if (H.hp < MAX_HP) { H.hp = Math.min(MAX_HP, H.hp + dt * 10); renderHp(); }
@@ -9598,6 +9704,17 @@ const TUNING = [
     [FALL_SPRAY, 'speed', 'Speed', 0.2, 3, 0.05],
     [FALL_SPRAY, 'color', 'Colour', 'color'],
   ]],
+  ['Smoke', [
+    [SMOKE, 'amount', 'Amount (0 off)', 0, 3, 0.05],
+    [SMOKE, 'size', 'Puff size', 0.2, 3, 0.05],
+    [SMOKE, 'speed', 'Speed', 0.2, 3, 0.05],
+    [SMOKE, 'rise', 'How fast it rises', 0.2, 3, 0.05],
+    [SMOKE, 'wind', 'How far the wind leans it', 0, 2, 0.05],
+    [SMOKE, 'glow', 'Vents: glow of its own', 0, 2, 0.05],
+    [SMOKE, 'ventColor', 'Vents: colour', 'color'],
+    [SMOKE, 'ventColor2', 'Vents: second colour', 'color'],
+    [SMOKE, 'hearthColor', 'Hearths: colour', 'color'],
+  ]],
   ['Swamp water', [
     [SWAMP_WATER, 'color', 'Colour', 'color'],
     [SWAMP_WATER, 'clarity', 'Clarity: how deep you can see into it', 0.05, 3, 0.01],
@@ -9828,6 +9945,7 @@ function frame(now) {
   updateClouds(dt);
   updateWater(dt);
   updateSpray();
+  updateSmoke();
   updateTrample(dt);
   updateGrass();
   updateDrift(dt);
@@ -9880,7 +9998,7 @@ window.GAME = {
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
@@ -9929,6 +10047,7 @@ window.GAME = {
   ores: () => { const n = {}; for (let i = 0; i < N * N; i++) { const o = OB[i]; if (o === O.ROCK || o === O.ICEROCK || o === O.SANDROCK || o === O.COPPER || o === O.IRON) n[o] = (n[o] || 0) + 1; } return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), copper: n[O.COPPER] || 0, iron: n[O.IRON] || 0, ids: [O.COPPER, O.IRON] }; },
   findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
   strike: (c, r) => { const i = T(c, r); strikeProp(i, c, r, 1, 0); return OB[i]; },
+  smoke: () => ({ verts: smokeMesh ? smokeMesh.geometry.attributes.position.array.length / 3 : 0, visible: !!(smokeMesh && smokeMesh.visible) }),
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
