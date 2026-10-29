@@ -7838,18 +7838,21 @@ function drawBigMap() {
   if (showPlots && bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // markers and labels stay their own size at any zoom
-  ctx.font = '14px "Press Start 2P", monospace'; ctx.textAlign = 'center';
+  // (labels are sized in screen pixels: k canvas pixels to one on screen; each is ringed with a pixel of black)
+  const k = N / side, label = (t, x, y, ink) => { ctx.strokeText(t, x, y); ctx.fillStyle = ink; ctx.fillText(t, x, y); };
+  ctx.font = `${Math.round(12 * k)}px "Press Start 2P", monospace`; ctx.textAlign = 'center';
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 2 * k; ctx.lineJoin = 'round';
   const boxes = [];
   for (const t of towns) {
     const seen = fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] < 128, [x, z] = worldToBig(t.c, t.r);
     ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8);
     boxes.push([x - 6, z - 6, 12, 12]);
     if (seen) {
-      ctx.fillStyle = '#000'; ctx.fillText(t.name, x + 2, z - 10); ctx.fillStyle = '#efe4c8'; ctx.fillText(t.name, x, z - 12);
-      const w = ctx.measureText(t.name).width + 6; boxes.push([x - w / 2, z - 30, w, 22]);
+      label(t.name, x, z - 8 * k, '#efe4c8');
+      const w = ctx.measureText(t.name).width + 4 * k; boxes.push([x - w / 2, z - 22 * k, w, 18 * k]);
     }
   }
-  drawRegionNames(ctx, boxes);
+  drawRegionNames(ctx, boxes, k, label);
   ctx.fillStyle = '#8de8dc';
   for (const rm of rooms.values()) { const [x, z] = worldToBig(rm.tiles[0][0], rm.tiles[0][1]); ctx.fillRect(x - 3, z - 3, 6, 6); }
   for (const h of hearths.values()) { const [x, z] = worldToBig(h.c + 0.5, h.r + 0.5); ctx.fillStyle = '#000'; ctx.fillRect(x - 7, z - 7, 14, 14); ctx.fillStyle = '#ffa040'; ctx.fillRect(x - 5, z - 5, 10, 10); }
@@ -7865,8 +7868,9 @@ function drawBigMap() {
 // already drawn (town names and markers, other regions' names) and stays on the map; failing that, where it
 // overlaps least. Long names go on two lines.
 const REGION_INK = ['#ece2a4', '#bfe2a2', '#cfdc96', '#cdc6dc', '#e4f2ff', '#f2d29a', '#efe4c8', '#a9dcae', '#ffb488'];
-function drawRegionNames(ctx, boxes) {
-  ctx.font = '9px "Press Start 2P", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+function drawRegionNames(ctx, boxes, k, label) {
+  ctx.font = `${Math.round(10 * k)}px "Press Start 2P", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const lh = 13 * k;
   const overlap = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
   const shown = regions.filter(g => g.found).sort((a, b) => b.n - a.n);
   for (const g of shown) {
@@ -7875,10 +7879,10 @@ function drawRegionNames(ctx, boxes) {
     if (g.name.length > 13 && words.length > 1) {
       // split where the two lines come out most even
       let best = 1, bd = 1e9;
-      for (let k = 1; k < words.length; k++) { const d = Math.abs(words.slice(0, k).join(' ').length - words.slice(k).join(' ').length); if (d < bd) { bd = d; best = k; } }
+      for (let m = 1; m < words.length; m++) { const d = Math.abs(words.slice(0, m).join(' ').length - words.slice(m).join(' ').length); if (d < bd) { bd = d; best = m; } }
       lines = [words.slice(0, best).join(' '), words.slice(best).join(' ')];
     }
-    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 6, h = lines.length * 13 + 4;
+    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 4 * k, h = lines.length * lh + 3 * k;
     let at = null, least = Infinity;
     for (const [sx, sz] of g.spots) {
       const [x, z] = worldToBig(sx, sz), box = [x - w / 2, z - h / 2, w, h];
@@ -7890,10 +7894,8 @@ function drawRegionNames(ctx, boxes) {
     if (!at) continue;
     const [x, z, box] = at;
     boxes.push(box);
-    lines.forEach((l, k) => {
-      const y = z + (k - (lines.length - 1) / 2) * 13;
-      ctx.fillStyle = '#000'; ctx.fillText(l, x + 1, y + 1);
-      ctx.fillStyle = REGION_INK[g.biome]; ctx.fillText(l, x, y);
+    lines.forEach((l, j) => {
+      label(l, x, z + (j - (lines.length - 1) / 2) * lh, REGION_INK[g.biome]);
     });
   }
   ctx.textBaseline = 'alphabetic';
