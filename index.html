@@ -2196,7 +2196,7 @@ scene.fog = new GFX.Fog('#b8c4d8', 1e5, 1e5 + 1);
 renderer.setClearColor('#0b0912', 1);
 // the view (T > Camera): the pixel-true orthographic camera, or a perspective one with a settable field of view
 // zoomIn / zoomOut: how far the wheel, +/- or the d-pad can zoom, as a multiple of the standard view
-const VIEW = { perspective: 1, fov: 15, zoomIn: 2.5, zoomOut: 0.9 };
+const VIEW = { perspective: 1, fov: 20, zoomIn: 2.5, zoomOut: 0.9 };
 const orthoCam = new GFX.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
 const perspCam = new GFX.PerspectiveCamera(VIEW.fov, 1, 1, 400);
 let camera = orthoCam;
@@ -3459,7 +3459,7 @@ function updateTrample(dt) {
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
-const GRASS = { on: 1, density: 16, range: 20, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
+const GRASS = { on: 1, density: 16, range: 22, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
   variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
@@ -8144,7 +8144,7 @@ function castLunge() {
 // stuck for `stuckLife` seconds. Knock-backs are in tiles (a foe's push dies away over an eighth of a second).
 const BOW = { dmg: 10, time: 0.5, speed: 32, range: 20, height: 0.55, knock: 0.2,
   volleyArrows: 5, volleyCone: 45, volleyDmg: 8, volleyKnock: 1, volleyCd: 5,
-  rainArrows: 10, rainRadius: 2, rainDelay: 1, rainDmg: 12, rainKnock: 0.3, rainCd: 8, rainReach: 8, stuckLife: 20 };
+  rainArrows: 10, rainRadius: 2, rainDelay: 1, rainDmg: 12, rainKnock: 0.3, rainCd: 8, rainReach: 8, rainSeek: 0.5, stuckLife: 20 };
 const STUCK_MAX = 150;
 const arrows = [];
 // an arrow, its tip at the origin pointing along +z: shaft, broadhead and fletching, each drawn as one instanced mesh
@@ -8208,18 +8208,33 @@ function updateBow(dt) {
     } else {
       // one straight up out of sight, then the rain over the ring
       arrows.push({ state: 'up', x: H.x, y: H.y + BOW.height + 0.3, z: H.z, vx: 0, vy: 28, vz: 0, life: 0 });
-      const [tx, tz] = b.target, R = BOW.rainRadius;
+      const [tx, tz] = b.target, R = BOW.rainRadius, zone = { x: tx, z: tz, R, claimed: new Set() };
       rainRingT = BOW.rainDelay + 0.35;
       rainRing.position.set(tx, surfH(tx, tz) + 0.06, tz); rainRing.scale.set(R, 1, R);
       for (let k = 0; k < BOW.rainArrows; k++) {
         const r = R * Math.sqrt((k + Math.random()) / BOW.rainArrows), th = Math.random() * Math.PI * 2;
         const x = tx + Math.sin(th) * r, z = tz + Math.cos(th) * r, sl = (Math.random() - 0.5) * 2;
         arrows.push({ state: 'wait', wait: BOW.rainDelay + Math.random() * 0.25, rain: true, x: x - sl * 0.3, y: surfH(x, z) + 9, z: z - sl * 0.15,
-          vx: sl * 0.8, vy: -26, vz: sl * 0.4, flown: 0, range: Infinity, dmg: BOW.rainDmg, knock: BOW.rainKnock, fromX: tx, fromZ: tz, life: 0 });
+          vx: sl * 0.8, vy: -26, vz: sl * 0.4, flown: 0, range: Infinity, dmg: BOW.rainDmg, knock: BOW.rainKnock, fromX: tx, fromZ: tz, life: 0, zone });
       }
     }
   }
   if (b.t >= b.len) H.bow = null;
+}
+// As each arrow of a rain starts down it picks a foe in the ring that no arrow of this rain has yet (so each
+// one in it gets at least one, while there are arrows enough), or once they all have one, another of them
+// `rainSeek` of the time; it comes down over that foe and steers onto it as it falls, as long as the foe stays in
+// the ring (if it leaves, the arrow lands where it last was)
+function rainAim(a) {
+  const z = a.zone, inRing = f => f.hp > 0 && Math.hypot(f.x - z.x, f.z - z.z) <= z.R;
+  const there = foes.filter(inRing);
+  if (!there.length) return;
+  let f = there.find(o => !z.claimed.has(o));
+  if (!f && Math.random() < BOW.rainSeek) f = there[Math.floor(Math.random() * there.length)];
+  if (!f) return;
+  z.claimed.add(f);
+  a.target = f; a.tx = f.x; a.tz = f.z;
+  a.x = f.x + (Math.random() - 0.5) * 0.4; a.z = f.z + (Math.random() - 0.5) * 0.4;
 }
 function shootArrow(dx, dz, dmg, knock) {
   const l = Math.hypot(dx, dz) || 1;
@@ -8285,6 +8300,13 @@ function flyArrow(a, dt) {
 function flyArrowSteps(a, dt) {
   const sp = Math.hypot(a.vx, a.vy, a.vz), steps = Math.max(1, Math.ceil(sp * dt / 0.2)), h = dt / steps;
   for (let k = 0; k < steps; k++) {
+    if (a.target) {
+      // steer onto its foe while it stays in the ring, to reach it by the time it's down to its middle
+      const f = a.target, z = a.zone;
+      if (f.hp > 0 && Math.hypot(f.x - z.x, f.z - z.z) <= z.R) { a.tx = f.x; a.tz = f.z; }
+      const left = Math.max((a.y - (f.y + 0.45)) / Math.max(-a.vy, 1), 0.04);
+      a.vx = clamp((a.tx - a.x) / left, -12, 12); a.vz = clamp((a.tz - a.z) / left, -12, 12);
+    }
     if (a.flown >= a.range && !a.falling) { a.falling = true; a.vx *= 0.3; a.vz *= 0.3; }
     if (a.falling) a.vy -= 30 * h;
     const x0 = a.x, z0 = a.z;
@@ -8318,7 +8340,7 @@ function updateArrows(dt) {
   let stuck = 0;
   for (let i = arrows.length - 1; i >= 0; i--) {
     const a = arrows[i];
-    if (a.state === 'wait') { a.wait -= dt; if (a.wait <= 0) a.state = 'fly'; continue; }
+    if (a.state === 'wait') { a.wait -= dt; if (a.wait <= 0) { a.state = 'fly'; if (a.zone) rainAim(a); } continue; }
     if (a.state === 'up') { a.y += a.vy * dt; a.life += dt; if (a.life > 0.6) arrows.splice(i, 1); continue; }
     if (a.state === 'fly') flyArrow(a, dt);
     else {
@@ -10454,6 +10476,7 @@ const TUNING = [
     [BOW, 'rainKnock', 'Rain knock-back (tiles)', 0, 2, 0.05],
     [BOW, 'rainCd', 'Rain cooldown (seconds)', 0.5, 30, 0.5],
     [BOW, 'rainReach', 'Rain distance with a pad or touch (tiles)', 2, 20, 0.5],
+    [BOW, 'rainSeek', 'Rain: share of the spare arrows that seek a foe too (each foe in the ring gets one first)', 0, 1, 0.05],
     [BOW, 'stuckLife', 'Spent arrows last (seconds)', 1, 120, 1],
   ]],
   ['Tumble', [
@@ -10863,6 +10886,7 @@ window.GAME = {
   arrows: () => { const n = { fly: 0, stuck: 0, foe: 0, wait: 0, up: 0 }; for (const a of arrows) { n[a.state]++; if (a.foe) n.foe++; } return n; },
   bowCast: k => k === 'q' ? castVolley() : k === 'e' ? castRain() : startShot('shot'),
   aimNow: () => [aim.x, aim.z],
+  rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
   aimForce: k => { aimForce = k; },
   aimShown: () => aimMesh.visible,
   inv: open => toggleInv(open),
