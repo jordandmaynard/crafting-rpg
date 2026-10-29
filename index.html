@@ -70,7 +70,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .glyph { display: inline-block; vertical-align: middle; }
 .slot .key svg.glyph { width: auto; height: 13px; }
 .sheet li .glyph { height: 15px; width: auto; }
-#prompt .glyph { height: 18px; width: auto; margin-right: 8px; }
+#prompt .glyph { height: 27px; width: auto; margin-right: 12px; }
 .maprow .glyph { height: 13px; width: auto; }
 body.pad .kb-only, body:not(.pad) .pad-only { display: none !important; }
 body.touch:not(.pad) .kb-only, body:not(.touch) .touch-only, body.pad .touch-only { display: none !important; }
@@ -143,8 +143,9 @@ body.pad canvas { cursor: none; }
 .slot.cat::after { content: ''; position: absolute; top: 3px; right: 4px; border: 4px solid transparent; border-bottom-color: var(--dim); border-top: 0; }
 #modeTag.up { bottom: calc(env(safe-area-inset-bottom, 0px) + 170px); }
 #modeTag { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 92px); transform: translateX(-50%); font-family: var(--display); font-size: 10px; color: var(--void); background: var(--gold); border: 3px solid #ffe08a; box-shadow: 3px 3px 0 #000; padding: 6px 10px; pointer-events: none; }
-#prompt { position: fixed; transform: translate(-50%, -50%); white-space: nowrap; font-family: var(--display); font-size: 10px; color: var(--bone); pointer-events: none; }
-#prompt b { color: var(--void); background: var(--bone); padding: 3px 6px; margin-right: 8px; font-weight: normal; }
+#prompt { position: fixed; transform: translate(-50%, -50%); white-space: nowrap; font-family: var(--display); font-size: 15px; color: var(--bone); pointer-events: none;
+  text-shadow: 1px 0 #000, -1px 0 #000, 0 1px #000, 0 -1px #000, 1px 1px #000, -1px 1px #000, 1px -1px #000, -1px -1px #000; }
+#prompt b { color: var(--void); background: var(--bone); padding: 4px 9px; margin-right: 12px; font-weight: normal; text-shadow: none; outline: 1px solid #000; }
 
 #toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 84px); transform: translateX(-50%); font-family: var(--display); font-size: 10px; line-height: 1.6; color: var(--bone); background: var(--panel); border: 3px solid var(--blood); box-shadow: 4px 4px 0 #000; padding: 10px 14px; max-width: min(440px, calc(100vw - 32px)); width: max-content; box-sizing: border-box; text-align: center; pointer-events: none; }
 #toast.good { border-color: var(--gold); color: var(--gold); }
@@ -3266,9 +3267,39 @@ const PLANT_U = {
 const plantMat = new GFX.ShaderMaterial({ uniforms: PLANT_U, vertexColors: true, side: GFX.DoubleSide, attributes: { plant: 'vec4f' }, lit: true,
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+// the trample map's push at a point (none off the map)
+fn pushAt(p: vec2f) -> vec2f {
+  if (U.trV.w < 0.5) { return vec2f(0.0); }
+  let uv = (p - U.trV.xy) / U.trV.z;
+  if (any(uv <= vec2f(0.0)) || any(uv >= vec2f(1.0))) { return vec2f(0.0); }
+  return textureSampleLevel(tTrample, tTrampleS, uv, 0.0).xy;
+}
 @vertex fn vs(v: VIn) -> VOut {
   let w0 = (O.model * vec4f(v.position, 1.0)).xyz;
   let root = v.plant.xyz;
+  // a fern's frond (flex < 0): pressed down about the fern's middle by the push over the frond itself, and swept
+  // aside by its push across the frond (and the wind's)
+  if (v.plant.w < 0.0) {
+    let rel = w0 - root;
+    let rl = length(rel.xz);
+    var w = w0;
+    if (rl > 1e-4) {
+      let flex = -v.plant.w;
+      let dir = rel.xz / rl;
+      let side = vec2f(-dir.y, dir.x);
+      let pb = pushAt(root.xz + dir * 0.35) * U.bend;
+      let fph = U.windV.w - dot(root.xz, U.windV.xy) * 0.6 + sin(root.x * 1.7 + root.z * 2.3) * 0.8;
+      let fgust = 0.35 + 0.65 * (sin(fph) * 0.6 + sin(fph * 2.3 + 1.7) * 0.4);
+      let down = min(length(pb) * flex, 0.7);
+      let yaw = clamp((dot(pb, side) + dot(U.windV.xy, side) * U.windV.z * fgust) * flex, -0.8, 0.8);
+      let k = vec3f(dir.y, 0.0, -dir.x);
+      let cd = cos(down); let sd = sin(down);
+      let p1 = rel * cd + cross(k, rel) * sd + k * dot(k, rel) * (1.0 - cd);
+      let cy = cos(yaw); let sy = sin(yaw);
+      w = root + vec3f(p1.x * cy - p1.z * sy, p1.y, p1.x * sy + p1.z * cy);
+    }
+    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+  }
   var push = vec2f(0.0);
   if (U.trV.w > 0.5) {
     let uv = (root.xz - U.trV.xy) / U.trV.z;
@@ -3341,7 +3372,7 @@ function updateTrample(dt) {
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
-const GRASS = { on: 1, density: 16, range: 23, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.37, width: 3, lean: 0.8, flowerSize: 1.15, flowerHeight: 1.15, reedHeight: 1.2,
+const GRASS = { on: 1, density: 16, range: 23, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.37, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 0.65, reedHeight: 1.2,
   variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
@@ -4312,7 +4343,7 @@ function updateWake(dt) {
 // Bone Road's props, a size up so they stand right against a human adventurer
 const TS = 1.3;
 // oaks', birches', pines' (frost pines too) and ferns' sizes on top of that (T > Trees)
-const TREE_SIZE = { oak: 1, birch: 1, pine: 1, fern: 1 };
+const TREE_SIZE = { oak: 1.5, birch: 1.5, pine: 1.6, fern: 2.35};
 function pine(x, z, k, snow = false) {
   const P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P, g = shade(CC(snow ? '#2f5048' : '#2f5a34'), 0.85 + k * 0.3);
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
@@ -4522,7 +4553,8 @@ function sequoia(x, z, k) {
   }
 }
 // a fern: fronds round its foot, each rising from it then arching over and down, narrowing as it goes, in
-// FERN_SEGS pieces
+// FERN_SEGS pieces. Each frond bends on its own (a negative flex, see plantMat): pressed down and swept aside
+// about the fern's middle by whatever walks over it, while the fronds away from it stay put.
 const FERN_SEGS = [[0.34, 0.6, 1], [0.32, 0.22, 0.78], [0.24, -0.2, 0.55], [0.16, -0.62, 0.32]];   // share of the length, rise (radians), width
 function fern(x, z, k) {
   const y = groundAt(x, z), g = shade(CC('#4a7a2e'), 0.82 + k * 0.3), n = 6 + Math.floor(k * 3), S = TREE_SIZE.fern;
@@ -4532,7 +4564,7 @@ function fern(x, z, k) {
     let px = x + ca * 0.02 * S, py = y + 0.02 * S, pz = z + sa * 0.02 * S;
     for (const [f, rise, wd] of FERN_SEGS) {
       const len = l * f, e = rise + droop, dx = Math.cos(e) * len, dy = Math.sin(e) * len;
-      stem(G.box, col, px + ca * dx / 2, py + dy / 2, pz + sa * dx / 2, { sx: len * 1.08, sy: 0.02 * S, sz: 0.11 * wd * S, ry: -a, rz: e }, x, y, z, 0.6);
+      stem(G.box, col, px + ca * dx / 2, py + dy / 2, pz + sa * dx / 2, { sx: len * 1.08, sy: 0.02 * S, sz: 0.11 * wd * S, ry: -a, rz: e }, x, y, z, -0.6);
       px += ca * dx; py += dy; pz += sa * dx;
     }
   }
