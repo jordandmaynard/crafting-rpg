@@ -415,6 +415,8 @@ const OB = new Uint8Array(N * N);   // scenery object
 const WT = new Uint8Array(N * N);   // 1 = shallow bog water over the ground, 2 = lake, 3 = river
 const TN = new Uint8Array(N * N);   // town number + 1
 const FL = new Uint8Array(N * N);   // built floor
+const FARM = new Uint8Array(N * N); // 1 a farm's ground: its house, yard and fields (see placeFarms)
+const FIELD = new Uint8Array(N * N); // a wheat field on tilled earth: 1 its rows running east-west, 2 north-south
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
 const WW = new Uint8Array(N * N);   // built piece on the tile's west edge
 const PATH = new Uint8Array(N * N); // road
@@ -830,6 +832,7 @@ async function generate(progress) {
   for (const w of waystones) OB[T(w.c, w.r)] = O.SHRINE;
   placeVents();
   fenceGraveyards();
+  placeFarms();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1343,7 +1346,7 @@ function deepenSea() {
 const PLOT = new Uint16Array(N * N);
 const plots = [null];   // id -> { id, n, c, r, x0, z0, x1, z1, edge, claimed, hearth }
 const PLOT_GRID = 42, PLOT_R = 25, PLOT_MIN = 600, OFF_LEVEL = 4;
-const plotGround = i => LV[i] > 0 && !BR[i] && !PATH[i] && !LAVA[i] && BI[i] !== TOWN && BI[i] !== DEEP && OB[i] !== O.SHRINE;
+const plotGround = i => LV[i] > 0 && !BR[i] && !PATH[i] && !LAVA[i] && BI[i] !== TOWN && BI[i] !== DEEP && OB[i] !== O.SHRINE && !FARM[i];
 function layPlots(rand) {
   const dist = new Float32Array(N * N).fill(1e9), own = new Int32Array(N * N), seeds = [null];
   const hk = new Float32Array(1 << 21), hv = new Int32Array(1 << 21);
@@ -1626,11 +1629,106 @@ function fenceGraveyards() {
     }
   }
 }
-// once the scene exists, the town houses get their doors and roofs, and the town gates stand open
+// Meadow farms, its points of interest: one for every so much meadow (none in a small one, up to three). A farm is
+// a farmhouse of timber walls on a plank floor, about 4 x 5 tiles with a corner out of it, and its door facing the
+// gate of the wooden fence round its yard; beside the yard lie two fields of wheat on tilled earth (FIELD), each
+// about 5 x 5, its rows one way or the other. It all stands on one level of open meadow, cleared of what grew
+// there, and nobody can claim it as a plot or take it down.
+const farms = [];
+const FARM_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+const FARM_ROOF = '#8a6a3a';
+function placeFarms() {
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  const dirTo = (c, r, nc, nr) => { for (let d = 0; d < 4; d++) if (c + DC[d] === nc && r + DR[d] === nr) return d; return -1; };
+  const seen = new Uint8Array(N * N);
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (BI[s0] !== MEADOW || !LV[s0] || seen[s0]) continue;
+    const patch = [s0];
+    seen[s0] = 1;
+    for (let k = 0; k < patch.length; k++) for (const dd of DI) {
+      const n = patch[k] + dd, c = n % N;
+      if (n < 0 || n >= N * N || Math.abs(c - patch[k] % N) > 1 || seen[n] || BI[n] !== MEADOW || !LV[n]) continue;
+      seen[n] = 1; patch.push(n);
+    }
+    const want = FARM_COUNT(patch.length);
+    for (let k = 0, tries = 0; k < want && tries < 300; tries++) {
+      const i0 = patch[Math.floor(hs(s0 % N + tries, k, 151) * patch.length)], c0 = i0 % N, r0 = (i0 - c0) / N;
+      const h = q => hs(c0, r0, 152 + q);
+      // the layout across (a) and deep (b) from the yard's corner, turned and mirrored one of 8 ways
+      const swap = h(0) < 0.5, fa = h(1) < 0.5 ? 1 : -1, fb = h(2) < 0.5 ? 1 : -1;
+      const at = (a, b) => swap ? [c0 + fb * b, r0 + fa * a] : [c0 + fa * a, r0 + fb * b];
+      const wA = 4 + Math.floor(h(3) * 3), hA = 4 + Math.floor(h(4) * 3), wB = 4 + Math.floor(h(5) * 3), hB = 4 + Math.floor(h(6) * 3);
+      const gap = 1 + (h(7) < 0.5 ? 1 : 0), A1 = 7 + gap, B1 = Math.max(8, hA + 1 + hB);
+      // the whole of it and a tile round it: on the map, one level, flat, open meadow
+      let L = LV[T(...at(0, 0))], ok = L > 0;
+      for (let b = -1; b <= B1 && ok; b++) for (let a = -1; a <= A1 + Math.max(wA, wB) && ok; a++) {
+        const [c, r] = at(a, b);
+        if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) { ok = false; break; }
+        const i = T(c, r);
+        if (LV[i] !== L || SH[i] || WT[i] || LAVA[i] || PATH[i] || FL[i] || CY[i] || BR[i] || TN[i] || FARM[i] || WN[i] || WW[i] || OBJ[OB[i]].tile || OB[i] === O.SHRINE) ok = false;
+        else if (BI[i] !== MEADOW && BI[i] !== FOREST) ok = false;
+      }
+      if (!ok) continue;
+      // (well apart from the other farms and the spawn)
+      const [mc, mr] = at(Math.floor(A1 / 2) + 3, B1 >> 1);
+      if (farms.some(f => Math.hypot(f.c - mc, f.r - mr) < 60) || Math.hypot(mc - towns[0].c, mr - towns[0].r) < 40) continue;
+      k++;
+      for (let b = -1; b <= B1; b++) for (let a = -1; a <= A1 + Math.max(wA, wB); a++) { const i = T(...at(a, b)); OB[i] = 0; FARM[i] = 1; }
+      // the yard (7 x 8) and the house in it, a corner of its back left out
+      const yard = new Set(), house = [], hset = new Set();
+      for (let b = 0; b < 8; b++) for (let a = 0; a < 7; a++) yard.add(T(...at(a, b)));
+      const notch = h(8) < 0.5 ? 1 : 4, notchB = h(9) < 0.5 ? 2 : 1;
+      for (let b = 1; b <= 5; b++) for (let a = 1; a <= 4; a++) {
+        if (a === notch && b <= notchB) continue;
+        const [c, r] = at(a, b);
+        house.push([c, r]); hset.add(T(c, r));
+      }
+      const doorA = h(10) < 0.5 ? 2 : 3, [dc, dr] = at(doorA, 5), [oc, or] = at(doorA, 6), doorD = dirTo(dc, dr, oc, or);
+      const [gc, gr] = at(3, 7), [goc, gor] = at(3, 8), gateD = dirTo(gc, gr, goc, gor);
+      const f = { c: mc, r: mr, house, door: null, gate: null, fields: [] };
+      for (const [c, r] of house) {
+        const i = T(c, r);
+        FL[i] = 1; piece(c, r);
+        for (let d = 0; d < 4; d++) {
+          if (hset.has(T(c + DC[d], r + DR[d]))) continue;
+          const [ec, er, ew] = edgeOf(c, r, d), door = c === dc && r === dr && d === doorD;
+          (ew ? WW : WN)[T(ec, er)] = door ? KIND_VAL.door : KIND_VAL.wall;
+          piece(ec, er);
+          if (door) f.door = [ec, er, ew];
+        }
+      }
+      for (const i of yard) {
+        const c = i % N, r = (i - c) / N;
+        for (let d = 0; d < 4; d++) {
+          if (yard.has(i + DI[d])) continue;
+          const [ec, er, ew] = edgeOf(c, r, d), gate = c === gc && r === gr && d === gateD;
+          (ew ? WW : WN)[T(ec, er)] = gate ? KIND_VAL.gate : KIND_VAL.fence;
+          piece(ec, er);
+          if (gate) f.gate = [ec, er, ew];
+        }
+      }
+      // the fields, beside the yard, one behind the other
+      for (const [fa0, fb0, w, hh, q] of [[A1, 0, wA, hA, 11], [A1, hA + 1, wB, hB, 12]]) {
+        // (rows along a or b, as the world has it once turned)
+        const alongA = h(q) < 0.5, dir = alongA !== swap ? 1 : 2;
+        const tiles = [];
+        for (let b = fb0; b < fb0 + hh; b++) for (let a = fa0; a < fa0 + w; a++) { const [c, r] = at(a, b); FIELD[T(c, r)] = dir; tiles.push([c, r]); }
+        f.fields.push({ dir, tiles });
+      }
+      farms.push(f);
+    }
+  }
+}
+// once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
     for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
+  }
+  for (const f of farms) {
+    if (f.door) makeDoor(...f.door);
+    if (f.gate) makeDoor(...f.gate, 'gate');
+    makeRoom(f.house, FARM_ROOF);
   }
   settleBuildings();
 }
@@ -3116,9 +3214,11 @@ const BOG_BED = 0.3, BOG_SURF = 0.06;
 const VOID_Y = -3;
 
 // ---------- Ground chunks ----------
+const TILLED = C('#4e3420');
 function groundColor(c, r, i, j) {
   const t = T(c, r);
   if (WT[t] === 1) return shade(BOG_MUD, 0.85 + hs(c, r, i * 2 + j) * 0.2);   // mud under swamp water
+  if (FIELD[t]) return shade(TILLED, 0.9 + hs(c, r, i * 2 + j) * 0.12);   // a field's tilled earth (its ridges: furrows)
   let b = BI[t];
   // dither into the neighbouring biome near a border, as Bone Road does
   if (hs(c, r, i * 2 + j + 3) > 0.55) {
@@ -3659,7 +3759,8 @@ function updateTrample(dt) {
 const GRASS = { on: 1, density: 16, range: 22, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
   variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
-// 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard
+// 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard; 8 and 9 a
+// field's wheat, its rows east-west or north-south (see Wheat below)
 const GRASS_KIND = { [MEADOW]: 1, [FOREST]: 2, [TOWN]: 3, [SWAMP]: 4, [DEEP]: 6, [GRAVE]: 7 };
 const grassTex = new GFX.DataTexture(new Uint8Array(N * N * 4), N, N);
 grassTex.regions = [];
@@ -3688,6 +3789,7 @@ function grassChunk(cx, cz) {
     const i = T(c, r), b = BI[i];
     let kind = 0, mask = 0, y = 0;
     if (WT[i] === 1 && LV[i] && !BR[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; }
+    else if (FIELD[i]) { if (LV[i] && !SH[i]) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
     else if (GRASS_KIND[b] && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || townCell(c, r) === 'yard')) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
@@ -3699,9 +3801,9 @@ function grassChunk(cx, cz) {
       }
       if (mask) kind = GRASS_KIND[b];
     }
-    // (a: the tile's ramp shape, SH, so the shader can lift each tuft to the slope; 0 flat)
+    // (a: the tile's ramp shape, SH, so the shader can lift each tuft to the slope; 0 flat. Wheat's how grown it is)
     const e = clamp(Math.round((y + 16) * 1024), 0, 65535), o = i * 4;
-    d[o] = kind ? mask | kind << 4 : 0; d[o + 1] = e >> 8; d[o + 2] = e & 255; d[o + 3] = kind && kind !== 5 ? SH[i] : 0;
+    d[o] = kind ? mask | kind << 4 : 0; d[o + 1] = e >> 8; d[o + 2] = e & 255; d[o + 3] = kind >= 8 ? Math.round(wheatGrown(i) * 255) : kind && kind !== 5 ? SH[i] : 0;
   }
   grassTex.regions.push([c0, r0, CH, CH]);
   grassTex.needsUpdate = true;
@@ -3716,6 +3818,8 @@ const GRASS_U = {
   look: { value: { x: 0.12, y: 0.5, z: 1, w: 0.55 } },// shade variation, how much they're lit like the ground, flower blossom size, reed height
   share: { value: { x: 1, y: 0.15, z: 1, w: 1 } },    // how much grass, flowers, reeds; flowers' height
   cMeadow: { value: C(GRASS.meadowColor) }, cForest: { value: C(GRASS.forestColor) }, cSwamp: { value: C(GRASS.swampColor) }, cReed: { value: C(GRASS.reedColor) },
+  wheat: { value: { x: 0.7, y: 0.12, z: 1, w: 0 } },  // wheat's height, how tall cut wheat stands (share), how thick it grows
+  cWheatY: { value: C('#6aa32f') }, cWheatR: { value: C('#d8b450') }, cWheatE: { value: C('#e8c068') },   // young, ripe, its ears
 };
 const fl = k => `vec3f(${FLOWER[k].r.toFixed(3)}, ${FLOWER[k].g.toFixed(3)}, ${FLOWER[k].b.toFixed(3)})`;
 const grassMat = new GFX.ShaderMaterial({ uniforms: GRASS_U, side: GFX.DoubleSide, lit: true,
@@ -3739,6 +3843,13 @@ fn bladeOf(h: u32, b: u32, variant: u32) -> Blade {
     if (b == 0u) { return Blade(vec2f(0.0), d * H * 0.06 * lean, H * (0.85 + 0.3 * gRand(hb, 2u)) * U.share.w, W * 0.6); }
     let lh = H * (0.3 + 0.15 * gRand(hb, 2u));
     return Blade(d * 0.012, d * lh * 0.9 * lean, lh, W * 1.4);
+  }
+  if (variant == 3u) {
+    // wheat: a stalk standing nearly straight up (its ear at the top, see the head), and leaves lower down
+    let WH = U.wheat.x;
+    if (b == 0u) { return Blade(vec2f(0.0), d * WH * 0.05 * lean, WH * (0.88 + 0.24 * gRand(hb, 2u)), W * 0.55); }
+    let lh = WH * (0.4 + 0.25 * gRand(hb, 2u));
+    return Blade(d * 0.012, d * lh * 0.45 * lean, lh, W * 1.1);
   }
   if (variant == 2u) {
     let rh = U.look.w * (0.65 + 0.45 * gRand(hb, 2u));
@@ -3767,21 +3878,30 @@ fn grassColor(kind: u32) -> vec3f {
   if (any(tile < vec2i(0)) || any(tile >= vec2i(${N}))) { return o; }
   let t = vec4u(round(textureLoad(tGrass, tile, 0) * 255.0));
   let kind = t.r >> 4u;
-  if (kind == 0u || kind > 7u) { return o; }
+  if (kind == 0u || kind > 9u) { return o; }
+  let wheat = kind >= 8u;
   // how thick each ground grows them, and how much of each variant (grass, flowers, reeds) it has
-  var kd = array<f32, 8>(0.0, 1.0, 0.55, 0.7, 0.6, 0.45, 0.3, 0.25);
-  var km = array<vec3f, 8>(vec3f(0.0), vec3f(1.0, 1.0, 0.0), vec3f(1.0, 0.25, 0.0), vec3f(1.0, 0.8, 0.0), vec3f(1.0, 0.0, 0.7), vec3f(0.0, 0.0, 1.0), vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.0, 0.0));
+  var kd = array<f32, 10>(0.0, 1.0, 0.55, 0.7, 0.6, 0.45, 0.3, 0.25, 1.0, 1.0);
+  var km = array<vec3f, 10>(vec3f(0.0), vec3f(1.0, 1.0, 0.0), vec3f(1.0, 0.25, 0.0), vec3f(1.0, 0.8, 0.0), vec3f(1.0, 0.0, 0.7), vec3f(0.0, 0.0, 1.0), vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.0, 0.0));
   let h = gHash((u32(tile.x) * 73856093u) ^ (u32(tile.y) * 19349663u) ^ (slot * 83492791u));
-  let dens = U.tuft.x * kd[kind] * select(1.0, U.at.w, kind == 5u);
+  let dens = select(U.tuft.x * kd[kind] * select(1.0, U.at.w, kind == 5u), U.tuft.x * U.wheat.z, wheat);
   if (gRand(h, 0u) >= clamp(dens - f32(slot), 0.0, 1.0)) { return o; }
-  // where on the tile (in a pool, away from its banks), and only on its open quarters
+  // where on the tile (in a pool, away from its banks), and only on its open quarters; wheat in rows on the
+  // field's four ridges (furrows), the first slots one a row
   let spread = select(0.84, 0.5, kind == 5u);
-  let uv = vec2f(gRand(h, 1u), gRand(h, 2u)) * spread + (1.0 - spread) * 0.5;
+  var uv = vec2f(gRand(h, 1u), gRand(h, 2u)) * spread + (1.0 - spread) * 0.5;
+  if (wheat) {
+    let along = (f32(slot >> 2u) + 0.5 + (gRand(h, 1u) - 0.5) * 0.6) / 4.0;
+    let across = (f32(slot & 3u) + 0.5) / 4.0 + (gRand(h, 2u) - 0.5) * 0.03;
+    uv = select(vec2f(across, along), vec2f(along, across), kind == 8u);
+  }
   let q = u32(uv.x >= 0.5) + 2u * u32(uv.y >= 0.5);
   if (((t.r >> q) & 1u) == 0u) { return o; }
-  // (on a ramp, lifted to its slope there: LIFT's corners nw, ne, se, sw, a level each)
+  // (on a ramp, lifted to its slope there: LIFT's corners nw, ne, se, sw, a level each; fields are flat, and
+  // their a is how grown the wheat is)
   var lift = array<vec4f, ${LIFT.length}>(${LIFT.map(l => `vec4f(${l.map(v => v.toFixed(2)).join(', ')})`).join(', ')});
-  let lc = lift[min(t.a, ${LIFT.length - 1}u)];
+  let lc = lift[select(min(t.a, ${LIFT.length - 1}u), 0u, wheat)];
+  let grown = select(1.0, f32(t.a) / 255.0, wheat);
   let rise = (lc.x * (1.0 - uv.x) + lc.y * uv.x) * (1.0 - uv.y) + (lc.w * (1.0 - uv.x) + lc.z * uv.x) * uv.y;
   let foot = vec3f(f32(tile.x) + uv.x, f32(t.g * 256u + t.b) / 1024.0 - 16.0 + rise * ${STEP.toFixed(6)}, f32(tile.y) + uv.y);
   let fade = 1.0 - smoothstep(0.8 * U.win.w, U.win.w, length(foot.xz - U.at.xy));
@@ -3790,15 +3910,18 @@ fn grassColor(kind: u32) -> vec3f {
   let tot = wts.x + wts.y + wts.z;
   if (tot <= 0.0) { return o; }
   let pick = gRand(h, 3u) * tot;
-  let variant = select(select(2u, 1u, pick < wts.x + wts.y), 0u, pick < wts.x);
-  let grassC = grassColor(kind) * (1.0 + U.look.x * (gRand(h, 5u) * 2.0 - 1.0));
-  // cut by your blade: down to a stub (see cutGrass), growing back
+  let variant = select(select(select(2u, 1u, pick < wts.x + wts.y), 0u, pick < wts.x), 3u, wheat);
+  // (wheat green as it grows, turning gold as it ripens)
+  let baseC = select(grassColor(kind), mix(U.cWheatY, U.cWheatR, smoothstep(0.55, 1.0, grown)), wheat);
+  let grassC = baseC * (1.0 + U.look.x * (gRand(h, 5u) * 2.0 - 1.0));
+  // cut by your blade: down to a stub (see cutGrass), growing back; wheat is cut a tile at a time (reapWheat),
+  // standing as tall as it's grown back
   var cut = 0.0;
-  if (U.cutV.w > 0.5) {
+  if (U.cutV.w > 0.5 && !wheat) {
     let cuv = (foot.xz - U.cutV.xy) / U.cutV.z;
     if (all(cuv > vec2f(0.0)) && all(cuv < vec2f(1.0))) { cut = clamp(textureSampleLevel(tCut, tCutS, cuv, 0.0).x, 0.0, 1.0); }
   }
-  let hs = mix(1.0, U.cutS.x, cut);
+  let hs = select(mix(1.0, U.cutS.x, cut), mix(U.wheat.y, 1.0, min(1.0, grown * 1.25)), wheat);
   var p = vec3f(0.0);
   var col = vec3f(0.0);
   if (vi < 36u) {
@@ -3823,6 +3946,12 @@ fn grassColor(kind: u32) -> vec3f {
       ctr = vec3f(s.off.x + s.tip.x, s.h, s.off.y + s.tip.y); rad = 0.045 * fs; top = 0.03 * fs; bot = 0.02 * fs;
       var fc = array<vec3f, 4>(${fl(0)}, ${fl(1)}, ${fl(2)}, ${fl(3)});
       c = fc[u32(gRand(h, 7u) * 3.999)]; lit = vec2f(0.85, 1.1);
+    } else if (variant == 3u) {
+      // the ear, at the stalk's top, filling out as it ripens
+      let s = bladeOf(h, 0u, 3u);
+      let ear = smoothstep(0.45, 0.85, grown) * U.tuft.z;
+      ctr = vec3f(s.off.x + s.tip.x, s.h, s.off.y + s.tip.y); rad = 0.026 * ear; top = 0.1 * ear; bot = 0.05 * ear;
+      c = mix(U.cWheatY, U.cWheatE, smoothstep(0.6, 1.0, grown)) * (1.0 + U.look.x * (gRand(h, 5u) * 2.0 - 1.0)); lit = vec2f(0.8, 1.15);
     } else if (variant == 2u) {
       let s = bladeOf(h, 0u, 2u);
       ctr = vec3f(s.off.x + s.tip.x * 0.8, s.h * 0.8, s.off.y + s.tip.y * 0.8); rad = 0.032; top = 0.07; bot = 0.07;
@@ -3855,6 +3984,7 @@ fn grassColor(kind: u32) -> vec3f {
   let bend = push * U.bend + U.windV.xy * U.windV.z * gust;
   var flex = 1.0;
   if (variant == 2u) { flex = 0.7; }
+  if (variant == 3u) { flex = 0.8; }
   let a = min(length(bend) * flex, 1.45);
   var w = w0;
   if (a > 1e-4) {
@@ -3894,6 +4024,8 @@ function updateGrass() {
   Object.assign(u.look.value, { x: g.variation, y: g.soft, z: g.flowerSize, w: g.reedHeight });
   Object.assign(u.share.value, { x: g.grass, y: g.flowers, z: g.reeds, w: g.flowerHeight });
   u.cMeadow.value.set(g.meadowColor); u.cForest.value.set(g.forestColor); u.cSwamp.value.set(g.swampColor); u.cReed.value.set(g.reedColor);
+  Object.assign(u.wheat.value, { x: WHEAT.height, y: WHEAT.stub, z: WHEAT.density });
+  u.cWheatY.value.set(WHEAT.youngColor); u.cWheatR.value.set(WHEAT.ripeColor); u.cWheatE.value.set(WHEAT.earColor);
 }
 
 // Your blade cuts the grass it passes through: a swing its arc in front of you, the whirlwind a ring round you,
@@ -3914,11 +4046,13 @@ function grassColorAt(x, z) {
   if (c < 0 || r < 0 || c >= N || r >= N) return null;
   const v = grassTex.image.data[T(c, r) * 4], kind = v >> 4, q = (x - c >= 0.5 ? 1 : 0) + (z - r >= 0.5 ? 2 : 0);
   if (!kind || !(v >> q & 1)) return null;
+  if (kind >= 8) return WHEAT.ripeColor;
   return kind === 2 || kind === 6 ? GRASS.forestColor : kind === 4 || kind === 5 || kind === 7 ? GRASS.swampColor : GRASS.meadowColor;
 }
 // cut the grass within r of (x, z); fling: which way the bits fly (from where the blade came)
 function cutGrass(x, z, r, fx, fz) {
   if (GRASS.on < 0.5 || GRASS.cut < 0.5) return;
+  reapWheat(x, z, r);
   cutQueue.push({ x, z, radius: r, strength: 1 });
   // (fresh unless an earlier stroke cut here; this one's other cuts don't count)
   const fresh = !cutLog.some(e => e.t < time && time - e.t < GRASS.regrow * 0.5 && Math.hypot(e.x - x, e.z - z) < e.r * 0.7);
@@ -3949,6 +4083,56 @@ function cutArc(range, arc, face) {
     const a = face + (i / (k - 1) - 0.5) * arc, sx = Math.sin(a), sz = Math.cos(a);
     cutGrass(H.x + sx * d, H.z + sz * d, range * 0.32, sx, sz);
   }
+}
+// ---------- Wheat (T > Wheat) ----------
+// The farms' fields grow wheat (grass kinds 8 and 9, drawn with the grass). Whatever cuts grass reaps it, a tile at
+// a time: each ripe tile the cut reaches gives a sheaf of wheat and is cut down to stubble, which grows back (green,
+// turning gold) over WHEAT.regrow seconds before it can be reaped again. How grown each tile is goes up to the GPU
+// in grassTex's a.
+const WHEAT = { height: 0.7, stub: 0.12, density: 1, regrow: 90, yield: 1, youngColor: '#6aa32f', ripeColor: '#d8b450', earColor: '#e8c068' };
+const wheatCut = new Map();   // a field tile cut and not yet grown back: when it was cut
+const wheatDirty = new Set();
+let wheatGot = 0, wheatT = 0;
+function wheatGrown(i) {
+  const t = wheatCut.get(i);
+  return t === undefined ? 1 : clamp((time - t) / WHEAT.regrow, 0, 1);
+}
+// reap the ripe wheat within r of (x, z): the tiles whose middle half the circle reaches
+function reapWheat(x, z, r) {
+  for (let rr = Math.floor(z - r); rr <= Math.floor(z + r); rr++) for (let cc = Math.floor(x - r); cc <= Math.floor(x + r); cc++) {
+    if (cc < 0 || rr < 0 || cc >= N || rr >= N) continue;
+    const i = T(cc, rr);
+    if (!FIELD[i] || wheatCut.has(i)) continue;
+    const dx = Math.max(cc + 0.25 - x, 0, x - cc - 0.75), dz = Math.max(rr + 0.25 - z, 0, z - rr - 0.75);
+    if (dx * dx + dz * dz > r * r) continue;
+    wheatCut.set(i, time); wheatDirty.add(i);
+    wheatGot += WHEAT.yield;
+  }
+}
+function updateWheat(dt) {
+  if (wheatGot) {
+    const lost = addItem('wheat', wheatGot);
+    if (lost < wheatGot) floatText('+' + (wheatGot - lost) + ' WHEAT', H.x, H.y + 1.3, H.z, WHEAT.earColor);
+    if (lost) dropLoot('wheat', lost, H.x, H.z);
+    wheatGot = 0;
+  }
+  // (the growing tiles go up a few times a second; grown back, they're ripe again)
+  if ((wheatT -= dt) <= 0) {
+    wheatT = 0.25;
+    for (const [i, t] of wheatCut) { wheatDirty.add(i); if (time - t >= WHEAT.regrow) wheatCut.delete(i); }
+  }
+  if (!wheatDirty.size) return;
+  const d = grassTex.image.data, box = new Map();
+  for (const i of wheatDirty) {
+    if (d[i * 4] >> 4 < 8) continue;   // (its chunk isn't built: grassChunk sets it when it is)
+    d[i * 4 + 3] = Math.round(wheatGrown(i) * 255);
+    const c = i % N, r = (i - c) / N, k = Math.floor(r / CH) * NC + Math.floor(c / CH), b = box.get(k);
+    if (b) { b[0] = Math.min(b[0], c); b[1] = Math.min(b[1], r); b[2] = Math.max(b[2], c); b[3] = Math.max(b[3], r); }
+    else box.set(k, [c, r, c, r]);
+  }
+  wheatDirty.clear();
+  for (const [c0, r0, c1, r1] of box.values()) grassTex.regions.push([c0, r0, c1 - c0 + 1, r1 - r0 + 1]);
+  if (box.size) grassTex.needsUpdate = true;
 }
 function updateCuts(dt) {
   const u = GRASS_U.cutV.value;
@@ -6402,6 +6586,25 @@ function objRows(cx, cz, ra, rb) {
     if (o && !detached.has(i)) drawObject(o, c, r);
     if (BR[i]) bridgeDeck(c, r, i);
     else if (RIM[i] & 255) cliffRocks(c, r, i);
+    if (FIELD[i]) furrows(c, r, i);
+  }
+}
+// a field tile's tilled earth: four low ridges along its rows (the wheat stands on them, see grassMat), each
+// sloping down at the field's ends
+const RIDGE_TOP = C('#6e4a2c'), RIDGE_FOOT = C('#43301e'), RIDGE_H = 0.06, RIDGE_W = 0.11;
+function furrows(c, r, i) {
+  const y = LV[i] * STEP, dir = FIELD[i];
+  // (a along the row, b across it; laid north-south it's mirrored, so the triangles turn the other way)
+  const pt = dir === 1 ? (a, h, b) => [c + a, y + h, r + b] : (a, h, b) => [c + b, y + h, r + a];
+  const t3 = dir === 1 ? (p, q, w, cp, cq, cw) => tri(p, q, w, cp, cq, cw) : (p, q, w, cp, cq, cw) => tri(p, w, q, cp, cw, cq);
+  const before = dir === 1 ? i - 1 : i - N, after = dir === 1 ? i + 1 : i + N;
+  for (let k = 0; k < 4; k++) {
+    const m = (k + 0.5) / 4, sh = 0.92 + hs(c, r, 160 + k) * 0.14, top = shade(RIDGE_TOP, sh), foot = shade(RIDGE_FOOT, sh);
+    const L0 = pt(0, 0, m - RIDGE_W), L1 = pt(1, 0, m - RIDGE_W), T0 = pt(0, RIDGE_H, m), T1 = pt(1, RIDGE_H, m), R0 = pt(0, 0, m + RIDGE_W), R1 = pt(1, 0, m + RIDGE_W);
+    t3(L0, T0, T1, foot, top, top); t3(L0, T1, L1, foot, top, foot);
+    t3(R1, T1, T0, foot, top, top); t3(R1, T0, R0, foot, top, foot);
+    if (FIELD[before] !== dir) t3(L0, R0, T0, foot, foot, top);
+    if (FIELD[after] !== dir) t3(R1, L1, T1, foot, foot, top);
   }
 }
 const OBJ_MESHES = ['obj', 'glow', 'trunk', 'plant', 'canopy', 'web', 'spider'];
@@ -7875,6 +8078,7 @@ const ICON = {
   stoneBlock: iconArt(['..GGGGGG', '.GwwwwGG', 'GGGGGGgG', 'GggggGgG', 'GggggGG.', 'GGGGGG..'], { G: '#5a5664', g: '#9a96a2', w: '#c8c6d0' }),
   copperIngot: iconArt(['..OOOOO..', '.OoooooO.', 'OOOOOOOOO', 'OdddddddO', '.OOOOOOO.'], { O: '#e08850', o: '#ffd0a0', d: '#a0562a' }),
   ironIngot: iconArt(['..OOOOO..', '.OoooooO.', 'OOOOOOOOO', 'OdddddddO', '.OOOOOOO.'], { O: '#a8aeb8', o: '#eef2f8', d: '#6a6e78' }),
+  wheat: iconArt(['.e.e.e.', 'eEeEeEe', '.eEeEe.', '..sss..', '.bBBBb.', '..sss..', '.s.s.s.', 's..s..s'], { e: '#c89a3a', E: '#f0d070', s: '#b89040', b: '#7a5232', B: '#9a6a3e' }),
   leather: iconArt(['.LLLLLL..', 'LllllllL.', 'LlLLLLlLL', 'LlLllLlLl', 'LlLLLLlLL', 'LllllllL.', '.LLLLLL..'], { L: '#7a4a28', l: '#b07a46' }),
   sawtable: iconArt(['...ss....', '..sSSs...', 'TTTSSTTTT', 'TTTTTTTTT', '.L.....L.', '.L.DD..L.', '.L.....L.'], { s: '#8c8a96', S: '#c8ccd4', T: '#8a6440', L: '#4a3020', D: '#3a3640' }),
   grinder: iconArt(['.HHHHHHH.', '..HHHHH..', '.w.HHH.w.', '.w..H..w.', '.wSSSSSw.', '.wsssssw.', 'DDDDDDDDD', 'DDDDDDDDD'], { H: '#6a4a2c', w: '#7a5232', S: '#9a96a2', s: '#7e7a86', D: '#4e4a56' }),
@@ -7912,6 +8116,7 @@ const ITEMS = {
   copperIngot: { name: 'Copper Ingot', icon: 'copperIngot', stack: 100, pile: true, loot: 'material', about: 'Smelted from copper ore. Copper weapons are made of it.' },
   ironIngot: { name: 'Iron Ingot', icon: 'ironIngot', stack: 100, pile: true, loot: 'material', about: 'Smelted from iron ore. Iron weapons, fences, gates and doors are made of it.' },
   leather: { name: 'Leather', icon: 'leather', stack: 100, loot: 'material', about: 'Tanned from hides on a tanning rack. A leatherworking table makes armor of it.' },
+  wheat: { name: 'Wheat', icon: 'wheat', stack: 200, pile: true, loot: 'material', about: 'Reaped from the meadow farms\' fields: cut it as you cut grass. A tile reaped grows back in a minute and a half.' },
   bone: { name: 'Bone', icon: 'bone', stack: 100, loot: 'material', about: 'Taken from skeletons, and from wolves, boars and hellhounds half the time. A weapon table works it into bone weapons.' },
 };
 // a sword, bow and spear of each material: sword_wood, bow_bone, spear_iron...
@@ -8601,6 +8806,8 @@ const oreMats = { copperOre: flatMat({ color: OBJ[O.COPPER].ore }), ironOre: fla
 const plankMat = flatMat({ color: '#c89a62' }), plankGeo = new GFX.BoxGeometry(0.42, 0.035, 0.1), blockMat = flatMat({ color: '#9a96a2' }), blockGeo = new GFX.BoxGeometry(0.14, 0.12, 0.14);
 const ingotMats = { copperIngot: flatMat({ color: '#e08850' }), ironIngot: flatMat({ color: '#a8aeb8' }) }, ingotGeo = new GFX.CylinderGeometry(0.06, 0.085, 0.24, 4, 1).rotateZ(Math.PI / 2).rotateX(Math.PI / 4);
 const leatherMat = flatMat({ color: '#9a6638' }), leatherGeo = new GFX.BoxGeometry(0.34, 0.03, 0.26);
+const strawMat = flatMat({ color: '#d8b450' }), earMat = flatMat({ color: '#e8c068' }), bandMat = flatMat({ color: '#7a5232' });
+const strawGeo = new GFX.CylinderGeometry(0.012, 0.012, 0.42, 4).rotateZ(Math.PI / 2), earGeo = new GFX.OctahedronGeometry(0.03, 0).scale(2.4, 1, 1), bandGeo = new GFX.CylinderGeometry(0.05, 0.05, 0.04, 6).rotateZ(Math.PI / 2);
 function dropModel(id) {
   const g = new GFX.Group(), add = (geo, mat, x, y, z, ry = 0, s = 1) => { const m = new GFX.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.y = ry; m.scale.setScalar(s); g.add(m); };
   if (id === 'hide') {
@@ -8623,6 +8830,13 @@ function dropModel(id) {
     add(ingotGeo, ingotMats[id], 0, 0.045, -0.06); add(ingotGeo, ingotMats[id], 0, 0.045, 0.06); add(ingotGeo, ingotMats[id], 0, 0.12, 0, Math.PI / 2);
   } else if (id === 'leather') {
     add(leatherGeo, leatherMat, 0, 0.015, 0); add(leatherGeo, leatherMat, 0.02, 0.045, -0.01, 0.3, 0.9);
+  } else if (id === 'wheat') {
+    // a sheaf lying down: straws bound in the middle, the ears at one end
+    for (let k = 0; k < 7; k++) {
+      const a = k / 7 * Math.PI * 2, y = 0.05 + Math.sin(a) * 0.03, z = Math.cos(a) * 0.03;
+      add(strawGeo, strawMat, 0, y, z, (k - 3) * 0.04); add(earGeo, earMat, 0.24, y, z + (k - 3) * 0.01, (k - 3) * 0.06);
+    }
+    add(bandGeo, bandMat, -0.02, 0.05, 0);
   } else if (oreMats[id]) {
     // ore: stones with the metal in them, and a lump of it on top
     add(pebbleGeo, pebbleMat, -0.1, 0.06, 0, 0, 1.1); add(pebbleGeo, oreMats[id], 0.1, 0.05, 0.05, 1, 0.9); add(pebbleGeo, pebbleMat, 0.02, 0.06, -0.1, 2, 0.8); add(pebbleGeo, oreMats[id], 0, 0.15, 0, 0.5, 0.75);
@@ -10597,6 +10811,7 @@ function removePiece() {
   if (!target) { sfx.nope(); return; }
   const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
   if (BI[T(target.c, target.r)] === TOWN || (across >= 0 && BI[across] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
+  if (FARM[T(target.c, target.r)] || (across >= 0 && FARM[across])) { sfx.nope(); toast('That belongs to the farmer.'); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
   const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
@@ -11448,6 +11663,7 @@ function tileRGB(i) {
   if (SH[i]) f *= 1.08;
   // cliff edges a shade darker so the terraces read
   if (c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) f *= 0.72;
+  if (FIELD[i]) { R = 176; Gc = 146; B = 70; f = 1; }
   if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; }
   if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; }
   return [R * f, Gc * f, B * f];
@@ -11954,6 +12170,16 @@ const TUNING = [
     [FOLIAGE, 'wind', 'Sway in the wind (radians)', 0, 0.6, 0.01],
     [FOLIAGE, 'windSpeed', 'Wind: how fast the gusts come', 0, 6, 0.05],
   ]],
+  ['Wheat', [
+    [WHEAT, 'height', 'Ripe wheat: height (tiles)', 0.1, 2, 0.01],
+    [WHEAT, 'density', 'How thick it grows (times the grass density)', 0, 1, 0.05],
+    [WHEAT, 'stub', 'How tall cut wheat stands (share of its height)', 0, 1, 0.01],
+    [WHEAT, 'regrow', 'Seconds a reaped tile takes to grow back', 5, 600, 1],
+    [WHEAT, 'yield', 'Wheat a reaped tile gives', 0, 5, 1],
+    [WHEAT, 'youngColor', 'Colour as it grows', 'color'],
+    [WHEAT, 'ripeColor', 'Colour when ripe', 'color'],
+    [WHEAT, 'earColor', 'Its ears when ripe', 'color'],
+  ]],
   ['Grass', [
     [GRASS, 'on', 'Grass tufts (1 on, 0 off)', 0, 1, 1],
     [GRASS, 'density', 'How thick: tufts a tile on a meadow (less in forest, swamp, the deep forest and graveyards)', 0, 16, 0.25],
@@ -12399,6 +12625,7 @@ function frame(now) {
   updateGrass();
   updateDrift(dt);
   updateCuts(dt);
+  updateWheat(dt);
   updatePrints();
   remakeOres(dt);
   updateHearths(dt);
@@ -12568,6 +12795,11 @@ window.GAME = {
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
   wildFences: () => wildFence.size,
+  farms: () => farms.map(f => ({ c: f.c, r: f.r, house: f.house.length, door: !!f.door, gate: !!f.gate, fields: f.fields.map(x => [x.dir, x.tiles.length]),
+    floors: f.house.filter(([c, r]) => FL[T(c, r)]).length, roof: [...buildings.values()].some(b => b.set.has(T(...f.house[0]))) })),
+  farmTile: (c, r) => ({ farm: FARM[T(c, r)], field: FIELD[T(c, r)], grass: [...grassTex.image.data.slice(T(c, r) * 4, T(c, r) * 4 + 4)], grown: wheatGrown(T(c, r)) }),
+  reap: (x, z, r) => { cutGrass(x, z, r, 0, 1); },
+  wheatCut: () => wheatCut.size,
   spikeReset: () => { chunkTime.parts.fill(0); giStepMax.fill(0); },
   spikeParts: () => ({ gi: giStepMax.map(v => +v.toFixed(1)), chunk: chunkTime.parts.map(v => +v.toFixed(1)), chunkAvg: +(chunkTime.ms / Math.max(1, chunkTime.n)).toFixed(1) }),
   ghTime: (n = 3) => { let tot = 0, max = 0, steps = 0; for (let k = 0; k < n; k++) { const job = groundHazeSiteJob(Math.round(camTarget.x) + k, Math.round(camTarget.z)); for (;;) { const t = performance.now(), d = job.next().done, e = performance.now() - t; tot += e; max = Math.max(max, e); steps++; if (d) break; } } return [+(tot / n).toFixed(1), +max.toFixed(1), steps / n]; },
@@ -12617,7 +12849,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE },
+  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT },
   gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
   moveItem: (from, to) => moveItem(from, to),
   clickCell: c => clickCell(c),
