@@ -4,8 +4,9 @@
 // A height field on a grid of CPT cells a tile that follows the hero, stepped RATE times a second by the damped
 // wave equation (leapfrog: each cell keeps its height now and a step ago). Cells that aren't water (the game says
 // which tiles are, site()) are banks: the waves reflect off them. Near the grid's edge the waves are damped away.
-// The hero stirs it two ways: their body pushes the water aside as it moves (the height under it moves with it,
-// so walking pushes up a bow wave and leaves a trough), and their legs work it up and down, sending rings out.
+// Whatever wades in it (the hero, and foes near them, up to MAX_BODIES) stirs it two ways: its body pushes the
+// water aside as it moves (the height under it moves with it, so walking pushes up a bow wave and leaves a
+// trough), and its legs work it up and down, sending rings out.
 //
 // `texture` holds the heights a step ago and now (r, g); a shader reads it at `view` (the grid's corner in tiles,
 // its width in tiles, and how far the time is between those two steps) and mixes the two, so the waves move
@@ -18,13 +19,17 @@ const RATE = 60;          // steps a second
 const MAX_STEPS = 3;      // steps in one frame, at most (a slow frame drops the rest)
 const SITE = Math.ceil(N / CPT) + 2;   // tiles across the site map
 const EDGE = 12;          // cells over which the grid's edge damps the waves away
+const MAX_BODIES = 8;     // waders stirring it at once
+const STIR_HZ = 3;        // how fast their legs work the water
 
 const WGSL = /* wgsl */ `
 struct P {
   o: vec4f,    // shift of the grid since its last step (cells, x z), wave speed² (cells a step), damping a step
-  s0: vec4f,   // the body: where it was a step ago, where it is now (cells, x z, x z)
-  s1: vec4f,   // how much water it moved a step ago, now; the legs' stirring now; its radius (cells)
   g: vec4f,    // the grid's corner (cells), the site map's corner (tiles)
+  n: vec4f,    // how many bodies
+  // each body's two: where it was a step ago, where it is now (cells, x z, x z); how much water it moved a
+  // step ago, now, its legs' stirring now, its radius (cells)
+  b: array<vec4f, ${MAX_BODIES * 2}>,
 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> src: array<vec2f>;          // height now, a step ago
@@ -49,7 +54,7 @@ fn nb(c: vec2i, h: f32) -> f32 {
   if (!wet(c)) { return h; }
   return state(c).x;
 }
-fn body(c: vec2f, at: vec2f) -> f32 { let d = c - at; return exp(-dot(d, d) / (p.s1.w * p.s1.w)); }
+fn body(c: vec2f, at: vec2f, r: f32) -> f32 { let d = c - at; return exp(-dot(d, d) / (r * r)); }
 @compute @workgroup_size(8, 8) fn step(@builtin(global_invocation_id) id: vec3u) {
   if (id.x >= u32(NC) || id.y >= u32(NC)) { return; }
   let c = vec2i(id.xy);
@@ -61,9 +66,15 @@ fn body(c: vec2f, at: vec2f) -> f32 { let d = c - at; return exp(-dot(d, d) / (p
     let e = f32(min(min(c.x, c.y), min(NC - 1 - c.x, NC - 1 - c.y)));
     let damp = p.o.w * mix(0.85, 1.0, smoothstep(0.0, ${EDGE}.0, e));
     let cf = vec2f(c);
-    // the water the body moved: what's under it now in, what was under it a step ago out
-    let moved = p.s1.y * body(cf, p.s0.zw) - p.s1.x * body(cf, p.s0.xy);
-    let next = h + (h - s.y) * damp + p.o.z * lap + moved + p.s1.z * body(cf, p.s0.zw);
+    // the water the bodies moved (what's under each now in, what was under it a step ago out), and their stirring
+    var moved = 0.0; var stir = 0.0;
+    for (var k = 0; k < i32(p.n.x); k++) {
+      let at = p.b[k * 2]; let m = p.b[k * 2 + 1];
+      let now = body(cf, at.zw, m.w);
+      moved += m.y * now - m.x * body(cf, at.xy, m.w);
+      stir += m.z * now;
+    }
+    let next = h + (h - s.y) * damp + p.o.z * lap + moved + stir;
     now = vec2f(next, h + moved);
   }
   dst[id.y * u32(NC) + id.x] = now;
@@ -78,8 +89,9 @@ export class Ripples {
     this.bufs = [0, 1].map(() => device.createBuffer({ size: bytes, usage: B.STORAGE | B.COPY_DST }));
     this.site = device.createBuffer({ size: SITE * SITE * 4, usage: B.STORAGE | B.COPY_DST });
     this.siteData = new Uint32Array(SITE * SITE);
-    this.params = [...Array(MAX_STEPS)].map(() => device.createBuffer({ size: 64, usage: B.UNIFORM | B.COPY_DST }));
-    this.pdata = new Float32Array(16);
+    this.params = [...Array(MAX_STEPS)].map(() => device.createBuffer({ size: (3 + MAX_BODIES * 2) * 16, usage: B.UNIFORM | B.COPY_DST }));
+    this.pdata = new Float32Array((3 + MAX_BODIES * 2) * 4);
+    this.bodies = new Map();   // key: { last (cells), moved, phase }
     this.tex = device.createTexture({ size: [N, N], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     const module = device.createShaderModule({ code: WGSL, label: 'ripples' });
     if (module.getCompilationInfo) module.getCompilationInfo().then(info => {
@@ -96,17 +108,18 @@ export class Ripples {
     this.texture.isViewTexture = true; this.texture.view = this.tex.createView();
     this.view = [0, 0, N / CPT, 0];   // the grid's corner (tiles, x z), its width (tiles), time between its last two steps
     this.on = false;
-    this.cur = 0; this.origin = null; this.acc = 0; this.last = null; this.moved = 0; this.phase = 0; this.wasOn = false;
+    this.cur = 0; this.origin = null; this.acc = 0; this.wasOn = false;
   }
-  // step it for this frame: on (any water round the hero), hero [x, z] (tiles), body (how much water the body
-  // moves: 0 out of it), stir (the legs' stirring), speed (tiles a second the waves run), fade (how fast they
-  // die, a second), site(tx, tz) (true for a water tile)
-  update({ on, hero, dt, body, stir, speed, fade, site }) {
+  // step it for this frame: on (any water round the hero), hero [x, z] (tiles: the grid follows them), bodies
+  // (what wades: { key, x, z (tiles), amount (how much water it moves: 0 out of the water), radius (tiles) }, the
+  // most important first), stir (how hard legs work the water, against amount), speed (tiles a second the waves
+  // run), fade (how fast they die, a second), site(tx, tz) (true for a water tile)
+  update({ on, hero, dt, bodies, stir, speed, fade, site }) {
     this.on = on;
     if (!on) { this.wasOn = false; return; }
     const d = this.device, r = this.renderer;
     if (!this.wasOn) {   // starting again: from still water, here
-      this.wasOn = true; this.acc = 0; this.origin = null; this.last = null;
+      this.wasOn = true; this.acc = 0; this.origin = null; this.bodies.clear();
       r.compute(enc => { for (const b of this.bufs) enc.clearBuffer(b); });
     }
     this.acc = Math.min(this.acc + dt * RATE, MAX_STEPS + 1);
@@ -119,21 +132,43 @@ export class Ripples {
       const tx = Math.floor(ox / CPT), tz = Math.floor(oz / CPT);
       for (let j = 0; j < SITE; j++) for (let i = 0; i < SITE; i++) this.siteData[j * SITE + i] = site(tx + i, tz + j) ? 1 : 0;
       d.queue.writeBuffer(this.site, 0, this.siteData);
-      const from = this.last && Math.hypot(hx - this.last[0], hz - this.last[1]) < CPT ? this.last : [hx, hz];
-      const c2 = Math.min(0.45, (speed * CPT / RATE) ** 2), damp = Math.exp(-fade / RATE), rad = 0.16 * CPT;
+      // this frame's waders, and any that just left (they take their water with them, then they're gone)
+      const list = [], seen = new Set();
+      for (const b of bodies) {
+        if (list.length >= MAX_BODIES) break;
+        const x = b.x * CPT, z = b.z * CPT;
+        if (Math.abs(x - hx) > N / 2 + CPT || Math.abs(z - hz) > N / 2 + CPT) continue;
+        let st = this.bodies.get(b.key);
+        if (!st) { st = { last: [x, z], moved: 0, phase: Math.random() * 6.3 }; this.bodies.set(b.key, st); }
+        seen.add(b.key);
+        list.push({ st, now: [x, z], amount: b.amount, rad: b.radius * CPT });
+      }
+      for (const [key, st] of this.bodies) {
+        if (seen.has(key)) continue;
+        if (!st.moved || list.length >= MAX_BODIES) { this.bodies.delete(key); continue; }
+        list.push({ st, now: st.last, amount: 0, rad: st.rad });
+      }
+      for (const w of list) {
+        const st = w.st;
+        if (Math.hypot(w.now[0] - st.last[0], w.now[1] - st.last[1]) > CPT) st.last = w.now;   // (it jumped: no wave)
+        st.rad = w.rad;
+      }
+      const c2 = Math.min(0.45, (speed * CPT / RATE) ** 2), damp = Math.exp(-fade / RATE);
       const p = this.pdata;
       for (let k = 0; k < steps; k++) {
-        const u = (k + 1) / steps, a = [from[0] + (hx - from[0]) * u, from[1] + (hz - from[1]) * u];
-        const b = k ? [from[0] + (hx - from[0]) * k / steps, from[1] + (hz - from[1]) * k / steps] : from;
         const sh = k ? [0, 0] : [ox - prev[0], oz - prev[1]];
-        this.phase = (this.phase + 2 * Math.PI * 3 / RATE) % (2 * Math.PI);
-        p.set([sh[0], sh[1], c2, damp,
-          b[0] - ox - 0.5, b[1] - oz - 0.5, a[0] - ox - 0.5, a[1] - oz - 0.5,
-          this.moved, body, stir * body * Math.sin(this.phase), rad,
-          ox, oz, tx, tz]);
+        p.fill(0);
+        p.set([sh[0], sh[1], c2, damp, ox, oz, tx, tz, list.length, 0, 0, 0]);
+        list.forEach((w, j) => {
+          const st = w.st, f = st.last, u = (k + 1) / steps, v = k / steps, o = 12 + j * 8;
+          st.phase = (st.phase + 2 * Math.PI * STIR_HZ / RATE) % (2 * Math.PI);
+          p.set([f[0] + (w.now[0] - f[0]) * v - ox - 0.5, f[1] + (w.now[1] - f[1]) * v - oz - 0.5,
+            f[0] + (w.now[0] - f[0]) * u - ox - 0.5, f[1] + (w.now[1] - f[1]) * u - oz - 0.5,
+            k ? w.amount : st.moved, w.amount, stir * w.amount * Math.sin(st.phase), w.rad], o);
+        });
         d.queue.writeBuffer(this.params[k], 0, p);
-        this.moved = body;
       }
+      for (const w of list) { w.st.last = w.now; w.st.moved = w.amount; }
       r.compute(enc => {
         const pass = enc.beginComputePass({ label: 'swamp wake' });
         pass.setPipeline(this.pipeline);
@@ -144,7 +179,7 @@ export class Ripples {
         }
         pass.end();
       });
-      this.origin = [ox, oz]; this.last = [hx, hz];
+      this.origin = [ox, oz];
     }
     // (nothing to draw until its first step)
     const o = this.origin;

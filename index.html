@@ -3485,14 +3485,26 @@ function updateWater(dt) {
   // murk: what light gets through is coloured like the water itself, blue lost first
   B.absorb.value.set((1.15 - tmpC2.r) * 0.5 / bc, (1.15 - tmpC2.g) * 0.5 / bc, (1.15 - tmpC2.b) * 0.5 / bc);
 }
-// the wake: step its sheet of water while there's swamp water round you; your body moves water while you're in it
+// the wake: step its sheet of water while there's swamp water round you; you, and foes near you, move water
+// while you're in it
 function updateWake(dt) {
   const hx = Math.floor(H.x), hz = Math.floor(H.z), SW = SWAMP_WATER;
   let on = false;
   for (let r = hz - 6; r <= hz + 6 && !on; r++) for (let c = hx - 6; c <= hx + 6; c++) if (WT[T(c, r)] === 1) { on = true; break; }
-  const i = T(hx, hz);
-  const inside = !H.flip && WT[i] === 1 && LV[i] * STEP - BOG_SURF - H.y > 0.03;
-  ripples.update({ on, hero: [H.x, H.z], dt, body: inside ? SW.wake : 0, stir: 0.05, speed: SW.wakeSpread, fade: SW.wakeFade,
+  // in the water: standing in a pool tile, below its surface
+  const wading = (x, z, y) => { const i = T(Math.floor(x), Math.floor(z)); return WT[i] === 1 && LV[i] * STEP - BOG_SURF - y > 0.03; };
+  const bodies = [{ key: H, x: H.x, z: H.z, amount: !H.flip && wading(H.x, H.z, H.y) ? SW.wake : 0, radius: 0.16 }];
+  // and the foes wading near you, nearest first (not ghosts: they float over it)
+  if (on) {
+    const near = [];
+    for (const f of foes) {
+      if (f.ghost || f.hp <= 0 || Math.abs(f.x - H.x) > 5 || Math.abs(f.z - H.z) > 5 || !wading(f.x, f.z, f.y)) continue;
+      near.push([Math.hypot(f.x - H.x, f.z - H.z), f]);
+    }
+    near.sort((a, b) => a[0] - b[0]);
+    for (const [, f] of near) bodies.push({ key: f, x: f.x, z: f.z, amount: SW.wake, radius: clamp(f.def.rad * 0.6, 0.1, 0.3) });
+  }
+  ripples.update({ on, hero: [H.x, H.z], dt, bodies, stir: 0.05, speed: SW.wakeSpread, fade: SW.wakeFade,
     site: (c, r) => WT[T(c, r)] === 1 });
   const v = BOG_U.wakeV.value, w = ripples.view;
   v.x = w[0]; v.y = w[1]; v.z = w[2]; v.w = w[3]; BOG_U.wakeOn.value = ripples.on ? 1 : 0; BOG_U.wakeWidth.value = SW.wakeWidth;
@@ -8383,7 +8395,7 @@ window.GAME = {
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
-  wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur }),
+  wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
   compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
