@@ -137,13 +137,14 @@ fn oldCell(cf: vec2f) -> Cell {
   let oc = vec2f(c) + hu.g1.xy;                       // this cell in last frame's grid
   let src = oc - oldCell(oc).a.xy * dt * CPM;
   var s = oldCell(src);
-  // smoothing: some of the neighbours' average mixed in (a share of p2.z each sixtieth of a second), so ripples a
-  // cell or two across die away. The pressure solve's wide differences can't see a pattern that flips cell to cell,
-  // and swirl feeds it; drawn, it showed the grid.
+  // smoothing: some of the neighbours' average velocity mixed in (a share of p2.z each sixtieth of a second), so
+  // ripples a cell or two across die away. The pressure solve's wide differences can't see a pattern that flips cell
+  // to cell, and swirl feeds it; carried into the haze, it showed the grid. The haze itself isn't smoothed: that
+  // filled the hero's wake back in.
   let k = 1.0 - pow(1.0 - clamp(hu.p2.z, 0.0, 0.95), dt * 60.0);
   if (k > 0.0) {
-    let n = (oldCell(src + vec2f(1.0, 0.0)).a + oldCell(src - vec2f(1.0, 0.0)).a + oldCell(src + vec2f(0.0, 1.0)).a + oldCell(src - vec2f(0.0, 1.0)).a) * 0.25;
-    s.a = mix(s.a, n, k);
+    let n = (oldCell(src + vec2f(1.0, 0.0)).a.xy + oldCell(src - vec2f(1.0, 0.0)).a.xy + oldCell(src + vec2f(0.0, 1.0)).a.xy + oldCell(src - vec2f(0.0, 1.0)).a.xy) * 0.25;
+    s.a = vec4f(mix(s.a.xy, n, k), s.a.zw);
   }
   var vel = s.a.xy;
   let haze = s.a.z + (rest - s.a.z) * (1.0 - exp(-hu.p0.w * dt));   // drifts back to the resting haze
