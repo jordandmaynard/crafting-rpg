@@ -146,7 +146,9 @@ export class Ripples {
       });
       this.origin = [ox, oz]; this.last = [hx, hz];
     }
+    // (nothing to draw until its first step)
     const o = this.origin;
+    if (!o) { this.on = false; return; }
     this.view[0] = o[0] / CPT; this.view[1] = o[1] / CPT; this.view[3] = this.acc;
   }
 }
