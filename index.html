@@ -847,6 +847,7 @@ async function generate(progress) {
   placeFarms();
   placeGrottos();
   placeStatues();
+  placeMausoleums();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1860,6 +1861,94 @@ function placeStatues() {
     }
   }
 }
+// The graveyard's points of interest: white marble mausoleums, one for every so much graveyard (up to three).
+// Each stands on a 4 x 5 patch of one level: a portico across the front (b = 0, open at the front and sides,
+// four columns along its edge) and behind it the tomb itself, a 4 x 4 room of marble walls entered by a pair
+// of bronze doors in the middle of its front, a sarcophagus inside. Steps lead up to the portico between two
+// stone lions on plinths, and a gabled roof with a pediment at each end covers the lot; walk in and the roof
+// and the walls in the way go, as in any house. In local terms a runs across the front, b from the front back.
+const mausoleums = [];
+const mausAt = new Map();   // tile -> its mausoleum (its 4 x 5 only)
+const pillars = new Map();  // tile -> round things standing on it that block the way: { x, z, R, col, key, y }
+const MAUS_COUNT = n => n < 1000 ? 0 : n < 3000 ? 1 : n < 5500 ? 2 : 3;
+// world x, z of a local point; the front faces +z, +x, -z or -x as d is 0 to 3
+function mausP(m, a, b) {
+  const { d, X0, Z0 } = m;
+  return d === 0 ? [X0 + a, Z0 + 5 - b] : d === 1 ? [X0 + 5 - b, Z0 + a] : d === 2 ? [X0 + 4 - a, Z0 + b] : [X0 + b, Z0 + 4 - a];
+}
+const MAUS_RY = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
+// a piece at a local point, its sx across (a) and sz deep (b)
+function mausPart(m, geo, color, a, y, b, o = {}) {
+  const [x, z] = mausP(m, a, b);
+  part(geo, color, x, y, z, { ...o, ry: (o.ry || 0) + MAUS_RY[m.d] });
+}
+function placeMausoleums() {
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  const keep = new Set([O.VENT, O.VENTX, O.SHRINE, O.LAMP, O.HEARTH, O.GROTTO, O.GROTTOX, O.STATUE, O.STATUEX]);
+  const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !keep.has(OB[i]);
+  const seen = new Uint8Array(N * N);
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (BI[s0] !== GRAVE || !LV[s0] || seen[s0]) continue;
+    const patch = [s0];
+    seen[s0] = 1;
+    for (let k = 0; k < patch.length; k++) for (const dd of DI) {
+      const n = patch[k] + dd;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== GRAVE || !LV[n]) continue;
+      seen[n] = 1; patch.push(n);
+    }
+    const want = MAUS_COUNT(patch.length);
+    for (let k = 0, tries = 0; k < want && tries < 400; tries++) {
+      const i0 = patch[Math.floor(hs(s0 % N + tries, k, 191) * patch.length)], X0 = i0 % N, Z0 = (i0 - X0) / N, L = LV[i0];
+      const d = Math.floor(hs(X0, Z0, 192) * 4), W = d & 1 ? 5 : 4, D = d & 1 ? 4 : 5;
+      // the 4 x 5 and a tile all round it (the steps, the lions): one level of open graveyard, any graves cleared
+      let ok = true;
+      for (let r = Z0 - 1; r <= Z0 + D && ok; r++) for (let c = X0 - 1; c <= X0 + W && ok; c++) {
+        if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) { ok = false; break; }
+        const i = T(c, r);
+        if (LV[i] !== L || BI[i] !== GRAVE || !open(i)) ok = false;
+      }
+      if (!ok) continue;
+      const m = { d, X0, Z0, L, tiles: [], cella: [], doors: [], cols: [] };
+      const [mx, mz] = mausP(m, 2, 2.5);
+      if (mausoleums.some(q => Math.hypot(q.x - mx, q.z - mz) < 40)) continue;
+      k++;
+      m.x = mx; m.z = mz;
+      for (let r = Z0 - 1; r <= Z0 + D; r++) for (let c = X0 - 1; c <= X0 + W; c++) { const i = T(c, r); OB[i] = 0; FARM[i] = 2; }
+      const tileAt = (a, b) => mausP(m, a + 0.5, b + 0.5).map(Math.floor), cset = new Set(), front = new Map();
+      for (let b = 0; b < 5; b++) for (let a = 0; a < 4; a++) {
+        const [c, r] = tileAt(a, b), i = T(c, r);
+        FL[i] = 3; piece(c, r); mausAt.set(i, m); m.tiles.push([c, r]);
+        if (b) { cset.add(i); m.cella.push([c, r]); } else front.set(i, a);
+      }
+      m.anchor = T(...tileAt(0, 0)); m.cellaI = T(...tileAt(1, 2));
+      // the tomb's walls, and its pair of doors onto the portico in the middle of its front
+      for (const [c, r] of m.cella) for (let dd = 0; dd < 4; dd++) {
+        const n = T(c + DC[dd], r + DR[dd]);
+        if (cset.has(n)) continue;
+        const [ec, er, ew] = edgeOf(c, r, dd), door = front.get(n) === 1 || front.get(n) === 2;
+        (ew ? WW : WN)[T(ec, er)] = door ? KIND_VAL.tombdoor : KIND_VAL.marblewall;
+        piece(ec, er);
+        if (door) m.doors.push([ec, er, ew]);
+      }
+      // the columns, cut down with the walls when they stand in the way (keyed by a side of their own tile that
+      // never has a wall: not the one onto the tomb)
+      const y = L * STEP;
+      for (const a of [0.17, 1.39, 2.61, 3.83]) {
+        const [x, z] = mausP(m, a, 0.32), c = Math.floor(x), r = Math.floor(z), i = T(c, r);
+        const q = { x, z, y, R: 0.16, col: true, key: edgeKey(c, r, d === 0 ? 1 : 0) };
+        if (!pillars.has(i)) pillars.set(i, []);
+        pillars.get(i).push(q); m.cols.push(q);
+      }
+      // (and what else blocks the way: the lions' plinths, the sarcophagus)
+      for (const [a, b, R] of [[-0.42, 0.45, 0.4], [4.42, 0.45, 0.4], [2, 2.75, 0.36], [2, 3.45, 0.36]]) {
+        const [x, z] = mausP(m, a, b), i = T(Math.floor(x), Math.floor(z));
+        if (!pillars.has(i)) pillars.set(i, []);
+        pillars.get(i).push({ x, z, y, R, col: false });
+      }
+      mausoleums.push(m);
+    }
+  }
+}
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
@@ -1868,6 +1957,13 @@ function finishTowns() {
   }
   buildGrottoFalls();
   buildObelisks();
+  for (const m of mausoleums) {
+    // the pair of doors: the first hung at its low end, the second at its high end, so they meet in the middle
+    const [e1, e2] = m.doors.sort((p, q) => p[2] ? p[1] - q[1] : p[0] - q[0]);
+    const a = makeDoor(...e1, 'tombdoor'), b = makeDoor(...e2, 'tombdoor', true);
+    a.pair = b; b.pair = a;
+    makeRoom(m.cella, MARBLE, mausRoof(m));
+  }
   for (const f of farms) {
     if (f.door) makeDoor(...f.door);
     if (f.gate) makeDoor(...f.gate, 'gate');
@@ -2324,7 +2420,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, CRYPT: 44, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -2359,7 +2455,6 @@ def(O.IRON, { name: 'iron rock', solid: 0.3, hp: 4, give: 'ironOre', ore: '#b9bf
 def(O.TOMB, { name: 'gravestone', solid: 0.2, hp: 3, give: 'stone' });
 def(O.HOUSE, { tile: true });
 def(O.WELL, { tile: true });
-def(O.CRYPT, { tile: true });
 def(O.SHRINE, { tile: true });
 def(O.LAMP, { solid: 0.1 });
 def(O.HEARTH, { solid: 0.44 });
@@ -2488,7 +2583,6 @@ function placeScenery(c, r) {
       else if (k < 0.14) OB[i] = O.DEAD;
       else if (k < 0.16) OB[i] = O.ROCK;
       else if (k < 0.19) OB[i] = O.BONES;
-      else if (k < 0.193 && k2 > 0.5) OB[i] = O.CRYPT;
       return;
     case DEEP: {
       // redwoods on a loose grid: at most one to each 4 × 4 block, on its inner 3 × 3, so never side by side
@@ -6349,7 +6443,7 @@ function grotto(g) {
 // is the sand drifted on its upper side, the mound round its foot and a slab broken off it.
 const STATUE_FRAME = new GFX.Object3D();
 STATUE_FRAME.rotation.order = 'YXZ';
-const OBELISK = { h: 3.6, w0: 0.78, w1: 0.5, cap: 0.42, carve: 1.6, scale: 1, color: '#c6a068' };
+const OBELISK = { h: 3.6, w0: 0.78, w1: 0.5, cap: 0.42, carve: 1.6, scale: 1.5, color: '#c6a068' };
 const OB_Y0 = -0.9;   // (the shaft's foot, well under the sand)
 const obSize = st => st.size * OBELISK.scale;
 // how far it leans: its own tilt, stood up straighter as it grows so its top still ends over its 3 x 2 tiles
@@ -6905,13 +6999,6 @@ function lamp(x, z) {
   part(G.box, '#2c2738', x, y + 1.24, z, { sx: 0.22, sy: 0.05, sz: 0.22 });
   part(G.box, '#ffcf7a', x, y + 1.13, z, { sx: 0.14, sy: 0.14, sz: 0.14, into: 'glow' });
 }
-function crypt(x, z, ry) {
-  const y = groundAt(x, z), stone = '#6e6a78';
-  part(G.box, stone, x, y + 0.5, z, { sx: 0.96, sy: 1.0, sz: 0.9, ry });
-  part(G.cone4, '#4e4a58', x, y + 1.24, z, { sx: 1.4, sy: 0.5, sz: 1.3, ry: ry + Math.PI / 4 });
-  for (const s of [-0.32, 0.32]) part(G.box, '#8c8896', x + Math.sin(ry) * 0.46 + Math.cos(ry) * s, y + 0.5, z + Math.cos(ry) * 0.46 - Math.sin(ry) * s, { sx: 0.12, sy: 1.0, sz: 0.1, ry });
-  part(G.box, '#120e18', x + Math.sin(ry) * 0.455, y + 0.34, z + Math.cos(ry) * 0.455, { sx: 0.34, sy: 0.6, sz: 0.04, ry });
-}
 const GRASS_C = { [MEADOW]: C('#5e8a3a'), [FOREST]: C('#3a6a2e'), [TOWN]: C('#5e8a3a') };
 function drawObject(o, c, r) {
   const [x, z] = objPos(c, r, o), k = hs(c, r, 2), k2 = hs(c, r, 6);
@@ -6946,7 +7033,6 @@ function drawObject(o, c, r) {
     case O.TOMB: return tomb(x, z, k2, Math.floor(k * 4) * Math.PI / 2);
     case O.LAMP: return lamp(x, z);
     case O.WELL: return well(x, z);
-    case O.CRYPT: return crypt(x, z, Math.floor(k * 4) * Math.PI / 2);
     case O.SHRINE: return shrine(x, z, k * 6);
     case O.HEARTH: return hearth(x, z, c, r);
     case O.TANTABLE: return tanTable(x, z, c, r);
@@ -7172,8 +7258,8 @@ const COST = { floor: { planks: 2 }, stonefloor: { stoneBlock: 2 }, wall: { wood
   sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
-// what's on a tile's floor: 1 planks, 2 flagstones
-const FLOOR_KIND = [null, 'floor', 'stonefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
+// what's on a tile's floor: 1 planks, 2 flagstones, 3 a mausoleum's marble
+const FLOOR_KIND = [null, 'floor', 'stonefloor', 'marblefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
 // the build menu's groups, each opening its own row of kinds
 const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'],
   stations: ['sawtable', 'grinder', 'smelter', 'tanrack'] };
@@ -7183,9 +7269,10 @@ const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate' || 
 const isDoorKind = k => k === 'door' || k === 'gate' || k === 'irondoor' || k === 'irongate';
 // what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall, 5 wooden fence,
 // 6 dry-stone wall, 7 gate, 8 iron railings, 9 iron gate, 10 iron door
-const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate', 'ironfence', 'irongate', 'irondoor'];
-const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10 };
-const isFenceVal = v => v >= 5 && v <= 9, isDoorVal = v => v === 2 || v === 7 || v === 9 || v === 10;
+// (11 a mausoleum's bronze door, 12 its marble wall: never built by hand)
+const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate', 'ironfence', 'irongate', 'irondoor', 'tombdoor', 'marblewall'];
+const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10, tombdoor: 11, marblewall: 12 };
+const isFenceVal = v => v >= 5 && v <= 9, isDoorVal = v => v === 2 || v === 7 || v === 9 || v === 10 || v === 11;
 // an edge is named by the tile whose north (w = 0) or west (w = 1) side it is
 const edgeOf = (c, r, d) => d === 0 ? [c, r, 0] : d === 2 ? [c, r + 1, 0] : d === 3 ? [c, r, 1] : [c + 1, r, 1];
 const edgeKey = (c, r, w) => T(c, r) * 2 + w;
@@ -7221,6 +7308,62 @@ function stoneFloor(c, r) {
     }
   }
 }
+// a mausoleum's floor: white and grey marble squares, two a side, over a grey bed
+const MARBLE = '#e6e2da', MARBLE_LT = '#f2efe8', MARBLE_DK = '#c4beb2', MARBLE_VEIN = '#a8a298', MARBLE_H = 2.1, TOMB_DOOR_H = 1.5;
+function marbleFloor(c, r) {
+  const y = LV[T(c, r)] * STEP;
+  part(G.box, '#8e8a84', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+  for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) {
+    const col = shade(CC((c * 2 + k + r * 2 + j) % 2 ? '#d2ccc0' : '#eeeae2'), 0.96 + hs(c, r, 70 + j * 2 + k) * 0.06);
+    part(G.box, col, c + 0.25 + k * 0.5, y + 0.035, r + 0.25 + j * 0.5, { sx: 0.47, sy: 0.05, sz: 0.47 });
+  }
+}
+// a fluted marble column with a leafy capital, MARBLE_H to the top of its slab (cut: a stump at waist height)
+function marbleColumn(x, y, z, cut) {
+  part(G.box, MARBLE_DK, x, y + 0.05, z, { sx: 0.4, sy: 0.1, sz: 0.4 });
+  part(G.cyl8, MARBLE_LT, x, y + 0.14, z, { sx: 0.34, sy: 0.08, sz: 0.34 });
+  const top = cut ? CUT_H : MARBLE_H - 0.3, sh = top - 0.18;
+  part(G.cyl8, MARBLE, x, y + 0.18 + sh / 2, z, { sx: 0.27, sy: sh, sz: 0.27 });
+  for (let k = 0; k < 8; k++) {
+    const t = (k + 0.5) * Math.PI / 4;
+    part(G.box, MARBLE_VEIN, x + Math.sin(t) * 0.126, y + 0.18 + sh / 2, z + Math.cos(t) * 0.126, { sx: 0.02, sy: sh - 0.08, sz: 0.02, ry: t });
+  }
+  if (cut) { part(G.cyl8, '#d6d0c4', x, y + top, z, { sx: 0.25, sy: 0.02, sz: 0.25 }); return; }
+  part(G.frust7, MARBLE_LT, x, y + top + 0.12, z, { sx: 0.5, sy: 0.24, sz: 0.5, rx: Math.PI });
+  for (let k = 0; k < 6; k++) { const t = k * Math.PI / 3; part(G.dodec, MARBLE, x + Math.sin(t) * 0.15, y + top + 0.07, z + Math.cos(t) * 0.15, { s: 0.1 }); }
+  for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) part(G.cyl8, MARBLE_LT, x + u * 0.17, y + top + 0.2, z + v * 0.17, { sx: 0.09, sy: 0.09, sz: 0.09, rz: Math.PI / 2 });
+  part(G.box, MARBLE_LT, x, y + top + 0.27, z, { sx: 0.46, sy: 0.06, sz: 0.46 });
+}
+// what stands about a mausoleum besides its walls and columns, drawn with the chunk of its front-left tile:
+// the steps up to the portico, a stone lion on a plinth either side of them, and the sarcophagus inside
+function mausExtras(m) {
+  const y = m.L * STEP, P = (geo, col, a, yy, b, o) => mausPart(m, geo, col, a, yy, b, o);
+  P(G.box, MARBLE_DK, 2, y + 0.035, -0.28, { sx: 3.7, sy: 0.07, sz: 0.56 });
+  P(G.box, MARBLE, 2, y + 0.085, -0.13, { sx: 3.5, sy: 0.07, sz: 0.26 });
+  const LION = '#d8d2c4', LION_DK = '#bfb8a8';
+  for (const [a, side] of [[-0.42, -1], [4.42, 1]]) {
+    const b = 0.45, yt = y + 0.56;
+    P(G.box, MARBLE_DK, a, y + 0.05, b, { sx: 0.7, sy: 0.1, sz: 1.0 });
+    P(G.box, MARBLE, a, y + 0.3, b, { sx: 0.6, sy: 0.42, sz: 0.9 });
+    P(G.box, MARBLE_LT, a, y + 0.54, b, { sx: 0.68, sy: 0.06, sz: 0.98 });
+    // lying down, head up, looking out the way the tomb faces
+    P(G.box, LION, a, yt + 0.16, b + 0.08, { sx: 0.3, sy: 0.24, sz: 0.55 });
+    P(G.dodec, LION, a, yt + 0.17, b + 0.3, { sx: 0.34, sy: 0.3, sz: 0.32 });
+    P(G.dodec, LION, a, yt + 0.22, b - 0.12, { s: 0.3 });
+    for (const u of [-0.09, 0.09]) P(G.box, LION, a + u, yt + 0.04, b - 0.3, { sx: 0.09, sy: 0.08, sz: 0.3 });
+    P(G.box, LION, a + side * 0.17, yt + 0.05, b + 0.22, { sx: 0.05, sy: 0.05, sz: 0.34 });
+    P(G.dodec, LION_DK, a, yt + 0.42, b - 0.17, { sx: 0.38, sy: 0.4, sz: 0.3 });
+    P(G.box, LION, a, yt + 0.42, b - 0.3, { sx: 0.17, sy: 0.18, sz: 0.12 });
+    P(G.box, LION, a, yt + 0.37, b - 0.38, { sx: 0.1, sy: 0.08, sz: 0.08 });
+    for (const u of [-0.07, 0.07]) P(G.dodec, LION_DK, a + u, yt + 0.53, b - 0.26, { s: 0.07 });
+  }
+  // the sarcophagus: a carved chest on a plinth, its lid ridged down the middle
+  P(G.box, MARBLE_DK, 2, y + 0.1, 3.1, { sx: 0.84, sy: 0.12, sz: 1.54 });
+  P(G.box, '#d4cec2', 2, y + 0.4, 3.1, { sx: 0.72, sy: 0.5, sz: 1.38 });
+  for (const u of [-1, 1]) for (let n = 0; n < 3; n++) P(G.box, MARBLE_VEIN, 2 + u * 0.36, y + 0.4, 2.65 + n * 0.45, { sx: 0.02, sy: 0.32, sz: 0.34 });
+  P(G.box, MARBLE_LT, 2, y + 0.7, 3.1, { sx: 0.8, sy: 0.1, sz: 1.48 });
+  P(G.box, MARBLE, 2, y + 0.78, 3.1, { sx: 0.46, sy: 0.07, sz: 1.36 });
+}
 // walls in front of you while you're indoors, drawn only to waist height (see updateCutaway)
 const cutEdges = new Set();
 const CUT_H = 0.55;
@@ -7232,7 +7375,46 @@ function wallPiece(c, r, w, type) {
   const ry = w ? Math.PI / 2 : 0;
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
-  const door = type === 2 || type === 10, cut = !door && cutEdges.has(edgeKey(c, r, w));
+  const door = type === 2 || type === 10 || type === 11, cut = !door && cutEdges.has(edgeKey(c, r, w));
+  if (type === 12) {
+    // marble: a plain slab on a moulded foot, a vein or two through it, a band along its top, and a pilaster
+    // at each end (all one shade, so where two walls meet theirs make one)
+    const hh = cut ? CUT_H : MARBLE_H;
+    let p = at(0.5, y + hh / 2); part(G.box, shade(CC(MARBLE), 0.97 + hs(c, r, 62 + w) * 0.05), p[0], p[1], p[2], { sx: 1, sy: hh, sz: 0.24, ry });
+    p = at(0.5, y + 0.09); part(G.box, MARBLE_DK, p[0], p[1], p[2], { sx: 1.02, sy: 0.18, sz: 0.32, ry });
+    for (let n = 0; n < 2; n++) {
+      const kk = hs(c * 3 + n, r, 64 + w), vy = 0.35 + hs(c, r * 3 + n, 66 + w) * (MARBLE_H - 0.6);
+      if (vy > hh - 0.1) continue;
+      p = at(0.25 + kk * 0.5, y + vy); part(G.box, MARBLE_VEIN, p[0], p[1], p[2], { sx: 0.34, sy: 0.012, sz: 0.25, ry, rz: (kk - 0.5) * 1.2 });
+    }
+    for (const a of [0, 1]) {
+      p = at(a, y + hh / 2); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 0.22, sy: hh, sz: 0.32, ry });
+      if (!cut) { p = at(a, y + hh - 0.06); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 0.3, sy: 0.12, sz: 0.38, ry }); }
+    }
+    if (!cut) { p = at(0.5, y + hh - 0.04); part(G.box, MARBLE_DK, p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.3, ry }); }
+    return;
+  }
+  if (type === 11) {
+    // a bronze door's marble surround: a threshold, the wall over it with a band of carved letters, and a jamb
+    // only where the doorway ends (none between the two halves of a double door)
+    const prev = w ? WW[T(c, r - 1)] : WN[T(c - 1, r)], next = w ? WW[T(c, r + 1)] : WN[T(c + 1, r)];
+    let p = at(0.5, y + 0.025); part(G.box, MARBLE_DK, p[0], p[1], p[2], { sx: 1, sy: 0.05, sz: 0.36, ry });
+    p = at(0.5, y + (TOMB_DOOR_H + MARBLE_H) / 2); part(G.box, MARBLE, p[0], p[1], p[2], { sx: 1, sy: MARBLE_H - TOMB_DOOR_H, sz: 0.24, ry });
+    p = at(0.5, y + TOMB_DOOR_H + 0.05); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 1.02, sy: 0.1, sz: 0.32, ry });
+    p = at(0.5, y + TOMB_DOOR_H + 0.3); part(G.box, '#bdb6aa', p[0], p[1], p[2], { sx: 1, sy: 0.2, sz: 0.27, ry });
+    for (let n = 0; n < 6; n++) {
+      const kk = hs(c * 7 + n, r, 68 + w);
+      if (kk < 0.12) continue;
+      p = at(0.12 + n * 0.152, y + TOMB_DOOR_H + 0.3); part(G.box, '#4a463e', p[0], p[1], p[2], { sx: 0.06 + kk * 0.05, sy: 0.11, sz: 0.285, ry });
+    }
+    p = at(0.5, y + MARBLE_H - 0.04); part(G.box, MARBLE_DK, p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.3, ry });
+    for (const [a, nb] of [[0, prev], [1, next]]) {
+      if (nb === 11) continue;
+      p = at(a, y + MARBLE_H / 2); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 0.22, sy: MARBLE_H, sz: 0.32, ry });
+      p = at(a, y + MARBLE_H - 0.06); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 0.3, sy: 0.12, sz: 0.38, ry });
+    }
+    return;
+  }
   if (type === 5) {
     // a post-and-rail fence: posts at the ends and the middle, two rails
     for (const a of [0, 0.5, 1]) {
@@ -7337,10 +7519,15 @@ function buildPieces(cx, cz, ch) {
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
-    if (FL[i] === 2) stoneFloor(c, r);
+    if (FL[i] === 3) marbleFloor(c, r);
+    else if (FL[i] === 2) stoneFloor(c, r);
     else if (FL[i]) plankFloor(c, r);
     if (WN[i]) wallPiece(c, r, 0, WN[i]);
     if (WW[i]) wallPiece(c, r, 1, WW[i]);
+    const pl = pillars.get(i);
+    if (pl) for (const q of pl) if (q.col) marbleColumn(q.x, q.y, q.z, cutEdges.has(q.key));
+    const m = mausAt.get(i);
+    if (m && m.anchor === i) mausExtras(m);
   }
   ch.build = bufBuild.mesh(groundMat);
 }
@@ -7354,15 +7541,30 @@ const IRON_RAIL = '#34303a';
 const railMat = flatMat({ color: IRON_RAIL, roughness: 0.45, metalness: 0.6 }), plateMat = flatMat({ color: '#56525e', roughness: 0.4, metalness: 0.6 });
 const ironBar = new GFX.BoxGeometry(0.03, FENCE_H - 0.12, 0.03), ironTip = new GFX.ConeGeometry(0.045, 0.1, 4), ironRail = new GFX.BoxGeometry(0.84, 0.045, 0.035);
 const studGeo = new GFX.BoxGeometry(0.045, 0.045, 0.11);
-// kind: 'door', 'gate', 'irondoor' or 'irongate'
-function makeDoor(c, r, w, kind = 'door') {
+// kind: 'door', 'gate', 'irondoor', 'irongate' or 'tombdoor' (flip: hung at the far end, the other half of a pair)
+const bronzeMat = flatMat({ color: '#4f8a76', roughness: 0.5, metalness: 0.4 }), bronzeDkMat = flatMat({ color: '#2e5a4c', roughness: 0.6, metalness: 0.3 });
+function makeDoor(c, r, w, kind = 'door', flip = false) {
   const gate = kind === 'gate' || kind === 'irongate';
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP;
-  const pivot = new GFX.Group();
-  pivot.position.set(w ? c : c + 0.08, y, w ? r + 0.08 : r);
+  const pivot = new GFX.Group(), at0 = flip ? 0.92 : 0.08;
+  pivot.position.set(w ? c : c + at0, y, w ? r + at0 : r);
   pivot.rotation.y = w ? -Math.PI / 2 : 0;
   const leaf = new GFX.Group();
-  if (kind === 'irongate') {
+  if (kind === 'tombdoor') {
+    // verdigris bronze: a frame, a solid lower panel, a grille of bars above with a ring of studs, a pull
+    const X = x => flip ? -x : x, H2 = TOMB_DOOR_H - 0.04, mid = H2 * 0.45;
+    const box = (sx, sy, sz, x, yy, mat) => { const b = new GFX.Mesh(new GFX.BoxGeometry(sx, sy, sz), mat); b.position.set(X(x), yy, 0); leaf.add(b); };
+    box(0.06, H2, 0.07, 0.03, H2 / 2, bronzeMat); box(0.06, H2, 0.07, 0.81, H2 / 2, bronzeMat);
+    for (const yy of [0.03, mid, H2 - 0.03]) box(0.84, 0.06, 0.07, 0.42, yy, bronzeMat);
+    box(0.78, mid - 0.06, 0.04, 0.42, mid / 2, bronzeDkMat);
+    box(0.5, mid * 0.5, 0.06, 0.42, mid / 2, bronzeMat);
+    for (let k = 1; k < 7; k++) box(0.025, H2 - mid - 0.06, 0.03, 0.03 + k * 0.111, (mid + H2) / 2, bronzeMat);
+    for (let k = 0; k < 8; k++) {
+      const a = k / 8 * Math.PI * 2, s = new GFX.Mesh(studGeo, bronzeMat);
+      s.position.set(X(0.42 + Math.cos(a) * 0.14), (mid + H2) / 2 + Math.sin(a) * 0.14, 0); s.scale.set(0.8, 1.6, 0.4); s.rotation.z = flip ? -a : a; leaf.add(s);
+    }
+    box(0.05, 0.16, 0.12, 0.74, mid + 0.12, bronzeDkMat);
+  } else if (kind === 'irongate') {
     // spear-topped bars on two rails, with a ring of scrollwork across the middle
     for (let k = 0; k < 7; k++) {
       const x = 0.06 + k * 0.12, b = new GFX.Mesh(ironBar, railMat); b.position.set(x, 0.04 + (FENCE_H - 0.12) / 2, 0); leaf.add(b);
@@ -7395,7 +7597,7 @@ function makeDoor(c, r, w, kind = 'door') {
   }
   pivot.add(leaf);
   scene.add(shadowy(pivot));
-  const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate };
+  const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip };
   doors.set(edgeKey(c, r, w), d);
   return d;
 }
@@ -7445,9 +7647,10 @@ function dropRoom(id) {
   rooms.delete(id);
   regroup.delete(id);
 }
-function makeRoom(tiles, color = '#9a4434') {
+// (roof: a builder of its own roof, in place of the hipped one, for a building this room is in)
+function makeRoom(tiles, color = '#9a4434', roof = null) {
   const id = roomSeq++, set = new Set(tiles.map(([c, r]) => T(c, r)));
-  const rm = { id, tiles, set, color, bld: 0 };
+  const rm = { id, tiles, set, color, bld: 0, roof };
   rooms.set(id, rm);
   tiles.forEach(([c, r]) => roomOf.set(T(c, r), id));
   regroup.add(id);
@@ -7473,7 +7676,8 @@ function settleBuildings() {
     const b = { id: bldSeq++, rooms: ids, tiles, set: new Set(tiles.map(([c, r]) => T(c, r))), color: list[0].color, mesh: null, roofY: null };
     for (const rm of list) rm.bld = b.id;
     buildings.set(b.id, b);
-    b.mesh = roofMesh(b);
+    const own = list.find(rm => rm.roof);
+    b.mesh = own ? own.roof(b) : roofMesh(b);
     scene.add(b.mesh);
     giTouch(b.tiles);
   }
@@ -7528,6 +7732,49 @@ function roofMesh(rm) {   // rm: a building
   OUT = save;
   return m;
 }
+// A mausoleum's roof, over its portico too: an entablature on the walls and columns (architrave, frieze, a row
+// of dentils, the cornice), then a low gable along its length in marble slabs, a pediment at either end with a
+// wreath carved in it, and a ridge cap. It goes with the building, so it hides like any roof when you're in.
+function mausRoof(m) {
+  return b => {
+    const save = OUT; OUT = bufTmp; bufTmp.n = 0;
+    const P = (geo, col, a, yy, bb, o) => mausPart(m, geo, col, a, yy, bb, o), W3 = (a, yy, bb) => { const [x, z] = mausP(m, a, bb); return [x, yy, z]; };
+    const e0 = m.L * STEP + MARBLE_H;
+    P(G.box, MARBLE, 2, e0 + 0.11, 2.64, { sx: 4.28, sy: 0.22, sz: 5 });
+    P(G.box, MARBLE_LT, 2, e0 + 0.235, 2.64, { sx: 4.36, sy: 0.03, sz: 5.08 });
+    P(G.box, MARBLE, 2, e0 + 0.33, 2.64, { sx: 4.28, sy: 0.16, sz: 5 });
+    for (let n = 0; n < 22; n++) {
+      const a = -0.1 + n * 0.2;
+      P(G.box, MARBLE_LT, a, e0 + 0.44, 0.11, { sx: 0.08, sy: 0.06, sz: 0.06 });
+      P(G.box, MARBLE_LT, a, e0 + 0.44, 5.17, { sx: 0.08, sy: 0.06, sz: 0.06 });
+    }
+    for (let n = 0; n < 26; n++) {
+      const bb = 0.2 + n * 0.19;
+      P(G.box, MARBLE_LT, -0.17, e0 + 0.44, bb, { sx: 0.06, sy: 0.06, sz: 0.08 });
+      P(G.box, MARBLE_LT, 4.17, e0 + 0.44, bb, { sx: 0.06, sy: 0.06, sz: 0.08 });
+    }
+    P(G.box, MARBLE_LT, 2, e0 + 0.52, 2.64, { sx: 4.6, sy: 0.1, sz: 5.32 });
+    const Yb = e0 + 0.57, R = 0.85, A = '#d2cdc3', B = '#c4beb2';
+    for (let n = 0; n < 14; n++) {
+      const b0 = -0.02 + n * 5.32 / 14, b1 = b0 + 5.32 / 14, k = n % 2 ? B : A;
+      quad(W3(-0.3, Yb, b0), W3(2, Yb + R, b0), W3(2, Yb + R, b1), W3(-0.3, Yb, b1), CC(k));
+      quad(W3(2, Yb + R, b0), W3(4.3, Yb, b0), W3(4.3, Yb, b1), W3(2, Yb + R, b1), CC(k));
+    }
+    for (const [bf, bt, wr] of [[0, 0.12, 0.1], [5.3, 5.16, 5.18]]) {
+      tri(W3(-0.2, Yb, bt), W3(4.2, Yb, bt), W3(2, Yb + R * 0.94, bt), CC('#d8d2c6'));
+      seg(G.box, MARBLE_LT, W3(-0.32, Yb - 0.02, bf), W3(2, Yb + R + 0.04, bf), 0.08);
+      seg(G.box, MARBLE_LT, W3(4.32, Yb - 0.02, bf), W3(2, Yb + R + 0.04, bf), 0.08);
+      for (let k = 0; k < 10; k++) { const t = k / 10 * Math.PI * 2; P(G.dodec, MARBLE_LT, 2 + Math.cos(t) * 0.17, Yb + 0.33 + Math.sin(t) * 0.17, wr, { s: 0.08 }); }
+      P(G.box, MARBLE_LT, 2, Yb + R + 0.1, bf, { sx: 0.16, sy: 0.16, sz: 0.16, rz: Math.PI / 4 });
+      for (const a of [-0.3, 4.3]) P(G.box, MARBLE_LT, a, Yb + 0.07, bf, { sx: 0.14, sy: 0.14, sz: 0.14 });
+    }
+    seg(G.box, MARBLE_LT, W3(2, Yb + R, -0.06), W3(2, Yb + R, 5.36), 0.05);
+    b.roofY = () => Yb + R;
+    const mesh = bufTmp.mesh(roofMat);
+    OUT = save;
+    return mesh;
+  };
+}
 // Standing in a building (the room you're in and any rooms joined to it through walls and doors), each of
 // its walls drops to waist height when it's both lower on the screen than you and between you and the
 // camera, or when it's an outer wall whose inside faces away from the camera (so all you'd see is its
@@ -7573,6 +7820,9 @@ function updateCutaway(inside) {
     const backOn = ox * sy + oz * cy > 1e-3;
     if ((lower && between) || backOn) wantCut.add(edgeKey(ec, er, w));
   }
+  // in a mausoleum, its columns come down too where they stand lower on the screen than you
+  const mau = inside && rooms.has(inside) ? mausAt.get(T(...rooms.get(inside).tiles[0])) : null;
+  if (mau) for (const q of mau.cols) if ((q.x - H.x) * sy + (q.z - H.z) * cy > 0.3) wantCut.add(q.key);
   if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
   const touched = new Set();
   const mark = e => { const t = e >> 1, c = t % N; touched.add(Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH)); };
@@ -8184,6 +8434,16 @@ function collide(p, rad, foe) {
       if (dd >= m * m) continue;
       const l = Math.sqrt(dd) || 1e-4;
       p.x = ox + ex / l * m; p.z = oz + ez / l * m;
+    }
+    // columns and the like (a mausoleum's): round, and any number to a tile
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const pl = pillars.get(T(clamp(c + dc, 0, N - 1), clamp(r + dr, 0, N - 1)));
+      if (pl) for (const q of pl) {
+        const ex = p.x - q.x, ez = p.z - q.z, dd = ex * ex + ez * ez, m = q.R + rad;
+        if (dd >= m * m) continue;
+        const l = Math.sqrt(dd) || 1e-4;
+        p.x = q.x + ex / l * m; p.z = q.z + ez / l * m;
+      }
     }
   }
 }
@@ -10851,17 +11111,17 @@ function useAction() {
 function useDoor() {
   const d = nearDoor();
   if (!d || !H.alive) return;
-  const key = edgeKey(d.c, d.r, d.w);
+  // (a pair of doors opens and shuts together)
+  const both = d.pair ? [d, d.pair] : [d];
   if (d.open) {
     // don't shut it on anyone standing in the doorway
-    const mx = d.w ? d.c : d.c + 0.5, mz = d.w ? d.r + 0.5 : d.r;
-    const inWay = [H, ...foes].some(e => Math.hypot(e.x - mx, e.z - mz) < 0.45);
+    const inWay = [H, ...foes].some(e => both.some(q => Math.hypot(e.x - (q.w ? q.c : q.c + 0.5), e.z - (q.w ? q.r + 0.5 : q.r)) < 0.45));
     if (inWay) { sfx.nope(); return; }
-    d.open = false; openDoors.delete(key);
+    for (const q of both) { q.open = false; openDoors.delete(edgeKey(q.c, q.r, q.w)); }
   } else {
-    d.open = true; openDoors.add(key);
     // swing away from the hero
-    d.side = d.w ? (H.x < d.c ? 1 : -1) : (H.z < d.r ? 1 : -1);
+    const side = d.w ? (H.x < d.c ? 1 : -1) : (H.z < d.r ? 1 : -1);
+    for (const q of both) { q.open = true; openDoors.add(edgeKey(q.c, q.r, q.w)); q.side = side; }
   }
   sfx.door();
 }
@@ -11351,7 +11611,8 @@ function removePiece() {
   if (!target) { sfx.nope(); return; }
   const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
   if (BI[T(target.c, target.r)] === TOWN || (across >= 0 && BI[across] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
-  if (FARM[T(target.c, target.r)] || (across >= 0 && FARM[across])) { sfx.nope(); toast('That belongs to the farmer.'); return; }
+  const farmV = FARM[T(target.c, target.r)] || (across >= 0 ? FARM[across] : 0);
+  if (farmV) { sfx.nope(); toast(farmV === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.'); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
   const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
@@ -11768,7 +12029,7 @@ function update(dt) {
   }
   for (const d of doors.values()) {
     d.t += ((d.open ? 1 : 0) - d.t) * Math.min(1, dt * 10);
-    d.pivot.children[0].rotation.y = d.t * 1.75 * d.side;
+    d.pivot.children[0].rotation.y = d.t * 1.75 * d.side * (d.flip ? -1 : 1);
   }
   for (let k = orbs.length - 1; k >= 0; k--) {
     const o = orbs[k]; o.t += dt;
@@ -11814,7 +12075,10 @@ function update(dt) {
 
   spikes.exit(); spikes.enter('update: roofs, sky, lamps, HUD');
   // ----- roofs: hidden over the building you stand in, and all of them while building -----
-  const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z))), inBld = inside ? rooms.get(inside).bld : 0;
+  const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z)));
+  let inBld = inside ? rooms.get(inside).bld : 0;
+  // (on a mausoleum's portico, under its roof, the roof goes too)
+  if (!inBld) { const m = mausAt.get(T(Math.floor(H.x), Math.floor(H.z))), b = m && bldOf(m.cellaI); if (b) inBld = b.id; }
   for (const b of buildings.values()) b.mesh.visible = mode !== 'build' && b.id !== inBld;
   updateCutaway(inside);
 
@@ -13455,6 +13719,11 @@ window.GAME = {
   camYaw: () => yaw,
   tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK },
   rescaleObelisks: () => rescaleObelisks(),
+  mausoleums: () => mausoleums.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, floors: m.tiles.filter(([c, r]) => FL[T(c, r)] === 3).length,
+    doors: m.doors.map(([c, r, w]) => (w ? WW : WN)[T(c, r)]), room: !!roomOf.get(m.cellaI), roofed: !!(bldOf(m.cellaI) || {}).mesh,
+    roofShown: !!((bldOf(m.cellaI) || {}).mesh || {}).visible, cols: m.cols.map(q => cutEdges.has(q.key) ? 'cut' : 'up'), open: doors.get(edgeKey(...m.doors[0])).open, open2: doors.get(edgeKey(...m.doors[1])).open,
+    inside: mausP(m, 0.5, 1.5), porch: mausP(m, 2, 0.6), outside: mausP(m, 2, -0.6) })),
+  useDoor: () => useDoor(),
   gear: () => ({ worn: { ...GEAR }, pack: PACK.slice(), weapon: weapon().name, bar: slotEls.map(e => e.s.name) }),
   moveItem: (from, to) => moveItem(from, to),
   clickCell: c => clickCell(c),
