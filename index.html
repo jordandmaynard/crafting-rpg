@@ -2819,13 +2819,13 @@ function buildWater(c0, r0, grid, GW, ch) {
   ch.water2 = new GFX.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
   ch.water.layers.set(2); ch.water2.layers.set(2);   // drawn after the world, over a copy of it
 }
-// Swamp pools (WT 1) the same way, in their own water (SWAMP_WATER): each point of a pool's tiles at its surface,
+// Swamp pools (WT 1) the same way, in their own still water (SWAMP_WATER, BOG_WGSL): each point of a pool's tiles at its surface,
 // BOG_SURF under the tiles' level, with how deep it stands over the bed (negative up the banks, where it fades
 // out). Drawn after you (layer 3), over what's there, without writing depth: so you wade into it and the murk
 // takes your legs, rather than the water hiding them as something in front.
 function buildBog(c0, r0, grid, GW, ch) {
-  const pos = [], dep = [], zero2 = [], zero1 = [];
-  const vert = (j, k, y) => { pos.push(c0 + k / 2, y, r0 + j / 2); dep.push(y - grid[j * GW + k]); zero2.push(0, 0); zero1.push(0); };
+  const pos = [], dep = [];
+  const vert = (j, k, y) => { pos.push(c0 + k / 2, y, r0 + j / 2); dep.push(y - grid[j * GW + k]); };
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
     if (WT[i] !== 1 || !LV[i]) continue;
@@ -2840,8 +2840,6 @@ function buildBog(c0, r0, grid, GW, ch) {
   const g = new GFX.BufferGeometry();
   g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
   g.setAttribute('wDepth', new GFX.Float32BufferAttribute(dep, 1));
-  g.setAttribute('wFlow', new GFX.Float32BufferAttribute(zero2, 2));
-  g.setAttribute('wFall', new GFX.Float32BufferAttribute(zero1, 1));
   ch.bog = new GFX.Mesh(g, bogMulMat); ch.bog.renderOrder = 2;
   ch.bog2 = new GFX.Mesh(g, bogAddMat); ch.bog2.renderOrder = 3;
   ch.bog.layers.set(3); ch.bog2.layers.set(3);
@@ -3135,23 +3133,62 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   if (U.passAdd > 0.5) { return vec4f(add * f, 1.0); }
   return vec4f(mix(vec3f(1.0), mul, f), 1.0);
 }`;
-const makeWaterMat = (add, U = WATER_U, depth = add) => new GFX.ShaderMaterial({
-  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32' }, code: WATER_WGSL,
-  transparent: true, depthWrite: depth, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+const makeWaterMat = add => new GFX.ShaderMaterial({
+  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32' }, code: WATER_WGSL,
+  transparent: true, depthWrite: add, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
   blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
 });
 const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
-// Swamp water (T > Swamp water): the same water, with its own look. Still, dark and murky by default: you see
-// only a little way into it, it barely ripples, and nothing bends or focuses in it. It shares the sun, sky,
-// lamp and textures with the rest; the rest is its own.
-const SWAMP_WATER = { color: '#3c4a1c', clarity: 0.3, turbidity: 1.6, waves: 0.35, waveSpeed: 0.8, rippleSize: 1.4, glitter: 1, roughness: 0.02,
-  sparkle: 0, shoreRipples: 0.3, rippleReach: 0.5 };
-const BOG_U = Object.assign({}, WATER_U);
-for (const k of ['time', 'waveAmp', 'flowSpeed', 'glitter', 'rough', 'foamAmt', 'shoreFoam', 'swellAmp', 'swellLen', 'rippleLen', 'swellShade', 'crests', 'sparkle',
-  'caustics', 'shallows', 'shoreLine', 'shoreRipples', 'ripReach', 'refr', 'refract']) BOG_U[k] = { value: 0 };
-BOG_U.waterCol = { value: new GFX.Vector3() }; BOG_U.absorb = { value: new GFX.Vector3() };
-BOG_U.swellLen.value = BOG_U.rippleLen.value = 1;
-const bogMulMat = makeWaterMat(false, BOG_U, false), bogAddMat = makeWaterMat(true, BOG_U, false);
+// Swamp water (T > Swamp water): still, murky water of its own colour. The lake water's shader cut down to what
+// still water has: no waves (a flat surface: the sky in it by Fresnel, no glitter), no swells, flow, foam,
+// sparkles, caustics or bending; just its body, what it lets through of the bed, the hero's torch, and ripples
+// running off the banks. It shares the sun, sky, lamp and wave texture with the lakes.
+const SWAMP_WATER = { color: '#80b602', clarity: 0.61, turbidity: 3.1, waveSpeed: 2.25, shoreRipples: 0.45, rippleReach: 0.75 };
+const BOG_U = { time: { value: 0 }, waterCol: { value: new GFX.Vector3() }, absorb: { value: new GFX.Vector3() }, shoreRipples: { value: 0 }, ripReach: { value: 1 } };
+for (const k of ['tWave', 'sunDir', 'sunCol', 'skyCol', 'viewDir', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) BOG_U[k] = WATER_U[k];
+const BOG_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) depth: f32, @location(2) fogZ: f32 }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = O.model * vec4f(v.position, 1.0);
+  var o: VOut;
+  o.pos = F.viewProj * w; o.wpos = w.xyz; o.depth = v.wDepth; o.fogZ = viewDepth(w.xyz);
+  return o;
+}
+fn fresnelWater(c: f32) -> f32 { let x = 1.0 - sat(c); let x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let t = U.time;
+  let xz = i.wpos.xz;
+  let d = max(i.depth, 0.0);
+  let V = -U.viewDir; let L = normalize(U.sunDir);
+  let sunE = U.sunCol * cloudShade(xz);
+  // the sky in the still surface, by Fresnel
+  let refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(V.y)));
+  let Fr = fresnelWater(max(V.y, 0.0));
+  // the water body: light scattered back up out of it, from the sky, the sun and the hero's torch
+  let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
+  let body = U.waterCol * (U.skyCol * 1.6 + sunE * max(L.y, 0.0) * 0.8 + U.lampCol * lampK * 1.5);
+  // what's under: through the water above it, slanting down the view
+  let Tr = exp(-U.absorb * d * 3.0);
+  // ripples running off the banks, broken up, dying out by 0.3 × ripReach deep
+  let wb = abs(fract(t * 0.3) * 2.0 - 1.0);
+  let fp = mix(textureSampleLevel(tWave, tWaveS, xz / 1.9, 0.0).a, textureSampleLevel(tWave, tWaveS, xz / 1.9 + 0.5, 0.0).a, wb);
+  let rp = fract(d * 7.0 - t * 0.32 + fp * 0.6);
+  let fm = sat(step(rp, 0.08) * step(0.4, fp) * (1.0 - smoothstep(0.05 * U.ripReach, 0.3 * U.ripReach, d)) * smoothstep(0.02, 0.04, d) * U.shoreRipples * 0.8);
+  let foamLit = vec3f(0.82, 0.87, 0.92) * (sunE * max(L.y, 0.0) * 0.9 + U.skyCol * 0.9 + U.lampCol * lampK);
+  let add = (body * (1.0 - Tr) * (1.0 - Fr) + refl * Fr) * (1.0 - fm) + foamLit * fm;
+  let mul = Tr * (1.0 - Fr) * (1.0 - fm);
+  // the waterline fades in over the first few hundredths, and the whole into the haze
+  let f = smoothstep(0.0, 0.03, i.depth) * (1.0 - sat((i.fogZ - U.fogNear) / (U.fogFar - U.fogNear)));
+  if (U.passAdd > 0.5) { return vec4f(add * f, 1.0); }
+  return vec4f(mix(vec3f(1.0), mul, f), 1.0);
+}`;
+// the two passes, as the lakes': times what it lets through, then plus its own light; neither writes depth
+const makeBogMat = add => new GFX.ShaderMaterial({
+  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, BOG_U), attributes: { wDepth: 'f32' }, code: BOG_WGSL,
+  transparent: true, depthWrite: false, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+  blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
+});
+const bogMulMat = makeBogMat(false), bogAddMat = makeBogMat(true);
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
 { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
@@ -3268,8 +3305,7 @@ function updateWater(dt) {
   // swamp water: its own look (the rest it shares)
   const B = BOG_U, SW = SWAMP_WATER;
   B.time.value = (B.time.value + dt * SW.waveSpeed) % 4000;
-  B.waveAmp.value = SW.waves; B.glitter.value = SW.glitter; B.rough.value = Math.max(0.004, SW.roughness);
-  B.rippleLen.value = Math.max(0.2, SW.rippleSize); B.sparkle.value = SW.sparkle; B.shoreRipples.value = SW.shoreRipples;
+  B.shoreRipples.value = SW.shoreRipples;
   B.ripReach.value = Math.min(SW.rippleReach, 0.75);   // (the pools are 0.24 deep: past that they'd cover them)
   tmpC2.set(SW.color);
   const bt = SW.turbidity * 0.3, bc = Math.max(0.02, SW.clarity);
@@ -7860,13 +7896,8 @@ const TUNING = [
     [SWAMP_WATER, 'color', 'Colour', 'color'],
     [SWAMP_WATER, 'clarity', 'Clarity: how deep you can see into it', 0.05, 3, 0.01],
     [SWAMP_WATER, 'turbidity', 'Body brightness (silt and algae)', 0, 5, 0.01],
-    [SWAMP_WATER, 'waves', 'Ripple height', 0, 3, 0.01],
-    [SWAMP_WATER, 'waveSpeed', 'Ripple speed', 0, 4, 0.05],
-    [SWAMP_WATER, 'rippleSize', 'Ripple size', 0.3, 4, 0.05],
-    [SWAMP_WATER, 'glitter', 'Sun glitter', 0, 4, 0.05],
-    [SWAMP_WATER, 'roughness', 'Glitter spread', 0.004, 0.2, 0.001],
-    [SWAMP_WATER, 'sparkle', 'Sparkles', 0, 3, 0.05],
     [SWAMP_WATER, 'shoreRipples', 'Ripples off the banks', 0, 2, 0.05],
+    [SWAMP_WATER, 'waveSpeed', 'Ripples: speed', 0, 4, 0.05],
     [SWAMP_WATER, 'rippleReach', 'Ripples: how far out from the banks they run', 0.1, 0.75, 0.01],
   ]],
   ['Health bars', [
@@ -8119,7 +8150,7 @@ window.GAME = {
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
