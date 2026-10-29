@@ -1993,7 +1993,7 @@ const connectStats = { reached: 0 };
 // solid: radius of a round obstacle; tile: blocks the whole tile; hp/give: what an axe or sword gets out of it
 const O = {
   PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8,
-  ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14,
+  ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14, COPPER: 15, IRON: 16,
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
@@ -2018,6 +2018,9 @@ def(O.SEQUOIA, { name: 'redwood', solid: 0.62 });
 def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.ICEROCK, { name: 'ice rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.SANDROCK, { name: 'sandstone', solid: 0.3, hp: 4, give: 'stone' });
+// ore rocks: rock pillars with the metal showing, that break into ore and no stone
+def(O.COPPER, { name: 'copper rock', solid: 0.3, hp: 4, give: 'copperOre', ore: '#d4773e' });
+def(O.IRON, { name: 'iron rock', solid: 0.3, hp: 4, give: 'ironOre', ore: '#b9bfc9' });
 def(O.TOMB, { name: 'gravestone', solid: 0.2, hp: 3, give: 'stone' });
 def(O.HOUSE, { tile: true });
 def(O.WELL, { tile: true });
@@ -2070,6 +2073,10 @@ function placeVents() {
     }
   }
 }
+// each biome's share of tiles that get a rock pillar (the width of its rock band in placeScenery below), and the
+// ore rocks to each rock pillar
+const ROCK_RATE = { [FOREST]: 0.02, [MEADOW]: 0.015, [GRAVE]: 0.02, [DEEP]: 0.015, [WASTES]: 0.012, [SNOW]: 0.04, [DESERT]: 0.023 };
+const ORE_ROCKS = { copper: 1 / 3, iron: 1 / 5 };
 function placeScenery(c, r) {
   const i = T(c, r);
   if (!LV[i] || SH[i] || FL[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;
@@ -2077,6 +2084,13 @@ function placeScenery(c, r) {
   if (PATH[i] && b !== TOWN) return;
   // keep the foot and the top of every ramp clear
   for (let d = 0; d < 4; d++) if (SH[i + DI[d]]) return;
+  // ore rocks, on their own roll, ORE_ROCKS of the biome's rock pillars each
+  const rocks = ROCK_RATE[b];
+  if (rocks && !WT[i] && !LAVA[i]) {
+    const k3 = hs(c, r, 47);
+    if (k3 < rocks * ORE_ROCKS.copper) { OB[i] = O.COPPER; return; }
+    if (k3 < rocks * (ORE_ROCKS.copper + ORE_ROCKS.iron)) { OB[i] = O.IRON; return; }
+  }
   switch (b) {
     case TOWN: {
       const t = towns[TN[i] - 1], dx = c - t.c, dz = r - t.r, cell = townCell(c, r);
@@ -2751,6 +2765,7 @@ const G = {
   dodec: new GFX.DodecahedronGeometry(0.5, 0),
   oct: new GFX.OctahedronGeometry(0.5, 0),
   frust7: new GFX.CylinderGeometry(0.26, 0.5, 1, 7),
+  frust4: new GFX.CylinderGeometry(0.2, 0.5, 1, 4),
 };
 // each primitive's triangles, unrolled once, so dropping thousands of them into a chunk stays cheap
 const GP = new Map();
@@ -3871,8 +3886,45 @@ function rock(x, z, k, c = '#7a7684') {
     if (b === MEADOW || b === TOWN) { if (n % 3 === 0) part(G.box, pb, px, y + hgt, pz, { s: 0.06 }); }
   }
 }
-// Ore streaks, kept for the ore rocks to come (not drawn yet): two pale bars across the boulder's face,
-// tilted with its lean. Call after rock() with the same x, z, k and the ore's colour.
+// ORE_LOOK changed (the panel, a paste, Reset): every built chunk's objects are made again, once it's settled
+let oreLookKey = '', oreRemakeT = 0;
+function remakeOres(dt) {
+  const key = Object.values(ORE_LOOK).join();
+  if (!oreLookKey) oreLookKey = key;
+  if (key !== oreLookKey) { oreLookKey = key; oreRemakeT = 0.3; }
+  if (oreRemakeT > 0 && (oreRemakeT -= dt) <= 0) for (const ch of chunks.values()) rebuildObjects(ch.cx * CH, ch.cz * CH);
+}
+// the ore rocks' stone: the rock pillars' of their biome
+const ROCK_COLOR = { [WASTES]: '#4a403c', [SNOW]: '#a8c4dc', [DESERT]: '#b8865a' };
+// Ore rocks (T > Ore rocks), after Crafting and Conquest's ore: a rock pillar with tapered, four-sided chunks
+// of the metal sticking out of it all round, leaning out of the stone at odd angles and narrowing to their
+// tips, each its own shade; and a couple broken off, lying at its foot. Call after rock() with the same x, z, k.
+const ORE_LOOK = { copper: '#d4773e', iron: '#b9bfc9', chunks: 7, size: 1 };
+function oreChunks(x, z, k, metal) {
+  const y = groundAt(x, z), h = 0.95 + k * 0.35, lean = (k - 0.5) * 0.25, spin = k * 6, S = ORE_LOOK.size, base = CC(metal);
+  // the pillar's axis, as rock() leans and turns it
+  const ux = -Math.sin(lean) * Math.cos(spin), uy = Math.cos(lean), uz = Math.sin(lean) * Math.sin(spin);
+  const n = Math.round(ORE_LOOK.chunks);
+  for (let j = 0; j < n; j++) {
+    const a = (j / n) * Math.PI * 2 + k * 3 + (hash(x, z, 30 + j) - 0.5) * 1.2;
+    const u = (hash(x, z, 40 + j) - 0.5) * 0.62;                       // up the pillar from its middle (× its height)
+    const rr = 0.22 * Math.sqrt(1 - u * u * 2.6);                      // its girth there
+    const tilt = 0.75 + hash(x, z, 50 + j) * 0.5 - u * 0.8;            // from upright: the higher, the more it points up
+    const w = (0.09 + hash(x, z, 60 + j) * 0.05) * S, len = (0.17 + hash(x, z, 70 + j) * 0.12) * S;
+    const dx = Math.sin(a), dz = Math.cos(a), st = Math.sin(tilt), ct = Math.cos(tilt);
+    const px = x + ux * u * h + dx * rr, py = y + h * 0.45 + uy * u * h, pz = z + uz * u * h + dz * rr;
+    // half sunk in the stone, its tip out along (dx st, ct, dz st)
+    part(G.frust4, shade(base, 0.8 + hash(x, z, 80 + j) * 0.45), px + dx * st * len * 0.3, py + ct * len * 0.3, pz + dz * st * len * 0.3,
+      { sx: w * 2, sy: len, sz: w * 2, rz: -tilt, ry: a - Math.PI / 2 });
+  }
+  // broken off at its foot
+  for (let j = 0; j < 2; j++) {
+    const a = k * 7 + j * 2.6 + 1, d = 0.42 + hash(x, z, 90 + j) * 0.08, s = (0.07 + hash(x, z, 92 + j) * 0.03) * S;
+    part(G.oct, shade(base, 0.85 + j * 0.2), x + Math.sin(a) * d, y + s * 0.4, z + Math.cos(a) * d, { sx: s * 1.4, sy: s, sz: s * 1.1, ry: a, rz: 0.3 });
+  }
+}
+// Ore streaks, from before the ore rocks (not drawn): two pale bars across the boulder's face, tilted with its
+// lean. Call after rock() with the same x, z, k and the streaks' colour.
 function oreVeins(x, z, k, vein) {
   const y = groundAt(x, z), h = 0.95 + k * 0.35, lean = (k - 0.5) * 0.25;
   part(G.box, CC(vein), x - 0.05, y + h * 0.5, z + 0.21, { sx: 0.08, sy: h * 0.42, sz: 0.06, ry: k * 2, rz: 0.4 + lean });
@@ -4054,6 +4106,7 @@ function drawObject(o, c, r) {
     case O.PUMICE: return pumice(x, z, k2);
     case O.ROCK: return rock(x, z, k2, BI[T(c, r)] === WASTES ? '#4a403c' : '#7a7684');
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
+    case O.COPPER: case O.IRON: { rock(x, z, k2, ROCK_COLOR[BI[T(c, r)]] || '#7a7684'); return oreChunks(x, z, k2, o === O.COPPER ? ORE_LOOK.copper : ORE_LOOK.iron); }
     case O.SANDROCK: return rock(x, z, k2, '#b8865a');
     case O.BUSH: return bush(x, z, k2, BI[T(c, r)] === SWAMP ? '#4a6a34' : BI[T(c, r)] === DEEP ? '#355f2c' : '#3f7a34');
     case O.SNOWBUSH: return bush(x, z, k2, '#dde8f2');
@@ -5391,6 +5444,8 @@ const ICON = {
   leatherPants: pixelSvg(ART.pants, { b: '#2a1e16', y: '#f2c14e', P: '#b07a46' }),
   leatherBoots: pixelSvg(ART.boots, { B: '#8a5430', s: '#3a2416', c: '#4e3220' }),
   leatherHelmet: pixelSvg(['...LLL...', '.LLLLLLL.', 'LLLLLLLLL', 'LdddddddL', 'LL.....LL', 'L.......L'], { L: '#9a6638', d: '#4e3220' }),
+  copperOre: pixelSvg(['..GGG...', '.GgoogG.', 'GgooOggG', 'GooOogGG', 'GgoggooG', '.GGGGGG.'], { G: '#5a5664', g: '#8c8a96', o: '#b0602e', O: '#f0a060' }),
+  ironOre: pixelSvg(['..GGG...', '.GgoogG.', 'GgooOggG', 'GooOogGG', 'GgoggooG', '.GGGGGG.'], { G: '#4a4652', g: '#7a7684', o: '#a8aeb8', O: '#eef2f8' }),
   hide: pixelSvg(['.H.....H.', 'HHH...HHH', '.HHHHHHH.', '..HhHhH..', '..HHhHH..', '.HHHHHHH.', 'HHH...HHH', '.H.....H.'], { H: '#b07a4a', h: '#7a5434' }),
   table: pixelSvg(['.........', '..hhhhh..', 'TTTTTTTTT', 'TTTTTTTTT', '.L.....L.', '.L.....L.', '.L.....L.'], { T: '#8a5a32', h: '#b07a4a', L: '#5a3a22' }),
   fist: pixelSvg(['..SSSSS..', '.SsSsSsS.', '.SSSSSSS.', '.SSSSSSS.', '..SSSSSS.', '...SSSS..', '...TTTT..', '...TTTT..'], { S: '#e0b48a', s: '#a8805a', T: '#3f6a8a' }),
@@ -5417,6 +5472,8 @@ const ITEMS = {
   leatherHelmet: { name: 'Leather Helmet', slot: 'head', icon: 'leatherHelmet', armor: 1 },
   wood: { name: 'Logs', icon: 'wood', stack: 200, pile: true, loot: 'material', about: 'Cut from trees. Walls, floors, doors and hearths are built of it.' },
   stone: { name: 'Stone', icon: 'stone', stack: 200, pile: true, loot: 'material', about: 'Broken from rocks. Stone walls, floors and hearths are built of it.' },
+  copperOre: { name: 'Copper Ore', icon: 'copperOre', stack: 100, pile: true, loot: 'material', about: 'Broken from copper rocks.' },
+  ironOre: { name: 'Iron Ore', icon: 'ironOre', stack: 100, pile: true, loot: 'material', about: 'Broken from iron rocks.' },
   hide: { name: 'Hide', icon: 'hide', stack: 100, loot: 'material', about: 'Taken from wolves and boars. A tanner\'s table works it into leather.' },
 };
 const ARMOR_PER = 0.04;
@@ -5892,7 +5949,7 @@ function wisp(x, y, z, color) {
   dust.push({ m, vx: 0.15 + (Math.random() - 0.5) * 0.2, vz: (Math.random() - 0.5) * 0.2, vy: 0.45 + Math.random() * 0.25, life: 0, max: 2.4, grow: 1.6, op: 0.6 });
 }
 // chips of bark or stone flying off a hit
-const chipMats = { wood: flatMat({ color: '#8a5a32' }), stone: flatMat({ color: '#8c8a96' }) };
+const chipMats = { wood: flatMat({ color: '#8a5a32' }), stone: flatMat({ color: '#8c8a96' }), copperOre: flatMat({ color: '#d4773e' }), ironOre: flatMat({ color: '#b9bfc9' }) };
 function chips(x, y, z, kind, n = 5) {
   for (let i = 0; i < n; i++) {
     const m = new GFX.Mesh(chipGeo, chipMats[kind].clone()); m.material.transparent = true;
@@ -6031,6 +6088,7 @@ const hideMat = flatMat({ color: '#b07a4a' }), hideSpine = flatMat({ color: '#8a
 const hideGeo = new GFX.BoxGeometry(0.42, 0.025, 0.3), spineGeo = new GFX.BoxGeometry(0.34, 0.015, 0.08), pawGeo = new GFX.BoxGeometry(0.09, 0.02, 0.07);
 const logMat = flatMat({ color: '#8a5a32' }), logGeo = new GFX.CylinderGeometry(0.065, 0.065, 0.44, 6).rotateZ(Math.PI / 2);
 const pebbleMat = flatMat({ color: '#8c8a96' }), pebbleGeo = new GFX.DodecahedronGeometry(0.1, 0);
+const oreMats = { copperOre: flatMat({ color: OBJ[O.COPPER].ore }), ironOre: flatMat({ color: OBJ[O.IRON].ore }) };
 function dropModel(id) {
   const g = new GFX.Group(), add = (geo, mat, x, y, z, ry = 0, s = 1) => { const m = new GFX.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.y = ry; m.scale.setScalar(s); g.add(m); };
   if (id === 'hide') {
@@ -6038,6 +6096,9 @@ function dropModel(id) {
     for (const a of [-1, 1]) for (const b of [-1, 1]) add(pawGeo, hideMat, a * 0.2, 0, b * 0.17, 0.5 * a * b);
   } else if (id === 'wood') {
     add(logGeo, logMat, 0, 0.05, -0.07); add(logGeo, logMat, 0, 0.05, 0.07); add(logGeo, logMat, 0.02, 0.16, 0, 0.15);
+  } else if (oreMats[id]) {
+    // ore: stones with the metal in them, and a lump of it on top
+    add(pebbleGeo, pebbleMat, -0.1, 0.06, 0, 0, 1.1); add(pebbleGeo, oreMats[id], 0.1, 0.05, 0.05, 1, 0.9); add(pebbleGeo, pebbleMat, 0.02, 0.06, -0.1, 2, 0.8); add(pebbleGeo, oreMats[id], 0, 0.15, 0, 0.5, 0.75);
   } else {
     add(pebbleGeo, pebbleMat, -0.1, 0.06, 0, 0, 1.1); add(pebbleGeo, pebbleMat, 0.1, 0.05, 0.05, 1, 0.9); add(pebbleGeo, pebbleMat, 0.02, 0.06, -0.1, 2, 0.8); add(pebbleGeo, pebbleMat, 0, 0.15, 0, 0.5, 0.75);
   }
@@ -6112,8 +6173,8 @@ function detach(i, c, r) {
   return d;
 }
 // Every blow takes toughness off a prop in proportion to its damage (a plain swing takes one point), and
-// each point taken off yields one wood or stone, fractions carried over to the next blow.
-const harvestCarry = { wood: 0, stone: 0 };
+// each point taken off yields one wood, stone or ore, fractions carried over to the next blow.
+const harvestCarry = { wood: 0, stone: 0, copperOre: 0, ironOre: 0 };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const o = OB[i], od = OBJ[o];
   const d = detach(i, c, r);
@@ -6122,7 +6183,8 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   d.shake = 1; d.sx = dirx; d.sz = dirz;
   const res = od.give;
   const top = LV[i] * STEP + (od.tree ? 0.7 : 0.55);
-  chips(d.x, top, d.z, res === 'wood' ? 'wood' : 'stone', od.tree ? 4 : 6);
+  chips(d.x, top, d.z, res === 'wood' ? 'wood' : 'stone', od.tree ? 4 : od.ore ? 3 : 6);
+  if (od.ore) chips(d.x, top, d.z, res, 3);
   if (res === 'wood') sfx.chop(); else sfx.clink();
   harvestCarry[res] += before - d.hp;
   let gain = Math.floor(harvestCarry[res] + 1e-6);
@@ -6138,13 +6200,14 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
       sfx.fell();
     } else {
       scene.remove(d.g); detached.delete(i);
-      chips(d.x, top, d.z, 'stone', 10);
+      chips(d.x, top, d.z, 'stone', od.ore ? 6 : 10);
+      if (od.ore) chips(d.x, top, d.z, res, 6);
       puff(d.x, LV[i] * STEP, d.z, '#a8a4b0', 8, 1.2);
     }
   }
   if (!gain) return;
   const lost = addItem(res, gain);
-  if (lost < gain) floatText('+' + (gain - lost) + ' ' + ITEMS[res].name.toUpperCase(), d.x, top + 0.6, d.z, res === 'wood' ? '#e0b070' : '#c8c6d0');
+  if (lost < gain) floatText('+' + (gain - lost) + ' ' + ITEMS[res].name.toUpperCase(), d.x, top + 0.6, d.z, res === 'wood' ? '#e0b070' : od.ore || '#c8c6d0');
   if (lost) {
     // what doesn't fit falls on the ground between you and it
     const dx = d.x - H.x, dz = d.z - H.z, l = Math.hypot(dx, dz) || 1, s = Math.min(0.6, l * 0.5);
@@ -8391,6 +8454,12 @@ const TUNING = [
     [WATER, 'foam', 'Foam', 0, 3, 0.05],
     [WATER, 'shoreFoam', 'Shore foam', 0, 2, 0.05],
   ]],
+  ['Ore rocks', [
+    [ORE_LOOK, 'copper', 'Copper colour', 'color'],
+    [ORE_LOOK, 'iron', 'Iron colour', 'color'],
+    [ORE_LOOK, 'chunks', 'Chunks round each rock', 2, 14, 1],
+    [ORE_LOOK, 'size', 'Chunk size', 0.4, 2, 0.05],
+  ]],
   ['Waterfall spray', [
     [FALL_SPRAY, 'amount', 'Amount (0 off)', 0, 3, 0.05],
     [FALL_SPRAY, 'size', 'Puff size', 0.2, 3, 0.05],
@@ -8617,6 +8686,7 @@ function frame(now) {
   updateClouds(dt);
   updateWater(dt);
   updateSpray();
+  remakeOres(dt);
   updateHearths(dt);
   ventSmoke(dt);
   prof.lap('clouds, water, hearths, smoke');
@@ -8689,6 +8759,9 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
+  ores: () => { const n = {}; for (let i = 0; i < N * N; i++) { const o = OB[i]; if (o === O.ROCK || o === O.ICEROCK || o === O.SANDROCK || o === O.COPPER || o === O.IRON) n[o] = (n[o] || 0) + 1; } return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), copper: n[O.COPPER] || 0, iron: n[O.IRON] || 0, ids: [O.COPPER, O.IRON] }; },
+  findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
+  strike: (c, r) => { const i = T(c, r); strikeProp(i, c, r, 1, 0); return OB[i]; },
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
