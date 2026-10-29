@@ -2343,7 +2343,10 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   // (where hot air rises, the whole picture, strokes and all, is read a few pixels off: see HEAT)
   var px = floor(i.pos.xy);
-  if (U.useHeat > 0.5) { px = clamp(px + textureLoad(tHeat, mid(px), 0).xy, vec2f(0.0), U.res - 1.0); }
+  if (U.useHeat > 0.5) {
+    let h = textureLoad(tHeat, mid(px), 0);
+    if (h.z > 0.0) { px = clamp(px + round(h.xy / max(h.z, 1.0)), vec2f(0.0), U.res - 1.0); }
+  }
   // strokes fade into the haze with the ground they outline
   let haze = 1.0 - sat((depthAt(px) + U.near - U.fogNear) / (U.fogFar - U.fogNear));
   var col = vec3f(0.0);
@@ -5239,43 +5242,46 @@ function updateAmbient() {
 }
 // Now and then a clump of snow slides off a frost pine's bough near you and drops into the deep snow below,
 // bursting into powder and punching a hole in it (T > Ambient life: SNOWFALL).
-const SNOWFALL = { every: 5, size: 1, hole: 0.7 };
-const snowClumpMat = flatMat({ color: '#eef4fa' }), snowClumpGeo = new GFX.DodecahedronGeometry(0.07, 0);
+const SNOWFALL = { every: 3, size: 1.6, hole: 0.8 };
+const snowClumpMat = flatMat({ color: '#eef4fa', emissive: '#3a4048' }), snowClumpGeo = new GFX.DodecahedronGeometry(0.07, 0);
 const snowfalls = [];
 let snowfallT = 2, snowfallN = 0;
 function updateSnowfalls(dt) {
   for (let n = snowfalls.length - 1; n >= 0; n--) {
     const f = snowfalls[n];
     f.vy -= GRAV * dt; f.g.position.y += f.vy * dt; f.g.rotation.x += dt * 3;
+    // (shedding powder as it falls)
+    if ((f.trail -= dt) < 0) { f.trail = 0.06; puff(f.g.position.x, f.g.position.y - 0.1, f.g.position.z, '#f4f8fc', 1, 0.15); }
     if (f.g.position.y > f.land) continue;
     scene.remove(f.g);
     snowfalls.splice(n, 1);
-    puff(f.g.position.x, f.land - 0.1, f.g.position.z, '#f4f8fc', 8, 0.7 * SNOWFALL.size);
+    puff(f.g.position.x, f.land - 0.1, f.g.position.z, '#f4f8fc', 14, 0.6 * SNOWFALL.size);
     if (driftHoles.length < 64) driftHoles.push([f.g.position.x, f.g.position.z, SNOWFALL.hole * SNOWFALL.size]);
   }
   if (SNOWFALL.every <= 0 || (snowfallT -= dt) > 0) return;
   snowfallT = SNOWFALL.every * (0.4 + Math.random() * 1.2);
-  // a frost pine standing in deep snow, near you
-  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
-  for (let tries = 0; tries < 30; tries++) {
-    const c = c0 + Math.floor((Math.random() - 0.5) * 28), r = r0 + Math.floor((Math.random() - 0.5) * 20), i = T(clamp(c, 0, N - 1), clamp(r, 0, N - 1));
+  // a frost pine standing in deep snow, near you (well on screen)
+  const c0 = Math.floor(camTarget.x), r0 = Math.floor(camTarget.z);
+  for (let tries = 0; tries < 60; tries++) {
+    const c = c0 + Math.floor((Math.random() - 0.5) * 18), r = r0 + Math.floor((Math.random() - 0.5) * 14), i = T(clamp(c, 0, N - 1), clamp(r, 0, N - 1));
     if (OB[i] !== O.SNOWPINE) continue;
     // where its tiers are (as pine() builds it), and a spot on the rim of one
     const [x, z] = objPos(c, r, O.SNOWPINE), k = hs(c, r, 6), P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P;
     const tier = Math.floor(Math.random() * 3), w = (0.75 - tier * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + tier * hgt * 0.24 + hgt * 0.2;
-    const a = Math.random() * Math.PI * 2, rad = w * 0.5 * 1.15, fx = x + Math.sin(a) * rad, fz = z + Math.cos(a) * rad;
+    // (off the side toward you, where it can be seen falling)
+    const a = Math.atan2(camera.position.x - x, camera.position.z - z) + (Math.random() - 0.5) * 2.2, rad = w * 0.5 * 1.15, fx = x + Math.sin(a) * rad, fz = z + Math.cos(a) * rad;
     if (driftCov(fx, fz) < 0.3) continue;
     const g = new GFX.Group();
-    for (let q = 0; q < 4; q++) {
+    for (let q = 0; q < 6; q++) {
       const m = new GFX.Mesh(snowClumpGeo, snowClumpMat);
       m.position.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.08, (Math.random() - 0.5) * 0.12); m.scale.setScalar((0.7 + Math.random() * 0.6) * SNOWFALL.size);
       g.add(m);
     }
     g.position.set(fx, yy - hgt * 0.2, fz);
     scene.add(g);
-    puff(fx, yy - hgt * 0.25, fz, '#f4f8fc', 3, 0.25);
+    puff(fx, yy - hgt * 0.25, fz, '#f4f8fc', 5, 0.3);
     snowfallN++;
-    snowfalls.push({ g, vy: 0, land: groundAt(fx, fz) + (DRIFT.snowMin + DRIFT.snowMax) * 0.5 * driftCov(fx, fz) });
+    snowfalls.push({ g, vy: 0, trail: 0, land: groundAt(fx, fz) + (DRIFT.snowMin + DRIFT.snowMax) * 0.5 * driftCov(fx, fz) });
     break;
   }
 }
@@ -5283,10 +5289,12 @@ function updateSnowfalls(dt) {
 // wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and are drawn
 // last (layer 8) into heatRT, each pixel an offset in mosaic pixels by ripples rising up the sheet, strongest in
 // its middle and fading at its sides and top; the outline pass then reads the whole picture there that far off,
-// strokes included. Anything nearer than the sheet is left as it is (and isn't pulled in from beside it), so the
+// strokes included. The sheets overlap, so they're added up (each offset weighted by its sheet's strength there,
+// with the weights in z) and where they come to more than one the outline pass takes their weighted mean, so the shimmer runs on unbroken from
+// sheet to sheet over the sand instead of in pockets. Anything nearer than the sheet is left as it is (and isn't pulled in from beside it), so the
 // hot air never smears what stands in front of it.
-const HEAT = { lava: 1, sand: 0.7, strength: 1, speed: 1.25, height: 3.75 };
-const HEAT_DENSITY = { lava: 0.35, sand: 0.06 };
+const HEAT = { lava: 1.2, sand: 0.7, strength: 0.55, speed: 1, height: 3.1 };
+const HEAT_DENSITY = { lava: 0.35, sand: 0.3 };
 const HEAT_U = { tD: { value: null }, res: { value: new GFX.Vector2(1, 1) }, ss: { value: 1 }, strength: { value: 1 }, speed: { value: 1 }, height: { value: 1 }, lava: { value: 1 }, sand: { value: 0.5 } };
 const HEAT_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) k: f32, @location(2) pix: vec3f, @location(3) seed: f32 }
@@ -5320,15 +5328,16 @@ fn heatSceneZ(q: vec2i) -> f32 {
   let q = i.pix;
   let wob = vec2f(sin(q.y * 9.0 - t * 5.0 + q.x * 3.1 + i.seed) + 0.5 * sin(q.y * 17.0 - t * 8.3 + q.z * 5.3 + i.seed),
     0.6 * sin(q.y * 11.0 - t * 6.1 + q.z * 2.7 + i.seed * 1.7));
-  var off = round(wob * mask * 2.0 * U.res.y / 360.0);
+  var off = wob * 2.0 * U.res.y / 360.0;
   // (nor from something nearer beside it)
-  let ps = clamp(p + vec2i(off * U.ss), vec2i(0), dims - 1);
+  let ps = clamp(p + vec2i(round(off * mask) * U.ss), vec2i(0), dims - 1);
   if (heatSceneZ(ps) > vs) { off = vec2f(0.0); }
-  return vec4f(off, 0.0, 1.0);
+  return vec4f(off * mask, mask, 0.0);
 }`;
 const heatMat = new GFX.ShaderMaterial({
   uniforms: HEAT_U, attributes: { hPart: 'vec4f', corner: 'vec2f' }, code: HEAT_WGSL,
-  depthTest: false, depthWrite: false, side: GFX.DoubleSide,
+  depthTest: false, depthWrite: false, side: GFX.DoubleSide, transparent: true,
+  blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneFactor,
 });
 HEAT_U.tD.value = outlineRT.depthTexture;
 let heatMesh = null;
@@ -5348,7 +5357,7 @@ function buildHeat() {
     if (LAVA[i] && !LV[i]) { if (rnd() < D.lava) add(c + rnd(), WL[i] * STEP - LAVA_DROP, r + rnd(), 1, 1.6 + rnd() * 0.6, 1.3 + rnd() * 0.5); }
     else if (BI[i] === DESERT && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile) {
       // (the deep sand: the open desert the drift layer lies over)
-      if (rnd() < D.sand) { const x = c + rnd(), z = r + rnd(); add(x, groundAt(x, z), z, 0, 2 + rnd(), 0.7 + rnd() * 0.3); }
+      if (rnd() < D.sand) { const x = c + rnd(), z = r + rnd(); add(x, groundAt(x, z), z, 0, 3 + rnd(), 0.7 + rnd() * 0.3); }
     }
   }
   if (!pos.length) return;
