@@ -789,6 +789,7 @@ async function generate(progress) {
   layPlots(rand);
   progress(0.95, 'NAMING THE LANDS'); await nextFrame();
   nameRegions();
+  findFalls();
   progress(0.97, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
 }
@@ -2527,12 +2528,14 @@ function renderWorld() {
     renderer.setRenderTarget(normRT);
     renderer.setClearColor(0x000000, 0); renderer.clear();
     scene.overrideMaterial = normalMat; tallVisible(false); groundHaze.mesh.visible = false; lootFx.visible = false;
+    const sprayOn = sprayMesh && sprayMesh.visible; if (sprayMesh) sprayMesh.visible = false;
     renderer.passName = 'normals (Sobel)';
     camera.layers.set(0); renderer.render(scene, camera);
     camera.layers.set(2); renderer.render(scene, camera);
     camera.layers.set(1); renderer.render(scene, camera);
     camera.layers.set(3); renderer.render(scene, camera);
     scene.overrideMaterial = null; tallVisible(true); groundHaze.mesh.visible = groundHaze.on; lootFx.visible = true;
+    if (sprayMesh) sprayMesh.visible = sprayOn;
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
@@ -3404,6 +3407,110 @@ const makeBogMat = add => new GFX.ShaderMaterial({
   blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
 });
 const bogMulMat = makeBogMat(false), bogAddMat = makeBogMat(true);
+
+// ---------- Waterfall spray (T > Waterfall spray) ----------
+// Wherever running water steps down a level (a river's falls, or where it drops into a lake), spray and mist
+// rise off the foot of the fall: soft round puffs, added on (no dithering), lit by the sky, the sun through its
+// shadow and the torch, and fogged. Every puff is worked out in the vertex shader from its fall, its own random
+// seed and the time, so nothing is stepped on the CPU: it loops forever, a fresh throw each time round. Two kinds:
+// spray, thrown out and up off the fall and dropping back, and mist, bigger and fainter, drifting up and away.
+// The falls round you are gathered into one mesh, built again when you've walked a way.
+const FALL_SPRAY = { amount: 1, size: 1, speed: 1, color: '#e6f0f4' };
+const falls = [];   // { x, y, z (the foot of the fall), dx, dz (the way it falls), drop (how far) }
+function findFalls() {
+  falls.length = 0;
+  const water = i => (!LV[i] || BR[i]) && WL[i] && !LAVA[i];
+  for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
+    const i = T(c, r);
+    if (!water(i)) continue;
+    for (let d = 0; d < 4; d++) {
+      const j = i + DI[d];
+      if (!water(j) || WL[j] >= WL[i]) continue;
+      // (the water's surface slopes down from the edge to the lower tile's middle: that's where it lands)
+      falls.push({ x: c + 0.5 + DC[d], y: WL[j] * STEP - 0.16, z: r + 0.5 + DR[d], dx: DC[d], dz: DR[d], drop: (WL[i] - WL[j]) * STEP });
+    }
+  }
+}
+const SPRAY_U = { amount: { value: 1 }, size: { value: 1 }, speed: { value: 1 }, color: { value: new GFX.Color(FALL_SPRAY.color) } };
+for (const k of ['sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) SPRAY_U[k] = WATER_U[k];
+const SPRAY_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32, @location(2) wpos: vec3f }
+fn sprayHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
+@vertex fn vs(v: VIn) -> VOut {
+  let mist = v.sPart.z > 0.5;
+  let life = select(1.3, 2.8, mist);
+  let ph = F.camDir.w * U.speed / life + v.sPart.y * 17.0;
+  let cyc = floor(ph); let k = ph - cyc;   // how far through its life, this time round
+  let r = v.sPart.y * 91.7 + cyc * 13.37;
+  let a = sprayHash(r); let b = sprayHash(r + 1.3); let c = sprayHash(r + 2.7); let e = sprayHash(r + 4.1);
+  let dir = v.sDir.xy; let side = vec2f(-dir.y, dir.x); let drop = v.sDir.z;
+  let age = k * life; let push = sqrt(max(drop, 0.3));
+  // thrown out from the fall and up, dropping back (spray); or drifting up and out, hardly falling (mist)
+  let outV = (0.3 + a * 0.7) * push * select(1.0, 0.4, mist);
+  let upV = (0.6 + b * 1.0) * push * select(1.0, 0.35, mist);
+  let g = select(2.6, 0.1, mist);
+  let up = max(upV * age - 0.5 * g * age * age, 0.0);
+  let across = v.sPart.x + (c - 0.5) * 0.12 + (e - 0.5) * 0.35 * age;
+  let hz = dir * (0.04 + outV * age) + side * across;
+  let at = v.position + vec3f(hz.x, up + 0.03, hz.y);
+  let size = mix(0.08, 0.3, sqrt(k)) * select(1.0, 2.4, mist) * U.size;
+  let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
+  let upv = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
+  let w = at + (right * v.corner.x + upv * v.corner.y) * size;
+  var o: VOut;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.uv = v.corner; o.wpos = at;
+  let fade = smoothstep(0.0, 0.1, k) * (1.0 - smoothstep(0.45, 1.0, k));
+  let fog = 1.0 - sat((viewDepth(at) - U.fogNear) / (U.fogFar - U.fogNear));
+  o.a = fade * select(0.35, 0.12, mist) * U.amount * sat(drop * 1.5) * fog;
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let r2 = dot(i.uv, i.uv);
+  if (r2 > 1.0) { discard; }
+  let m = exp(-r2 * 3.0) * (1.0 - r2);
+  let L = normalize(U.sunDir);
+  let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
+  let light = U.skyCol * 0.9 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
+  return vec4f(U.color * light * m * i.a, 1.0);
+}`;
+const sprayMat = new GFX.ShaderMaterial({
+  uniforms: SPRAY_U, attributes: { sDir: 'vec3f', sPart: 'vec3f', corner: 'vec2f' }, code: SPRAY_WGSL,
+  transparent: true, depthWrite: false, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+  blendSrc: GFX.OneFactor, blendDst: GFX.OneFactor,
+});
+let sprayMesh = null;
+const sprayAt = { x: -1e9, z: -1e9 };
+const SPRAY_R = 36;   // tiles round you whose falls spray
+function buildSpray() {
+  sprayAt.x = H.x; sprayAt.z = H.z;
+  if (sprayMesh) { scene.remove(sprayMesh); sprayMesh.geometry.dispose(); sprayMesh = null; }
+  const pos = [], dir = [], part = [], corner = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  let seed = 0;
+  for (const f of falls) {
+    if (Math.abs(f.x - H.x) > SPRAY_R || Math.abs(f.z - H.z) > SPRAY_R) continue;
+    const n = Math.round(10 + 8 * Math.min(2, f.drop));
+    for (let k = 0; k < n; k++) {
+      const u = (k + 0.5) / n - 0.5, sd = (++seed * 0.6180339887) % 1, mist = k % 3 === 0 ? 1 : 0;
+      for (const [cx, cz] of C) { pos.push(f.x, f.y, f.z); dir.push(f.dx, f.dz, f.drop); part.push(u, sd, mist); corner.push(cx, cz); }
+    }
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('sDir', new GFX.Float32BufferAttribute(dir, 3));
+  g.setAttribute('sPart', new GFX.Float32BufferAttribute(part, 3));
+  g.setAttribute('corner', new GFX.Float32BufferAttribute(corner, 2));
+  sprayMesh = new GFX.Mesh(g, sprayMat);
+  sprayMesh.frustumCulled = false; sprayMesh.renderOrder = 10; sprayMesh.layers.set(3);
+  scene.add(sprayMesh);
+}
+function updateSpray() {
+  if (Math.hypot(H.x - sprayAt.x, H.z - sprayAt.z) > 8) buildSpray();
+  const S = FALL_SPRAY, U = SPRAY_U;
+  U.amount.value = S.amount; U.size.value = S.size; U.speed.value = S.speed; U.color.value.set(S.color);
+  if (sprayMesh) sprayMesh.visible = S.amount > 0;
+}
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
 { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
@@ -8182,6 +8289,12 @@ const TUNING = [
     [WATER, 'foam', 'Foam', 0, 3, 0.05],
     [WATER, 'shoreFoam', 'Shore foam', 0, 2, 0.05],
   ]],
+  ['Waterfall spray', [
+    [FALL_SPRAY, 'amount', 'Amount (0 off)', 0, 3, 0.05],
+    [FALL_SPRAY, 'size', 'Puff size', 0.2, 3, 0.05],
+    [FALL_SPRAY, 'speed', 'Speed', 0.2, 3, 0.05],
+    [FALL_SPRAY, 'color', 'Colour', 'color'],
+  ]],
   ['Swamp water', [
     [SWAMP_WATER, 'color', 'Colour', 'color'],
     [SWAMP_WATER, 'clarity', 'Clarity: how deep you can see into it', 0.05, 3, 0.01],
@@ -8401,6 +8514,7 @@ function frame(now) {
   prof.lap('camera + foe bars');
   updateClouds(dt);
   updateWater(dt);
+  updateSpray();
   updateHearths(dt);
   ventSmoke(dt);
   prof.lap('clouds, water, hearths, smoke');
@@ -8447,7 +8561,7 @@ window.GAME = {
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
@@ -8473,6 +8587,7 @@ window.GAME = {
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
   // tests: the world's arrays and helpers, to check them in bulk
+  falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map((w, b) => w ? new Set(allNames(b)).size : 0) }),
   raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
