@@ -2373,7 +2373,8 @@ const GROUND_HAZE = { on: 1, amount: 0.99, density: 3.49, height: 0.25, slices: 
 // and no black point, which is there to take back the lit haze's washout
 if (MOBILE) { GI.on = 0; HAZE.on = 0; GROUND_HAZE.on = 0; EYE.on = 0; BLOOM.strength = 0; GRADE.black = 0; }
 const groundHaze = new GFX.GroundHaze(renderer);
-groundHaze.mesh.layers.set(1);   // drawn after the hero, so it swirls round their feet
+// drawn after the hero, so it swirls round their feet, and after the swamp water (layer 3), so it lies over the pools
+groundHaze.mesh.layers.set(3); groundHaze.mesh.renderOrder = 5;
 scene.add(groundHaze.mesh);
 const GH_N = GFX.GROUND_HAZE_SITE, GH_TPT = GFX.GROUND_HAZE_SITE_TPT, GH_TILES = GH_N / GH_TPT, GH_BLUR = 2;
 // the haze drapes over cliffs as it lies on ramps: its ground never falls faster than this (levels a tile), and not
@@ -2398,9 +2399,11 @@ function poolNear(c, r, lava) {
   return G.poolAway + (1 - G.poolAway) * t * t * (3 - 2 * t);
 }
 // the ground as drawn (a cliff's face slopes down over the lower tile's first half), or the water or lava's surface
+// (a swamp pool's too, over its sunken bed)
 function ghGround(x, z) {
   const ti = T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1));
   if (!LV[ti]) return WT[ti] >= 2 ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;
+  if (WT[ti] === 1) return Math.max(surfH(x, z), LV[ti] * STEP - BOG_SURF);
   return surfH(x, z);
 }
 function groundHazeSite(cx, cz) {
@@ -2416,9 +2419,9 @@ function groundHazeSite(cx, cz) {
     let s = Math.max(0, share(b));
     // in swamps and the Wastes, thickest by the water and over lava, thinning away from them
     if (s > 0 && (b === SWAMP || b === WASTES)) s *= poolNear(tc, tr, b === WASTES);
-    // none over water (lava keeps its haze)
+    // none over lakes and rivers (lava and swamp pools keep their haze), nor inside a closed-in building
     const wi = T(tc, tr);
-    if (WT[wi] && !LAVA[wi]) s = 0; else land[c + r * W] = 1;
+    if ((WT[wi] >= 2 && !LAVA[wi]) || roomOf.has(wi)) s = 0; else land[c + r * W] = 1;
     if (s > 0) { m[k] = s; m[k + 1] = col[b][0] * s; m[k + 2] = col[b][1] * s; m[k + 3] = col[b][2] * s; }
   }
   for (const [dc, dr] of [[1, 0], [0, 1]]) {
@@ -2619,9 +2622,9 @@ function renderWorld() {
   WATER_U.refr.value = bend ? 1 : 0;
   renderer.passName = 'water';
   camera.layers.set(2); renderer.render(scene, camera);
-  renderer.passName = 'hero, ground haze';
+  renderer.passName = 'hero';
   camera.layers.set(1); renderer.render(scene, camera);
-  renderer.passName = 'swamp water';
+  renderer.passName = 'swamp water, ground haze';
   camera.layers.set(3); renderer.render(scene, camera);
   updateHaze();
   updateEye();
@@ -4723,6 +4726,8 @@ function refreshRooms(c, r, w) {
   settleBuildings();
   // a roof going up or coming down round a hearth: its chimney grows or shrinks to suit
   for (const h of hearths.values()) if (Math.abs(h.c - c) < 24 && Math.abs(h.r - r) < 24) rebuildObjects(h.c, h.r);
+  // and the ground haze's site map is made again at once: none rests in a closed-in room
+  ghAt = -1e9;
 }
 
 // ---------- Chunk streaming ----------
@@ -8842,6 +8847,7 @@ window.GAME = {
   },
   // tests: the world's arrays and helpers, to check them in bulk
   resources: a => { if (a) RESOURCES.amount = a; return RESOURCES.amount; },
+  ghPoint: (x, z) => { groundHazeSite(Math.round(camTarget.x), Math.round(camTarget.z)); const c0 = Math.round(camTarget.x) - GH_TILES / 2, r0 = Math.round(camTarget.z) - GH_TILES / 2, k = (Math.floor((z - r0) * GH_TPT) * GH_N + Math.floor((x - c0) * GH_TPT)) * 4; return { y: ghSite[k], share: ghSite[k + 2] }; },
   ores: () => { const n = {}; for (let i = 0; i < N * N; i++) { const o = OB[i]; if (o === O.ROCK || o === O.ICEROCK || o === O.SANDROCK || o === O.COPPER || o === O.IRON) n[o] = (n[o] || 0) + 1; } return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), copper: n[O.COPPER] || 0, iron: n[O.IRON] || 0, ids: [O.COPPER, O.IRON] }; },
   findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
   strike: (c, r) => { const i = T(c, r); strikeProp(i, c, r, 1, 0); return OB[i]; },
