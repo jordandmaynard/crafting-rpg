@@ -13,5 +13,6 @@ export { GroundHaze, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT } from './groundhaze
 export { Caustics } from './caustics.js';
 export { Ripples } from './ripples.js';
 export { Trample } from './trample.js';
+export { Drift } from './drift.js';
 export { GpuProfiler } from './profiler.js';
 export { SpikeRecorder, SPIKE_TUNING } from './spikes.js';
