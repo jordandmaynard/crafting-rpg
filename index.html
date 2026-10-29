@@ -3692,7 +3692,7 @@ function updateCuts(dt) {
 // quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
 // layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
 // point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
-const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.84, rim: 0.47, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1 };
+const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.84, rim: 0.47, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.25 };
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
@@ -3761,7 +3761,7 @@ const DRIFT_U = {
   dV: { value: { x: 0, y: 0, z: 48, w: 0 } },      // the trench map's corner (tiles), width (tiles), on
   depth: { value: { x: 0.18, y: 0.38, z: 0.14, w: 0.3 } },   // snow's least and most depth, sand's (tiles)
   look: { value: { x: 0.15, y: 0.92, z: 0.35, w: 0 } },      // the drifts' waves a tile, how far down a trench goes, a rim's height, smooth normals
-  edge: { value: { x: 0, y: 0, z: 0, w: 0 } },               // right up to cliffs (1 on), over ramps (1 on), per-pixel normals (1 on)
+  edge: { value: { x: 0, y: 0, z: 0, w: 0 } },               // right up to cliffs (1 on), over ramps (1 on), per-pixel normals (1 on), how far apart the smooth normals' samples are (tiles)
 };
 const driftMat = new GFX.ShaderMaterial({ uniforms: DRIFT_U, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -3798,6 +3798,24 @@ fn dGround(t: vec4f, q: vec2i, xz: vec2f) -> f32 {
   return h;
 }
 fn dH(t: vec4f) -> f32 { return (round(t.g * 255.0) * 256.0 + round(t.b * 255.0)) / 1024.0 - 16.0; }
+// the trench map read through a cubic B-spline (4 bilinear taps), so its slopes run on smoothly from cell to
+// cell and the light on a trench's sides shows no blotches of the grid
+fn dDeform(uv: vec2f) -> vec2f {
+  let size = vec2f(textureDimensions(tDeform));
+  let p = uv * size - 0.5;
+  let i = floor(p); let f = p - i;
+  let f2 = f * f; let f3 = f2 * f;
+  let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  let w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+  let w3 = f3 / 6.0;
+  let g0 = w0 + w1; let g1 = w2 + w3;
+  let t0 = (i + 0.5 - 1.0 + w1 / g0) / size;
+  let t1 = (i + 0.5 + 1.0 + w3 / g1) / size;
+  let a = textureSampleLevel(tDeform, tDeformS, vec2f(t0.x, t0.y), 0.0).xy * g0.x + textureSampleLevel(tDeform, tDeformS, vec2f(t1.x, t0.y), 0.0).xy * g1.x;
+  let b = textureSampleLevel(tDeform, tDeformS, vec2f(t0.x, t1.y), 0.0).xy * g0.x + textureSampleLevel(tDeform, tDeformS, vec2f(t1.x, t1.y), 0.0).xy * g1.x;
+  return a * g0.y + b * g1.y;
+}
 // the layer's top at xz
 fn dPoint(xz: vec2f) -> DP {
   let lim = vec2i(${N * 2 - 1});
@@ -3840,7 +3858,7 @@ fn dPoint(xz: vec2f) -> DP {
   var s = vec2f(0.0);
   if (U.dV.w > 0.5) {
     let uv = (xz - U.dV.xy) / U.dV.z;
-    if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) { s = textureSampleLevel(tDeform, tDeformS, uv, 0.0).xy; }
+    if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) { s = dDeform(uv); }
   }
   let lift = 1.0 - s.x * U.look.y + s.y * (1.0 - s.x) * U.look.z;
   return DP(ground + deep * cov * lift - 0.08 * (1.0 - cov), isSand, s.x, col, wcol);
@@ -3853,7 +3871,7 @@ fn dPoint(xz: vec2f) -> DP {
   // smooth normals (DRIFT.smooth): from the points round it, a grid step away
   var nrm = vec3f(0.0, 1.0, 0.0);
   if (U.look.w > 0.001 && U.edge.z < 0.5) {
-    let e = ${(1 / DRIFT_S).toFixed(6)};
+    let e = U.edge.w;
     let dx = dPoint(xz + vec2f(e, 0.0)).y - dPoint(xz - vec2f(e, 0.0)).y;
     let dz = dPoint(xz + vec2f(0.0, e)).y - dPoint(xz - vec2f(0.0, e)).y;
     nrm = normalize(vec3f(-dx, 2.0 * e, -dz));
@@ -3870,7 +3888,7 @@ fn dPoint(xz: vec2f) -> DP {
   // afresh at each pixel (DRIFT.fine), so no edge between triangles shows at all
   var sn = normalize(i.nrm);
   if (U.edge.z > 0.5 && U.look.w > 0.001) {
-    let e = ${(1 / DRIFT_S).toFixed(6)};
+    let e = U.edge.w;
     let xz = i.world.xz;
     let dx = dPoint(xz + vec2f(e, 0.0)).y - dPoint(xz - vec2f(e, 0.0)).y;
     let dz = dPoint(xz + vec2f(0.0, e)).y - dPoint(xz - vec2f(0.0, e)).y;
@@ -3924,7 +3942,7 @@ function updateDrift(dt) {
   Object.assign(u.win.value, { x: Math.floor(camTarget.x * DRIFT_S / 2) * 2 / DRIFT_S - DRIFT_R, y: Math.floor(camTarget.z * DRIFT_S / 2) * 2 / DRIFT_S - DRIFT_R });
   Object.assign(u.depth.value, { x: D.snowMin, y: D.snowMax, z: D.sandMin, w: D.sandMax });
   Object.assign(u.look.value, { x: D.size, y: D.press, z: D.rim, w: D.smooth });
-  u.edge.value.x = D.cliffs; u.edge.value.y = D.ramps; u.edge.value.z = D.fine;
+  u.edge.value.x = D.cliffs; u.edge.value.y = D.ramps; u.edge.value.z = D.fine; u.edge.value.w = D.span;
   const bodies = [];
   if (H.alive && !H.flip) bodies.push({ x: H.x, z: H.z, radius: D.radius, strength: 1 });
   if (D.foes > 0.5) {
@@ -9561,6 +9579,7 @@ const TUNING = [
     [DRIFT, 'ramps', 'Over ramps too (1 on, 0 stops at them)', 0, 1, 1],
     [DRIFT, 'outline', 'Depth outline on it (1 on, 0 none)', 0, 1, 1],
     [DRIFT, 'fine', 'Smooth normals worked out at each pixel (1, hides the triangles; 0 per vertex)', 0, 1, 1],
+    [DRIFT, 'span', 'Smooth normals: how far round each point they look (tiles; wider is smoother)', 0.05, 1, 0.01],
   ]],
   ['Footprints', [
     [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
