@@ -3038,7 +3038,7 @@ function roughCell(P, K, Q, flip, lifted) {
 // and round off, paths and streets melt into the ground round them as biomes do, and nothing bleeds over a
 // cliff. blend (0-1) fades each quarter's colour into its neighbours' across that much of the way between their
 // middles, until at 1 the ground is one continuous, noisy run of colour with no edges at all.
-const GROUND_SHAPE = { on: 1, wobble: 0.55, size: 2.8, blend: 1 };
+const GROUND_SHAPE = { on: 1, wobble: 0.55, size: 2.8, blend: 1, rampSmooth: 1, rampSpan: 0.3 };
 const groundTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 groundTex.regions = [];
 function buildGround(cx, cz, ch) {
@@ -3402,6 +3402,23 @@ function grassChunk(cx, cz) {
   const c0 = cx * CH, r0 = cz * CH, W = CH * 2 + 3, ph = new Float32Array(W * W), d = grassTex.image.data;
   // the ground's half-grid points, from one before the chunk's first half-cell to one past its last
   for (let j = 0; j < W; j++) for (let k = 0; k < W; k++) ph[j * W + k] = pointH(c0 * 2 - 1 + k, r0 * 2 - 1 + j);
+  // which half-cells, from one before the chunk to one past it, are lifted: a slope or cliff face (a corner
+  // raised above its own tile's surface by a higher tile beside it), off the land, or a bridge. A quarter is
+  // smooth ground (flat, or on a ramp's slope) if neither it nor any half-cell round it is lifted: the rough
+  // cliff faces reach one half-cell onto the ground round them
+  const LW = CH * 2 + 2, lifted = new Uint8Array(LW * LW);
+  for (let hz = -1; hz <= CH * 2; hz++) for (let hx = -1; hx <= CH * 2; hx++) {
+    const X = c0 * 2 + hx, Z = r0 * 2 + hz, cc = X >> 1, rr = Z >> 1, at = (hz + 1) * LW + hx + 1;
+    if (cc < 0 || rr < 0 || cc >= N || rr >= N) { lifted[at] = 1; continue; }
+    const ti = T(cc, rr);
+    if (!LV[ti] || BR[ti]) { lifted[at] = 1; continue; }
+    for (let b = 0; b < 2 && !lifted[at]; b++) for (let a = 0; a < 2; a++)
+      if (ph[(hz + b + 1) * W + hx + a + 1] > tileSurf(cc, rr, (X + a) / 2 - cc, (Z + b) / 2 - rr) + 1e-4) { lifted[at] = 1; break; }
+  }
+  const smoothQ = (lx, lz) => {
+    for (let b = 0; b < 3; b++) for (let a = 0; a < 3; a++) if (lifted[(lz + b) * LW + lx + a]) return false;
+    return true;
+  };
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), b = BI[i];
     let kind = 0, mask = 0, y = 0;
@@ -3409,21 +3426,21 @@ function grassChunk(cx, cz) {
     else if (GRASS_KIND[b] && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || townCell(c, r) === 'yard')) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
-        // a quarter is flat if the 4 × 4 points round it are level: it's no slope and touches none
-        const lx = (c - c0) * 2 + (q & 1), lz = (r - r0) * 2 + (q >> 1), h0 = ph[(lz + 1) * W + lx + 1];
-        let flat = true;
-        for (let j = 0; j < 4 && flat; j++) for (let k = 0; k < 4; k++) if (Math.abs(ph[(lz + j) * W + lx + k] - h0) > 1e-4) { flat = false; break; }
-        if (!flat || (at && Math.hypot(c + 0.25 + (q & 1) * 0.5 - at[0], r + 0.25 + (q >> 1) * 0.5 - at[1]) < sol + 0.3)) continue;
-        mask |= 1 << q; y = h0;
+        // a quarter grows grass if it's smooth ground (flat or a ramp's slope: see smoothQ), clear of a solid
+        // thing's foot. On a ramp the tufts stand upright, each lifted to the slope under it (grassMat).
+        const lx = (c - c0) * 2 + (q & 1), lz = (r - r0) * 2 + (q >> 1);
+        if (!smoothQ(lx, lz) || (at && Math.hypot(c + 0.25 + (q & 1) * 0.5 - at[0], r + 0.25 + (q >> 1) * 0.5 - at[1]) < sol + 0.3)) continue;
+        mask |= 1 << q; y = LV[i] * STEP;
       }
       if (mask) kind = GRASS_KIND[b];
     }
+    // (a: the tile's ramp shape, SH, so the shader can lift each tuft to the slope; 0 flat)
     const e = clamp(Math.round((y + 16) * 1024), 0, 65535), o = i * 4;
-    d[o] = kind ? mask | kind << 4 : 0; d[o + 1] = e >> 8; d[o + 2] = e & 255; d[o + 3] = 255;
+    d[o] = kind ? mask | kind << 4 : 0; d[o + 1] = e >> 8; d[o + 2] = e & 255; d[o + 3] = kind && kind !== 5 ? SH[i] : 0;
   }
   grassTex.regions.push([c0, r0, CH, CH]);
   grassTex.needsUpdate = true;
-  driftChunk(c0, r0, ph, W);
+  driftChunk(c0, r0, ph, W, smoothQ);
 }
 const GRASS_U = {
   tGrass: { value: grassTex },
@@ -3497,7 +3514,11 @@ fn grassColor(kind: u32) -> vec3f {
   let uv = vec2f(gRand(h, 1u), gRand(h, 2u)) * spread + (1.0 - spread) * 0.5;
   let q = u32(uv.x >= 0.5) + 2u * u32(uv.y >= 0.5);
   if (((t.r >> q) & 1u) == 0u) { return o; }
-  let foot = vec3f(f32(tile.x) + uv.x, f32(t.g * 256u + t.b) / 1024.0 - 16.0, f32(tile.y) + uv.y);
+  // (on a ramp, lifted to its slope there: LIFT's corners nw, ne, se, sw, a level each)
+  var lift = array<vec4f, ${LIFT.length}>(${LIFT.map(l => `vec4f(${l.map(v => v.toFixed(2)).join(', ')})`).join(', ')});
+  let lc = lift[min(t.a, ${LIFT.length - 1}u)];
+  let rise = (lc.x * (1.0 - uv.x) + lc.y * uv.x) * (1.0 - uv.y) + (lc.w * (1.0 - uv.x) + lc.z * uv.x) * uv.y;
+  let foot = vec3f(f32(tile.x) + uv.x, f32(t.g * 256u + t.b) / 1024.0 - 16.0 + rise * ${STEP.toFixed(6)}, f32(tile.y) + uv.y);
   let fade = 1.0 - smoothstep(0.8 * U.win.w, U.win.w, length(foot.xz - U.at.xy));
   if (fade <= 0.0) { return o; }
   let wts = km[kind] * U.share.xyz;
@@ -3699,10 +3720,16 @@ const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
 // (called by grassChunk, with its half-grid of the ground's points round the chunk)
-function driftChunk(c0, r0, ph, W) {
+function driftChunk(c0, r0, ph, W, smoothQ) {
   const d = driftTex.image.data, N2 = N * 2;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), b = BI[i], kind = b === SNOW ? 1 : b === DESERT ? 2 : 0;
+    // (a ramp on this tile or one beside it: the ground's light is smoothed round here, see groundPrintMat)
+    let nearRamp = false;
+    for (let dr = -1; dr <= 1 && !nearRamp; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const cc = c + dc, rr = r + dr;
+      if (cc >= 0 && rr >= 0 && cc < N && rr < N && SH[T(cc, rr)] && LV[T(cc, rr)]) { nearRamp = true; break; }
+    }
     const open = kind && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile;
     const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
     for (let q = 0; q < 4; q++) {
@@ -3730,7 +3757,9 @@ function driftChunk(c0, r0, ph, W) {
       // (each quarter keeps its ground's middle; an uncovered one's lets the layer's edge dip under it)
       const y = (ph[(lz + 1) * W + lx + 1] + ph[(lz + 1) * W + lx + 2] + ph[(lz + 2) * W + lx + 1] + ph[(lz + 2) * W + lx + 2]) / 4;
       const e = clamp(Math.round((y + 16) * 1024), 0, 65535), t = ((r * 2 + (q >> 1)) * N2 + c * 2 + (q & 1)) * 4;
-      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind;
+      // (a: the kind, 1 snow 2 sand; 8 smooth ground (see grassChunk's smoothQ), 4 that and near a ramp)
+      const sm = smoothQ(lx, lz);
+      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0);
     }
   }
   driftTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
@@ -3752,7 +3781,7 @@ function driftSlow(x, z) {
   if (DRIFT.on < 0.5) return 1;
   const cov = driftCov(x, z);
   if (!cov) return 1;
-  const d = driftTex.image.data, q = (clamp(Math.floor(z * 2), 0, N * 2 - 1) * N * 2 + clamp(Math.floor(x * 2), 0, N * 2 - 1)) * 4, sand = d[q + 3] === 2;
+  const d = driftTex.image.data, q = (clamp(Math.floor(z * 2), 0, N * 2 - 1) * N * 2 + clamp(Math.floor(x * 2), 0, N * 2 - 1)) * 4, sand = (d[q + 3] & 3) === 2;
   const deep = sand ? (DRIFT.sandMin + DRIFT.sandMax) / 2 : (DRIFT.snowMin + DRIFT.snowMax) / 2;
   return 1 - (sand ? DRIFT.sandSlow : DRIFT.snowSlow) * cov * clamp(deep / 0.3, 0, 1.5) / 1.5;
 }
@@ -3834,7 +3863,7 @@ fn dPoint(xz: vec2f) -> DP {
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
     let t = textureLoad(tDrift, q, 0);
     hall = min(hall, dH(t));
-    if (dCov(t)) { cov += w; hc += dGround(t, q, xz) * w; if (round(t.a * 255.0) > 1.5) { sand += w; } }
+    if (dCov(t)) { cov += w; hc += dGround(t, q, xz) * w; if ((u32(round(t.a * 255.0)) & 3u) == 2u) { sand += w; } }
     if (dSlope(t)) { slope = true; }
     let g = textureLoad(tGround, q, 0);
     if (g.a > 0.002) { col += g.rgb * 2.0 * w; wcol += w; }
@@ -4036,6 +4065,7 @@ function drawPrints() {
 function updatePrints() {
   const U = PRINT_U, on = PRINTS.on > 0.5;
   Object.assign(U.gsV.value, { x: GROUND_SHAPE.on, y: GROUND_SHAPE.wobble, z: GROUND_SHAPE.size, w: GROUND_SHAPE.blend });
+  Object.assign(U.rmp.value, { x: GROUND_SHAPE.rampSmooth, y: GROUND_SHAPE.rampSpan });
   U.prV.value.w = on && prints.length ? 1 : 0;
   if (!on) return;
   if (H.alive && H.moving && H.dash < 0 && !H.flip) {
@@ -4071,6 +4101,8 @@ const PRINT_U = {
   prE: { value: { x: 1 / PR_W, y: 0.035, z: 0.3, w: 0 } },   // a texel (of the map), dent depth (tiles), darkening
   tGround: { value: groundTex },
   gsV: { value: { x: 1, y: 1.1, z: 1.2, w: 1 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
+  tDrift: { value: driftTex },
+  rmp: { value: { x: 1, y: 0.3, z: 0, w: 0 } },     // smooth light round ramps (0-1), how far round each point it looks (tiles)
 };
 const groundPrintMat = new GFX.ShaderMaterial({ uniforms: PRINT_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -4089,6 +4121,20 @@ fn gsNoise(p: vec2f) -> f32 {
   let i = vec2i(floor(p)); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
   return mix(mix(gsHash(i), gsHash(i + vec2i(1, 0)), u.x), mix(gsHash(i + vec2i(0, 1)), gsHash(i + vec2i(1, 1)), u.x), u.y) * 2.0 - 1.0;
 }
+// the ground's height at p, from the quarters' middles round it (driftTex), and 1 if they're all smooth ground
+fn gH(p: vec2f) -> vec2f {
+  let lim = vec2i(${N * 2 - 1});
+  let qp = p * 2.0 - 0.5; let b = vec2i(floor(qp)); let f = fract(qp);
+  var h = 0.0; var ok = 1.0;
+  for (var k = 0; k < 4; k++) {
+    let o = vec2i(k & 1, k >> 1);
+    let t = textureLoad(tDrift, clamp(b + o, vec2i(0), lim), 0);
+    let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
+    h += ((round(t.g * 255.0) * 256.0 + round(t.b * 255.0)) / 1024.0 - 16.0) * w;
+    if ((u32(round(t.a * 255.0)) & 8u) == 0u) { ok = 0.0; }
+  }
+  return vec2f(h, ok);
+}
 // whether quarter b's colour may run into quarter a's (alphas as bytes): the same level, or a ramp's to the level above
 fn gsJoin(a: u32, b: u32) -> bool {
   if (b == 0u) { return false; }
@@ -4097,6 +4143,21 @@ fn gsJoin(a: u32, b: u32) -> bool {
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   var N = flatNormal(i.eye);
+  // on and round a ramp: a smooth normal from the ground's height a little way off each side, so its crest
+  // and foot round off in the light instead of creasing (only where all of it is smooth ground, not a cliff)
+  if (U.rmp.x > 0.001) {
+    let lim = vec2i(${N * 2 - 1});
+    let fl = u32(round(textureLoad(tDrift, clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), lim), 0).a * 255.0));
+    if ((fl & 4u) != 0u) {
+      let e = U.rmp.y;
+      let a = gH(i.world.xz + vec2f(e, 0.0)); let b = gH(i.world.xz - vec2f(e, 0.0));
+      let c = gH(i.world.xz + vec2f(0.0, e)); let d = gH(i.world.xz - vec2f(0.0, e));
+      if (min(min(a.y, b.y), min(c.y, d.y)) > 0.5) {
+        let sn = normalize(vec3f(b.x - a.x, 2.0 * e, d.x - c.x));
+        N = normalize(mix(N, sn, U.rmp.x));
+      }
+    }
+  }
   var albedo = i.color;
   // rounded patches: this quarter's colour from a little way off, if that's the same sort of ground on this level
   if (U.gsV.x > 0.5 && N.y > 0.5) {
@@ -4501,7 +4562,8 @@ fn sprayHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453);
   let drop = v.sDir.z;
   let n = U.rate * U.life * (10.0 + 8.0 * min(2.0, drop)) / 18.0 * select(1.0, 0.5, mist);
   let live = sat(n - v.sPart.x);
-  let ph = F.camDir.w / life + v.sPart.y * 17.0;
+  // (its slot's share of the loop, so the fall's puffs come one every 1 / rate seconds, not in clumps)
+  let ph = F.camDir.w / life + v.sPart.x / max(n, 1.0) + sprayHash(dot(v.position.xz, vec2f(1.37, 2.71)));
   let cyc = floor(ph); let k = ph - cyc;   // how far through its life, this time round
   let r = v.sPart.y * 91.7 + cyc * 13.37;
   let a = sprayHash(r); let b = sprayHash(r + 1.3); let c = sprayHash(r + 2.7); let e = sprayHash(r + 4.1);
@@ -4606,7 +4668,8 @@ fn smokeHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453);
   let vent = v.sPart.y > 0.5;
   let life = U.life * select(0.765, 1.0, vent);
   let live = sat(U.rate * life - v.sPart.z);
-  let ph = F.camDir.w / life + v.sPart.x * 17.0;
+  // (its slot's share of the loop, so the source's puffs come one every 1 / rate seconds, not in clumps)
+  let ph = F.camDir.w / life + v.sPart.z / max(U.rate * life, 1.0) + smokeHash(dot(v.position.xz, vec2f(1.37, 2.71)));
   let cyc = floor(ph); let k = ph - cyc;   // how far through its life, this time round
   let r = v.sPart.x * 91.7 + cyc * 13.37;
   let a = smokeHash(r); let b = smokeHash(r + 1.3); let c = smokeHash(r + 2.7); let e = smokeHash(r + 4.1); let g = smokeHash(r + 5.9);
@@ -9680,6 +9743,8 @@ const TUNING = [
     [GROUND_SHAPE, 'wobble', 'How far their edges wander (quarter tiles)', 0, 2, 0.05],
     [GROUND_SHAPE, 'size', 'How tight the wiggles are (waves a tile)', 0.2, 5, 0.05],
     [GROUND_SHAPE, 'blend', 'Blend the colours together (0 hard edges, 1 one smooth noisy gradient)', 0, 1, 0.01],
+    [GROUND_SHAPE, 'rampSmooth', 'Ramps: smooth the light over their crest and foot (0 off, 1 full)', 0, 1, 0.01],
+    [GROUND_SHAPE, 'rampSpan', 'Ramps: how far the smoothing reaches (tiles)', 0.05, 0.8, 0.01],
   ]],
   ['Deep snow and sand', [
     [DRIFT, 'on', 'Deep snow and sand (1 on, 0 off)', 0, 1, 1],
