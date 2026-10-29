@@ -48,9 +48,6 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .card-row { display: flex; gap: 12px; margin-top: 6px; font-family: var(--display); font-size: 10px; }
 .card-row b { color: var(--bone); font-weight: normal; font-variant-numeric: tabular-nums; }
 .card-row span { color: var(--dim); }
-.tally { display: flex; align-items: center; gap: 8px; font-family: var(--display); font-size: 12px; color: var(--bone); font-variant-numeric: tabular-nums; min-width: 64px; justify-content: space-between; }
-.tally svg { width: 18px; height: 18px; image-rendering: pixelated; }
-.tally.pop svg { animation: pop .35s steps(4); }
 .tallies { display: flex; gap: 8px; }
 @keyframes pop { 50% { transform: scale(1.45); } }
 
@@ -62,6 +59,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 @keyframes hurt { 25%, 75% { transform: translateX(-3px); } 50% { transform: translateX(3px); } }
 
 #mini { display: block; width: 168px; height: 168px; padding: 0; image-rendering: pixelated; cursor: pointer; }
+#dayStrip { display: block; width: 168px; height: 24px; padding: 0; image-rendering: pixelated; }
 
 #bar { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); transform: translateX(-50%); display: flex; gap: 8px; pointer-events: none; }
 .slot { pointer-events: auto; cursor: pointer; position: relative; width: 64px; height: 64px; box-sizing: border-box; padding: 6px 4px 4px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; overflow: hidden; }
@@ -246,6 +244,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   .slot.wide { width: 60px; }
   .slot .name { font-size: 6px; }
   #mini { width: 120px; height: 120px; }
+  #dayStrip { width: 120px; height: 17px; }
   .hp { width: 150px; }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -268,7 +267,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 </div>
 <div class="hud tr">
   <canvas class="plate" id="mini" width="168" height="168" title="Map (M)"></canvas>
-  <div class="plate tally" id="killPlate" title="Foes slain"><span id="skullIcon"></span><span id="kills">0</span></div>
+  <canvas class="plate" id="dayStrip" width="84" height="12" title="Time of day: the sun's way across the sky, and the moon's"></canvas>
   <button id="optsBtn" title="Options (O)">OPTIONS</button>
   <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
   <button id="gpuBtn" title="Profiler: frame rate, GPU and CPU time per part of the frame, spike capture (G)">GPU</button>
@@ -2328,15 +2327,17 @@ const hazeTint = new GFX.Color();
 // mosaic pixels' brightness, as a geometric mean, `middle` weighting it toward the middle of the screen) and eases
 // the exposure toward what brings it to `target`, kept between `darkest` and `brightest` (1: never brighter than
 // as tuned, only darker on a bright plain); toDark / toLight: how fast it adjusts (a second) when the picture gets
-// brighter / darker. On top of the day and night auto exposure (T > Day & night).
-const EYE = { on: 1, target: 0.25, darkest: 1, brightest: 4, middle: 0.66, toDark: 1, toLight: 1};
+// brighter / darker. On top of the day and night auto exposure (T > Day & night). `target` is by day and
+// `nightTarget` by night (night should stay darker than day, not be brought up to it), eased between as the sun
+// goes down and comes up.
+const EYE = { on: 1, target: 0.25, nightTarget: 0.12, darkest: 1, brightest: 4, middle: 0.66, toDark: 2.3, toLight: 2.3 };
 const EYE_READ = { brightness: 0, exposure: 1 };   // what it measured, for the tuning panel
 const eye = new GFX.EyeAdaptation(renderer);
 renderer.setEye(eye);
 function updateEye() {
   const res = outlineMat.uniforms.res.value;
   eye.update({ on: EYE.on > 0.5, scene: renderer.textureView(outlineRT.texture), haze: hazeOn() ? { view: haze.view(), id: 'h' + haze.key } : null,
-    res: [res.x, res.y], ss: ssNow, target: EYE.target, darkest: EYE.darkest, brightest: EYE.brightest, middle: EYE.middle,
+    res: [res.x, res.y], ss: ssNow, target: EYE.nightTarget + (EYE.target - EYE.nightTarget) * smoothstep(-0.12, 0.2, sunDir[1]), darkest: EYE.darkest, brightest: EYE.brightest, middle: EYE.middle,
     toDark: EYE.toDark, toLight: EYE.toLight });
 }
 
@@ -6697,7 +6698,6 @@ const ICON = {
 };
 // an empty gear slot shows what goes there, in shadow
 const dimIcon = svg => svg.replace(/fill="#[0-9a-f]+"/g, 'fill="#3a3150"');
-$('skullIcon').innerHTML = ICON.skull;
 
 // ---------- Gear and the pack ----------
 // What you wear goes on the paper doll, one item to a slot; everything else rides in the pack, where
@@ -7103,7 +7103,6 @@ function updateBar() {
   }
 }
 function renderStats() {
-  $('kills').textContent = H.kills;
   updateBar();
 }
 function bump(id) { const el = $(id); el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
@@ -7489,7 +7488,7 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
     sfx.kill();
     shatter(f, new GFX.Vector3(dx / l, 0, dz / l));
     foes.splice(foes.indexOf(f), 1);
-    H.kills++; renderStats(); bump('killPlate');
+    H.kills++; renderStats();
     if (Math.random() < 0.35) dropOrb(f.x, f.z);
     if (f.def.hide) {
       harvestCarry.hide += RESOURCES.amount;
@@ -8666,6 +8665,42 @@ function updateSky() {
   const hour = clock * 24;
   $('clock').textContent = hour < 5 ? 'NIGHT' : hour < 8 ? 'DAWN' : hour < 12 ? 'MORNING' : hour < 17 ? 'AFTERNOON' : hour < 20 ? 'DUSK' : 'NIGHT';
   $('day').textContent = dayNum;
+  drawDayStrip(y);
+}
+// The time-of-day strip under the map, an old watch's sun and moon window laid out flat: the sun crosses it from
+// left (sunrise) to right (sunset), and the moon (on the sun's way, twelve hours behind) by night, over the sky's
+// colour now, with the horizon along its foot and ticks at sunrise, noon and sunset.
+const dayStrip = $('dayStrip').getContext('2d');
+let dayStripKey = '';
+function drawDayStrip(y) {
+  const W = 84, Hh = 12, g = dayStrip, hour = SKY.timeOfDay;
+  // half the day's length (hours from noon to sunset), from the latitude and the season
+  const ch = clamp(-Math.tan(SKY.latitude * D2R) * Math.tan(SKY.season * D2R), -1, 1), half = Math.acos(ch) / D2R / 15;
+  const along = h => { const t = ((h - (12 - half)) % 24 + 24) % 24; return t / Math.max(0.5, 2 * half); };
+  const sx = Math.round(along(hour) * (W - 1)), mx = Math.round(along((hour + 12) % 24) * (W - 1));
+  const a = smoothstep(-0.2, -0.02, y), b = smoothstep(0.02, 0.3, y);
+  tmpC.set(SKY.bgNight).lerp(tmpC2.set(SKY.bgDusk), a).lerp(tmpC2.set(SKY.bgDay), b);
+  const key = [sx, mx, Math.round(a * 20), Math.round(b * 20)].join();
+  if (key === dayStripKey) return;
+  dayStripKey = key;
+  const css = (c, k = 1) => `rgb(${Math.round(Math.min(1, c.r * k) * 255)},${Math.round(Math.min(1, c.g * k) * 255)},${Math.round(Math.min(1, c.b * k) * 255)})`;
+  // the sky, lighter toward its top, and the ground
+  for (let j = 0; j < Hh - 2; j++) { g.fillStyle = css(tmpC, 1.15 - j * 0.04); g.fillRect(0, j, W, 1); }
+  g.fillStyle = '#2a2234'; g.fillRect(0, Hh - 2, W, 2);
+  g.fillStyle = 'rgba(239,228,200,0.35)';
+  for (const t of [0, 0.5, 1]) g.fillRect(Math.round(t * (W - 1)), Hh - 3, 1, 1);
+  // the moon: a crescent
+  if (mx >= -3 && mx <= W + 2) {
+    g.fillStyle = '#dfe6ff';
+    for (const [dx, dy] of [[-1, -2], [0, -2], [-2, -1], [-1, -1], [-2, 0], [-1, 0], [-2, 1], [-1, 1], [-1, 2], [0, 2]]) g.fillRect(mx + dx, 5 + dy, 1, 1);
+  }
+  // the sun: a disc with rays
+  if (sx >= -3 && sx <= W + 2) {
+    g.fillStyle = '#ffd25a'; g.fillRect(sx - 1, 3, 3, 5); g.fillRect(sx - 2, 4, 5, 3);
+    g.fillStyle = '#fff2b0'; g.fillRect(sx, 4, 1, 2);
+    g.fillStyle = 'rgba(255,200,80,0.7)';
+    for (const [dx, dy] of [[0, -3], [0, 3], [-3, 0], [3, 0]]) g.fillRect(sx + dx, 5 + dy + (dy > 0 ? 0 : 0), 1, 1);
+  }
 }
 // light the town lamps nearest the hero (a fixed number of lights keeps one shader for everything)
 function updateLamps() {
@@ -9608,7 +9643,8 @@ const TUNING = [
     [EYE, 'on', 'Eye adaptation (0 off, 1 on)', 0, 1, 1],
     [EYE_READ, 'brightness', 'Picture brightness now (measured)', 'readout', null, 0.01],
     [EYE_READ, 'exposure', 'Its exposure now', 'readout', null, 0.01],
-    [EYE, 'target', 'Brightness it aims for', 0.05, 1, 0.01],
+    [EYE, 'target', 'Brightness it aims for by day', 0.05, 1, 0.01],
+    [EYE, 'nightTarget', 'Brightness it aims for by night', 0.02, 1, 0.01],
     [EYE, 'darkest', 'Darkest exposure (on a bright plain)', 0.1, 1, 0.01],
     [EYE, 'brightest', 'Brightest exposure (in the dark; 1 never above as tuned)', 1, 4, 0.01],
     [EYE, 'middle', 'Weight toward the middle of the screen', 0, 1, 0.01],
