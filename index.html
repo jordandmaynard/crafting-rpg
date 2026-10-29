@@ -6163,15 +6163,74 @@ const heroSkin = flatMat({ color: '#e0b48a' }), heroTunic = flatMat({ color: '#3
 const HERO_MAT = {
   tunic: heroTunic, hood: flatMat({ color: '#2f5a3a' }), pants: flatMat({ color: '#5a4632' }), boots: flatMat({ color: '#3a2a1e' }),
   leather: flatMat({ color: '#8a5a34' }), leatherDark: flatMat({ color: '#4e3220' }), leatherPants: flatMat({ color: '#9a6a3e' }), leatherBoots: flatMat({ color: '#6e4426' }),
-  wpnWood: flatMat({ color: '#8a5a32' }), wpnBone: flatMat({ color: '#e4dac0' }),
-  wpnCopper: flatMat({ color: '#d4773e', roughness: 0.4, metalness: 0.5 }), wpnIron: flatMat({ color: '#d8dce8', roughness: 0.35, metalness: 0.55 }),
 };
-// the spear, butt to tip along z from the hand: [w, h, d, z, part], its tip SPEAR_TIP out
-const SPEAR_BOXES = [[0.032, 0.032, 0.82, 0.19, 'shaft'], [0.045, 0.045, 0.06, 0.6, 'collar'], [0.07, 0.02, 0.14, 0.69, 'head'], [0.04, 0.04, 0.05, 0.785, 'head']];
+// the spear, butt to tip along z from the hand: [w, h, d, z] (the ghost spears' shape), its tip SPEAR_TIP out
+const SPEAR_BOXES = [[0.032, 0.032, 0.82, 0.19], [0.045, 0.045, 0.06, 0.6], [0.07, 0.02, 0.14, 0.69], [0.04, 0.04, 0.05, 0.785]];
 const SPEAR_TIP = 0.81, SPEAR_BUTT = 0.22;
+// Each weapon in each material, box by box ([w, h, d, x, y, z, material, rx, rz] in the hand's frame: the blade or
+// shaft along z), plainest in wood and grandest in iron: wood is whittled and bare; bone is lashed with cord and
+// knobbed and toothed; copper has a leather grip, a flared guard, a fuller and a tassel; iron is long, gold-mounted,
+// winged, recurved and set with a glowing gem.
+const WM = {
+  wood: flatMat({ color: '#9a6a3e' }), woodDark: flatMat({ color: '#5a3a22' }), shaft: flatMat({ color: '#8a6440' }), ebony: flatMat({ color: '#3a2a22' }),
+  bone: flatMat({ color: '#e4dac0' }), boneDark: flatMat({ color: '#a89a7c' }), cord: flatMat({ color: '#4a3424' }),
+  leather: flatMat({ color: '#6a4026' }), cloth: flatMat({ color: '#b8302a' }),
+  copper: flatMat({ color: '#d4773e', roughness: 0.4, metalness: 0.5 }), copperDark: flatMat({ color: '#8a4a22', roughness: 0.5, metalness: 0.4 }),
+  steel: flatMat({ color: '#d8dce8', roughness: 0.35, metalness: 0.55 }), steelDark: flatMat({ color: '#5a5e6a', roughness: 0.4, metalness: 0.6 }),
+  gold: flatMat({ color: '#f2c14e', emissive: '#6a4a10', metalness: 0.4, roughness: 0.5 }), gem: flatMat({ color: '#7ad8ff', emissive: '#2a9ae0' }),
+};
+// a bow's limbs: two bends each side from the grip to the tip (0.12, ±0.32 in y, z), and a recurve flicked out past it
+function bowLimbs(mat, recurve, tipMat) {
+  const out = [];
+  for (const k of [1, -1]) {
+    const pts = [[0, 0.05], [0.035, 0.19], [0.12, 0.32]];
+    if (recurve) pts.push([0.09, 0.39]);
+    for (let j = 0; j < pts.length - 1; j++) {
+      const [y0, z0] = pts[j], [y1, z1] = pts[j + 1], len = Math.hypot(y1 - y0, z1 - z0);
+      out.push([0.032, 0.026, len + 0.02, 0, (y0 + y1) / 2, k * (z0 + z1) / 2, j === 2 ? tipMat : mat, Math.atan2(-(y1 - y0) * k, z1 - z0)]);
+    }
+  }
+  return out;
+}
+const pair = (w, h, d, x, y, z, m) => [[w, h, d, x, y, z, m], [w, h, d, -x, y, z, m]];
+const fore = (w, h, d, x, y, z, m) => [[w, h, d, x, y, z, m], [w, h, d, x, y, -z, m]];
+const WEAPON_LOOK = {
+  sword: {
+    wood: [[0.035, 0.035, 0.14, 0, 0, 0, 'woodDark'], [0.11, 0.03, 0.03, 0, 0, 0.08, 'woodDark'], [0.05, 0.02, 0.42, 0, 0, 0.3, 'wood'], [0.026, 0.02, 0.05, 0, 0, 0.53, 'wood']],
+    bone: [[0.035, 0.035, 0.14, 0, 0, 0, 'cord'], [0.15, 0.035, 0.035, 0, 0, 0.08, 'bone'], ...pair(0.045, 0.045, 0.045, 0.08, 0, 0.08, 'boneDark'),
+      [0.05, 0.018, 0.42, 0, 0, 0.32, 'bone'], [0.03, 0.018, 0.06, 0, 0, 0.56, 'bone'], [0.05, 0.05, 0.05, 0, 0, -0.08, 'boneDark'],
+      ...[0.18, 0.28, 0.38].map(z => [0.02, 0.014, 0.035, 0.032, 0, z, 'boneDark'])],
+    copper: [[0.035, 0.035, 0.14, 0, 0, 0, 'leather'], ...[-0.03, 0.03].map(z => [0.042, 0.042, 0.02, 0, 0, z, 'copperDark']),
+      [0.18, 0.03, 0.035, 0, 0, 0.08, 'copper'], ...pair(0.03, 0.03, 0.06, 0.09, 0, 0.105, 'copper'),
+      [0.055, 0.015, 0.46, 0, 0, 0.33, 'copper'], [0.012, 0.02, 0.36, 0, 0, 0.3, 'copperDark'], [0.032, 0.015, 0.06, 0, 0, 0.585, 'copper'],
+      [0.055, 0.055, 0.055, 0, 0, -0.085, 'copper']],
+    iron: [[0.035, 0.035, 0.16, 0, 0, -0.01, 'leather'], ...[-0.06, 0, 0.05].map(z => [0.042, 0.042, 0.016, 0, 0, z, 'gold']),
+      [0.24, 0.03, 0.04, 0, 0, 0.08, 'gold'], ...pair(0.045, 0.03, 0.08, 0.12, 0, 0.115, 'gold'), [0.035, 0.05, 0.035, 0, 0, 0.085, 'gem'],
+      [0.06, 0.016, 0.52, 0, 0, 0.36, 'steel'], [0.014, 0.022, 0.42, 0, 0, 0.33, 'steelDark'], [0.036, 0.016, 0.07, 0, 0, 0.655, 'steel'],
+      [0.06, 0.06, 0.06, 0, 0, -0.11, 'gold'], [0.03, 0.07, 0.03, 0, 0, -0.11, 'gem']],
+  },
+  bow: {
+    wood: [[0.045, 0.045, 0.1, 0, 0, 0, 'woodDark'], ...bowLimbs('wood')],
+    bone: [[0.05, 0.05, 0.12, 0, 0, 0, 'cord'], ...bowLimbs('bone'), ...fore(0.045, 0.045, 0.045, 0, 0.12, 0.32, 'boneDark'), ...fore(0.04, 0.04, 0.03, 0, 0.02, 0.12, 'cord')],
+    copper: [[0.05, 0.05, 0.12, 0, 0, 0, 'leather'], ...fore(0.055, 0.055, 0.02, 0, 0, 0.06, 'copper'), ...bowLimbs('woodDark', true, 'copper'), ...fore(0.04, 0.035, 0.03, 0, 0.12, 0.32, 'copper')],
+    iron: [[0.055, 0.055, 0.13, 0, 0, 0, 'gold'], [0.03, 0.03, 0.03, 0, -0.03, 0, 'gem'], ...bowLimbs('steelDark', true, 'gold'), ...fore(0.045, 0.04, 0.035, 0, 0.12, 0.32, 'gold'),
+      ...fore(0.04, 0.03, 0.04, 0, 0.035, 0.19, 'gold')],
+  },
+  // (the spearhead's tip at about SPEAR_TIP up the shaft in each)
+  spear: {
+    wood: [[0.032, 0.032, 0.82, 0, 0, 0.19, 'shaft'], [0.03, 0.03, 0.1, 0, 0, 0.64, 'woodDark'], [0.018, 0.018, 0.08, 0, 0, 0.73, 'woodDark'], [0.01, 0.01, 0.05, 0, 0, 0.79, 'woodDark']],
+    bone: [[0.032, 0.032, 0.82, 0, 0, 0.19, 'shaft'], [0.042, 0.042, 0.07, 0, 0, 0.6, 'cord'], [0.065, 0.02, 0.15, 0, 0, 0.69, 'bone'], ...pair(0.025, 0.02, 0.04, 0.045, 0, 0.63, 'bone'),
+      [0.035, 0.02, 0.05, 0, 0, 0.785, 'bone'], [0.042, 0.042, 0.03, 0, 0, -0.2, 'cord']],
+    copper: [[0.032, 0.032, 0.82, 0, 0, 0.19, 'shaft'], [0.05, 0.05, 0.06, 0, 0, 0.6, 'copper'], [0.075, 0.02, 0.15, 0, 0, 0.69, 'copper'], [0.015, 0.026, 0.15, 0, 0, 0.69, 'copperDark'],
+      [0.04, 0.02, 0.05, 0, 0, 0.785, 'copper'], [0.03, 0.1, 0.03, 0, -0.06, 0.585, 'cloth'], [0.045, 0.045, 0.04, 0, 0, -0.21, 'copper']],
+    iron: [[0.034, 0.034, 0.82, 0, 0, 0.19, 'ebony'], ...[0.1, 0.3].map(z => [0.04, 0.04, 0.02, 0, 0, z, 'gold']), [0.055, 0.055, 0.07, 0, 0, 0.6, 'gold'], [0.03, 0.065, 0.03, 0, 0, 0.6, 'gem'],
+      [0.14, 0.02, 0.03, 0, 0, 0.645, 'steel'], [0.07, 0.018, 0.17, 0, 0, 0.72, 'steel'], [0.016, 0.024, 0.16, 0, 0, 0.72, 'steelDark'], [0.036, 0.018, 0.05, 0, 0, 0.815, 'steel'],
+      [0.05, 0.05, 0.05, 0, 0, -0.22, 'gold'], [0.03, 0.1, 0.03, 0, -0.06, 0.575, 'cloth']],
+  },
+};
+const WEAPON_TIERS = ['wood', 'bone', 'copper', 'iron'];
 // the hero's arm from shoulder to hand, and how far it's swung back by the hip holding the spear drawn back
 const SPEAR_ARM = 0.25, SPEAR_BACK = 0.55;
-const spearWood = flatMat({ color: '#8a6440' });
 function makeHuman() {
   const g = new GFX.Group(), parts = [];
   const { pants, boots, hood, leather, leatherDark } = HERO_MAT, hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
@@ -6216,26 +6275,18 @@ function makeHuman() {
     box(arm, 0.07, 0.07, 0.075, 0, -0.235, 0, heroSkin);
     wear('pads', box(arm, 0.11, 0.07, 0.12, 0, -0.005, 0, leatherDark));
   }
+  // each weapon in all four materials, the one in hand shown (tagged tier_wood...)
+  const look = (parent, kind) => { for (const t of WEAPON_TIERS) { const tg = pivot(parent, 0, 0, 0); wear('tier_' + t, tg); for (const [w, h, d, x, y, z, m, rx, rz] of WEAPON_LOOK[kind][t]) box(tg, w, h, d, x, y, z, WM[m], rx, rz); } };
   const sword = pivot(armR, 0, -0.25, 0.02);
   wear('sword', sword);
-  box(sword, 0.035, 0.035, 0.14, 0, 0, 0, hiltMat);
-  box(sword, 0.16, 0.03, 0.035, 0, 0, 0.08, goldMat);
-  wear('wpn', box(sword, 0.045, 0.015, 0.46, 0, 0, 0.32, HERO_MAT.wpnIron));
-  box(sword, 0.05, 0.05, 0.05, 0, 0, -0.08, goldMat);
+  look(sword, 'sword');
   // the bow, in the left hand: its limbs run along the hand's z (stood upright at rest by turning its pivot), bowed
   // back toward its string on the hand's +y, which is toward you when the arm is raised to shoot. The string is two
   // halves from the tips, each turned and stretched to meet where it's drawn, with an arrow nocked there.
   const bow = pivot(armL, 0, -0.25, 0.02);
   wear('bow', bow);
   const bowString = flatMat({ color: '#e8dcc0' });
-  box(bow, 0.045, 0.045, 0.1, 0, 0, 0, hiltMat);
-  for (const k of [1, -1]) {
-    const pts = [[0, 0.05], [0.035, 0.19], [0.12, 0.32]];
-    for (let j = 0; j < 2; j++) {
-      const [y0, z0] = pts[j], [y1, z1] = pts[j + 1], len = Math.hypot(y1 - y0, z1 - z0);
-      wear('wpn', box(bow, 0.032, 0.026, len + 0.02, 0, (y0 + y1) / 2, k * (z0 + z1) / 2, HERO_MAT.wpnWood, Math.atan2(-(y1 - y0) * k, z1 - z0)));
-    }
-  }
+  look(bow, 'bow');
   const bowStr = [1, -1].map(k => {
     const half = pivot(bow, 0, 0.12, 0.32 * k);
     box(half, 0.008, 0.008, 0.32, 0, 0, -0.16 * k, bowString);
@@ -6245,13 +6296,14 @@ function makeHuman() {
   box(nock, 0.014, 0.46, 0.014, 0, -0.23, 0, hiltMat);
   box(nock, 0.03, 0.06, 0.012, 0, -0.47, 0, steelMat);
   box(nock, 0.004, 0.08, 0.04, 0, -0.03, 0, bowString);
-  bow.rotation.z = -Math.PI / 2;
+  // (carried level in the hanging hand, limbs fore and aft and the string above the grip; raised to shoot, the
+  // string's toward you)
   // the spear, in the right hand: its shaft runs along the hand's z (stood upright at rest), on a slide (spearShaft)
   // the pokes thrust out along it
   const spear = pivot(armR, 0, -0.25, 0.02);
   wear('spear', spear);
   const spearShaft = pivot(spear, 0, 0, 0);
-  for (const [w, h, d, z, k] of SPEAR_BOXES) { const m = box(spearShaft, w, h, d, 0, 0, z, k === 'shaft' ? spearWood : k === 'collar' ? hiltMat : HERO_MAT.wpnIron); if (k === 'head') wear('wpn', m); }
+  look(spearShaft, 'spear');
   spear.rotation.x = -Math.PI / 2;
   g.scale.setScalar(1.12);
   return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock, spear, spearShaft };
@@ -6839,10 +6891,10 @@ function pixelSvg(rows, palette) {
 // look recolours each weapon's icon, and part is the HERO_MAT the hero's blade, bow limbs or spearhead wear.
 const WEAPON_TIER = { wood: 1, bone: 1.3, copper: 1.6, iron: 2, cost: 10 };
 const TIERS = {
-  wood: { name: 'Wooden', mat: 'wood', part: 'wpnWood', look: { sword: { w: '#c89a62', s: '#9a6a3e' }, bow: {}, spear: { s: '#9a6a3e', S: '#c89a62' } } },
-  bone: { name: 'Bone', mat: 'bone', part: 'wpnBone', look: { sword: { w: '#f8f2e2', s: '#d8ccae' }, bow: { b: '#d8ccae' }, spear: { s: '#d8ccae', S: '#f8f2e2' } } },
-  copper: { name: 'Copper', mat: 'copperOre', part: 'wpnCopper', look: { sword: { w: '#f0a060', s: '#c8743a' }, bow: { b: '#b0602e' }, spear: { s: '#c8743a', S: '#f0a060' } } },
-  iron: { name: 'Iron', mat: 'ironOre', part: 'wpnIron', look: { sword: {}, bow: { b: '#7a7684' }, spear: {} } },
+  wood: { name: 'Wooden', mat: 'wood', look: { sword: { w: '#c89a62', s: '#9a6a3e', y: '#5a3a22', b: '#5a3a22' }, bow: { g: '#5a3a22' }, spear: { s: '#5a3a22', S: '#7a5232' } } },
+  bone: { name: 'Bone', mat: 'bone', look: { sword: { w: '#f8f2e2', s: '#d8ccae', y: '#d8ccae', b: '#4a3424', t: '#a89a7c', k: '#a89a7c' }, bow: { b: '#d8ccae', g: '#4a3424', k: '#a89a7c', c: '#4a3424' }, spear: { s: '#d8ccae', S: '#f8f2e2', c: '#4a3424', t: '#d8ccae' } } },
+  copper: { name: 'Copper', mat: 'copperOre', look: { sword: { w: '#f0a060', s: '#c8743a', y: '#d4773e', b: '#6a4026', p: '#d4773e' }, bow: { b: '#5a3a22', g: '#6a4026', c: '#d4773e', r: '#d4773e' }, spear: { s: '#c8743a', S: '#f0a060', c: '#8a4a22', r: '#d8443a' } } },
+  iron: { name: 'Iron', mat: 'ironOre', look: { sword: { y: '#f2c14e', b: '#6a4026', p: '#f2c14e', g: '#7ad8ff' }, bow: { b: '#5a5e6a', g: '#7ad8ff', c: '#f2c14e', r: '#f2c14e' }, spear: { c: '#f2c14e', w: '#d8dce8', r: '#d8443a', b: '#3a2a22', g: '#7ad8ff' } } },
 };
 const WEAPON_ART = {
   sword: [['.......ww', '......wsw', '.....wsw.', '....wsw..', '.y.wsw...', '..yww....', '..by.....', '.b..y....', 'b........'], { w: '#efe4c8', s: '#a8acb8', y: '#f2c14e', b: '#8a5a32' }],
@@ -6889,6 +6941,29 @@ function iconArt(rows, palette) {
   }
   return `<svg viewBox="0 0 ${W2} ${H2}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
 }
+// each weapon's icon in each material, plainest in wood and grandest in iron (its colours are in TIERS.look): wood
+// bare, bone toothed and knobbed and bound in cord, copper flared with a pommel or tassel and recurved, iron gold
+// mounted with a gem
+const WEAPON_ART_TIER = {
+  sword: {
+    wood: ['.........', '......ww.', '.....wsw.', '....wsw..', '.y.wsw...', '..yww....', '..by.....', '.b.......', 'b........'],
+    bone: ['.......ww', '......wsw', '.....wswt', '....wsw..', '.y.wswt..', '..yww....', '..by.....', '.b..y....', 'k........'],
+    copper: ['.......ww', '......wsw', '.....wsw.', 'y...wsw..', '.y.wsw...', '..yww....', '..by.....', '.b..y....', 'p....y...'],
+    iron: ['.......ww', '......wsw', '.....wsw.', 'y...wsw..', '.y.wsw...', '..gww....', '..by.....', '.b..y....', 'p....y...'],
+  },
+  bow: {
+    wood: ['......b..', '....bbs..', '...b..s..', '..b...s..', 'hwgwwwsff', '..b...s..', '...b..s..', '....bbs..', '......b..'],
+    bone: ['......k..', '....bbs..', '...b..s..', '..c...s..', 'hwgwwwsff', '..c...s..', '...b..s..', '....bbs..', '......k..'],
+    copper: ['......br.', '....bbs..', '...b..s..', '..c...s..', 'hwgwwwsff', '..c...s..', '...b..s..', '....bbs..', '......br.'],
+    iron: ['......br.', '....bbs..', '...b..s..', '..c...s..', 'hwgwwwsff', '..c...s..', '...b..s..', '....bbs..', '......br.'],
+  },
+  spear: {
+    wood: ['........S', '.......s.', '......b..', '.....b...', '....b....', '...b.....', '..b......', '.b.......', 'b........'],
+    bone: ['.......sS', '......sss', '.....cs..', '....b.t..', '...b.....', '..b......', '.b.......', 'b........', '.........'],
+    copper: ['.......sS', '......sss', '.....cs..', '....br...', '...b.r...', '..b......', '.b.......', 'b........', '.........'],
+    iron: ['.......sS', '.....wsss', '.....gs..', '....c.w..', '...b.r...', '..b..r...', '.b.......', 'b........', '.........'],
+  },
+};
 // shapes the cloth and leather pieces share, in their own colours
 const ART = {
   shirt: ['.TT.c.TT.', 'TTTcccTTT', 'TsTTTTTsT', '.TTTTTTT.', '..TTTTT..', '..TTTTT..', '..ttttt..'],
@@ -6943,7 +7018,7 @@ const ICON = {
   bag: iconArt(['...ddd...', '..d...d..', '.BBBBBBB.', '.BbbbbbB.', '.BBByBBB.', '.BbbbbbB.', '.BBBBBBB.'], { B: '#8a5a32', b: '#5a3a22', d: '#5a3a22', y: '#f2c14e' }),
   lock: iconArt(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
 };
-for (const [t, tr] of Object.entries(TIERS)) for (const [w, [rows, pal]] of Object.entries(WEAPON_ART)) ICON[w + '_' + t] = iconArt(rows, { ...pal, ...tr.look[w] });
+for (const [t, tr] of Object.entries(TIERS)) for (const [w, [, pal]] of Object.entries(WEAPON_ART)) ICON[w + '_' + t] = iconArt(WEAPON_ART_TIER[w][t], { ...pal, ...tr.look[w] });
 // an empty gear slot shows what goes there, in shadow
 const dimIcon = svg => svg.replace(/fill="#[0-9a-f]+"/g, 'fill="#3a3150"');
 
@@ -7016,13 +7091,12 @@ const DRESS = {
   sword: () => weapon().kind === 'sword',
   bow: () => weapon().kind === 'bow',
   spear: () => weapon().kind === 'spear',
-  wpn: () => true,
+  tier_wood: () => weapon().tier === 'wood', tier_bone: () => weapon().tier === 'bone', tier_copper: () => weapon().tier === 'copper', tier_iron: () => weapon().tier === 'iron',
 };
 const DRESS_MAT = {
   shirt: () => GEAR.chest && ITEMS[GEAR.chest].mat, hood: () => GEAR.chest && ITEMS[GEAR.chest].trim,
   pants: () => GEAR.legs && ITEMS[GEAR.legs].mat, hipPants: () => GEAR.legs && ITEMS[GEAR.legs].mat,
   boots: () => GEAR.boots && ITEMS[GEAR.boots].mat,
-  wpn: () => GEAR.weapon && TIERS[ITEMS[GEAR.weapon].tier].part,
 };
 // (the silhouette and shadow copies keep their own materials)
 const DRESSABLE = new Set(Object.values(HERO_MAT));
@@ -8308,7 +8382,7 @@ function castLunge() {
 // over `volleyCone` degrees that knocks foes back `volleyKnock` tiles; E shoots one up, and `rainDelay` seconds
 // later `rainArrows` fall in a ring `rainRadius` tiles across round where the cursor was. Spent arrows stay
 // stuck for `stuckLife` seconds. Knock-backs are in tiles (a foe's push dies away over an eighth of a second).
-const BOW = { turn: 60, draw: 0.3, dmg: 10, time: 0.5, speed: 32, range: 20, height: 0.55, knock: 0.2,
+const BOW = { turn: 45, draw: 0.3, dmg: 10, time: 0.5, speed: 32, range: 20, height: 0.55, knock: 0.2,
   volleyArrows: 5, volleyCone: 45, volleyDmg: 8, volleyKnock: 1, volleyCd: 5,
   rainArrows: 10, rainRadius: 2, rainDelay: 1, rainDmg: 12, rainKnock: 0.3, rainCd: 8, rainReach: 8, rainSeek: 0.5, stuckLife: 20 };
 const STUCK_MAX = 150;
@@ -8760,7 +8834,8 @@ function updateSpear(dt) {
   } else if (!sp.hit && sp.t > sp.len * 0.4) {
     sp.hit = true;
     harpoon = { x: H.x + fx * 0.8, y: H.y + 0.62, z: H.z + fz * 0.8, dx: fx, dz: fz, out: true, dist: 0, foe: null, stuck: 0 };
-    harpoonTip.forEach(m => { m.material = HERO_MAT[TIERS[ITEMS[GEAR.weapon]?.tier || 'iron'].part]; });
+    const tier = weapon().tier || 'wood';
+    harpoonHead.children.forEach((c, k) => { c.visible = WEAPON_TIERS[k] === tier; });
     sfx.dash();
   }
   if (sp.t >= sp.len) H.spear = null;
@@ -8770,12 +8845,13 @@ function updateSpear(dt) {
 let harpoon = null;
 const HARPOON_LINKS = 64;
 // the thrown spear itself, its tip at the group's origin and the chain made fast to its butt
-const harpoonTip = [];
 const harpoonHead = (() => {
   const g = new GFX.Group();
-  for (const [w, h, d, z, k] of SPEAR_BOXES) {
-    const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), k === 'shaft' ? spearWood : k === 'collar' ? hiltMat : steelMat); m.position.z = z - SPEAR_TIP; m.castShadow = true; g.add(m);
-    if (k === 'head') harpoonTip.push(m);
+  for (const t of WEAPON_TIERS) {
+    const tg = new GFX.Group(); g.add(tg);
+    for (const [w, h, d, x, y, z, m, rx = 0, rz = 0] of WEAPON_LOOK.spear[t]) {
+      const b = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), WM[m]); b.position.set(x, y, z - SPEAR_TIP); b.rotation.set(rx, 0, rz); b.castShadow = true; tg.add(b);
+    }
   }
   g.visible = false; scene.add(g);
   return g;
@@ -9901,7 +9977,11 @@ let spearHeld = 0;
 const spearDrive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 : 1 - smooth(0.45, 1, v);
 // the flurry's nth jab, as a share of the cone's half-angle: spread across it in no order (by the golden ratio)
 const flurryAt = n => ((n * 0.618034 + 0.31) % 1) * 2 - 1;
+// how far the bow's raised (0..1): up over 0.12 s for a shot, kept up while the attack's held, lowered after
+let bowUp = 0;
 function animateHero(dt) {
+  const bowHeld = mode === 'play' && H.alive && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
+  bowUp = H.bow || bowHeld ? Math.min(1, bowUp + dt / 0.12) : Math.max(0, bowUp - dt / 0.2);
   // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
   // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
@@ -9937,17 +10017,18 @@ function animateHero(dt) {
     const phi = Math.asin(clamp((shoulder - (tip - SPEAR_TIP - thrust)) / SPEAR_ARM, -1, 1));
     ax = phi - bend; ay -= twist;
     hero.armL.rotation.set(-0.5, 0, 0.1);
-  } else if (H.bow) {
-    // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin
-    const b = H.bow, rel = b.len * (b.kind === 'shot' ? 0.6 : 0.5), u = smooth(0, 1, Math.min(1, b.t / rel));
-    const raise = smooth(0, 1, Math.min(1, b.t / 0.12)), lift = b.kind === 'rain' ? 0.95 : 0;
+  } else if (bowUp > 0) {
+    // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin;
+    // held up between shots while the attack is held, and lowered after
+    const b = H.bow, rel = b ? b.len * (b.kind === 'shot' ? 0.6 : 0.5) : 1, u = b ? smooth(0, 1, Math.min(1, b.t / rel)) : 0;
+    const raise = smooth(0, 1, bowUp), lift = b && b.kind === 'rain' ? 0.95 : 0;
     const out = -(Math.PI / 2 + lift) * raise;
     // stood side-on (the body turned BOW.turn degrees to the right) with the head and both arms turned back onto
     // the aim, so the bow's held out across the body
     stance = BOW.turn * Math.PI / 180 * raise;
     const yl = -0.08 * raise + stance;
     hero.armL.rotation.set(out, yl, 0.08);
-    pull = b.fired ? 0 : BOW.draw * u;
+    pull = !b || b.fired ? 0 : BOW.draw * u;
     // the drawing hand on the string: the right arm aimed from its shoulder at where the string's drawn to (out
     // along the bow arm, then back toward you by the nock's offset and the pull), in the body's frame
     const so = Math.sin(out), k = 0.25 - (0.12 + pull);
@@ -9970,10 +10051,6 @@ function animateHero(dt) {
   else if (H.lunge >= 0) { ax = -1.55; ay = 0; sx = Math.PI / 2; }
   else if (mode === 'build') { ax = -0.3; }
   hero.armR.rotation.set(ax, ay, -0.08);
-  // the bow's carried level in the hanging hand, limbs fore and aft and the string out to the side, and rolls
-  // upright (string to you) as it's raised to shoot
-  hero.bow.rotation.x = 0;
-  hero.bow.rotation.z += ((H.bow ? 0 : -Math.PI / 2) - hero.bow.rotation.z) * Math.min(1, dt * 18);
   hero.head.rotation.y = stance;
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
@@ -9985,7 +10062,7 @@ function animateHero(dt) {
   hero.spear.rotation.x = -Math.PI / 2 + (Math.PI / 2 - ax - bend) * spearHeld;
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
-  hero.body.rotation.y = H.bow ? -stance : H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
+  hero.body.rotation.y = stance ? -stance : H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
   hero.body.rotation.x = bend || (on && f < 0 ? f * WALK.lean * 0.85 : 0);
   // a bend at the waist: the body tips forward about the hips (it hangs from the feet, so it's shifted back to keep
   // them there) and the legs are turned back to stand straight under them
@@ -11349,6 +11426,7 @@ window.GAME = {
   harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
   treeNear: () => { const c0 = Math.floor(H.x), r0 = Math.floor(H.z); for (let d = 1; d < 40; d++) for (let r = r0 - d; r <= r0 + d; r++) for (let c = c0 - d; c <= c0 + d; c++) { const i = T(c, r), o = OB[i]; if (OBJ[o].tree && OBJ[o].hp) { const [x, z] = objPos(c, r, o); return [x, z, c, r]; } } return null; },
   ghosts: () => ghostSpears.filter(g => g.g.visible).length + " shown, spear in hand " + hero.spearShaft.visible + ", chain " + chainLinks.count,
+  tierShown: () => ["sword", "bow", "spear"].map(k => k + ":" + (k === "spear" ? hero.spearShaft : hero[k]).children.filter(c => c.userData.gear && c.userData.gear.startsWith("tier_") && c.visible).map(c => c.userData.gear).join(",") + (hero[k].visible ? "" : "(hidden)")).join(" "),
   bowPose: t => { if (H.bow && t !== undefined) { H.bow.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; heroRoot.updateMatrixWorld(); const g = new GFX.Vector3(0, 0, 0).applyMatrix4(hero.bow.matrixWorld), a = new GFX.Vector3(0, 0, 0).applyMatrix4(hero.nock.matrixWorld), b = new GFX.Vector3(0, -0.47, 0).applyMatrix4(hero.nock.matrixWorld), f = [Math.sin(H.face), Math.cos(H.face)], rel = v => [+((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2), +((v.x - H.x) * f[1] - (v.z - H.z) * f[0]).toFixed(2), +(v.y - H.y).toFixed(2)]; const dx = b.x - a.x, dz = b.z - a.z; const hand = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld); return { grip: rel(g), string: rel(a), hand: rel(hand), arrowYaw: +(angDiff(Math.atan2(dx, dz), H.face) * 180 / Math.PI).toFixed(1), arrowPitch: +(Math.atan2(b.y - a.y, Math.hypot(dx, dz)) * 180 / Math.PI).toFixed(1), body: +(hero.body.rotation.y * 180 / Math.PI).toFixed(1) }; },
   spearPose: t => { if (H.spear && t !== undefined) { H.spear.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.updateMatrixWorld(); const p = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld), q = new GFX.Vector3(0, 0, SPEAR_TIP).applyMatrix4(hero.spearShaft.matrixWorld), c = new GFX.Vector3(0, 0, -SPEAR_BUTT).applyMatrix4(hero.spearShaft.matrixWorld); const f = [Math.sin(H.face), Math.cos(H.face)], ah = v => +((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2); return `t ${H.spear ? H.spear.t.toFixed(2) : "-"} hand ${ah(p)} y ${(p.y - H.y).toFixed(2)} tip ${ah(q)} y ${(q.y - H.y).toFixed(2)} butt ${ah(c)} y ${(c.y - H.y).toFixed(2)} bend ${hero.body.rotation.x.toFixed(2)}`; },
   foeSlow: () => foes.map(f => +(f.slowT || 0).toFixed(2)),
