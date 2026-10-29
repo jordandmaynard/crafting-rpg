@@ -75,7 +75,9 @@ fn body(c: vec2f, at: vec2f, r: f32) -> f32 { let d = c - at; return exp(-dot(d,
       moved += m.y * now - m.x * body(cf, at.xy, m.w);
       stir += m.z * now;
     }
-    let next = h + (h - s.y) * damp + p.o.z * lap + moved + stir;
+    // (the height itself settles back to still water too, at half the rate: else water a pool gained, say from
+    // something wading in, would stand in it as a swell for good, since its banks keep it in)
+    let next = (h + (h - s.y) * damp + p.o.z * lap) * sqrt(damp) + moved + stir;
     now = vec2f(next, h + moved);
   }
   dst[id.y * u32(NC) + id.x] = now;

@@ -3292,8 +3292,8 @@ const waterMulMat = makeWaterMat(false), waterAddMat = makeWaterMat(true);
 // sparkles, caustics or bending; just its body, what it lets through of the bed, the hero's torch, and ripples
 // running off the banks, and the waves you make wading through it (the wake). It shares the sun, sky, lamp and
 // wave texture with the lakes.
-const SWAMP_WATER = { color: '#80b602', clarity: 0.61, turbidity: 3.1, waveSpeed: 1.4, shoreRipples: 1.25, rippleReach: 0.75,
-  wake: 1.3, wakeSpread: 0.45, wakeFade: 1.2, wakeWidth: 0.45, shoreColor: '#d1deeb', wakeColor: '#d1deeb' };
+const SWAMP_WATER = { color: '#80b602', clarity: 0.61, turbidity: 3.1, waveSpeed: 1.4, shoreRipples: 0.75, rippleReach: 0.75,
+  wake: 1.3, wakeSpread: 0.5, wakeFade: 1.75, wakeWidth: 0.2, shoreColor: '#7b8b2d', wakeColor: '#839041' };
 // The wake is simulated (src/gfx/ripples.js): a sheet of water round you that your body pushes aside as you wade
 // and your legs stir, its waves running out, off the banks and away. Its crests are drawn as the bank ripples are.
 const ripples = new GFX.Ripples(renderer);
@@ -3327,7 +3327,9 @@ fn wakeH(xz: vec2f) -> f32 {
   let wx = xz + (textureSampleLevel(tWave, tWaveS, xz / 1.3, 0.0).rg - 0.5) * 0.12;
   let hw = wakeH(wx);
   let we = 1.0 / 16.0;
-  let wg = vec2f(wakeH(wx + vec2f(we, 0.0)) - wakeH(wx - vec2f(we, 0.0)), wakeH(wx + vec2f(0.0, we)) - wakeH(wx - vec2f(0.0, we))) / (2.0 * we);
+  let hE = wakeH(wx + vec2f(we, 0.0)); let hW = wakeH(wx - vec2f(we, 0.0)); let hS = wakeH(wx + vec2f(0.0, we)); let hN = wakeH(wx - vec2f(0.0, we));
+  let wg = vec2f(hE - hW, hS - hN) / (2.0 * we);
+  let wl = (hE + hW + hS + hN - 4.0 * hw) / (we * we);   // how sharply it bends: a crest's top bends down
   let N = normalize(vec3f(-wg.x * 0.02, 1.0, -wg.y * 0.02));
   let R = reflect(-V, N);
   let Fr = fresnelWater(max(dot(V, N), 0.0));
@@ -3344,7 +3346,8 @@ fn wakeH(xz: vec2f) -> f32 {
   // the wake's crests drawn the same way: thin lines along their tops (where the slope is small against the
   // height), broken up as the bank ripples are, fading as the waves die down
   // hard edged, as theirs are (wakeWidth widens the lines: how far down from the top they reach)
-  let crest = step(length(wg) / max(hw, 1e-4), 3.5 * U.wakeWidth) * step(0.03, hw);
+  // (and only on a real crest, bending down: not a flat swell left standing in the pool)
+  let crest = step(length(wg) / max(hw, 1e-4), 3.5 * U.wakeWidth) * step(0.04, hw) * step(wl, -50.0 * hw);
   let shore = step(rp, 0.08) * (1.0 - smoothstep(0.05 * U.ripReach, 0.3 * U.ripReach, d)) * U.shoreRipples;
   let fm = sat(max(shore, crest) * step(0.4, fp) * smoothstep(0.02, 0.04, d) * 0.8);
   // each in its own colour (where they cross, mixed by how strong each is)
