@@ -2725,7 +2725,7 @@ const flatMat = opts => new GFX.MeshStandardMaterial(Object.assign({ flatShading
 // A tiling noise texture laid over the world by position and slowly scrolled; where it's dense, the sun's
 // (or moon's) light is dimmed in every lit material's shader. Lamps, the torch and the sky's light are left
 // alone, so shadows only show where the sun falls and fade out with it.
-const CLOUDS = { strength: 0.75, cover: 0.44, softness: 0.1, scale: 123, speed: 0.7, direction: 35 };
+const CLOUDS = { strength: 1, cover: 0.37, softness: 0.1, scale: 123, speed: 0.7, direction: 35 };
 const cloudTex = (() => {
   // tileable value noise: lattices whose periods divide the texture, four octaves
   const S = 256, data = new Uint8Array(S * S * 4), rnd = mulberry32(9137);
@@ -2851,6 +2851,23 @@ for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attrib
 // drop a primitive into the current buffer, posed and tinted
 function part(geo, color, x, y, z, { ry = 0, rx = 0, rz = 0, s = 1, sx = s, sy = s, sz = s, into = 'world' } = {}) {
   dummy.position.set(x, y, z); dummy.rotation.set(rx, ry, rz); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
+  emitPart(geo, color, into);
+}
+// a piece run from a to b ([x, y, z]), r thick at a (geo's foot, its -y end, at a; a tapered one narrows to b)
+const segAxis = new GFX.Vector3(), segDir = new GFX.Vector3();
+function seg(geo, color, a, b, r, into = 'world') {
+  segDir.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const len = segDir.length();
+  if (len < 1e-5) return;
+  segDir.divideScalar(len);
+  segAxis.set(segDir.z, 0, -segDir.x);   // (up × the way it runs)
+  const sl = segAxis.length();
+  if (sl < 1e-6) segAxis.set(1, 0, 0); else segAxis.divideScalar(sl);
+  dummy.quaternion.setFromAxisAngle(segAxis, Math.acos(clamp(segDir.y, -1, 1)));
+  dummy.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2); dummy.scale.set(r * 2, len, r * 2); dummy.updateMatrix();
+  emitPart(geo, color, into);
+}
+function emitPart(geo, color, into) {
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
   const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : OUT;
   B.need(src.length);
@@ -4944,7 +4961,7 @@ function updateWake(dt) {
 // Bone Road's props, a size up so they stand right against a human adventurer
 const TS = 1.3;
 // oaks', birches', pines' (frost pines too) and ferns' sizes on top of that (T > Trees)
-const TREE_SIZE = { oak: 1.5, birch: 1.5, pine: 1.6, fern: 2.35};
+const TREE_SIZE = { oak: 1.5, birch: 1.5, pine: 1.6, fern: 2.35, swamp: 1.2 };
 function pine(x, z, k, snow = false) {
   const P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P, g = shade(CC(snow ? '#2f5048' : '#2f5a34'), 0.85 + k * 0.3);
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
@@ -4971,6 +4988,56 @@ function birch(x, z, k) {
   // a tall, narrow crown
   part(G.ico, shade(CC('#9ab84a'), 0.9 + k * 0.2), x, y + 1.22 * S, z, { sx: 0.5 * S, sy: 1.08 * S, sz: 0.5 * S, ry: k * 4 });
   part(G.ico, shade(CC('#9ab84a'), 1.06 + k * 0.1), x + 0.05 * S, y + 1.62 * S, z - 0.03 * S, { sx: 0.3 * S, sy: 0.5 * S, sz: 0.3 * S, ry: k * 2 });
+}
+// A swamp tree, after a live oak in a misty bayou: a short trunk that flares at its foot and kinks as it climbs,
+// gnarled limbs reaching out wide and sagging at their ends, bare twigs, moss in lumps on its foot and along its
+// limbs, and Spanish moss hanging from them in long grey-green strands (plants, so they sway in the wind and
+// swing aside as you pass under). TREE_SIZE.swamp scales it.
+function swampTree(x, z, k) {
+  const y = groundAt(x, z), S = TS * TREE_SIZE.swamp * (0.85 + k * 0.3);
+  let seed = k * 1000;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const bark = shade(CC('#3e3a2c'), 0.9 + k * 0.2), barkD = shade(bark, 0.8), moss = shade(CC('#56702e'), 0.9 + k * 0.2);
+  const hang = [CC('#8f9c78'), CC('#a3ab8c'), CC('#7d8c66')];
+  // the foot, flaring, with moss on it
+  seg(G.frust7, barkD, [x, y - 0.05, z], [x, y + 0.3 * S, z], 0.2 * S);
+  for (let n = 0; n < 3; n++) { const a = k * 5 + n * 2.1; part(G.dodec, moss, x + Math.sin(a) * 0.15 * S, y + 0.06 * S, z + Math.cos(a) * 0.15 * S, { sx: 0.16 * S, sy: 0.1 * S, sz: 0.14 * S, ry: a }); }
+  // the trunk, kinking as it climbs
+  const pts = [[x, y + 0.2 * S, z]];
+  for (let n = 0; n < 3; n++) {
+    const p = pts[n];
+    pts.push([p[0] + (rnd() - 0.5) * 0.24 * S, p[1] + (0.32 + rnd() * 0.1) * S, p[2] + (rnd() - 0.5) * 0.24 * S]);
+  }
+  for (let n = 0; n < 3; n++) seg(G.frust7, n ? bark : barkD, pts[n], pts[n + 1], (0.13 - n * 0.025) * S);
+  // the limbs: out wide from the upper trunk, a little up and then sagging, each with a twig or two
+  const limbs = 3 + Math.floor(k * 2.99);
+  for (let n = 0; n < limbs; n++) {
+    const from = pts[1 + (n % 3 === 2 ? 1 : n % 2 ? 2 : 1)], a = k * 6.28 + n * 6.28 / limbs + (rnd() - 0.5) * 0.6;
+    const dx = Math.sin(a), dz = Math.cos(a), reach = (0.5 + rnd() * 0.35) * S;
+    const m = [from[0] + dx * reach * 0.55, from[1] + (0.12 + rnd() * 0.12) * S, from[2] + dz * reach * 0.55];
+    const bend = (rnd() - 0.5) * 0.5, ex = Math.sin(a + bend), ez = Math.cos(a + bend);
+    const end = [m[0] + ex * reach * 0.6, m[1] - (0.02 + rnd() * 0.1) * S, m[2] + ez * reach * 0.6];
+    seg(G.frust7, bark, from, m, 0.06 * S);
+    seg(G.frust7, bark, m, end, 0.04 * S);
+    // moss along the top of the limb
+    part(G.dodec, moss, (from[0] + m[0]) / 2, (from[1] + m[1]) / 2 + 0.04 * S, (from[2] + m[2]) / 2, { sx: 0.09 * S, sy: 0.05 * S, sz: 0.09 * S, ry: a });
+    // bare twigs off its end
+    for (let t = 0; t < 2; t++) {
+      const ta = a + (t ? 0.7 : -0.7) + (rnd() - 0.5) * 0.4;
+      seg(G.frust4, barkD, end, [end[0] + Math.sin(ta) * 0.18 * S, end[1] + (0.12 + rnd() * 0.12) * S, end[2] + Math.cos(ta) * 0.18 * S], 0.018 * S);
+    }
+    // Spanish moss: strands hanging down from points along the limb
+    for (let h = 0; h < 4; h++) {
+      const t = 0.25 + h * 0.25, inner = t < 0.5;
+      const q = inner ? [from[0] + (m[0] - from[0]) * t * 2, from[1] + (m[1] - from[1]) * t * 2, from[2] + (m[2] - from[2]) * t * 2]
+        : [m[0] + (end[0] - m[0]) * (t - 0.5) * 2, m[1] + (end[1] - m[1]) * (t - 0.5) * 2, m[2] + (end[2] - m[2]) * (t - 0.5) * 2];
+      for (let st = 0; st < 2; st++) {
+        const len = (0.22 + rnd() * 0.4) * S, w = (0.05 + rnd() * 0.04) * S, ox = (rnd() - 0.5) * 0.08 * S, oz = (rnd() - 0.5) * 0.08 * S;
+        const tx = q[0] + ox, ty = q[1] - 0.02 * S, tz = q[2] + oz;
+        stem(G.cone4, hang[Math.floor(rnd() * 3)], tx, ty - len / 2, tz, { sx: w, sy: len, sz: w * 0.6, rx: Math.PI, ry: rnd() * 3 }, tx, ty, tz, 0.35);
+      }
+    }
+  }
 }
 function deadTree(x, z, k, bark = '#3a3030') {
   const y = groundAt(x, z), h = (0.8 + k * 0.5) * TS;
@@ -5283,7 +5350,7 @@ function drawObject(o, c, r) {
     case O.BIRCH: return birch(x, z, k2);
     case O.SEQUOIA: return sequoia(x, z, k2);
     case O.FERN: return fern(x, z, k2);
-    case O.DEAD: return deadTree(x, z, k2, BI[T(c, r)] === SWAMP ? '#3a3428' : '#3a3030');
+    case O.DEAD: return BI[T(c, r)] === SWAMP ? swampTree(x, z, k2) : deadTree(x, z, k2);
     case O.CACTUS: return cactus(x, z, k2);
     case O.BURNT: return burntTree(x, z, k2);
     case O.VENT: return vent(c, r, k2);
@@ -6507,7 +6574,7 @@ const heroShadow = new GFX.Mesh(shadowGeo, shadowMat);
 scene.add(heroShadow);
 // Tuning (T > Hero light): strength by night and by day, reach, falloff, colour, and where it hangs:
 // `toward` tiles from the hero along the line to the camera, then `height` above that
-const HERO_LIGHT = { night: 0.25, day: 0, range: 9, decay: 1.6, toward: 1.2, height: 1.0, color: '#ffb060' };
+const HERO_LIGHT = { night: 1.35, day: 0, range: 6.5, decay: 1.4, toward: 1.2, height: 1.0, color: '#ffa142'};
 const heroLight = addLight(new GFX.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.range, HERO_LIGHT.decay));
 // a few lamp lights shared out to whichever town lamps are nearest
 const lampLights = [0, 1, 2, 3].map(() => addLight(new GFX.PointLight('#ffb060', 0, 4.5, 2)));
@@ -9759,6 +9826,7 @@ const TUNING = [
     [TREE_SIZE, 'birch', 'Birch size', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'pine', 'Pine size (frost pines too)', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'fern', 'Fern size', 0.3, 3, 0.05],
+    [TREE_SIZE, 'swamp', 'Swamp tree size (mossy, gnarled)', 0.4, 2.5, 0.05],
   ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
