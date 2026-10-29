@@ -3924,7 +3924,7 @@ function updateTrunkCut() {
 // the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
 function tallVisible(v) {
   for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; }
-  for (const w of willows) if (w.mesh) w.mesh.visible = v;
+  for (const w of willows) { if (w.mesh) w.mesh.visible = v; if (w.top) w.top.visible = v && w.topShown; }
 }
 
 // ---------- Plants that bend (T > Plants) ----------
@@ -6851,9 +6851,9 @@ function willowTrunk(w) {
 }
 // The canopy: the great limbs out of the fork, a low dome of leaf clumps over them, and the hanging curtains:
 // ribbons of leaves in rings from half its radius out to the edge, the outer ones down nearly to the ground.
-// It sways in the wind (the strands more, the further down). While you're under it (by your distance from its
-// trunk), the dome and limbs are gone outright and the hanging strands nearer the camera than you dither away;
-// the strands behind you stay. Strands write alpha 0 so the outline leaves them unstroked.
+// It sways in the wind (the strands more, the further down). The top (the dome and the limbs, a mesh of its own)
+// is gone outright whenever any of it lies between you and the camera (updateWillows), and while you're under it
+// (by your distance from its trunk) the hanging strands nearer the camera than you dither away; those behind stay. Strands write alpha 0 so the outline leaves them unstroked.
 const WILLOW_U = { time: { value: 0 }, hero: { value: new GFX.Vector2() }, heroW: { value: new GFX.Vector3() }, wind: { value: new GFX.Vector2(0.8, 0.6) }, sway: { value: WILLOW.sway },
   radius: { value: WILLOW.radius }, fade: { value: WILLOW.fade } };
 const willowMat = new GFX.ShaderMaterial({ uniforms: WILLOW_U, vertexColors: true, side: GFX.DoubleSide, attributes: { wv: 'vec4f' }, lit: true,
@@ -6868,8 +6868,6 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let under = 1.0 - smoothstep(U.radius - U.fade, U.radius + U.fade * 0.6, distance(U.hero, i.wv.zw));
-  // the dome and limbs: there, or not
-  if (i.wv.x < 0.0 && under > 0.5) { discard; }
   // a strand: gone once it's on the camera's side of you
   let v = normalize(F.camPos.xyz - U.heroW);
   let gone = select(0.0, smoothstep(-0.6, 0.8, dot((i.world - U.heroW).xz, normalize(v.xz))), i.wv.x >= 0.0);
@@ -6881,8 +6879,26 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   return vec4f(applyFog(c, viewDepth(i.world)), select(1.0, 0.0, i.wv.x >= 0.0));
 }`,
 });
+const wilRay = new GFX.Vector3();
 function updateWillows() {
   WILLOW_U.hero.value.set(H.x, H.z); WILLOW_U.heroW.value.set(H.x, H.y + 0.8, H.z);
+  // each top: hidden if the line from you to the camera passes through it (the dome's shell, or the limbs' reach
+  // under it), stepped along till it's over the dome's top
+  const R = WILLOW.radius, hx = H.x, hy = H.y + 0.8, hz = H.z;
+  wilRay.copy(camera.position).sub(WILLOW_U.heroW.value).normalize();
+  for (const w of willows) {
+    if (!w.top) continue;
+    let hit = false;
+    const y0 = w.L * STEP, top = y0 + WILLOW.height + 1;
+    if (Math.hypot(w.x - hx, w.z - hz) < R + 30) for (let t = 0; t < 60 && !hit; t += 0.35) {
+      const px = hx + wilRay.x * t, py = hy + wilRay.y * t, pz = hz + wilRay.z * t;
+      if (py > top) break;
+      const r = Math.hypot(px - w.x, pz - w.z);
+      if (r <= R + 0.4 && py >= y0 + WILLOW_FORK - 0.6 && py <= y0 + WILLOW.height - 2.6 * (r / R) * (r / R) + 0.9) hit = true;
+    }
+    w.topShown = !hit;
+    w.top.visible = w.topShown;
+  }
   WILLOW_U.time.value = time % 4000;
   WILLOW_U.sway.value = WILLOW.sway; WILLOW_U.radius.value = WILLOW.radius; WILLOW_U.fade.value = WILLOW.fade;
 }
@@ -6893,7 +6909,20 @@ function buildWillows() {
     const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
     const domeY = r => y0 + Hc - 2.6 * (r / R) * (r / R);
     const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-    const wv = [];
+    let wv = [];
+    // (the buffer so far, and its wv, as a mesh)
+    const mesh = () => {
+      const n = OUT.n, geo = new GFX.BufferGeometry();
+      geo.setAttribute('position', new GFX.Float32BufferAttribute(OUT.p.slice(0, n), 3));
+      geo.setAttribute('color', new GFX.Float32BufferAttribute(OUT.c.slice(0, n), 3));
+      geo.setAttribute('wv', new GFX.Float32BufferAttribute(wv, 4));
+      geo.computeVertexNormals();
+      const m = shadowy(new GFX.Mesh(geo, willowMat));
+      m.matrixAutoUpdate = false;
+      scene.add(m);
+      OUT.n = 0; wv = [];
+      return m;
+    };
     const tagTo = (sway, phase) => { while (wv.length / 4 < OUT.n / 3) wv.push(sway, phase, x, z); };
     const bark = shade(CC(WILLOW_BARK), 0.9 + w.seed * 0.15), leaf = CC('#6f8c34'), leafLt = CC('#9db04c'), leafDk = CC('#4e6a26');
     // the limbs: out of the fork, arching up and out, each with a pair of boughs off its end
@@ -6919,6 +6948,10 @@ function buildWillows() {
       }
     }
     tagTo(-1, 0);
+    // (the top: hidden whole by updateWillows, so it casts its shade through a stand-in that's always there)
+    w.top = mesh(); w.top.castShadow = false; w.topShown = true;
+    w.topCast = new GFX.Mesh(w.top.geometry, castOnlyMat); w.topCast.castShadow = true; w.topCast.matrixAutoUpdate = false;
+    scene.add(w.topCast);
     // the curtains: ribbons of leaves turned along the ring, a little zigzag down them, lighter toward the tips
     for (let r = R * 0.5; r <= R + 0.01; r += 0.45) {
       const cnt = Math.round(6.28 * r / 0.34), outer = Math.min(1, Math.max(0, (r / R - 0.55) / 0.4));
@@ -6940,16 +6973,8 @@ function buildWillows() {
         }
       }
     }
-    const n = OUT.n, geo = new GFX.BufferGeometry();
-    geo.setAttribute('position', new GFX.Float32BufferAttribute(OUT.p.slice(0, n), 3));
-    geo.setAttribute('color', new GFX.Float32BufferAttribute(OUT.c.slice(0, n), 3));
-    geo.setAttribute('wv', new GFX.Float32BufferAttribute(wv, 4));
-    geo.computeVertexNormals();
+    w.mesh = mesh();
     OUT = save;
-    const m = shadowy(new GFX.Mesh(geo, willowMat));
-    m.matrixAutoUpdate = false;
-    scene.add(m);
-    w.mesh = m;
   }
 }
 // a fern: fronds round its foot, each rising from it then arching over and down, narrowing as it goes, in
@@ -13918,7 +13943,7 @@ window.GAME = {
   camYaw: () => yaw,
   tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
-  willows: () => willows.map(w => ({ x: w.x, z: w.z, L: w.L, anchor: OB[w.anchor] === O.WILLOW, mesh: !!w.mesh, cast: !!(w.mesh && w.mesh.castShadow),
+  willows: () => willows.map(w => ({ x: w.x, z: w.z, L: w.L, anchor: OB[w.anchor] === O.WILLOW, mesh: !!w.mesh, top: w.top ? w.top.visible : null, topVerts: w.top ? w.top.geometry.attributes.position.count : 0, cast: !!(w.mesh && w.mesh.castShadow),
     verts: w.mesh ? w.mesh.geometry.attributes.position.count : 0, wv: w.mesh ? w.mesh.geometry.attributes.wv.count : 0 })),
   mausoleums: () => mausoleums.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, floors: m.tiles.filter(([c, r]) => FL[T(c, r)] === 3).length,
     doors: m.doors.map(([c, r, w]) => (w ? WW : WN)[T(c, r)]), room: !!roomOf.get(m.cellaI), roofed: !!(bldOf(m.cellaI) || {}).mesh,
