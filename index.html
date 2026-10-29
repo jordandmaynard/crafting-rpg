@@ -2839,7 +2839,7 @@ class Buf {
     return shadowy(new GFX.Mesh(g, mat));
   }
 }
-let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf();
+let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
 // (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
 const bufWeb = new Buf();
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
@@ -2873,6 +2873,17 @@ class PlantBuf extends Buf {
 }
 const bufPlant = new PlantBuf();
 PLANT = bufPlant;
+// the graveyard's spiders and the threads they drop on carry, for every vertex, the height of the web's hub, how
+// far below it the spider drops, its seed, and 1 for a thread's top (which stays at the hub; see spiderMat)
+class SpiderBuf extends PlantBuf {
+  mesh(mat) {
+    const m = Buf.prototype.mesh.call(this, mat);
+    if (m) m.geometry.setAttribute('spider', new GFX.BufferAttribute(this.r.slice(0, this.n / 3 * 4), 4));
+    return m;
+  }
+}
+const bufSpider = new SpiderBuf();
+SPIDER = bufSpider;
 // a piece of a plant, bending from (rx, ry, rz), its stem's foot, as freely as flex (1 grass, less for stiffer ones)
 function stem(geo, color, x, y, z, o, rx, ry, rz, flex) {
   const from = PLANT.n;
@@ -2925,7 +2936,7 @@ function seg(geo, color, a, b, r, into = 'world') {
 }
 function emitPart(geo, color, into) {
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : OUT;
+  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -4318,6 +4329,38 @@ fn gsJoin(a: u32, b: u32) -> bool {
 const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 // spiderweb threads: lit, a touch aglow, and writing alpha 0 so the outline pass draws no stroke round them
 const webMat = flatMat({ vertexColors: true, side: GFX.DoubleSide, opacity: 0 });
+// Every so often a spider drops down from its web on a thread, hangs there bobbing a moment, then climbs back up
+// (T > Graveyard spiders). Lit like the world, but writing alpha 0 so the outline draws no stroke round it.
+const SPIDERS = { drops: 1, depth: 1, dropTime: 0.8, hang: 4, climb: 6 };
+const SPIDER_U = { drops: { value: 1 }, depth: { value: 1 }, dropTime: { value: 0.8 }, hang: { value: 4 }, climb: { value: 6 } };
+const spiderMat = new GFX.ShaderMaterial({ uniforms: SPIDER_U, vertexColors: true, side: GFX.DoubleSide, attributes: { spider: 'vec4f' }, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w0 = (O.model * vec4f(v.position, 1.0)).xyz;
+  // its cycle: sitting at the hub, then a quick drop, a bounce and a hang, then the climb back up in little tugs
+  let busy = U.dropTime + U.hang + U.climb;
+  let P = (busy + 14.0 + v.spider.z * 30.0) / max(U.drops, 0.02);
+  let f = fract(F.camDir.w / P + v.spider.z * 7.31) * P;
+  let g = f - (P - busy);
+  var d = 0.0;
+  if (U.drops > 0.0 && g > 0.0) {
+    if (g < U.dropTime) { let q = g / U.dropTime; d = 1.0 - (1.0 - q) * (1.0 - q) * (1.0 - q); }
+    else if (g < U.dropTime + U.hang) { let h = g - U.dropTime; d = 1.0 + 0.06 * sin(h * 9.0) * exp(-h * 2.5); }
+    else { let c = (g - U.dropTime - U.hang) / U.climb; d = 1.0 - c - 0.025 * sin(c * 60.0); }
+  }
+  let off = select(clamp(d, 0.0, 1.06) * v.spider.y * U.depth, 0.0, v.spider.w > 0.5);
+  let w = w0 - vec3f(0.0, off, 0.0);
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N = flatNormal(i.eye);
+  // (the pale thread glows a little of itself, as the webs do)
+  let em = select(vec3f(0.0), vec3f(0.15), dot(i.color, vec3f(0.333)) > 0.5);
+  let c = shadeLit(i.color, em, 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 0.0);
+}`,
+});
 webMat.emissive.set('#26262c');
 
 // ---------- Water (T > Water) ----------
@@ -4869,27 +4912,30 @@ function updateSmoke() {
   if (smokeMesh) smokeMesh.visible = S.amount > 0;
 }
 // Little things in the air that make each land feel alive (T > Ambient life): butterflies over the meadows by
-// day, fireflies blinking in the deep forest by night, embers drifting up off the wastes and their lava, and
+// day, dragonflies darting over the swamps by day, fireflies blinking in the deep forest by night, embers drifting up off the wastes and their lava, and
 // snow falling gently on the snowfields. Each is worked out in the vertex shader from where it hatched, its
 // seed and the time, as the smoke is, so nothing is stepped on the CPU; the ones round you are gathered into
 // one mesh, built again when you've walked a way. Butterflies and snow are blended over the world and lit;
 // fireflies and embers glow of themselves (added, alpha 0). All of it leaves the target's alpha alone.
-const AMBIENT = { butterflies: 1, fireflies: 1, embers: 1, snow: 1, wind: 0.3,
-  bfSize: 0.09, bfRange: 1, flySize: 0.05, flyGlow: 2.5, flyColor: '#c8f060',
+const AMBIENT = { butterflies: 1, dragonflies: 1, fireflies: 1, embers: 1, snow: 1, wind: 0.3,
+  bfSize: 0.09, bfRange: 1, dfSize: 0.13, dfRange: 1.2, dfSpeed: 1, flySize: 0.07, flyGlow: 3, flyColor: '#c8f060',
   emberSize: 0.035, emberGlow: 2.5, emberRise: 0.6, emberColor: '#ffb040', emberColor2: '#ff4a18',
   snowSize: 0.045, snowFall: 0.9, snowColor: '#f4f6ff' };
-const AMB_DENSITY = { meadow: 0.02, deep: 0.05, wastes: 0.035, lava: 0.25, snow: 0.6 };   // (a tile's chance of one)
+const AMB_DENSITY = { meadow: 0.02, swamp: 0.05, deep: 0.05, wastes: 0.035, lava: 0.25, snow: 0.6 };   // (a tile's chance of one)
 const AMB_U = { dayK: { value: 1 }, flyCol: { value: new GFX.Color(AMBIENT.flyColor) }, emberA: { value: new GFX.Color(AMBIENT.emberColor) },
   emberB: { value: new GFX.Color(AMBIENT.emberColor2) }, snowCol: { value: new GFX.Color(AMBIENT.snowColor) } };
-for (const k of ['butterflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall'])
+for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall'])
   AMB_U[k] = { value: AMBIENT[k] };
 for (const k of ['sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) AMB_U[k] = WATER_U[k];
 const AMB_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32, @location(2) wpos: vec3f, @location(3) col: vec3f, @location(4) kind: f32 }
 fn ambHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
+// a dragonfly's nth spot round where it hatched: across, along, and how high
+fn dfSpot(s: f32, n: f32) -> vec3f { let h = s + n * 3.17; return vec3f(ambHash(h) * 2.0 - 1.0, ambHash(h + 1.1) * 2.0 - 1.0, ambHash(h + 2.3) * 0.5); }
 @vertex fn vs(v: VIn) -> VOut {
-  // sPart: its seed, its kind (0 a butterfly, 1 a firefly, 2 an ember, 3 a snowflake), and for a butterfly which
-  // wing (-1 or 1). position is where it hatched, on the ground (or the lava)
+  // sPart: its seed, its kind (0 a butterfly, 1 a firefly, 2 an ember, 3 a snowflake, 4 a dragonfly), for a
+  // butterfly or a dragonfly which wing (-1 or 1), and for a dragonfly which piece (0 a forewing, 1 a hindwing,
+  // 2 its body). position is where it hatched, on the ground (or the lava)
   let t = F.camDir.w;
   let kind = i32(v.sPart.y + 0.5);
   let s = v.sPart.x * 91.7;
@@ -4914,6 +4960,29 @@ fn ambHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
     // monarch orange, sulphur yellow, cabbage white or a blue
     col = select(select(select(vec3f(0.35, 0.6, 0.95), vec3f(0.95, 0.94, 0.9), a < 0.75), vec3f(0.96, 0.8, 0.25), a < 0.5), vec3f(0.92, 0.48, 0.14), a < 0.3);
     al = U.dayK * U.butterflies;
+  } else if (kind == 4) {
+    // a dragonfly: darts in quick straight lines from spot to spot, hanging still a moment between, turning to
+    // face each new way just as it goes
+    let hop = (0.55 + a * 0.6) / max(U.dfSpeed, 0.05);
+    let ph = t / hop + b * 17.0; let n = floor(ph); let f = ph - n;
+    let p0 = dfSpot(s, n); let p1 = dfSpot(s, n + 1.0);
+    let pt = mix(p0, p1, smoothstep(0.0, 0.3, f));
+    at = v.position + vec3f(pt.x * U.dfRange + 0.015 * sin(t * 7.0 + s), 0.3 + pt.z + 0.015 * sin(t * 9.0 + s * 2.0), pt.y * U.dfRange);
+    let dir = p1.xy - p0.xy;
+    let fwd = normalize(vec3f(dir.x, 0.0, dir.y) + vec3f(1e-4, 0.0, 0.0));
+    let side = vec3f(fwd.z, 0.0, -fwd.x);
+    let sz = U.dfSize * (0.85 + 0.3 * c);
+    if (v.sPart.w < 1.5) {
+      // its wings: long and narrow, two pairs, buzzing
+      let buzz = 0.25 * sin(t * 55.0 + s + v.sPart.w * 1.3);
+      let ox = v.corner.x * sz * 0.55;
+      w = at + fwd * (select(-0.08, 0.12, v.sPart.w < 0.5) * sz + v.corner.y * sz * 0.07) + side * v.sPart.z * ox * cos(buzz) + vec3f(0.0, ox * sin(buzz) + 0.01, 0.0);
+    } else {
+      w = at + fwd * (v.corner.x * sz * 0.55 - 0.15 * sz) + side * v.corner.y * sz * 0.07;
+    }
+    // a blue, a green or a red
+    col = select(select(vec3f(0.8, 0.2, 0.15), vec3f(0.2, 0.7, 0.35), a < 0.7), vec3f(0.15, 0.45, 0.85), a < 0.4);
+    al = U.dayK * U.dragonflies;
   } else if (kind == 1) {
     // a firefly: drifts slowly about where it hatched, and blinks now and then
     let tt = t * 0.25 + a * 30.0;
@@ -4953,7 +5022,7 @@ fn ambHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
   if (al < 0.002) { w = at; }   // (folded to a point: not drawn)
   var o: VOut;
   o.pos = F.viewProj * vec4f(w, 1.0);
-  o.uv = v.corner; o.a = al; o.wpos = at; o.col = col; o.kind = f32(kind);
+  o.uv = v.corner; o.a = al; o.wpos = at; o.col = col; o.kind = f32(kind) + select(0.0, 1.0, kind == 4 && v.sPart.w > 1.5);
   return o;
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
@@ -4971,6 +5040,20 @@ fn ambHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
     var col = select(i.col, i.col * 0.3, m > 0.78);
     if (q.x < 0.1) { col = vec3f(0.08, 0.06, 0.05); }
     return vec4f(col * light * i.a, i.a);
+  }
+  if (kind == 4) {
+    // a dragonfly's wing: clear, faintly veined at the rim
+    let e = length((i.uv - vec2f(0.5, 0.0)) / vec2f(0.5, 1.0));
+    if (e > 1.0) { discard; }
+    let al = select(0.3, 0.55, e > 0.8) * i.a;
+    return vec4f(vec3f(0.85, 0.9, 1.0) * (light + 0.1) * al, al);
+  }
+  if (kind == 5) {
+    // its body: head, a broad thorax and a long thin tail (uv.x runs from tail -1 to head 1), with a sheen
+    let hw = select(select(0.45, 1.0, i.uv.x > 0.4), 0.85, i.uv.x > 0.78);
+    if (abs(i.uv.y) > hw) { discard; }
+    let sheen = 1.0 + 0.6 * (1.0 - abs(i.uv.y) / hw);
+    return vec4f(i.col * light * sheen * i.a, i.a);
   }
   let r2 = dot(i.uv, i.uv);
   if (r2 > 1.0) { discard; }
@@ -5000,6 +5083,9 @@ function buildAmbient() {
     const sd = rnd();
     if (kind === 0) {
       for (const wing of [-1, 1]) for (const [cx, cz] of W) { pos.push(x, y, z); part.push(sd, 0, wing, 0); corner.push(cx, cz); }
+    } else if (kind === 4) {
+      for (const pc of [0, 1]) for (const wing of [-1, 1]) for (const [cx, cz] of W) { pos.push(x, y, z); part.push(sd, 4, wing, pc); corner.push(cx, cz); }
+      for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, 4, 0, 2); corner.push(cx, cz); }
     } else for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, kind, 0, 0); corner.push(cx, cz); }
   };
   const c0 = Math.floor(H.x), r0 = Math.floor(H.z), D = AMB_DENSITY;
@@ -5011,6 +5097,7 @@ function buildAmbient() {
     if (LAVA[i]) {
       if (rnd() < D.lava) add(x, LV[i] ? groundAt(x, z) : WL[i] * STEP - LAVA_DROP, z, 2);
     } else if (b === MEADOW) { if (!WT[i] && LV[i] && rnd() < D.meadow) add(x, groundAt(x, z), z, 0); }
+    else if (b === SWAMP) { if (LV[i] && rnd() < D.swamp * (WT[i] ? 1 : 0.3)) add(x, groundAt(x, z), z, 4); }
     else if (b === DEEP) { if (rnd() < D.deep) add(x, groundAt(x, z), z, 1); }
     else if (b === WASTES) { if (rnd() < D.wastes) add(x, groundAt(x, z), z, 2); }
     else if (b === SNOW) { if (rnd() < D.snow) add(x, groundAt(x, z), z, 3); }
@@ -5027,10 +5114,12 @@ function buildAmbient() {
 function updateAmbient() {
   if (Math.hypot(H.x - ambAt.x, H.z - ambAt.z) > 8) buildAmbient();
   const A = AMBIENT, U = AMB_U;
-  for (const k of ['butterflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall']) U[k].value = A[k];
+  for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall']) U[k].value = A[k];
   U.flyCol.value.set(A.flyColor); U.emberA.value.set(A.emberColor); U.emberB.value.set(A.emberColor2); U.snowCol.value.set(A.snowColor);
-  U.dayK.value = smoothstep(-0.05, 0.2, WATER_U.sunDir.value.y);
-  if (ambMesh) ambMesh.visible = A.butterflies + A.fireflies + A.embers + A.snow > 0;
+  for (const k of ['drops', 'depth', 'dropTime', 'hang', 'climb']) SPIDER_U[k].value = SPIDERS[k];
+  // (the sun's own height: the light's direction, sunDir in the shaders, is the moon's by night)
+  U.dayK.value = smoothstep(-0.05, 0.2, sunDir[1]);
+  if (ambMesh) ambMesh.visible = A.butterflies + A.dragonflies + A.fireflies + A.embers + A.snow > 0;
 }
 // Heat rising (T > Heat shimmer): over the lava, and faintly over the desert's deep sand, the world behind
 // wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and drawn last
@@ -5412,13 +5501,26 @@ function spiderWeb(anchors, rnd, S) {
   const at = (p, f) => [hub[0] + (p[0] - hub[0]) * f, hub[1] + (p[1] - hub[1]) * f, hub[2] + (p[2] - hub[2]) * f];
   for (const f of [0.22, 0.42, 0.62, 0.82]) for (let n = 0; n < spokes.length; n++) thread(at(spokes[n], f), at(spokes[(n + 1) % spokes.length], f), th * 0.8);
   if (rnd() < 0.8) {
-    // the spider: a dark body and a bigger abdomen, a little off the hub (in the web buffer too: an outline would
-    // dwarf it)
+    // the spider: a dark body and a bigger abdomen, a little off the hub, in a buffer of its own so it can drop
+    // (and like the web drawn with no outline, which would dwarf it)
     const sx = hub[0] + (rnd() - 0.5) * 0.04 * S, sy = hub[1] + (rnd() - 0.5) * 0.04 * S, sz = hub[2] + (rnd() - 0.5) * 0.04 * S;
-    part(G.dodec, '#1c1418', sx, sy, sz, { s: 0.022, into: 'web' });
-    part(G.dodec, '#2a1a1e', sx, sy - 0.022, sz, { sx: 0.03, sy: 0.034, sz: 0.03, into: 'web' });
-    part(G.box, '#a82a20', sx, sy - 0.024, sz + 0.012, { sx: 0.01, sy: 0.012, sz: 0.008, into: 'web' });
+    const drop = clamp(sy - groundAt(sx, sz) - 0.12, 0, 0.9) * (0.6 + rnd() * 0.4), sd = rnd(), from = SPIDER.n;
+    part(G.dodec, '#1c1418', sx, sy, sz, { s: 0.022, into: 'spider' });
+    part(G.dodec, '#2a1a1e', sx, sy - 0.022, sz, { sx: 0.03, sy: 0.034, sz: 0.03, into: 'spider' });
+    part(G.box, '#a82a20', sx, sy - 0.024, sz + 0.012, { sx: 0.01, sy: 0.012, sz: 0.008, into: 'spider' });
+    SPIDER.tag(from, sy, drop, sd, 0);
+    // its thread: two crossed ribbons, their tops held at the hub and their feet going down with the spider
+    const tw = th * 0.5, k = CC('#e8eaf0');
+    for (const [ox, oz] of [[tw, 0], [0, tw]]) {
+      const t0 = [sx - ox, sy + 0.012, sz - oz], t1 = [sx + ox, sy + 0.012, sz + oz], b0 = [sx - ox, sy, sz - oz], b1 = [sx + ox, sy, sz + oz];
+      let v = SPIDER.n; tri(t0, b0, b1, k, k, k, SPIDER); tagTop(v, [1, 0, 0], sy, drop, sd);
+      v = SPIDER.n; tri(t0, b1, t1, k, k, k, SPIDER); tagTop(v, [1, 0, 1], sy, drop, sd);
+    }
   }
+}
+// (tags each of the 3 vertices from v in the spider buffer, its top flag from tops)
+function tagTop(v, tops, sy, drop, sd) {
+  for (let j = 0; j < 3; j++) { const o = (v / 3 + j) * 4, r = SPIDER.r; r[o] = sy; r[o + 1] = drop; r[o + 2] = sd; r[o + 3] = tops[j]; }
 }
 function deadTree(x, z, k, bark = '#3a3030') {
   const y = groundAt(x, z), h = (0.8 + k * 0.5) * TS;
@@ -5937,7 +6039,8 @@ function shrine(x, z, k) {
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 function buildObjects(cx, cz, ch) {
-  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; PLANT = bufPlant; WEB = bufWeb; bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = bufPlant.n = bufWeb.n = 0;
+  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; PLANT = bufPlant; WEB = bufWeb; SPIDER = bufSpider;
+  bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = bufPlant.n = bufWeb.n = bufSpider.n = 0;
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
@@ -5953,6 +6056,8 @@ function buildObjects(cx, cz, ch) {
   if (ch.canopy) ch.canopy.castShadow = true;
   ch.web = bufWeb.mesh(webMat);
   if (ch.web) ch.web.castShadow = false;
+  ch.spider = bufSpider.mesh(spiderMat);
+  if (ch.spider) ch.spider.castShadow = false;
 }
 
 // ---------- Building pieces ----------
@@ -6391,7 +6496,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.web, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0 };
 function buildChunk(cx, cz) {
   const t0 = performance.now();
@@ -6416,7 +6521,7 @@ function rebuildObjects(c, r) {
   if (!ch) return;
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web);
+  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
   grassChunk(ch.cx, ch.cz);
 }
 function rebuildPieces(c, r) {
@@ -11132,6 +11237,13 @@ const TUNING = [
     [TREE_SIZE, 'swamp', 'Swamp tree size (mossy, gnarled)', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'grave', 'Graveyard tree size (webbed, gnarled)', 0.4, 2.5, 0.05],
   ]],
+  ['Graveyard spiders', [
+    [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],
+    [SPIDERS, 'depth', 'How far they drop', 0, 2, 0.05],
+    [SPIDERS, 'dropTime', 'Drop (seconds)', 0.1, 4, 0.05],
+    [SPIDERS, 'hang', 'Hang there (seconds)', 0, 15, 0.1],
+    [SPIDERS, 'climb', 'Climb back (seconds)', 0.5, 20, 0.1],
+  ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
     [ORE_LOOK, 'iron', 'Iron colour', 'color'],
@@ -11234,6 +11346,10 @@ const TUNING = [
     [AMBIENT, 'butterflies', 'Meadow butterflies by day (0 off)', 0, 2, 0.05],
     [AMBIENT, 'bfSize', 'Butterflies: size', 0.02, 0.4, 0.01],
     [AMBIENT, 'bfRange', 'Butterflies: how far they wander', 0, 3, 0.05],
+    [AMBIENT, 'dragonflies', 'Swamp dragonflies by day (0 off)', 0, 2, 0.05],
+    [AMBIENT, 'dfSize', 'Dragonflies: size', 0.02, 0.5, 0.01],
+    [AMBIENT, 'dfRange', 'Dragonflies: how far they dart', 0, 4, 0.05],
+    [AMBIENT, 'dfSpeed', 'Dragonflies: how often they dart', 0.1, 4, 0.05],
     [AMBIENT, 'fireflies', 'Deep forest fireflies by night (0 off)', 0, 2, 0.05],
     [AMBIENT, 'flySize', 'Fireflies: size', 0.01, 0.3, 0.005],
     [AMBIENT, 'flyGlow', 'Fireflies: glow', 0, 8, 0.1],
@@ -11628,7 +11744,7 @@ window.GAME = {
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
@@ -11639,12 +11755,13 @@ window.GAME = {
   },
   begin,
   ambient: () => {
-    const kinds = [0, 0, 0, 0], a = ambMesh && ambMesh.geometry.attributes.sPart;
+    const kinds = [0, 0, 0, 0, 0], a = ambMesh && ambMesh.geometry.attributes.sPart;
     if (a) for (let i = 0; i < a.count; i += 6) kinds[Math.round(a.array[i * 4 + 1])] += 1;
-    kinds[0] /= 2;   // (a butterfly is two wings)
+    kinds[0] /= 2; kinds[4] /= 5;   // (a butterfly is two wings, a dragonfly four and a body)
     let webs = 0;
-    for (const ch of chunks.values()) if (ch.web) webs += ch.web.geometry.attributes.position.count;
-    return { kinds, heat: heatMesh ? heatMesh.geometry.attributes.position.count / 6 : 0, heatOn: !!(heatMesh && heatMesh.visible), dayK: AMB_U.dayK.value, webVerts: webs };
+    let spiders = 0;
+    for (const ch of chunks.values()) { if (ch.web) webs += ch.web.geometry.attributes.position.count; if (ch.spider) spiders += ch.spider.geometry.attributes.position.count; }
+    return { kinds, heat: heatMesh ? heatMesh.geometry.attributes.position.count / 6 : 0, heatOn: !!(heatMesh && heatMesh.visible), dayK: AMB_U.dayK.value, webVerts: webs, spiderVerts: spiders };
   },
   teleport: (x, z) => { H.x = x; H.z = z; H.y = surfaceY(x, z); camTarget.set(H.x, H.y, H.z); },
   give: (w, s) => { if (w) addItem('wood', w); if (s) addItem('stone', s); },
