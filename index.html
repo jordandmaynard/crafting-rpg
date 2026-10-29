@@ -2710,6 +2710,12 @@ function renderWorld() {
   camera.layers.set(1); renderer.render(scene, camera);
   renderer.passName = 'swamp water, ground haze';
   camera.layers.set(3); renderer.render(scene, camera);
+  // the heat shimmer, over a copy of the picture so far
+  if (on && heatMesh && heatMesh.visible) {
+    const s = renderer.snapshot(outlineRT); HEAT_U.tC.value = s.color; HEAT_U.tD.value = s.depth;
+    renderer.passName = 'heat shimmer';
+    camera.layers.set(8); renderer.render(scene, camera);
+  }
   // the aim decal, over a copy of the depth so far
   if (on && aimMesh.visible) {
     AIM_U.tD.value = renderer.snapshot(outlineRT).depth;
@@ -2728,6 +2734,7 @@ function renderWorld() {
     const grassOn = grassMesh.visible, driftOn = driftMesh.visible; grassMesh.visible = driftMesh.visible = false;
     const sprayOn = sprayMesh && sprayMesh.visible; if (sprayMesh) sprayMesh.visible = false;
     const smokeOn = smokeMesh && smokeMesh.visible; if (smokeMesh) smokeMesh.visible = false;
+    const ambOn = ambMesh && ambMesh.visible; if (ambMesh) ambMesh.visible = false;
     renderer.passName = 'normals (Sobel)';
     camera.layers.set(5); renderer.render(scene, camera);
     camera.layers.set(0); renderer.render(scene, camera);
@@ -2738,6 +2745,7 @@ function renderWorld() {
     grassMesh.visible = grassOn; driftMesh.visible = driftOn;
     if (sprayMesh) sprayMesh.visible = sprayOn;
     if (smokeMesh) smokeMesh.visible = smokeOn;
+    if (ambMesh) ambMesh.visible = ambOn;
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
@@ -2831,7 +2839,9 @@ class Buf {
     return shadowy(new GFX.Mesh(g, mat));
   }
 }
-let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null;
+let OUT = new Buf(), GLOW = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf();
+// (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
+const bufWeb = new Buf();
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
@@ -2869,8 +2879,8 @@ function stem(geo, color, x, y, z, o, rx, ry, rz, flex) {
   part(geo, color, x, y, z, Object.assign({ into: 'plant' }, o));
   PLANT.tag(from, rx, ry, rz, flex);
 }
-function tri(a, b, c, ca, cb = ca, cc = ca) {
-  const B = OUT; B.need(9);
+function tri(a, b, c, ca, cb = ca, cc = ca, B = OUT) {
+  B.need(9);
   const p = B.p, k = B.c; let n = B.n;
   p[n] = a[0]; p[n + 1] = a[1]; p[n + 2] = a[2]; k[n] = ca.r; k[n + 1] = ca.g; k[n + 2] = ca.b; n += 3;
   p[n] = b[0]; p[n + 1] = b[1]; p[n + 2] = b[2]; k[n] = cb.r; k[n + 1] = cb.g; k[n + 2] = cb.b; n += 3;
@@ -2915,7 +2925,7 @@ function seg(geo, color, a, b, r, into = 'world') {
 }
 function emitPart(geo, color, into) {
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : OUT;
+  const B = into === 'glow' ? GLOW : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -4306,6 +4316,9 @@ fn gsJoin(a: u32, b: u32) -> bool {
 }`,
 });
 const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
+// spiderweb threads: lit, a touch aglow, and writing alpha 0 so the outline pass draws no stroke round them
+const webMat = flatMat({ vertexColors: true, side: GFX.DoubleSide, opacity: 0 });
+webMat.emissive.set('#26262c');
 
 // ---------- Water (T > Water) ----------
 // Crafting and Conquest's water surface: Fresnel (Schlick, n = 1.333) between the
@@ -4855,9 +4868,253 @@ function updateSmoke() {
   U.ventA.value.set(S.ventColor); U.ventB.value.set(S.ventColor2); U.hearthCol.value.set(S.hearthColor);
   if (smokeMesh) smokeMesh.visible = S.amount > 0;
 }
+// Little things in the air that make each land feel alive (T > Ambient life): butterflies over the meadows by
+// day, fireflies blinking in the deep forest by night, embers drifting up off the wastes and their lava, and
+// snow falling gently on the snowfields. Each is worked out in the vertex shader from where it hatched, its
+// seed and the time, as the smoke is, so nothing is stepped on the CPU; the ones round you are gathered into
+// one mesh, built again when you've walked a way. Butterflies and snow are blended over the world and lit;
+// fireflies and embers glow of themselves (added, alpha 0). All of it leaves the target's alpha alone.
+const AMBIENT = { butterflies: 1, fireflies: 1, embers: 1, snow: 1, wind: 0.3,
+  bfSize: 0.09, bfRange: 1, flySize: 0.05, flyGlow: 2.5, flyColor: '#c8f060',
+  emberSize: 0.035, emberGlow: 2.5, emberRise: 0.6, emberColor: '#ffb040', emberColor2: '#ff4a18',
+  snowSize: 0.045, snowFall: 0.9, snowColor: '#f4f6ff' };
+const AMB_DENSITY = { meadow: 0.02, deep: 0.05, wastes: 0.035, lava: 0.25, snow: 0.6 };   // (a tile's chance of one)
+const AMB_U = { dayK: { value: 1 }, flyCol: { value: new GFX.Color(AMBIENT.flyColor) }, emberA: { value: new GFX.Color(AMBIENT.emberColor) },
+  emberB: { value: new GFX.Color(AMBIENT.emberColor2) }, snowCol: { value: new GFX.Color(AMBIENT.snowColor) } };
+for (const k of ['butterflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall'])
+  AMB_U[k] = { value: AMBIENT[k] };
+for (const k of ['sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) AMB_U[k] = WATER_U[k];
+const AMB_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32, @location(2) wpos: vec3f, @location(3) col: vec3f, @location(4) kind: f32 }
+fn ambHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453); }
+@vertex fn vs(v: VIn) -> VOut {
+  // sPart: its seed, its kind (0 a butterfly, 1 a firefly, 2 an ember, 3 a snowflake), and for a butterfly which
+  // wing (-1 or 1). position is where it hatched, on the ground (or the lava)
+  let t = F.camDir.w;
+  let kind = i32(v.sPart.y + 0.5);
+  let s = v.sPart.x * 91.7;
+  let a = ambHash(s); let b = ambHash(s + 1.3); let c = ambHash(s + 2.7); let d = ambHash(s + 4.1);
+  let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
+  let upv = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
+  let bb = right * v.corner.x + upv * v.corner.y;
+  var at = v.position; var w = at; var al = 0.0; var col = vec3f(1.0);
+  if (kind == 0) {
+    // a butterfly: loops and wanders round its patch, bobbing, its wings beating
+    let tt = t * (0.35 + a * 0.2) + a * 40.0;
+    let p0 = b * 6.28; let p1 = c * 6.28; let p2 = d * 6.28;
+    let p = vec2f(sin(tt + p0) + 0.5 * sin(tt * 2.3 + p1), sin(tt * 0.8 + p1) + 0.5 * sin(tt * 1.9 + p2)) * 0.9 * U.bfRange;
+    let vel = vec2f(cos(tt + p0) + 1.15 * cos(tt * 2.3 + p1), 0.8 * cos(tt * 0.8 + p1) + 0.95 * cos(tt * 1.9 + p2));
+    at = v.position + vec3f(p.x, 0.35 + b * 0.4 + 0.18 * sin(tt * 3.1 + a * 9.0), p.y);
+    let fwd = normalize(vec3f(vel.x, 0.0, vel.y) + vec3f(1e-4, 0.0, 0.0));
+    let side = vec3f(fwd.z, 0.0, -fwd.x);
+    let flap = 0.2 + 1.1 * (0.5 + 0.5 * sin(t * (15.0 + a * 6.0) + s));
+    let sz = U.bfSize * (0.8 + 0.4 * c);
+    let ox = v.corner.x;   // (0 at the body, 1 at the wing's edge)
+    w = at + side * v.sPart.z * ox * cos(flap) * sz + vec3f(0.0, ox * sin(flap) * sz, 0.0) + fwd * v.corner.y * sz * 0.8;
+    // monarch orange, sulphur yellow, cabbage white or a blue
+    col = select(select(select(vec3f(0.35, 0.6, 0.95), vec3f(0.95, 0.94, 0.9), a < 0.75), vec3f(0.96, 0.8, 0.25), a < 0.5), vec3f(0.92, 0.48, 0.14), a < 0.3);
+    al = U.dayK * U.butterflies;
+  } else if (kind == 1) {
+    // a firefly: drifts slowly about where it hatched, and blinks now and then
+    let tt = t * 0.25 + a * 30.0;
+    at = v.position + vec3f(sin(tt + b * 6.28) * 0.7 + 0.3 * sin(tt * 2.7), 0.3 + a * 1.1 + 0.2 * sin(tt * 1.7 + c * 6.28), cos(tt * 0.9 + c * 6.28) * 0.7 + 0.3 * sin(tt * 2.1 + d));
+    let ph = fract(t / (2.0 + b * 3.0) + d);
+    al = smoothstep(0.0, 0.08, ph) * (1.0 - smoothstep(0.1, 0.45, ph)) * (1.0 - U.dayK) * U.fireflies;
+    col = U.flyCol * U.flyGlow;
+    w = at + bb * U.flySize;
+  } else if (kind == 2) {
+    // an ember: rises off the ground, swaying and leaning with the wind, flickering as it cools, round and round
+    let life = 3.5 + a * 3.0;
+    let ph = t / life + b; let k = fract(ph);
+    let r = s + floor(ph) * 13.37;
+    let o = vec2f(ambHash(r), ambHash(r + 1.7)) - 0.5;
+    let age = k * life;
+    let sway = vec2f(sin(age * 2.0 + r), cos(age * 1.6 + r * 1.3)) * 0.25 * k + vec2f(1.0, 0.35) * U.wind * age * 0.3;
+    at = v.position + vec3f(o.x + sway.x, 0.05 + age * U.emberRise * (0.4 + 0.3 * c), o.y + sway.y);
+    al = smoothstep(0.0, 0.1, k) * (1.0 - smoothstep(0.5, 1.0, k)) * (0.65 + 0.35 * sin(t * 9.0 + r)) * U.embers;
+    col = mix(U.emberA, U.emberB, k) * U.emberGlow;
+    w = at + bb * U.emberSize * (1.0 - 0.5 * k);
+  } else {
+    // a snowflake: falls slowly from high over its spot, swaying and drifting with the wind, and melts away
+    let fall = 7.0;
+    let life = fall / (U.snowFall * (0.7 + 0.5 * a));
+    let ph = t / life + b; let k = fract(ph);
+    let r = s + floor(ph) * 7.31;
+    let o = vec2f(ambHash(r), ambHash(r + 2.1)) - 0.5;
+    let age = k * life;
+    let sway = vec2f(sin(age * 1.3 + r), cos(age * 1.1 + r * 1.7)) * 0.3 + vec2f(1.0, 0.35) * U.wind * (age - life * 0.5) * 0.4;
+    at = v.position + vec3f(o.x + sway.x, fall * (1.0 - k), o.y + sway.y);
+    al = smoothstep(0.0, 0.08, k) * (1.0 - smoothstep(0.93, 1.0, k)) * U.snow;
+    col = U.snowCol;
+    w = at + bb * U.snowSize * (0.7 + 0.6 * c);
+  }
+  let fog = 1.0 - sat((viewDepth(at) - U.fogNear) / (U.fogFar - U.fogNear));
+  al *= fog;
+  if (al < 0.002) { w = at; }   // (folded to a point: not drawn)
+  var o: VOut;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.uv = v.corner; o.a = al; o.wpos = at; o.col = col; o.kind = f32(kind);
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let kind = i32(i.kind + 0.5);
+  let L = normalize(U.sunDir);
+  let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
+  let light = U.skyCol * 0.9 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
+  if (kind == 0) {
+    // the wing: a big forewing and a smaller hindwing, darker at the rim, with the dark body down the middle
+    let q = vec2f(i.uv.x, i.uv.y);
+    let f = length((q - vec2f(0.5, 0.35)) / vec2f(0.5, 0.6));
+    let h = length((q - vec2f(0.4, -0.45)) / vec2f(0.42, 0.5));
+    let m = min(f, h);
+    if (m > 1.0 && q.x > 0.1) { discard; }
+    var col = select(i.col, i.col * 0.3, m > 0.78);
+    if (q.x < 0.1) { col = vec3f(0.08, 0.06, 0.05); }
+    return vec4f(col * light * i.a, i.a);
+  }
+  let r2 = dot(i.uv, i.uv);
+  if (r2 > 1.0) { discard; }
+  let m = exp(-r2 * 4.0) * (1.0 - r2);
+  if (kind == 3) {
+    let al = sat(m * 1.6 * i.a);
+    return vec4f(i.col * (light + 0.15) * al, al);
+  }
+  return vec4f(i.col * m * i.a, 0.0);
+}`;
+const ambMat = new GFX.ShaderMaterial({
+  uniforms: AMB_U, attributes: { sPart: 'vec4f', corner: 'vec2f' }, code: AMB_WGSL,
+  transparent: true, depthWrite: false, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
+  blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
+});
+ambMat.keepAlpha = true;
+let ambMesh = null;
+const ambAt = { x: -1e9, z: -1e9 };
+const AMB_R = 30;   // tiles round you with life in the air
+function buildAmbient() {
+  ambAt.x = H.x; ambAt.z = H.z;
+  if (ambMesh) { scene.remove(ambMesh); ambMesh.geometry.dispose(); ambMesh = null; }
+  const pos = [], part = [], corner = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]], W = [[0, -1], [1, -1], [1, 1], [0, -1], [1, 1], [0, 1]];
+  let seed = 0;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 78.233 + H.x * 0.013 + H.z * 0.029) * 43758.5453; return v - Math.floor(v); };
+  const add = (x, y, z, kind) => {
+    const sd = rnd();
+    if (kind === 0) {
+      for (const wing of [-1, 1]) for (const [cx, cz] of W) { pos.push(x, y, z); part.push(sd, 0, wing, 0); corner.push(cx, cz); }
+    } else for (const [cx, cz] of C) { pos.push(x, y, z); part.push(sd, kind, 0, 0); corner.push(cx, cz); }
+  };
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z), D = AMB_DENSITY;
+  for (let r = Math.max(1, r0 - AMB_R); r <= Math.min(N - 2, r0 + AMB_R); r++) for (let c = Math.max(1, c0 - AMB_R); c <= Math.min(N - 2, c0 + AMB_R); c++) {
+    const i = T(c, r), b = BI[i];
+    // (seeded by the tile, so the same tiles have the same life whenever it's built)
+    seed = (c * 7919 + r * 104729) % 100000;
+    const x = c + rnd(), z = r + rnd();
+    if (LAVA[i]) {
+      if (rnd() < D.lava) add(x, LV[i] ? groundAt(x, z) : WL[i] * STEP - LAVA_DROP, z, 2);
+    } else if (b === MEADOW) { if (!WT[i] && LV[i] && rnd() < D.meadow) add(x, groundAt(x, z), z, 0); }
+    else if (b === DEEP) { if (rnd() < D.deep) add(x, groundAt(x, z), z, 1); }
+    else if (b === WASTES) { if (rnd() < D.wastes) add(x, groundAt(x, z), z, 2); }
+    else if (b === SNOW) { if (rnd() < D.snow) add(x, groundAt(x, z), z, 3); }
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('sPart', new GFX.Float32BufferAttribute(part, 4));
+  g.setAttribute('corner', new GFX.Float32BufferAttribute(corner, 2));
+  ambMesh = new GFX.Mesh(g, ambMat);
+  ambMesh.frustumCulled = false; ambMesh.renderOrder = 12; ambMesh.layers.set(3);
+  scene.add(ambMesh);
+}
+function updateAmbient() {
+  if (Math.hypot(H.x - ambAt.x, H.z - ambAt.z) > 8) buildAmbient();
+  const A = AMBIENT, U = AMB_U;
+  for (const k of ['butterflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall']) U[k].value = A[k];
+  U.flyCol.value.set(A.flyColor); U.emberA.value.set(A.emberColor); U.emberB.value.set(A.emberColor2); U.snowCol.value.set(A.snowColor);
+  U.dayK.value = smoothstep(-0.05, 0.2, WATER_U.sunDir.value.y);
+  if (ambMesh) ambMesh.visible = A.butterflies + A.fireflies + A.embers + A.snow > 0;
+}
+// Heat rising (T > Heat shimmer): over the lava, and faintly over the desert's deep sand, the world behind
+// wavers as if seen through hot air. Upright sheets stand over the spots, turned to face you, and drawn last
+// (layer 8) over a copy of the picture so far: each pixel shows the copy a few pixels off, by ripples rising
+// up the sheet, strongest in its middle and fading at its sides and top. Anything nearer than the sheet is
+// left as it is, so the hot air never smears what stands in front of it.
+const HEAT = { lava: 1, sand: 0.5, strength: 1, speed: 1, height: 1 };
+const HEAT_DENSITY = { lava: 0.35, sand: 0.06 };
+const HEAT_U = { tC: { value: null }, tD: { value: null }, strength: { value: 1 }, speed: { value: 1 }, height: { value: 1 }, lava: { value: 1 }, sand: { value: 0.5 } };
+const HEAT_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) k: f32, @location(2) pix: vec3f, @location(3) seed: f32 }
+@vertex fn vs(v: VIn) -> VOut {
+  // hPart: its seed, 1 over lava or 0 over sand, its width, its height
+  let lava = v.hPart.y > 0.5;
+  let right = normalize(vec3f(F.view[0][0], 0.0, F.view[2][0]) + vec3f(1e-5, 0.0, 0.0));
+  let w = v.position + right * v.corner.x * v.hPart.z * 0.5 + vec3f(0.0, (v.corner.y * 0.5 + 0.5) * v.hPart.w * U.height, 0.0);
+  var o: VOut;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.uv = vec2f(v.corner.x, v.corner.y * 0.5 + 0.5); o.pix = w; o.seed = v.hPart.x * 6.28;
+  o.k = select(U.sand, U.lava, lava);
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let u = i.uv;
+  let mask = (1.0 - u.x * u.x) * smoothstep(0.0, 0.2, u.y) * (1.0 - smoothstep(0.35, 1.0, u.y)) * i.k * U.strength;
+  if (mask <= 0.002) { discard; }
+  let dims = vec2i(textureDimensions(tC));
+  let p = clamp(vec2i(i.pos.xy), vec2i(0), dims - 1);
+  let t = F.camDir.w * U.speed;
+  let q = i.pix;
+  let wob = vec2f(sin(q.y * 9.0 - t * 5.0 + q.x * 3.1 + i.seed) + 0.5 * sin(q.y * 17.0 - t * 8.3 + q.z * 5.3 + i.seed),
+    0.6 * sin(q.y * 11.0 - t * 6.1 + q.z * 2.7 + i.seed * 1.7));
+  let off = vec2i(round(wob * mask * 2.0 * f32(dims.y) / 360.0));
+  let ps = clamp(p + off, vec2i(0), dims - 1);
+  // (not from anything nearer than the sheet)
+  let P = F.proj;
+  let zb = textureLoad(tD, ps, 0);
+  let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+  let vs = (F.view * vec4f(i.pix, 1.0)).z;
+  let src = select(ps, p, vb > vs);
+  return vec4f(textureLoad(tC, src, 0).rgb, 1.0);
+}`;
+const heatMat = new GFX.ShaderMaterial({
+  uniforms: HEAT_U, attributes: { hPart: 'vec4f', corner: 'vec2f' }, code: HEAT_WGSL,
+  transparent: true, depthWrite: false, side: GFX.DoubleSide,
+});
+heatMat.keepAlpha = true;
+let heatMesh = null;
+const heatAt = { x: -1e9, z: -1e9 };
+const HEAT_R = 30;
+function buildHeat() {
+  heatAt.x = H.x; heatAt.z = H.z;
+  if (heatMesh) { scene.remove(heatMesh); heatMesh.geometry.dispose(); heatMesh = null; }
+  const pos = [], part = [], corner = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  let seed = 0;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 45.164) * 43758.5453; return v - Math.floor(v); };
+  const add = (x, y, z, lava, wd, ht) => { const sd = rnd(); for (const [cx, cy] of C) { pos.push(x, y, z); part.push(sd, lava, wd, ht); corner.push(cx, cy); } };
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z), D = HEAT_DENSITY;
+  for (let r = Math.max(1, r0 - HEAT_R); r <= Math.min(N - 2, r0 + HEAT_R); r++) for (let c = Math.max(1, c0 - HEAT_R); c <= Math.min(N - 2, c0 + HEAT_R); c++) {
+    const i = T(c, r);
+    seed = (c * 6151 + r * 92821) % 100000;
+    if (LAVA[i] && !LV[i]) { if (rnd() < D.lava) add(c + rnd(), WL[i] * STEP - LAVA_DROP, r + rnd(), 1, 1.6 + rnd() * 0.6, 1.3 + rnd() * 0.5); }
+    else if (BI[i] === DESERT && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile) {
+      // (the deep sand: the open desert the drift layer lies over)
+      if (rnd() < D.sand) { const x = c + rnd(), z = r + rnd(); add(x, groundAt(x, z), z, 0, 2 + rnd(), 0.7 + rnd() * 0.3); }
+    }
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('hPart', new GFX.Float32BufferAttribute(part, 4));
+  g.setAttribute('corner', new GFX.Float32BufferAttribute(corner, 2));
+  heatMesh = new GFX.Mesh(g, heatMat);
+  heatMesh.frustumCulled = false; heatMesh.layers.set(8);
+  scene.add(heatMesh);
+}
+function updateHeat() {
+  if (Math.hypot(H.x - heatAt.x, H.z - heatAt.z) > 8) buildHeat();
+  for (const k of ['strength', 'speed', 'height', 'lava', 'sand']) HEAT_U[k].value = HEAT[k];
+  if (heatMesh) heatMesh.visible = HEAT.strength > 0 && HEAT.lava + HEAT.sand > 0;
+}
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
-{ const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
+{ const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; HEAT_U.tC.value = s.color; HEAT_U.tD.value = s.depth; }
 // splat this frame's caustics, before the water reads them
 function updateCaustics() {
   const P = 9 * Math.max(0.2, WATER.rippleSize), t = WATER_U.time.value, sd = WATER_U.sunDir.value;
@@ -5010,7 +5267,7 @@ function updateWake(dt) {
 // Bone Road's props, a size up so they stand right against a human adventurer
 const TS = 1.3;
 // oaks', birches', pines' (frost pines too) and ferns' sizes on top of that (T > Trees)
-const TREE_SIZE = { oak: 1.5, birch: 1.5, pine: 1.6, fern: 2.35, swamp: 1.2 };
+const TREE_SIZE = { oak: 1.5, birch: 1.5, pine: 1.6, fern: 2.35, swamp: 1.2, grave: 1.1 };
 function pine(x, z, k, snow = false) {
   const P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P, g = shade(CC(snow ? '#2f5048' : '#2f5a34'), 0.85 + k * 0.3);
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
@@ -5086,6 +5343,81 @@ function swampTree(x, z, k) {
         stem(G.cone4, hang[Math.floor(rnd() * 3)], tx, ty - len / 2, tz, { sx: w, sy: len, sz: w * 0.6, rx: Math.PI, ry: rnd() * 3 }, tx, ty, tz, 0.35);
       }
     }
+  }
+}
+// A graveyard tree: the swamp tree's gnarled, kinked shape, bare and grey, with spiderwebs strung in the angles
+// between its trunk and limbs and, in most of them, a spider (about real size) waiting at the hub
+function graveTree(x, z, k) {
+  const y = groundAt(x, z), S = TS * TREE_SIZE.grave * (0.85 + k * 0.3);
+  let seed = k * 1000 + 7;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const bark = shade(CC('#4a4448'), 0.85 + k * 0.25), barkD = shade(bark, 0.75);
+  seg(G.frust7, barkD, [x, y - 0.05, z], [x, y + 0.3 * S, z], 0.19 * S);
+  const pts = [[x, y + 0.2 * S, z]];
+  for (let n = 0; n < 3; n++) {
+    const p = pts[n];
+    pts.push([p[0] + (rnd() - 0.5) * 0.26 * S, p[1] + (0.32 + rnd() * 0.1) * S, p[2] + (rnd() - 0.5) * 0.26 * S]);
+  }
+  for (let n = 0; n < 3; n++) seg(G.frust7, n ? bark : barkD, pts[n], pts[n + 1], (0.12 - n * 0.025) * S);
+  const limbs = 3 + Math.floor(k * 2.99);
+  let webs = 0;
+  for (let n = 0; n < limbs; n++) {
+    const fi = 1 + (n % 3 === 2 ? 1 : n % 2 ? 2 : 1), from = pts[fi], a = k * 6.28 + n * 6.28 / limbs + (rnd() - 0.5) * 0.6;
+    const dx = Math.sin(a), dz = Math.cos(a), reach = (0.5 + rnd() * 0.35) * S;
+    const m = [from[0] + dx * reach * 0.55, from[1] + (0.14 + rnd() * 0.14) * S, from[2] + dz * reach * 0.55];
+    const bend = (rnd() - 0.5) * 0.6, ex = Math.sin(a + bend), ez = Math.cos(a + bend);
+    const end = [m[0] + ex * reach * 0.6, m[1] + (rnd() - 0.6) * 0.12 * S, m[2] + ez * reach * 0.6];
+    seg(G.frust7, bark, from, m, 0.055 * S);
+    seg(G.frust7, bark, m, end, 0.035 * S);
+    for (let t = 0; t < 2; t++) {
+      const ta = a + (t ? 0.8 : -0.8) + (rnd() - 0.5) * 0.4;
+      seg(G.frust4, barkD, end, [end[0] + Math.sin(ta) * 0.2 * S, end[1] + (0.1 + rnd() * 0.16) * S, end[2] + Math.cos(ta) * 0.2 * S], 0.016 * S);
+    }
+    // a web in the angle under the limb: from the trunk below it, up to the limb's root, out along it
+    if (webs < 2 && rnd() < 0.7) {
+      webs++;
+      const out = [m[0] + (end[0] - m[0]) * 0.45, m[1] + (end[1] - m[1]) * 0.45, m[2] + (end[2] - m[2]) * 0.45];
+      const low = pts[fi - 1];
+      const foot = [from[0] + (low[0] - from[0]) * 0.8, from[1] + (low[1] - from[1]) * 0.8, from[2] + (low[2] - from[2]) * 0.8];
+      spiderWeb([foot, from, m, out], rnd, S);
+    }
+  }
+}
+// threads from a hub out to each anchor (in order round it) and to the middle of each side between them, crossed
+// by rings; a spider sits by the hub most of the time
+function spiderWeb(anchors, rnd, S) {
+  const col = shade(CC('#d8dae2'), 0.9 + rnd() * 0.15), th = 0.0035 * S + 0.004;
+  const hub = [0, 0, 0];
+  for (const p of anchors) for (let j = 0; j < 3; j++) hub[j] += p[j] / anchors.length;
+  // (its hub pulled a little toward the limb's root, where webs hang tightest)
+  for (let j = 0; j < 3; j++) hub[j] += (anchors[1][j] - hub[j]) * 0.15;
+  const spokes = [];
+  anchors.forEach((p, n) => { const q = anchors[(n + 1) % anchors.length]; spokes.push(p, [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2]); });
+  // (the side from the limb back down to the trunk's foot is open air: its thread sags in toward the hub)
+  const sag = spokes.length - 1;
+  for (let j = 0; j < 3; j++) spokes[sag][j] += (hub[j] - spokes[sag][j]) * 0.3;
+  // (each thread a flat ribbon in the web's plane, so like a real web it all but goes when seen edge on)
+  const u = anchors[0].map((v, j) => v - hub[j]), w = anchors[2].map((v, j) => v - hub[j]);
+  const nx = u[1] * w[2] - u[2] * w[1], ny = u[2] * w[0] - u[0] * w[2], nz = u[0] * w[1] - u[1] * w[0];
+  const thread = (a, b, t) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    let ox = dy * nz - dz * ny, oy = dz * nx - dx * nz, oz = dx * ny - dy * nx;
+    const l = Math.hypot(ox, oy, oz);
+    if (l < 1e-9) return;
+    ox *= t / 2 / l; oy *= t / 2 / l; oz *= t / 2 / l;
+    const a0 = [a[0] - ox, a[1] - oy, a[2] - oz], a1 = [a[0] + ox, a[1] + oy, a[2] + oz], b0 = [b[0] - ox, b[1] - oy, b[2] - oz], b1 = [b[0] + ox, b[1] + oy, b[2] + oz];
+    tri(a0, b0, b1, col, col, col, WEB); tri(a0, b1, a1, col, col, col, WEB);
+  };
+  for (const p of spokes) thread(hub, p, th);
+  const at = (p, f) => [hub[0] + (p[0] - hub[0]) * f, hub[1] + (p[1] - hub[1]) * f, hub[2] + (p[2] - hub[2]) * f];
+  for (const f of [0.22, 0.42, 0.62, 0.82]) for (let n = 0; n < spokes.length; n++) thread(at(spokes[n], f), at(spokes[(n + 1) % spokes.length], f), th * 0.8);
+  if (rnd() < 0.8) {
+    // the spider: a dark body and a bigger abdomen, a little off the hub (in the web buffer too: an outline would
+    // dwarf it)
+    const sx = hub[0] + (rnd() - 0.5) * 0.04 * S, sy = hub[1] + (rnd() - 0.5) * 0.04 * S, sz = hub[2] + (rnd() - 0.5) * 0.04 * S;
+    part(G.dodec, '#1c1418', sx, sy, sz, { s: 0.022, into: 'web' });
+    part(G.dodec, '#2a1a1e', sx, sy - 0.022, sz, { sx: 0.03, sy: 0.034, sz: 0.03, into: 'web' });
+    part(G.box, '#a82a20', sx, sy - 0.024, sz + 0.012, { sx: 0.01, sy: 0.012, sz: 0.008, into: 'web' });
   }
 }
 function deadTree(x, z, k, bark = '#3a3030') {
@@ -5424,7 +5756,7 @@ function drawObject(o, c, r) {
     case O.BIRCH: return birch(x, z, k2);
     case O.SEQUOIA: return sequoia(x, z, k2);
     case O.FERN: return fern(x, z, k2);
-    case O.DEAD: return BI[T(c, r)] === SWAMP ? swampTree(x, z, k2) : deadTree(x, z, k2);
+    case O.DEAD: return BI[T(c, r)] === SWAMP ? swampTree(x, z, k2) : BI[T(c, r)] === GRAVE ? graveTree(x, z, k2) : deadTree(x, z, k2);
     case O.CACTUS: return cactus(x, z, k2);
     case O.BURNT: return burntTree(x, z, k2);
     case O.VENT: return vent(c, r, k2);
@@ -5605,7 +5937,7 @@ function shrine(x, z, k) {
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 function buildObjects(cx, cz, ch) {
-  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; PLANT = bufPlant; bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = bufPlant.n = 0;
+  OUT = bufObj; GLOW = bufGlow; TRUNK = bufTrunk; CANOPY = bufCanopy; PLANT = bufPlant; WEB = bufWeb; bufObj.n = bufGlow.n = bufTrunk.n = bufCanopy.n = bufPlant.n = bufWeb.n = 0;
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
@@ -5619,6 +5951,8 @@ function buildObjects(cx, cz, ch) {
   ch.plant = bufPlant.mesh(plantMat);
   ch.canopy = bufCanopy.mesh(castOnlyMat);
   if (ch.canopy) ch.canopy.castShadow = true;
+  ch.web = bufWeb.mesh(webMat);
+  if (ch.web) ch.web.castShadow = false;
 }
 
 // ---------- Building pieces ----------
@@ -6057,7 +6391,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.water, ch.water2, ch.obj, ch.glow, ch.trunk, ch.plant, ch.canopy, ch.web, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0 };
 function buildChunk(cx, cz) {
   const t0 = performance.now();
@@ -6082,7 +6416,7 @@ function rebuildObjects(c, r) {
   if (!ch) return;
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy);
+  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web);
   grassChunk(ch.cx, ch.cz);
 }
 function rebuildPieces(c, r) {
@@ -10796,6 +11130,7 @@ const TUNING = [
     [TREE_SIZE, 'pine', 'Pine size (frost pines too)', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'fern', 'Fern size', 0.3, 3, 0.05],
     [TREE_SIZE, 'swamp', 'Swamp tree size (mossy, gnarled)', 0.4, 2.5, 0.05],
+    [TREE_SIZE, 'grave', 'Graveyard tree size (webbed, gnarled)', 0.4, 2.5, 0.05],
   ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
@@ -10894,6 +11229,33 @@ const TUNING = [
     [SMOKE, 'ventColor', 'Vents: colour', 'color'],
     [SMOKE, 'ventColor2', 'Vents: second colour', 'color'],
     [SMOKE, 'hearthColor', 'Hearths: colour', 'color'],
+  ]],
+  ['Ambient life', [
+    [AMBIENT, 'butterflies', 'Meadow butterflies by day (0 off)', 0, 2, 0.05],
+    [AMBIENT, 'bfSize', 'Butterflies: size', 0.02, 0.4, 0.01],
+    [AMBIENT, 'bfRange', 'Butterflies: how far they wander', 0, 3, 0.05],
+    [AMBIENT, 'fireflies', 'Deep forest fireflies by night (0 off)', 0, 2, 0.05],
+    [AMBIENT, 'flySize', 'Fireflies: size', 0.01, 0.3, 0.005],
+    [AMBIENT, 'flyGlow', 'Fireflies: glow', 0, 8, 0.1],
+    [AMBIENT, 'flyColor', 'Fireflies: colour', 'color'],
+    [AMBIENT, 'embers', 'Wasteland embers (0 off)', 0, 2, 0.05],
+    [AMBIENT, 'emberSize', 'Embers: size', 0.01, 0.2, 0.005],
+    [AMBIENT, 'emberGlow', 'Embers: glow', 0, 8, 0.1],
+    [AMBIENT, 'emberRise', 'Embers: how fast they rise', 0.05, 3, 0.05],
+    [AMBIENT, 'emberColor', 'Embers: colour when fresh', 'color'],
+    [AMBIENT, 'emberColor2', 'Embers: colour as they cool', 'color'],
+    [AMBIENT, 'snow', 'Falling snow (0 off)', 0, 2, 0.05],
+    [AMBIENT, 'snowSize', 'Snow: flake size', 0.01, 0.2, 0.005],
+    [AMBIENT, 'snowFall', 'Snow: how fast it falls', 0.1, 4, 0.05],
+    [AMBIENT, 'snowColor', 'Snow: colour', 'color'],
+    [AMBIENT, 'wind', 'Wind (embers and snow)', 0, 2, 0.05],
+  ]],
+  ['Heat shimmer', [
+    [HEAT, 'strength', 'Strength (0 off)', 0, 4, 0.05],
+    [HEAT, 'lava', 'Over lava', 0, 2, 0.05],
+    [HEAT, 'sand', 'Over deep desert sand', 0, 2, 0.05],
+    [HEAT, 'speed', 'How fast it ripples', 0.1, 4, 0.05],
+    [HEAT, 'height', 'How high it rises', 0.2, 4, 0.05],
   ]],
   ['Swamp water', [
     [SWAMP_WATER, 'color', 'Colour', 'color'],
@@ -11212,6 +11574,8 @@ function frame(now) {
   updateWater(dt);
   updateSpray();
   updateSmoke();
+  updateAmbient();
+  updateHeat();
   updateTrample(dt);
   updateGrass();
   updateDrift(dt);
@@ -11264,7 +11628,7 @@ window.GAME = {
   prof: () => prof,
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
@@ -11274,6 +11638,14 @@ window.GAME = {
     return { lv, bi, sh, ob, water: Object.assign({ lake, river, canyon, bridge }, waterStats) };
   },
   begin,
+  ambient: () => {
+    const kinds = [0, 0, 0, 0], a = ambMesh && ambMesh.geometry.attributes.sPart;
+    if (a) for (let i = 0; i < a.count; i += 6) kinds[Math.round(a.array[i * 4 + 1])] += 1;
+    kinds[0] /= 2;   // (a butterfly is two wings)
+    let webs = 0;
+    for (const ch of chunks.values()) if (ch.web) webs += ch.web.geometry.attributes.position.count;
+    return { kinds, heat: heatMesh ? heatMesh.geometry.attributes.position.count / 6 : 0, heatOn: !!(heatMesh && heatMesh.visible), dayK: AMB_U.dayK.value, webVerts: webs };
+  },
   teleport: (x, z) => { H.x = x; H.z = z; H.y = surfaceY(x, z); camTarget.set(H.x, H.y, H.z); },
   give: (w, s) => { if (w) addItem('wood', w); if (s) addItem('stone', s); },
   setClock: c => { SKY.timeOfDay = c * 24; advanceClock(0); },
