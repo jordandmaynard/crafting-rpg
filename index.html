@@ -4950,14 +4950,14 @@ function updateSmoke() {
 // seed and the time, as the smoke is, so nothing is stepped on the CPU; the ones round you are gathered into
 // one mesh, built again when you've walked a way. Butterflies and snow are blended over the world and lit;
 // fireflies and embers glow of themselves (added, alpha 0). All of it leaves the target's alpha alone.
-const AMBIENT = { butterflies: 1, dragonflies: 1, fireflies: 1, embers: 1, snow: 1, wind: 0.3,
-  bfSize: 0.09, bfRange: 1, dfSize: 0.13, dfRange: 1.2, dfSpeed: 1, flySize: 0.07, flyGlow: 3, flyColor: '#c8f060',
-  emberSize: 0.035, emberGlow: 2.5, emberRise: 0.6, emberColor: '#ffb040', emberColor2: '#ff4a18',
-  snowSize: 0.045, snowFall: 0.9, snowColor: '#f4f6ff' };
+const AMBIENT = { butterflies: 1, dragonflies: 0.75, fireflies: 2, embers: 1, snow: 1.85, wind: 0.3,
+  bfSize: 0.09, bfRange: 1, bfLift: 1, dfSize: 0.3, dfRange: 1.45, dfSpeed: 0.55, flySize: 0.03, flyGlow: 4.1, flyColor: '#dff060',
+  emberSize: 0.06, emberGlow: 4.9, emberRise: 1, emberColor: '#ffb040', emberColor2: '#ff4a18',
+  snowSize: 0.05, snowFall: 0.9, snowColor: '#ffffff' };
 const AMB_DENSITY = { meadow: 0.02, swamp: 0.05, deep: 0.05, wastes: 0.035, lava: 0.25, snow: 0.6 };   // (a tile's chance of one)
 const AMB_U = { dayK: { value: 1 }, flyCol: { value: new GFX.Color(AMBIENT.flyColor) }, emberA: { value: new GFX.Color(AMBIENT.emberColor) },
   emberB: { value: new GFX.Color(AMBIENT.emberColor2) }, snowCol: { value: new GFX.Color(AMBIENT.snowColor) } };
-for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall'])
+for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'bfLift', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall'])
   AMB_U[k] = { value: AMBIENT[k] };
 for (const k of ['sunDir', 'sunCol', 'skyCol', 'lampPos', 'lampCol', 'lampRange', 'fogNear', 'fogFar']) AMB_U[k] = WATER_U[k];
 const AMB_WGSL = /* wgsl */ `
@@ -4983,7 +4983,9 @@ fn dfSpot(s: f32, n: f32) -> vec3f { let h = s + n * 3.17; return vec3f(ambHash(
     let p0 = b * 6.28; let p1 = c * 6.28; let p2 = d * 6.28;
     let p = vec2f(sin(tt + p0) + 0.5 * sin(tt * 2.3 + p1), sin(tt * 0.8 + p1) + 0.5 * sin(tt * 1.9 + p2)) * 0.9 * U.bfRange;
     let vel = vec2f(cos(tt + p0) + 1.15 * cos(tt * 2.3 + p1), 0.8 * cos(tt * 0.8 + p1) + 0.95 * cos(tt * 1.9 + p2));
-    at = v.position + vec3f(p.x, 0.35 + b * 0.4 + 0.18 * sin(tt * 3.1 + a * 9.0), p.y);
+    // (rising and sinking as it goes, over bfLift tiles from a little above the ground)
+    let lift = 0.5 + 0.35 * sin(tt * 0.7 + p2) + 0.15 * sin(tt * 3.1 + a * 9.0);
+    at = v.position + vec3f(p.x, 0.15 + lift * U.bfLift, p.y);
     let fwd = normalize(vec3f(vel.x, 0.0, vel.y) + vec3f(1e-4, 0.0, 0.0));
     let side = vec3f(fwd.z, 0.0, -fwd.x);
     let flap = 0.2 + 1.1 * (0.5 + 0.5 * sin(t * (15.0 + a * 6.0) + s));
@@ -5147,7 +5149,7 @@ function buildAmbient() {
 function updateAmbient() {
   if (Math.hypot(H.x - ambAt.x, H.z - ambAt.z) > 8) buildAmbient();
   const A = AMBIENT, U = AMB_U;
-  for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall']) U[k].value = A[k];
+  for (const k of ['butterflies', 'dragonflies', 'fireflies', 'embers', 'snow', 'wind', 'bfSize', 'bfRange', 'bfLift', 'dfSize', 'dfRange', 'dfSpeed', 'flySize', 'flyGlow', 'emberSize', 'emberGlow', 'emberRise', 'snowSize', 'snowFall']) U[k].value = A[k];
   U.flyCol.value.set(A.flyColor); U.emberA.value.set(A.emberColor); U.emberB.value.set(A.emberColor2); U.snowCol.value.set(A.snowColor);
   for (const k of ['drops', 'depth', 'dropTime', 'hang', 'climb']) SPIDER_U[k].value = SPIDERS[k];
   // (the sun's own height: the light's direction, sunDir in the shaders, is the moon's by night)
@@ -11720,6 +11722,7 @@ const TUNING = [
     [AMBIENT, 'butterflies', 'Meadow butterflies by day (0 off)', 0, 2, 0.05],
     [AMBIENT, 'bfSize', 'Butterflies: size', 0.02, 0.4, 0.01],
     [AMBIENT, 'bfRange', 'Butterflies: how far they wander', 0, 3, 0.05],
+    [AMBIENT, 'bfLift', 'Butterflies: how far up and down they wander (tiles)', 0, 3, 0.05],
     [AMBIENT, 'dragonflies', 'Swamp dragonflies by day (0 off)', 0, 2, 0.05],
     [AMBIENT, 'dfSize', 'Dragonflies: size', 0.02, 0.5, 0.01],
     [AMBIENT, 'dfRange', 'Dragonflies: how far they dart', 0, 4, 0.05],
