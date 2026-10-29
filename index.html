@@ -1544,7 +1544,7 @@ function fenceTowns() {
 function finishTowns() {
   for (const t of towns) {
     for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
-    for (const g of t.gates || []) { const d = makeDoor(...g, true); d.open = true; openDoors.add(edgeKey(...g)); }
+    for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
   }
   settleBuildings();
 }
@@ -4297,21 +4297,22 @@ function buildObjects(cx, cz, ch) {
 // ---------- Building pieces ----------
 const WALL_H = 1.6;
 const COST = { floor: { wood: 2 }, stonefloor: { stone: 2 }, wall: { wood: 2, stone: 2 }, door: { wood: 5 }, logwall: { wood: 4 }, stonewall: { stone: 4 }, hearth: { wood: 2, stone: 4 },
-  fence: { wood: 1 }, stonefence: { stone: 2 }, gate: { wood: 3 } };
+  fence: { wood: 1 }, stonefence: { stone: 2 }, gate: { wood: 3 }, ironfence: { ironOre: 2 }, irongate: { ironOre: 3 }, irondoor: { ironOre: 6 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
 // what's on a tile's floor: 1 planks, 2 flagstones
 const FLOOR_KIND = [null, 'floor', 'stonefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
 // the build menu's groups, each opening its own row of kinds
-const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence'], doors: ['door', 'gate'] };
+const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'] };
 const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
-const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence';
-const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate', isDoorKind = k => k === 'door' || k === 'gate';
+const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence' || k === 'ironfence';
+const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate' || k === 'ironfence' || k === 'irongate';
+const isDoorKind = k => k === 'door' || k === 'gate' || k === 'irondoor' || k === 'irongate';
 // what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall, 5 wooden fence,
-// 6 dry-stone wall, 7 gate
-const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate'];
-const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7 };
-const isFenceVal = v => v >= 5, isDoorVal = v => v === 2 || v === 7;
+// 6 dry-stone wall, 7 gate, 8 iron railings, 9 iron gate, 10 iron door
+const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate', 'ironfence', 'irongate', 'irondoor'];
+const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10 };
+const isFenceVal = v => v >= 5 && v <= 9, isDoorVal = v => v === 2 || v === 7 || v === 9 || v === 10;
 // an edge is named by the tile whose north (w = 0) or west (w = 1) side it is
 const edgeOf = (c, r, d) => d === 0 ? [c, r, 0] : d === 2 ? [c, r + 1, 0] : d === 3 ? [c, r, 1] : [c + 1, r, 1];
 const edgeKey = (c, r, w) => T(c, r) * 2 + w;
@@ -4358,7 +4359,7 @@ function wallPiece(c, r, w, type) {
   const ry = w ? Math.PI / 2 : 0;
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
-  const door = type === 2, cut = !door && cutEdges.has(edgeKey(c, r, w));
+  const door = type === 2 || type === 10, cut = !door && cutEdges.has(edgeKey(c, r, w));
   if (type === 5) {
     // a post-and-rail fence: posts at the ends and the middle, two rails
     for (const a of [0, 0.5, 1]) {
@@ -4386,6 +4387,29 @@ function wallPiece(c, r, w, type) {
     for (const a of [0, 1]) {
       let p = at(a, y + (FENCE_H + 0.16) / 2); part(G.box, shade(CC('#5a3c24'), k), p[0], p[1], p[2], { sx: 0.15, sy: FENCE_H + 0.16, sz: 0.15, ry });
       p = at(a, y + FENCE_H + 0.2); part(G.box, '#3e2a1a', p[0], p[1], p[2], { sx: 0.19, sy: 0.07, sz: 0.19, ry });
+    }
+    return;
+  }
+  if (type === 8) {
+    // wrought-iron railings: square posts with ball tops at the ends, two rails, and spear-topped bars between
+    for (const a of [0, 1]) {
+      let p = at(a, y + (FENCE_H + 0.06) / 2); part(G.box, shade(CC(IRON_RAIL), k), p[0], p[1], p[2], { sx: 0.09, sy: FENCE_H + 0.06, sz: 0.09, ry });
+      p = at(a, y + FENCE_H + 0.1); part(G.oct, shade(CC(IRON_RAIL), k * 1.15), p[0], p[1], p[2], { sx: 0.11, sy: 0.12, sz: 0.11, ry });
+    }
+    for (const yy of [0.12, FENCE_H - 0.14]) { const p = at(0.5, y + yy); part(G.box, shade(CC(IRON_RAIL), k * 0.9), p[0], p[1], p[2], { sx: 1, sy: 0.045, sz: 0.04, ry }); }
+    for (let n = 1; n < 8; n++) {
+      const a = n / 8, hh = FENCE_H - 0.06;
+      let p = at(a, y + hh / 2); part(G.box, shade(CC(IRON_RAIL), k), p[0], p[1], p[2], { sx: 0.03, sy: hh, sz: 0.03, ry });
+      p = at(a, y + hh + 0.04); part(G.cone4, shade(CC(IRON_RAIL), k * 1.1), p[0], p[1], p[2], { sx: 0.07, sy: 0.1, sz: 0.07, ry: ry + Math.PI / 4 });
+    }
+    return;
+  }
+  if (type === 9) {
+    // an iron gate's posts: stout square ones, capped; the gate itself swings on its own mesh
+    for (const a of [0, 1]) {
+      let p = at(a, y + (FENCE_H + 0.16) / 2); part(G.box, shade(CC(IRON_RAIL), k), p[0], p[1], p[2], { sx: 0.13, sy: FENCE_H + 0.16, sz: 0.13, ry });
+      p = at(a, y + FENCE_H + 0.2); part(G.box, shade(CC(IRON_RAIL), k * 1.2), p[0], p[1], p[2], { sx: 0.17, sy: 0.05, sz: 0.17, ry });
+      p = at(a, y + FENCE_H + 0.28); part(G.oct, shade(CC(IRON_RAIL), k * 1.2), p[0], p[1], p[2], { sx: 0.12, sy: 0.14, sz: 0.12, ry });
     }
     return;
   }
@@ -4452,13 +4476,40 @@ function buildPieces(cx, cz, ch) {
 const doors = new Map();   // edge key -> { pivot, open, t, side }
 const doorWood = flatMat({ color: '#6a4428' }), doorIron = flatMat({ color: '#2a2630', roughness: 0.5, metalness: 0.5 });
 const gatePicket = new GFX.BoxGeometry(0.13, FENCE_H - 0.16, 0.05), gateRail = new GFX.BoxGeometry(0.84, 0.07, 0.04), gateBrace = new GFX.BoxGeometry(0.84, 0.06, 0.035);
-function makeDoor(c, r, w, gate = false) {
+// the iron pieces: railings and gate bars in IRON_RAIL, the iron door's plate a shade lighter, with darker bands and studs
+const IRON_RAIL = '#34303a';
+const railMat = flatMat({ color: IRON_RAIL, roughness: 0.45, metalness: 0.6 }), plateMat = flatMat({ color: '#56525e', roughness: 0.4, metalness: 0.6 });
+const ironBar = new GFX.BoxGeometry(0.03, FENCE_H - 0.12, 0.03), ironTip = new GFX.ConeGeometry(0.045, 0.1, 4), ironRail = new GFX.BoxGeometry(0.84, 0.045, 0.035);
+const studGeo = new GFX.BoxGeometry(0.045, 0.045, 0.11);
+// kind: 'door', 'gate', 'irondoor' or 'irongate'
+function makeDoor(c, r, w, kind = 'door') {
+  const gate = kind === 'gate' || kind === 'irongate';
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP;
   const pivot = new GFX.Group();
   pivot.position.set(w ? c : c + 0.08, y, w ? r + 0.08 : r);
   pivot.rotation.y = w ? -Math.PI / 2 : 0;
   const leaf = new GFX.Group();
-  if (gate) {
+  if (kind === 'irongate') {
+    // spear-topped bars on two rails, with a ring of scrollwork across the middle
+    for (let k = 0; k < 7; k++) {
+      const x = 0.06 + k * 0.12, b = new GFX.Mesh(ironBar, railMat); b.position.set(x, 0.04 + (FENCE_H - 0.12) / 2, 0); leaf.add(b);
+      const tip = new GFX.Mesh(ironTip, railMat); tip.position.set(x, FENCE_H - 0.03, 0); tip.rotation.y = Math.PI / 4; leaf.add(tip);
+    }
+    for (const yy of [0.12, FENCE_H - 0.16]) { const b = new GFX.Mesh(ironRail, railMat); b.position.set(0.42, yy, 0); leaf.add(b); }
+    for (let k = 0; k < 8; k++) {
+      const a = k / 8 * Math.PI * 2, s = new GFX.Mesh(studGeo, railMat);
+      s.position.set(0.42 + Math.cos(a) * 0.13, FENCE_H / 2 - 0.02 + Math.sin(a) * 0.13, 0); s.scale.set(0.8, 1.6, 0.4); s.rotation.z = a; leaf.add(s);
+    }
+  } else if (kind === 'irondoor') {
+    // a plate of iron, banded and studded, with a heavy ring
+    const plate = new GFX.Mesh(new GFX.BoxGeometry(0.84, WALL_H - 0.42, 0.07), plateMat);
+    plate.position.set(0.42, (WALL_H - 0.42) / 2, 0); leaf.add(plate);
+    for (const yy of [0.12, 0.6, WALL_H - 0.56]) {
+      const b = new GFX.Mesh(new GFX.BoxGeometry(0.86, 0.08, 0.1), railMat); b.position.set(0.42, yy, 0); leaf.add(b);
+      for (let k = 0; k < 5; k++) { const st = new GFX.Mesh(studGeo, plateMat); st.position.set(0.1 + k * 0.16, yy, 0); st.scale.set(1, 1, 1.2); leaf.add(st); }
+    }
+    const ring = new GFX.Mesh(new GFX.BoxGeometry(0.1, 0.1, 0.13), railMat); ring.position.set(0.7, 0.38, 0); ring.rotation.z = Math.PI / 4; leaf.add(ring);
+  } else if (gate) {
     // a picket gate: boards on two rails, braced corner to corner
     for (let k = 0; k < 5; k++) { const b = new GFX.Mesh(gatePicket, doorWood); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
     for (const yy of [0.22, FENCE_H - 0.22]) { const b = new GFX.Mesh(gateRail, doorWood); b.position.set(0.42, yy, 0.045); leaf.add(b); }
@@ -5435,6 +5486,9 @@ const ICON = {
   fence: pixelSvg(['b...b...b', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'b...b...b'], { b: '#6a4a2c', L: '#8a6440' }),
   stonefence: pixelSvg(['.ccc.ccc.', 'ccccccccc', '.GG.gGG.G', 'GggGGgGGg', 'gGGgGGggG', 'GgGGgGGGg'], { c: '#a8a49a', G: '#8e8a80', g: '#6a665e' }),
   gate: pixelSvg(['P.......P', 'PwwwwwwwP', 'Pw.w.w.wP', 'PwLwLw.wP', 'Pw.wLwLwP', 'PwwwwwwwP', 'P.......P'], { P: '#5a3c24', w: '#8a6440', L: '#6a4428' }),
+  ironfence: pixelSvg(['o.^.^.^.o', 'P.i.i.i.P', 'PIIIIIIIP', 'P.i.i.i.P', 'P.i.i.i.P', 'PIIIIIIIP', 'P.i.i.i.P'], { o: '#6a6674', '^': '#6a6674', P: '#34303a', I: '#4a4652', i: '#5a5664' }),
+  irondoor: pixelSvg(['dddddddd', 'd.pppp.d', 'd.IsIs.d', 'd.pppp.d', 'd.ppyp.d', 'd.IsIs.d', 'd.pppp.d', 'd.IsIs.d'], { d: '#4a3020', p: '#6a6674', I: '#34303a', s: '#8c8a96', y: '#a8a6b0' }),
+  irongate: pixelSvg(['o.^^^^^.o', 'P.iiiii.P', 'PIIIIIIIP', 'P.iOiOi.P', 'P.ii.ii.P', 'PIIIIIIIP', 'P.......P'], { o: '#6a6674', '^': '#6a6674', P: '#34303a', I: '#4a4652', i: '#5a5664', O: '#6a6674' }),
   remove: pixelSvg(['r.....r', '.r...r.', '..r.r..', '...r...', '..r.r..', '.r...r.', 'r.....r'], { r: '#d8443a' }),
   helm: pixelSvg(['...XXX...', '.XXXXXXX.', 'XXXXXXXXX', 'XX.....XX', 'XX.X.X.XX', 'XX.....XX', 'X.......X'], { X: '#8c8a96' }),
   shirt: pixelSvg(ART.shirt, { T: '#3f6a8a', t: '#2f5070', c: '#2f5a3a', s: '#3f6a8a' }),
@@ -5793,11 +5847,14 @@ const KIND_SLOT = {
   wall: { name: 'TIMBER WALL', icon: 'wall' }, logwall: { name: 'LOG WALL', icon: 'logwall' }, stonewall: { name: 'STONE WALL', icon: 'stonewall' },
   fence: { name: 'WOOD FENCE', icon: 'fence' }, stonefence: { name: 'FIELDSTONE WALL', icon: 'stonefence' },
   door: { name: 'WOODEN DOOR', icon: 'door' }, gate: { name: 'WOODEN GATE', icon: 'gate' },
+  ironfence: { name: 'IRON FENCE', icon: 'ironfence' }, irondoor: { name: 'IRON DOOR', icon: 'irondoor' }, irongate: { name: 'IRON GATE', icon: 'irongate' },
 };
 const catPick = { floors: 'floor', walls: 'wall', doors: 'door' };
 let subOpen = null;
-const costText = k => Object.entries(COST[k]).map(([r, n]) => n + (r === 'wood' ? 'W' : 'S')).join(' ');
-const canAfford = k => Object.entries(COST[k]).every(([r, n]) => H[r] >= n);
+// costs as the bar shows them: 2W wood, 2S stone, 2I iron ore
+const COST_TAG = { wood: 'W', stone: 'S', ironOre: 'I', copperOre: 'C' };
+const costText = k => Object.entries(COST[k]).map(([r, n]) => n + COST_TAG[r]).join(' ');
+const canAfford = k => Object.entries(COST[k]).every(([r, n]) => countItem(r) >= n);
 let slotEls = [];
 function slotEl(s, parent) {
   // a group's slot shows the kind last picked from it
@@ -6957,6 +7014,7 @@ const ghostGeo = { floor: new GFX.BoxGeometry(1, 0.08, 1), wall: new GFX.BoxGeom
 ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new GFX.BoxGeometry(1, WALL_H, 0.32);
 ghostGeo.hearth = new GFX.CylinderGeometry(0.5, 0.5, 0.7, 8);
 ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
+ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
 const ghosts = [];
 function showGhosts(spots) {
   while (ghosts.length < spots.length) { const g = new GFX.Mesh(ghostGeo.wall, ghostMat); g.renderOrder = 4; scene.add(g); ghosts.push(g); }
@@ -7062,14 +7120,15 @@ function dragSpots() {
 }
 // which of them will actually go up: in reach, allowed, and paid for in turn
 function settle(spots) {
-  let wood = H.wood, stone = H.stone;
+  const have = {};
+  for (const r in COST_TAG) have[r] = countItem(r);
   for (const s of spots) {
     const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE;
-    const afford = (cost.wood || 0) <= wood && (cost.stone || 0) <= stone;
+    const afford = Object.entries(cost).every(([r, n]) => n <= have[r]);
     s.go = s.ok && !far && afford;
     if (s.ok && far) s.why = 'Too far away to build.';
     else if (s.ok && !afford) s.why = 'Not enough materials: ' + costText(s.kind) + '.';
-    if (s.go) { wood -= cost.wood || 0; stone -= cost.stone || 0; }
+    if (s.go) for (const [r, n] of Object.entries(cost)) have[r] -= n;
   }
   return spots;
 }
@@ -7113,7 +7172,7 @@ function placeSpot(s) {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
     // clear the grass and flowers either side
     for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
-    if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind === 'gate');
+    if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind);
     markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
     hearthsBy(s.c, s.r, s.w);
     if (!isFenceKind(s.kind)) {
@@ -8817,7 +8876,7 @@ window.GAME = {
   },
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
-  fenceCount: () => { const n = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
+  fenceCount: () => { const n = new Array(11).fill(0); for (let i = 0; i < N * N; i++) { n[WN[i]]++; n[WW[i]]++; } return n.slice(1); },
   stepOpen: (c, r, d) => stepOpen(c, r, d, false),
   foeList: () => foes.map(f => ({ kind: f.kind, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), hp: f.hp, homing: f.homing, calm: +f.calm.toFixed(1), path: f.path ? f.path.length : -1 })),
   // dash the way you face, and run the whole game for a while, 60 steps a second, with nothing drawn
