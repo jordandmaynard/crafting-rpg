@@ -2373,7 +2373,9 @@ function updateBloom() {
 const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 1, patchiness: 1, patchSize: 17.3, relax: 0,
   windSpeed: 0, settle: 1.19, swirl: 28.5, smooth: 0.15, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 100, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
+  arrowWake: 0.22, arrowClear: 2.5, arrowPush: 2, arrowDrag: 6, landRadius: 0.35, landClear: 3, landPush: 5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400'};
+const hazeStirs = [];   // arrows passing through it this frame (stirHaze)
 // on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T),
 // and no black point, which is there to take back the lit haze's washout
 if (MOBILE) { GI.on = 0; HAZE.on = 0; GROUND_HAZE.on = 0; EYE.on = 0; BLOOM.strength = 0; GRADE.black = 0; }
@@ -2499,7 +2501,8 @@ function updateGroundHaze(dt) {
   groundHaze.update({ on, target: [camTarget.x, camTarget.z], hero: [H.x, H.z], dt, amount: G.amount, patchiness: G.patchiness,
     patchSize: G.patchSize, relax: G.relax, wind: [Math.cos(a) * G.windSpeed, Math.sin(a) * G.windSpeed], settle: G.settle, swirl: G.swirl, smooth: G.smooth,
     wakeRadius: H.whirl >= 0 ? G.whirlWake : G.wakeRadius, spin: H.whirl >= 0 ? G.whirlSpin : 0, spinClear: H.whirl >= 0 ? G.whirlClear : 0, wakeDrag: G.wakeDrag, wakeClear: G.wakeClear, height: G.height, density: G.density, slices: G.slices,
-    brightness: G.brightness });
+    brightness: G.brightness, stirs: hazeStirs });
+  hazeStirs.length = 0;
 }
 setInterval(() => {
   if ($('tuning').hidden) return;
@@ -8260,7 +8263,21 @@ function stickArrow(a) {
   a.dx = a.vx / l; a.dy = a.vy / l; a.dz = a.vz / l;
   a.state = 'stuck'; a.life = 0;
 }
+// what arrows did in the ground haze this frame: a thin wake along each one's flight near the ground, and a
+// clearing where each one comes down (GROUND_HAZE.arrow*, land*), handed to the sim in updateGroundHaze
+function stirHaze(a, x0, z0) {
+  if (hazeStirs.length >= 32) return;
+  const G = GROUND_HAZE;
+  if (a.rain || a.falling) {
+    if (a.state === 'stuck' || a.dead) hazeStirs.push([a.x, a.z, a.x, a.z, G.landRadius, G.landClear, G.landPush, 0]);
+  } else if (a.y - ghGround(a.x, a.z) < 1.3) hazeStirs.push([x0, z0, a.x, a.z, G.arrowWake, G.arrowClear, G.arrowPush, G.arrowDrag]);
+}
 function flyArrow(a, dt) {
+  const fx0 = a.x, fz0 = a.z;
+  flyArrowSteps(a, dt);
+  if (GROUND_HAZE.on > 0.5) stirHaze(a, fx0, fz0);
+}
+function flyArrowSteps(a, dt) {
   const sp = Math.hypot(a.vx, a.vy, a.vz), steps = Math.max(1, Math.ceil(sp * dt / 0.2)), h = dt / steps;
   for (let k = 0; k < steps; k++) {
     if (a.flown >= a.range && !a.falling) { a.falling = true; a.vx *= 0.3; a.vz *= 0.3; }
@@ -10178,6 +10195,13 @@ const TUNING = [
     [GROUND_HAZE, 'whirlClear', 'Whirlwind: haze swept aside (a second)', 0, 20, 0.1],
     [GROUND_HAZE, 'wakeDrag', 'Your wake: drag', 0, 1, 0.01],
     [GROUND_HAZE, 'wakeClear', 'Your wake: haze swept aside (a tile walked)', 0, 100, 0.5],
+    [GROUND_HAZE, 'arrowWake', 'Arrow wake: width (tiles)', 0.05, 1, 0.01],
+    [GROUND_HAZE, 'arrowClear', 'Arrow wake: haze cleared', 0, 10, 0.05],
+    [GROUND_HAZE, 'arrowPush', 'Arrow wake: air pushed out (tiles a second)', 0, 12, 0.1],
+    [GROUND_HAZE, 'arrowDrag', 'Arrow wake: air dragged along (tiles a second)', 0, 12, 0.1],
+    [GROUND_HAZE, 'landRadius', 'Arrow landing: clearing radius (tiles)', 0.05, 1.5, 0.01],
+    [GROUND_HAZE, 'landClear', 'Arrow landing: haze cleared', 0, 10, 0.05],
+    [GROUND_HAZE, 'landPush', 'Arrow landing: air pushed out (tiles a second)', 0, 12, 0.1],
   ]],
   ['Picture', [
     [BLOOM, 'strength', 'Bloom: how much glow (0 off)', 0, 2, 0.01],

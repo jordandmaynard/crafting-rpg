@@ -22,6 +22,7 @@ import { ShaderMaterial, Texture, NormalBlending, DoubleSide } from './materials
 const CPT = 4;            // sim cells a tile
 const GRID = 192;         // sim cells across (48 tiles), round the camera's target
 const JACOBI = 20;        // pressure solver iterations (pairs of passes)
+const MAX_STIRS = 32;     // arrows and such passing through the haze in one frame
 const MAX_DT = 1 / 30;    // the sim never steps further than this in one frame
 const CELL_BYTES = 32;    // two vec4f
 export const GROUND_HAZE_SITE = 128;   // site map texels across (64 tiles)
@@ -59,7 +60,7 @@ struct GH {
   g1: vec4f,   // origin shift since last frame (cells), dt, time
   p0: vec4f,   // resting haze amount, patchiness, patch frequency (a tile), relax rate (a second)
   p1: vec4f,   // wind (tiles a second, x z), air settling rate (a second), swirl
-  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (4: fill with resting haze), smoothing, _
+  p2: vec4f,   // haze swept aside round the hero a second (whirling), flags (4: fill with resting haze), smoothing, stirs
   pl0: vec4f,  // hero position xz, velocity xz
   pl1: vec4f,  // wake radius (tiles), drag, haze cleared a tile walked, the air spun round the hero (tiles a second)
   s0: vec4f,   // site map: first texel x, z, texels across, texels a tile
@@ -74,6 +75,10 @@ struct Cell {
 @group(0) @binding(3) var<storage, read_write> aux: array<vec4f>;   // divergence, curl, pressure (odd Jacobi steps)
 @group(0) @binding(4) var outState: texture_storage_2d<rgba16float, write>;   // haze, _, velocity xz
 @group(0) @binding(5) var siteTex: texture_2d<f32>;                           // ground, solid, resting share, _
+// things passing through this frame (arrows), each two vec4s: a stretch from x0 z0 to x1 z1 (a point where they're
+// the same), then its radius (tiles), the haze it clears (as the hero's wakeClear, but once), how hard it pushes the
+// air out from its line (tiles a second), and how fast it drags the air along the stretch (tiles a second)
+@group(0) @binding(6) var<storage, read> stirs: array<vec4f, ${MAX_STIRS * 2}>;
 const CPM = ${CPT}.0;
 ${NOISE}
 
@@ -163,6 +168,22 @@ fn oldCell(cf: vec2f) -> Cell {
       vel = mix(vel, vec2f(-rel.y, rel.x) / max(r, 1e-3) * hu.pl1.w * min(r / max(hu.pl1.x * 0.5, 1e-3), 1.0), clamp(w, 0.0, 1.0));
       h *= exp(-hu.p2.x * dt * w);
     }
+  }
+  let ns = min(u32(hu.p2.w), ${MAX_STIRS}u);
+  for (var k = 0u; k < ns; k++) {
+    let sa = stirs[k * 2u];
+    let sb = stirs[k * 2u + 1u];
+    let seg = sa.zw - sa.xy;
+    let sl = dot(seg, seg);
+    let near = sa.xy + seg * select(0.0, clamp(dot(wp - sa.xy, seg) / sl, 0.0, 1.0), sl > 1e-6);
+    let off = wp - near;
+    let d2 = dot(off, off);
+    let sw = exp(-d2 / max(sb.x * sb.x, 1e-4));
+    if (sw < 0.01) { continue; }
+    h *= exp(-sb.y * sw);
+    let dl = sqrt(d2);
+    if (dl > 1e-3) { vel += off / dl * sb.z * sw; }
+    if (sl > 1e-6) { vel = mix(vel, seg / sqrt(sl) * sb.w, clamp(sw, 0.0, 1.0) * 0.5); }
   }
   let vm = length(vel);
   if (vm > 12.0) { vel *= 12.0 / vm; }
@@ -380,11 +401,15 @@ export class GroundHaze {
       ...[1, 2, 3].map(binding => ({ binding, visibility: C, buffer: { type: 'storage' } })),
       { binding: 4, visibility: C, storageTexture: { access: 'write-only', format: 'rgba16float' } },
       { binding: 5, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 6, visibility: C, buffer: { type: 'read-only-storage' } },
     ] });
+    this.stirBuf = device.createBuffer({ size: MAX_STIRS * 32, usage: B.STORAGE | B.COPY_DST });
+    this.stirData = new Float32Array(MAX_STIRS * 8);
     this.simBG = device.createBindGroup({ layout, entries: [
       { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: { buffer: this.simA } },
       { binding: 2, resource: { buffer: this.simB } }, { binding: 3, resource: { buffer: this.aux } },
-      { binding: 4, resource: this.stateTex.createView() }, { binding: 5, resource: this.siteTex.createView() }] });
+      { binding: 4, resource: this.stateTex.createView() }, { binding: 5, resource: this.siteTex.createView() },
+      { binding: 6, resource: { buffer: this.stirBuf } }] });
     const module = device.createShaderModule({ code: SIM_WGSL, label: 'ground haze sim' });
     if (module.getCompilationInfo) module.getCompilationInfo().then(info => {
       for (const e of info.messages) if (e.type === 'error') console.error(`ground haze WGSL ${e.lineNum}:${e.linePos} ${e.message}\n` + SIM_WGSL.split('\n')[e.lineNum - 1]);
@@ -447,7 +472,8 @@ export class GroundHaze {
   // Each frame, before drawing. f: { on, target: [x, z] (the camera's), hero: [x, z], dt, amount, patchiness,
   // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear, spin
   // (tiles a second the air's spun round the hero, whirling), spinClear (haze swept aside round them a second),
-  // smooth (0-0.95: the neighbours' average mixed in each sixtieth of a second), height, density, slices, brightness }
+  // smooth (0-0.95: the neighbours' average mixed in each sixtieth of a second), height, density, slices, brightness,
+  // stirs (things passing through this frame: [x0, z0, x1, z1, radius, clear, push, drag] each, up to MAX_STIRS) }
   update(f) {
     this.on = !!f.on && !!this.siteOrigin;
     this.mesh.visible = this.on;
@@ -466,10 +492,13 @@ export class GroundHaze {
     if (Math.hypot(vel[0], vel[1]) > 30) vel[0] = vel[1] = 0;   // a teleport, not a walk
     this.heroWas = [f.hero[0], f.hero[1]];
     const freq = 1 / Math.max(f.patchSize, 0.5), so = this.siteOrigin;
+    const stirs = f.stirs || [], ns = Math.min(stirs.length, MAX_STIRS);
+    for (let k = 0; k < ns; k++) this.stirData.set(stirs[k], k * 8);
+    if (ns) this.device.queue.writeBuffer(this.stirBuf, 0, this.stirData, 0, ns * 8);
     this.device.queue.writeBuffer(this.params, 0, new Float32Array([
       origin[0], origin[1], GRID, GRID, shift[0], shift[1], dt, this.time,
       f.amount, f.patchiness, freq, f.relax, f.wind[0], f.wind[1], f.settle, f.swirl,
-      f.spinClear || 0, flags, f.smooth || 0, 0, f.hero[0], f.hero[1], vel[0], vel[1],
+      f.spinClear || 0, flags, f.smooth || 0, ns, f.hero[0], f.hero[1], vel[0], vel[1],
       f.wakeRadius, f.wakeDrag, f.wakeClear, f.spin || 0, so[0], so[1], GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT]));
     const U = this.material.uniforms;
     Object.assign(U.grid.value, { x: origin[0], y: origin[1] });
