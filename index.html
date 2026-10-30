@@ -135,7 +135,13 @@ body.pad canvas { cursor: none; }
 #storeCol { padding-left: calc(var(--cell) * 0.3); border-left: 3px solid var(--panel-edge); }
 /* with a chest open the window's three columns wide, so its squares shrink to fit */
 #inv.storing { --cell: max(44px, min(96px, calc((100vh - 280px) / 5), calc((100vw - 200px) / 14))); }
-.trashRow { display: flex; justify-content: flex-end; margin-top: calc(var(--cell) * 0.1); }
+.trashRow { display: flex; justify-content: flex-end; gap: calc(var(--cell) * 0.16); margin-top: calc(var(--cell) * 0.1); }
+/* refine and stash: only lit while you stand on a plot of yours */
+.invAct { width: calc(var(--cell) * 0.62); height: calc(var(--cell) * 0.62); display: grid; place-items: center; border: 3px solid var(--panel-edge); background: var(--well, #211e26); cursor: pointer; }
+.invAct svg, .invAct img { width: 80%; height: 80%; image-rendering: pixelated; }
+.invAct:hover { border-color: var(--gold); }
+.invAct.off { opacity: 0.35; cursor: default; }
+.invAct.off:hover { border-color: var(--panel-edge); }
 #trash { width: calc(var(--cell) * 0.62); height: calc(var(--cell) * 0.62); display: grid; place-items: center; border: 2px dashed var(--panel-edge); background: rgba(0, 0, 0, 0.25); }
 #trash svg { width: 72%; height: 72%; image-rendering: pixelated; }
 #trash.drop { border-color: #d8443a; background: rgba(216, 68, 58, 0.3); }
@@ -345,7 +351,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   <div class="invBar" id="invBar"><span class="card-title">INVENTORY</span><button id="invClose" title="Close (Tab)" aria-label="Close">X</button></div>
   <div class="invBody">
     <div><div class="card-title">GEAR <span id="armorVal"></span></div><div id="doll"></div></div>
-    <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div><div class="trashRow"><div id="trash" title="Drag something here to throw it away"></div></div></div>
+    <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div><div class="trashRow"><div id="refineBtn" class="invAct" title="Refine: send everything raw to this plot's stations"></div><div id="stashBtn" class="invAct" title="Stash: put everything else away in this plot's crates and chests"></div><div id="trash" title="Drag something here to throw it away"></div></div></div>
     <div id="storeCol" hidden><div class="card-title"><span id="storeTitle"></span> <span id="storeCount"></span></div><div id="store"></div></div>
   </div>
   <div id="station" hidden>
@@ -2693,7 +2699,7 @@ const STATION_KIND = {
 const stFoot = k => STATION_KIND[k].foot || 2;
 const isStation = k => k in STATION_KIND;
 const REFINE = { time: 2 };   // seconds to refine one (T > Stations)
-const STATION_IN = 2, STATION_OUT = 8;   // squares in a station's input and output
+const STATION_IN = 4, STATION_OUT = 8;   // squares in a station's input and output
 const stations = new Map();   // tile -> { c, r, kind, ry, inp, inN, out, outN, box, boxN, t, spin, busy, fx, parts }
 let openSt = null;   // the station whose window is open
 [O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG, O.FERN, O.PUMICE].forEach(id => def(id, {}));
@@ -7468,7 +7474,7 @@ function crate(c, r) {
   }
   // a cross brace on each face, and the lid's boards
   for (const sb of [-1, 1]) { const [px, pz] = at(0, sb * (S / 2 - 0.005)); part(G.box, dark, px, y + H2 / 2, pz, { sx: S * 0.95, sy: 0.06, sz: 0.02, ry, rz: 0.72 }); }
-  for (const sa of [-1, 1]) { const [px, pz] = at(sa * (S / 2 - 0.005), 0); part(G.box, dark, px, y + H2 / 2, pz, { sx: 0.02, sy: 0.06, sz: S * 0.95, ry: ry + Math.PI / 2, rz: 0.72 }); }
+  for (const sa of [-1, 1]) { const [px, pz] = at(sa * (S / 2 - 0.005), 0); part(G.box, dark, px, y + H2 / 2, pz, { sx: S * 0.95, sy: 0.06, sz: 0.02, ry: ry + Math.PI / 2, rz: 0.72 }); }
   for (let k = -1; k <= 1; k++) { const [px, pz] = at(0, k * S * 0.28); part(G.box, k ? wood : '#b88a58', px, y + H2 + 0.005, pz, { sx: S - 0.1, sy: 0.02, sz: S * 0.27, ry }); }
 }
 // an iron chest on 2 x 2 tiles: long and low, banded and riveted, with a curved lid, a lock plate and a handle each end
@@ -9849,6 +9855,74 @@ function trashCell(c) {
   sfx.nope();
 }
 $('trash').innerHTML = ICON.trash;
+// Refine and stash, from the window's foot, while you stand on your plot: refine sends everything in the pack a
+// station there refines to their inputs (topping up stacks, then the emptiest station's free squares); stash puts
+// everything else in the plot's crates and chests (topping up stacks anywhere, then a new pile, in one that
+// already holds some if it can)
+const isRaw = id => Object.values(STATION_KIND).some(k => k.refine[id]);
+const waiting = st => st.inN.reduce((a, b) => a + b, 0);
+function refineAll() {
+  const pl = homePlot(), sts = plotStores(pl).filter(st => Object.keys(STATION_KIND[st.kind].refine).length);
+  if (!pl) { toast('Stand on your plot to refine.'); sfx.nope(); return 0; }
+  if (!sts.length) { toast('There are no refining stations on this plot.'); sfx.nope(); return 0; }
+  let moved = 0, raw = 0;
+  PACK.forEach((id, i) => {
+    const to = id ? sts.filter(st => refinesTo(st, id)) : [];
+    if (!to.length) return;
+    let n = PACK_N[i];
+    raw += n;
+    for (const st of to) st.inp.forEach((p, k) => { if (n > 0 && p === id) { const t = Math.min(n, stackOf(id) - st.inN[k]); st.inN[k] += t; n -= t; } });
+    while (n > 0) {
+      const free = to.filter(st => st.inp.includes(null));
+      if (!free.length) break;
+      const st = free.reduce((a, b) => waiting(a) <= waiting(b) ? a : b), k = st.inp.indexOf(null), t = Math.min(n, stackOf(id));
+      st.inp[k] = id; st.inN[k] = t; n -= t;
+    }
+    moved += PACK_N[i] - n;
+    PACK_N[i] = n; if (!n) PACK[i] = null;
+  });
+  if (!raw) { toast('Nothing in your pack needs refining here.'); sfx.nope(); return 0; }
+  if (!moved) { toast('The stations are full.'); sfx.nope(); return 0; }
+  toast(`Sent ${moved} to the stations${moved < raw ? '. The rest won\'t fit' : ''}.`, 'good');
+  sfx.equip(); renderInv(); renderStats();
+  return moved;
+}
+function stashAll() {
+  const pl = homePlot(), boxes = plotStores(pl).filter(isStore);
+  if (!pl) { toast('Stand on your plot to stash.'); sfx.nope(); return 0; }
+  if (!boxes.length) { toast('There are no crates or chests on this plot.'); sfx.nope(); return 0; }
+  let moved = 0, some = 0;
+  PACK.forEach((id, i) => {
+    if (!id || isRaw(id)) return;
+    let n = PACK_N[i];
+    some += n;
+    for (const o of boxes) o.box.forEach((b, k) => { if (n > 0 && b === id) { const t = Math.min(n, stackOf(id) - o.boxN[k]); o.boxN[k] += t; n -= t; } });
+    for (const o of [...boxes.filter(o => o.box.includes(id)), ...boxes.filter(o => !o.box.includes(id))])
+      for (let k = o.box.indexOf(null); n > 0 && k >= 0; k = o.box.indexOf(null)) { const t = Math.min(n, stackOf(id)); o.box[k] = id; o.boxN[k] = t; n -= t; }
+    moved += PACK_N[i] - n;
+    PACK_N[i] = n; if (!n) PACK[i] = null;
+  });
+  if (!some) { toast('Nothing in your pack to stash.'); sfx.nope(); return 0; }
+  if (!moved) { toast('The crates and chests are full.'); sfx.nope(); return 0; }
+  toast(`Stashed ${moved}${moved < some ? '. The rest won\'t fit' : ''}.`, 'good');
+  sfx.equip(); renderInv(); renderStats();
+  return moved;
+}
+$('refineBtn').innerHTML = ICON.smelter; $('stashBtn').innerHTML = ICON.chest;
+$('refineBtn').addEventListener('click', () => { audioOn(); refineAll(); });
+$('stashBtn').addEventListener('click', () => { audioOn(); stashAll(); });
+const ACT_INFO = {
+  refineBtn: '<b>REFINE</b> Sends everything raw in your pack to the refining stations on this plot.',
+  stashBtn: '<b>STASH</b> Puts everything in your pack that isn\'t raw into the crates and chests on this plot, topping up like stacks first.',
+};
+let actHome = -1;
+// lit only on your plot (checked as you walk while the window's open)
+function litActs() {
+  const on = homePlot() > 0;
+  if (on === actHome) return;
+  actHome = on;
+  for (const b of ['refineBtn', 'stashBtn']) $(b).classList.toggle('off', !on);
+}
 // The window: the doll on the left, the pack on the right. Click (or right-click) to put on or take off,
 // drag to move; on the controller the D-pad picks a square and A clicks it.
 let invOpen = false, invFocus = ['gear', 'weapon'], invHover = null, invPress = null;
@@ -9898,6 +9972,7 @@ function renderInv() {
     $('stTakes').textContent = 'TAKES ' + stationTakes(openSt);
   }
   $('packCount').textContent = PACK.filter(Boolean).length + ' / ' + PACK.length;
+  actHome = -1; litActs();
   $('armorVal').textContent = 'ARMOR ' + armor();
   showInfo();
 }
@@ -9967,7 +10042,11 @@ function navInv(dx, dy) {
     invPress = { c: cellOf(el), x: e.clientX, y: e.clientY, dragging: false };
     e.preventDefault();
   });
-  inv.addEventListener('pointerover', e => { const el = e.target.closest('.cell'); invHover = el ? cellOf(el) : null; showInfo(); });
+  inv.addEventListener('pointerover', e => {
+    const b = e.target.closest('.invAct');
+    if (b) { invHover = null; $('invInfo').innerHTML = ACT_INFO[b.id] + (b.classList.contains('off') ? ' Stand on your plot to use it.' : ''); return; }
+    const el = e.target.closest('.cell'); invHover = el ? cellOf(el) : null; showInfo();
+  });
   inv.addEventListener('pointerleave', () => { invHover = null; showInfo(); });
   addEventListener('pointermove', e => {
     if (!invPress) return;
@@ -10014,29 +10093,29 @@ const WEAPON_HAFT = 4;
 const TABLE_NAME = { tan: 'ARMOR CRAFTING TABLE', weapon: 'WEAPON CRAFTING TABLE' };
 let craftAt = null, craftFocus = 0;   // the table in use
 const recipes = () => RECIPES[craftAt ? craftAt.kind : 'tan'];
-const canCraft = rc => Object.entries(rc.cost).every(([id, n]) => countItem(id) >= n);
+const canCraft = rc => Object.entries(rc.cost).every(([id, n]) => haveCount(id) >= n);
 function renderCraft() {
   const list = $('craftList');
   list.innerHTML = '';
   recipes().forEach((rc, k) => {
     const it = ITEMS[rc.make], ok = canCraft(rc), row = document.createElement('div');
     row.className = 'recipe' + (ok ? '' : ' poor') + (PAD.on && k === craftFocus ? ' focus' : '');
-    const cost = Object.entries(rc.cost).map(([id, n]) => `<span class="${countItem(id) >= n ? '' : 'short'}">${n} ${ITEMS[id].name.toUpperCase()}</span>`).join(' ');
-    const about = it.tier ? `damage ×${WEAPON_TIER[it.tier]} · you have ${countItem(TIERS[it.tier].mat)}` : `${titleCase(it.slot)} · armor ${it.armor}`;
+    const cost = Object.entries(rc.cost).map(([id, n]) => `<span class="${haveCount(id) >= n ? '' : 'short'}">${n} ${ITEMS[id].name.toUpperCase()}</span>`).join(' ');
+    const about = it.tier ? `damage ×${WEAPON_TIER[it.tier]} · you have ${haveCount(TIERS[it.tier].mat)}` : `${titleCase(it.slot)} · armor ${it.armor}`;
     row.innerHTML = `<div class="cell full">${ICON[it.icon]}</div><div class="rtext"><b>${it.name.toUpperCase()}</b><span>${about}</span></div><div class="rcost">${cost}</div><button>CRAFT</button>`;
     row.querySelector('button').addEventListener('click', () => { audioOn(); craftFocus = k; craft(k); });
     list.appendChild(row);
     if (PAD.on && k === craftFocus) requestAnimationFrame(() => row.scrollIntoView({ block: 'nearest' }));
   });
   $('craftTitle').textContent = TABLE_NAME[craftAt ? craftAt.kind : 'tan'];
-  $('craftHave').textContent = craftAt && craftAt.kind === 'weapon' ? '' : 'YOU HAVE ' + countItem('leather') + ' LEATHER';
+  $('craftHave').textContent = craftAt && craftAt.kind === 'weapon' ? '' : 'YOU HAVE ' + haveCount('leather') + ' LEATHER';
 }
 function craft(k) {
   const rc = recipes()[k], it = ITEMS[rc.make];
   if (!canCraft(rc)) { toast(`You need ${Object.entries(rc.cost).map(([id, n]) => n + ' ' + ITEMS[id].name.toLowerCase()).join(' and ')} for ${it.name.toLowerCase()}.`); sfx.nope(); return false; }
-  for (const [id, n] of Object.entries(rc.cost)) takeItem(id, n);
+  for (const [id, n] of Object.entries(rc.cost)) spend(id, n);
   if (addItem(rc.make)) {
-    for (const [id, n] of Object.entries(rc.cost)) addItem(id, n);
+    for (const [id, n] of Object.entries(rc.cost)) { const left = addItem(id, n); if (left) dropLoot(id, left, H.x, H.z); }
     toast('Your pack is full.'); sfx.nope(); renderCraft(); return false;
   }
   sfx.place(); sfx.coin();
@@ -10104,12 +10183,12 @@ let subOpen = null;
 // costs as the bar shows them: 2W logs, 2S stone, 2P planks, 2B stone blocks, 2I iron ingots
 const COST_TAG = { wood: 'W', stone: 'S', planks: 'P', stoneBlock: 'B', ironIngot: 'I', copperIngot: 'C', ironOre: 'Io', copperOre: 'Co', leather: 'L' };
 const costText = k => Object.entries(COST[k]).map(([r, n]) => n + COST_TAG[r]).join(' ');
-const canAfford = k => Object.entries(COST[k]).every(([r, n]) => countItem(r) >= n);
+const canAfford = k => Object.entries(COST[k]).every(([r, n]) => haveCount(r) >= n);
 // a build slot's tooltip: what it costs, and what you're short of
 function costTip(name, k) {
-  const need = Object.entries(COST[k]), short = need.filter(([r, n]) => countItem(r) < n);
+  const need = Object.entries(COST[k]), short = need.filter(([r, n]) => haveCount(r) < n);
   const list = a => a.map(([r, n]) => n + ' ' + ITEMS[r].name.toLowerCase()).join(', ');
-  return titleCase(name) + ' · costs ' + list(need) + (short.length ? ' · missing ' + list(short.map(([r, n]) => [r, n - countItem(r)])) : '');
+  return titleCase(name) + ' · costs ' + list(need) + (short.length ? ' · missing ' + list(short.map(([r, n]) => [r, n - haveCount(r)])) : '');
 }
 let slotEls = [];
 function slotEl(s, parent) {
@@ -12070,9 +12149,9 @@ function dragSpots() {
 // which of them will actually go up: in reach, allowed, and paid for in turn
 function settle(spots) {
   const have = {};
-  for (const r in COST_TAG) have[r] = countItem(r);
   for (const s of spots) {
     const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE;
+    for (const r in cost) if (!(r in have)) have[r] = haveCount(r);
     const afford = Object.entries(cost).every(([r, n]) => n <= have[r]), queued = buildQueue.has(spotKey(s));
     s.go = s.ok && !far && afford;
     s.queue = s.ok && !far && !afford && queueable(s.kind) && !queued;
@@ -12095,7 +12174,7 @@ function updateGhost() {
 // pay for a piece (sign 1) or give its cost back (-1)
 function pay(kind, sign) {
   for (const [r, n] of Object.entries(COST[kind])) {
-    if (sign > 0) { takeItem(r, n); continue; }
+    if (sign > 0) { spend(r, n); continue; }
     const left = addItem(r, n);
     if (left) { dropLoot(r, left, H.x, H.z); packFull(); }
   }
@@ -12154,11 +12233,41 @@ function placeMany(spots) {
   puff(mid.x, mid.y - (isFloor(mid.kind) || mid.kind === 'hearth' || isStation(mid.kind) ? 0 : (isFenceKind(mid.kind) ? FENCE_H : WALL_H) / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
   if (miss && !queue.length && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
 }
+// ---------- Plot stores ----------
+// Standing on a claimed plot, everything in its crates, chests and stations counts as yours to build and craft
+// with: it's taken from the pack first, then the crates and chests, then the stations' outputs, then their inputs.
+function homePlot() {
+  const c = Math.floor(H.x), r = Math.floor(H.z);
+  return c < 0 || r < 0 || c >= N || r >= N || !claimedAt(T(c, r)) ? 0 : PLOT[T(c, r)];
+}
+function plotStores(pl) { return pl ? [...stations.values()].filter(st => PLOT[T(st.c, st.r)] === pl) : []; }
+const STORE_ROWS = [['box', 'boxN'], ['out', 'outN'], ['inp', 'inN']];
+function storedCount(sts, id) {
+  let n = 0;
+  for (const st of sts) for (const [a, b] of STORE_ROWS) st[a].forEach((o, k) => { if (o === id) n += st[b][k]; });
+  return n;
+}
+function takeStored(sts, id, n) {
+  for (const [a, b] of STORE_ROWS) for (const st of sts) st[a].forEach((o, k) => {
+    if (n <= 0 || o !== id) return;
+    const t = Math.min(n, st[b][k]); n -= t; st[b][k] -= t;
+    if (!st[b][k]) st[a][k] = null;
+  });
+  return n;
+}
+function haveCount(id) { return countItem(id) + storedCount(plotStores(homePlot()), id); }
+function spend(id, n) {
+  const p = Math.min(n, countItem(id));
+  if (p) takeItem(id, p);
+  if (n > p) { takeStored(plotStores(homePlot()), id, n - p); if (openSt && invOpen) renderInv(); }
+}
+
 // ---------- The build queue ----------
-// Floors, walls, fences, doors and gates you can't pay for when you lay them are queued instead: drawn as white
-// see-through previews, they go up one at a time (every BUILD_QUEUE.every seconds, first laid first) as the
-// output squares of the stations on their plot hold what they cost, which is taken from there. Removing one
-// (REMOVE) takes it off the queue.
+// Floors, walls, fences, doors and gates you can't pay for when you lay them (from the pack and everything stored
+// on the plot) are queued instead: drawn as white see-through previews, they go up one at a time (every
+// BUILD_QUEUE.every seconds), strictly in the order they were laid, as the crates, chests and stations on their
+// plot come to hold what the next one costs, which is taken from there. Removing one (REMOVE) takes it off the
+// queue.
 const BUILD_QUEUE = { every: 0.35 };
 const buildQueue = new Map();   // spotKey -> { kind, c, r, w, x, y, z, ry, plot, mesh }
 const queueable = k => isFloor(k) || isWall(k) || isDoorKind(k);
@@ -12183,16 +12292,6 @@ function unqueue(key) {
   scene.remove(q.mesh); buildQueue.delete(key);
   return true;
 }
-// what the stations on a plot hold in their outputs
-const plotStations = pl => [...stations.values()].filter(st => PLOT[T(st.c, st.r)] === pl);
-const outCount = (sts, id) => sts.reduce((a, st) => a + st.out.reduce((b, o, k) => b + (o === id ? st.outN[k] : 0), 0), 0);
-function takeOut(sts, id, n) {
-  for (const st of sts) st.out.forEach((o, k) => {
-    if (n <= 0 || o !== id) return;
-    const t = Math.min(n, st.outN[k]); n -= t; st.outN[k] -= t;
-    if (!st.outN[k]) st.out[k] = null;
-  });
-}
 let queueT = 0;
 function runBuildQueue(dt) {
   if (!buildQueue.size || (queueT -= dt) > 0) return;
@@ -12204,15 +12303,17 @@ function runBuildQueue(dt) {
       if (isFloor(q.kind) ? FL[T(q.c, q.r)] : (q.w ? WW : WN)[T(q.c, q.r)]) unqueue(key);
       continue;
     }
-    const sts = plotStations(q.plot), cost = Object.entries(COST[q.kind]);
-    if (!cost.every(([id, n]) => outCount(sts, id) >= n)) continue;
-    for (const [id, n] of cost) takeOut(sts, id, n);
+    // (the next in line waits for its materials, and everything after it waits too)
+    const sts = plotStores(q.plot), cost = Object.entries(COST[q.kind]);
+    if (!cost.every(([id, n]) => storedCount(sts, id) >= n)) return;
+    for (const [id, n] of cost) takeStored(sts, id, n);
     s.paid = true;
     placeSpot(s);
     flushDirty();
     if (Math.hypot(s.x - H.x, s.z - H.z) < 20) sfx.place();
     puff(s.x, s.y - (isFloor(s.kind) ? 0 : (isFenceKind(s.kind) ? FENCE_H : WALL_H) / 2), s.z, '#c8bca0', 5, 0.7);
     if (openSt && sts.includes(openSt) && invOpen) renderInv();
+    if (craftAt) renderCraft();
     return;
   }
 }
@@ -12387,6 +12488,24 @@ function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); }
 const refinesTo = (st, id) => id ? STATION_KIND[st.kind].refine[id] || null : null;
 // room in the output for one more of id
 const outRoom = (st, id) => st.out.some((o, i) => o === null || (o === id && st.outN[i] < stackOf(id)));
+// the crates and chests sharing an edge with a station: what it makes goes in them first, topping up a stack in any
+// of them before starting a new one, and only into its own output once they're full
+function touching(st) {
+  const f = stFoot(st.kind), out = [];
+  for (const o of stations.values()) {
+    if (o === st || !isStore(o)) continue;
+    const g = stFoot(o.kind), xs = st.c <= o.c + g - 1 && o.c <= st.c + f - 1, zs = st.r <= o.r + g - 1 && o.r <= st.r + f - 1;
+    if ((xs && (o.r + g === st.r || st.r + f === o.r)) || (zs && (o.c + g === st.c || st.c + f === o.c))) out.push(o);
+  }
+  return out;
+}
+const boxRoom = (o, id) => o.box.some((b, i) => b === null || (b === id && o.boxN[i] < stackOf(id)));
+function stow(st, id) {
+  const boxes = touching(st);
+  for (const o of boxes) { const i = o.box.findIndex((b, k) => b === id && o.boxN[k] < stackOf(id)); if (i >= 0) { o.boxN[i]++; return true; } }
+  for (const o of boxes) { const i = o.box.indexOf(null); if (i >= 0) { o.box[i] = id; o.boxN[i] = 1; return true; } }
+  return outAdd(st, id);
+}
 function outAdd(st, id) {
   let i = st.out.findIndex((o, k) => o === id && st.outN[k] < stackOf(id));
   if (i < 0) i = st.out.indexOf(null);
@@ -12395,7 +12514,7 @@ function outAdd(st, id) {
   return true;
 }
 // the input square it's working on: the first with something it can refine and room for what that makes
-const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && outRoom(st, refinesTo(st, id)));
+const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && (outRoom(st, refinesTo(st, id)) || touching(st).some(o => boxRoom(o, refinesTo(st, id)))));
 const stTiles = (c, r, n = 2) => n === 1 ? [T(c, r)] : [T(c, r), T(c + 1, r), T(c, r + 1), T(c + 1, r + 1)];
 const markTiles = (c, r, n) => { markObj(c, r); if (n > 1) { markObj(c + 1, r + 1); markObj(c + 1, r); markObj(c, r + 1); } };
 function placeStation(s) {
@@ -12471,9 +12590,9 @@ function updateStations(dt) {
       if (st.t >= REFINE.time) {
         const made = refinesTo(st, st.inp[k]);
         st.inN[k]--; if (!st.inN[k]) st.inp[k] = null;
-        outAdd(st, made);
+        stow(st, made);
         st.t = 0;
-        if (openSt === st && invOpen) renderInv();
+        if (openSt && invOpen) renderInv();
         if (Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z) < 8) sfx.coin();
       }
     } else st.t = 0;
@@ -12497,6 +12616,7 @@ function updateStations(dt) {
     stationHumT = hum.kind === 'sawtable' ? 0.12 : 0.3 + Math.random() * 0.3;
     beep(f * (0.9 + Math.random() * 0.2), 0.08, { type, vol: 0.02 * (1 - humD / 7) + 0.004 });
   }
+  if (invOpen) litActs();
   if (openSt) {
     if (!stations.has(T(openSt.c, openSt.r)) || Math.hypot(stMid(openSt)[0] - H.x, stMid(openSt)[1] - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
     else { const bar = $('stProgress'); if (bar) bar.style.width = (openSt.busy ? openSt.t / REFINE.time * 100 : 0) + '%'; }
@@ -14796,6 +14916,8 @@ window.GAME = {
   pack: () => PACK.map((id, i) => id && [id, PACK_N[i]]),
   addItem: (id, n) => addItem(id, n),
   trash: c => trashCell(c),
+  refineAll: () => refineAll(), stashAll: () => stashAll(), homePlot: () => homePlot(), haveCount: id => haveCount(id),
+  queueKeys: () => [...buildQueue.keys()],
   dressed: tag => { let n = 0; heroRoot.traverse(o => { if (o.userData.gear === tag && o.visible) n++; }); return n; },
   nearTableKind: () => { const t = nearTable(); return t ? [t.kind, !!t.built] : null; },
   tables: () => TABLES.map(t => [t.c, t.r, t.built ? 'built' : towns[t.town].name, t.kind]),
