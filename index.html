@@ -11855,6 +11855,8 @@ ghostGeo.hearth = new GFX.CylinderGeometry(0.5, 0.5, 0.7, 8);
 ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
 ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
 for (const k in STATION_KIND) ghostGeo[k] = new GFX.BoxGeometry(0.9, 0.9, 0.9);
+// a piece that will be queued (no materials to hand) shows white, as the queued ones themselves do
+const ghostQueue = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.35, depthWrite: false });
 const ghosts = [];
 function showGhosts(spots) {
   while (ghosts.length < spots.length) { const g = new GFX.Mesh(ghostGeo.wall, ghostMat); g.renderOrder = 4; scene.add(g); ghosts.push(g); }
@@ -11863,7 +11865,7 @@ function showGhosts(spots) {
     const s = spots[k];
     g.visible = !!s;
     if (!s) return;
-    g.geometry = ghostGeo[s.kind]; g.material = s.go ? ghostMat : ghostBad;
+    g.geometry = ghostGeo[s.kind]; g.material = s.go ? ghostMat : s.queue ? ghostQueue : ghostBad;
     g.position.set(s.x, s.y, s.z); g.rotation.y = s.ry || 0;
   });
 }
@@ -11965,9 +11967,11 @@ function settle(spots) {
   for (const r in COST_TAG) have[r] = countItem(r);
   for (const s of spots) {
     const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE;
-    const afford = Object.entries(cost).every(([r, n]) => n <= have[r]);
+    const afford = Object.entries(cost).every(([r, n]) => n <= have[r]), queued = buildQueue.has(spotKey(s));
     s.go = s.ok && !far && afford;
+    s.queue = s.ok && !far && !afford && queueable(s.kind) && !queued;
     if (s.ok && far) s.why = 'Too far away to build.';
+    else if (s.ok && !afford && queued) s.why = 'That is queued already.';
     else if (s.ok && !afford) s.why = 'Not enough materials: ' + costText(s.kind) + '.';
     if (s.go) for (const [r, n] of Object.entries(cost)) have[r] -= n;
   }
@@ -12001,7 +12005,8 @@ function flushDirty() {
   dirtyObj.clear(); dirtyPieces.clear();
 }
 function placeSpot(s) {
-  pay(s.kind, 1);
+  if (!s.paid) pay(s.kind, 1);
+  unqueue(spotKey(s));
   const ch = Math.floor(s.r / CH) * NC + Math.floor(s.c / CH);
   buildCount[ch]++;
   if (isFloor(s.kind)) {
@@ -12028,14 +12033,82 @@ function placeSpot(s) {
   markPieces(s.c, s.r);
 }
 function placeMany(spots) {
-  const go = spots.filter(s => s.go), miss = spots.find(s => !s.go);
+  const go = spots.filter(s => s.go), queue = spots.filter(s => s.queue), miss = spots.find(s => !s.go && !s.queue);
+  for (const s of queue) queueSpot(s);
+  if (queue.length) {
+    if (!go.length) sfx.place();
+    toast(`${go.length ? `Built ${go.length}, q` : 'Q'}ueued ${queue.length}. ${queue.length > 1 ? 'They go' : 'It goes'} up as the stations on this plot make the materials.`, 'calm');
+    if (!go.length) return;
+  }
   if (!go.length) { sfx.nope(); if (miss) toast(miss.why); return; }
   for (const s of go) placeSpot(s);
   flushDirty();
   sfx.place();
   const mid = go[Math.floor(go.length / 2)];
   puff(mid.x, mid.y - (isFloor(mid.kind) || mid.kind === 'hearth' || isStation(mid.kind) ? 0 : (isFenceKind(mid.kind) ? FENCE_H : WALL_H) / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
-  if (miss && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
+  if (miss && !queue.length && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
+}
+// ---------- The build queue ----------
+// Floors, walls, fences and gates you can't pay for when you lay them are queued instead: drawn as white
+// see-through previews, they go up one at a time (every BUILD_QUEUE.every seconds, first laid first) as the
+// output squares of the stations on their plot hold what they cost, which is taken from there. Removing one
+// (REMOVE) takes it off the queue.
+const BUILD_QUEUE = { every: 0.35 };
+const buildQueue = new Map();   // spotKey -> { kind, c, r, w, x, y, z, ry, plot, mesh }
+const queueable = k => isFloor(k) || isWall(k) || k === 'gate' || k === 'irongate';
+const spotKey = s => isFloor(s.kind) ? 'F' + T(s.c, s.r) : 'w' in s ? 'E' + edgeKey(s.c, s.r, s.w) : 'X' + T(s.c, s.r);
+const queueMat = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.3, depthWrite: false });
+// the claimed plot a piece stands on (a wall: either side of it)
+function spotPlot(s) {
+  const tiles = isFloor(s.kind) ? [T(s.c, s.r)] : [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)];
+  const i = tiles.find(claimedAt);
+  return i === undefined ? 0 : PLOT[i];
+}
+function queueSpot(s) {
+  const key = spotKey(s);
+  if (buildQueue.has(key)) return;
+  const mesh = new GFX.Mesh(ghostGeo[s.kind], queueMat);
+  mesh.renderOrder = 4; mesh.position.set(s.x, s.y, s.z); mesh.rotation.y = s.ry || 0; scene.add(mesh);
+  buildQueue.set(key, { kind: s.kind, c: s.c, r: s.r, w: s.w, x: s.x, y: s.y, z: s.z, ry: s.ry, plot: spotPlot(s), mesh });
+}
+function unqueue(key) {
+  const q = buildQueue.get(key);
+  if (!q) return false;
+  scene.remove(q.mesh); buildQueue.delete(key);
+  return true;
+}
+// what the stations on a plot hold in their outputs
+const plotStations = pl => [...stations.values()].filter(st => PLOT[T(st.c, st.r)] === pl);
+const outCount = (sts, id) => sts.reduce((a, st) => a + st.out.reduce((b, o, k) => b + (o === id ? st.outN[k] : 0), 0), 0);
+function takeOut(sts, id, n) {
+  for (const st of sts) st.out.forEach((o, k) => {
+    if (n <= 0 || o !== id) return;
+    const t = Math.min(n, st.outN[k]); n -= t; st.outN[k] -= t;
+    if (!st.outN[k]) st.out[k] = null;
+  });
+}
+let queueT = 0;
+function runBuildQueue(dt) {
+  if (!buildQueue.size || (queueT -= dt) > 0) return;
+  queueT = BUILD_QUEUE.every;
+  for (const [key, q] of buildQueue) {
+    const s = isFloor(q.kind) ? floorSpot(q.c, q.r, q.kind) : edgeSpot(q.c, q.r, q.w, q.kind);
+    if (!s.ok) {
+      // something else was built there: drop it (otherwise, someone in the way, wait)
+      if (isFloor(q.kind) ? FL[T(q.c, q.r)] : (q.w ? WW : WN)[T(q.c, q.r)]) unqueue(key);
+      continue;
+    }
+    const sts = plotStations(q.plot), cost = Object.entries(COST[q.kind]);
+    if (!cost.every(([id, n]) => outCount(sts, id) >= n)) continue;
+    for (const [id, n] of cost) takeOut(sts, id, n);
+    s.paid = true;
+    placeSpot(s);
+    flushDirty();
+    if (Math.hypot(s.x - H.x, s.z - H.z) < 20) sfx.place();
+    puff(s.x, s.y - (isFloor(s.kind) ? 0 : (isFenceKind(s.kind) ? FENCE_H : WALL_H) / 2), s.z, '#c8bca0', 5, 0.7);
+    if (openSt && sts.includes(openSt) && invOpen) renderInv();
+    return;
+  }
 }
 function placePiece() {
   if (buildKind === 'remove') { removePiece(); return; }
@@ -12324,6 +12397,9 @@ function removePiece() {
     const c = Math.floor(hit.x), r = Math.floor(hit.z), u = hit.x - c, v = hit.z - r, i = T(c, r);
     // close to a tile side with a wall on it? take the wall, else a hearth, else the floor
     const dist = [v, 1 - u, 1 - v, u];
+    // (a queued piece there comes off the queue first)
+    for (let d = 0; d < 4; d++) if (dist[d] < 0.22) { const [ec, er, w] = edgeOf(c, r, d); if (unqueue('E' + edgeKey(ec, er, w))) { sfx.remove(); return; } }
+    if (!FL[i] && unqueue('F' + i)) { sfx.remove(); return; }
     for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[wallOn(c, r, d)], c: ec, r: er, w }; }
     if (!target && OB[i] === O.HEARTH) target = { kind: 'hearth', c, r };
     if (!target && stations.has(i)) target = { kind: stations.get(i).kind, c, r };
@@ -14336,6 +14412,7 @@ function frame(now) {
   remakeOres(dt);
   updateHearths(dt);
   updateStations(dt);
+  runBuildQueue(dt);
   ventSmoke(dt);
   prof.lap('clouds, water, hearths, smoke');
   streamChunks(6);
@@ -14393,6 +14470,9 @@ window.GAME = {
   begin,
   stations: () => [...stations.values()].map(st => ({ c: st.c, r: st.r, kind: st.kind, ry: st.ry, inp: st.inp.map((id, i) => id && id + ':' + st.inN[i]), out: st.out.map((id, i) => id && id + ':' + st.outN[i]), busy: st.busy, t: st.t })),
   stationPut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.inp[slot] = id; st.inN[slot] = n; },
+  stationOut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.out[slot] = id; st.outN[slot] = n; },
+  buildQueue: () => [...buildQueue.values()].map(q => q.kind + '@' + q.c + ',' + q.r + (q.w !== undefined ? ':' + q.w : '')),
+  floorAt: (c, r) => FL[T(c, r)],
   openStation: (c, r) => { openStation(stations.get(T(c, r))); return !$('station').hidden; },
   stationClick: (k, i) => clickCell([k, i]),
   ambient: () => {
