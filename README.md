@@ -161,6 +161,12 @@ Crafting and Conquest's water surface. Fresnel blends the sky's reflection with 
 
 The day and night follow Crafting and Conquest's sky without drawing it: the sun is placed by the hour, latitude, season and north; its light reddens and dims through the air at a low sun (Rayleigh and haze extinction over the air mass); the sky's light shades from night through dusk to day; the moon, running the sun's own arc twelve hours behind (so it climbs as high by night as the sun by day), lights the night; and the exposure opens up as the light fails. Cloud shadows are a tiling noise laid over the world and slowly scrolled, dimming only the sun's or moon's light in every lit material's shader, so lamps and the torch are untouched.
 
+## Use (F) and the minimap
+
+With more than one thing in reach to use with F (A), loot, a table, a station, a crate or a door, F picks the one most nearly ahead of where you face, then the nearest. The N button in the minimap's corner turns to show where north is; clicking it locks north up (kept), and then the camera's view is drawn as a pale cone from you.
+
+**Errors.** A frame that throws is caught: the game keeps running and a box at the top shows the error, where it happened and the version, with a COPY button, for browsers with no console to hand.
+
 ## Build queue
 
 Floors, walls, fences, doors and gates you can't pay for when you lay them (in reach, on your claimed plot) are queued instead of refused: the preview shows white, and a queued piece stays as a see-through white preview. Queued pieces go up one at a time, every 0.35 s, strictly in the order they were laid: the next in line waits until the crates, chests and stations on its plot (outputs, then inputs) hold what it costs, and everything after it waits too. Its cost is taken from there, never from your pack.
