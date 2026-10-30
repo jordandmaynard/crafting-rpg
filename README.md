@@ -39,7 +39,7 @@ Press any button on a controller and the game switches to it: the action bar, th
 - **Build (MENU):** the right stick moves a diamond cursor around you. **RT** places (hold it and move the cursor to lay a row or an area), **LT** removes, **X** / **Y** / **A** open the floor, wall and door rows (press again to step to the next kind), **RB** hearth, **B** closes the row or leaves build mode.
 - **Both:** **VIEW** map (left stick pans, **RT** / **LT** zoom, **B** closes), **L3** plot outlines, D-pad up and down zoom, left and right turn the camera to the next 45° step.
 
-- **Sizes:** the minimap is 240px (with the place name and time of day plate under it as wide), toasts are bigger, and the gear window's squares are 96px (smaller only where the screen is too short or narrow for that), with its text scaled to match. The crafting window is half as big again. Icons are drawn at twice the resolution of their pixel maps: doubled with Scale2x (rounding off diagonal steps), lit along their top edges, shaded along their bottom ones and outlined a pixel wide (iconArt).
+- **Sizes:** the minimap is 240px (with the place name and time of day plate under it as wide), toasts are bigger, and the gear window's squares are 96px inside, with their 3px border outside that (smaller only where the screen is too short or narrow for that), so 32px PNG icons fill them at exactly 3x, with its text scaled to match. The crafting window is half as big again. Icons are drawn at twice the resolution of their pixel maps: doubled with Scale2x (rounding off diagonal steps), lit along their top edges, shaded along their bottom ones and outlined a pixel wide (iconArt).
 
 ## The world
 
