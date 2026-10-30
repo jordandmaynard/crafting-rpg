@@ -167,6 +167,10 @@ With more than one thing in reach to use with F (A), loot, a table, a station, a
 
 **Errors.** A frame that throws is caught: the game keeps running and a box at the top shows the error, where it happened and the version, with a COPY button, for browsers with no console to hand.
 
+## UI sizes
+
+Squares follow V Rising's proportions as shares of the screen's height (measured off a 1564px tall screenshot of it): action bar 4.9% (1.35% apart), hotbar 4.7% (0.6% apart), pack and paper doll 5.1% (pack 0.5% apart, doll 1.2%), with floors so they stay usable on short screens. The action bar's names show only in build mode, on a line under each square. Painted icons scale smoothly into any box; a pixel icon is drawn at a whole multiple of its pixels where that fits and otherwise squeezed into its box until it's repainted.
+
 ## Hotbar
 
 The action bar sits at the bottom right and the hotbar at the bottom left: seven squares, keys 1-7 in play, each holding a weapon you have (worn or in the pack; a worn one's square is gold-edged, one you no longer have is dimmed). Its key, or a click, puts that weapon on, and the weapon you had goes into the pack square it came from; the hotbar squares never move on their own. Drag a weapon from the gear window onto a square to put it there, drag a square onto another to swap them or off the bar to empty it, or right-click it to empty it. You start with the sword, bow and spear in 1-3, and a weapon you craft goes in the first empty square. The hotbar hides in build mode, where the numbers pick pieces. On touch screens the action bar stays centred and the hotbar sits above the stick.
