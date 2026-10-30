@@ -849,6 +849,7 @@ async function generate(progress) {
   placeStatues();
   placeMausoleums();
   placeWillows();
+  placeCabins();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
@@ -1922,6 +1923,7 @@ function placeMausoleums() {
         if (b) { cset.add(i); m.cella.push([c, r]); } else front.set(i, a);
       }
       m.anchor = T(...tileAt(0, 0)); m.cellaI = T(...tileAt(1, 2));
+      for (const [c, r] of m.tiles) roofOver.set(T(c, r), m.cellaI);
       // the tomb's walls, and its pair of doors onto the portico in the middle of its front
       for (const [c, r] of m.cella) for (let dd = 0; dd < 4; dd++) {
         const n = T(c + DC[dd], r + DR[dd]);
@@ -1987,6 +1989,107 @@ function placeWillows() {
     }
   }
 }
+// The snowfields' points of interest: log cabins, one for every so much snow (up to three). A cabin is about 4 x 5
+// of log walls on a plank floor, a back corner left out, its wooden door opening onto a front porch: a plank deck
+// across the front, railed but for the way down to the steps, under a lean-to roof on two posts. A stone chimney
+// stands against one side and a woodpile by the other, and its roof lies deep in snow, icicles along the eaves.
+// It's built from the same pieces as a house, so in it the roof goes and the walls in the way drop; on the porch
+// the roof goes too. In local terms a runs across the front, b from the porch's front edge back.
+const cabins = [];
+const roofOver = new Map();   // tile outside a room but under its roof (a portico, a porch) -> a tile of that room
+const CABIN_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+function cabP(m, a, b) {
+  const { d, X0, Z0 } = m;
+  return d === 0 ? [X0 + a, Z0 + 6 - b] : d === 1 ? [X0 + 6 - b, Z0 + a] : d === 2 ? [X0 + 4 - a, Z0 + b] : [X0 + b, Z0 + 4 - a];
+}
+function cabPart(m, geo, color, a, y, b, o = {}) {
+  const [x, z] = cabP(m, a, b);
+  part(geo, color, x, y, z, { ...o, ry: (o.ry || 0) + MAUS_RY[m.d] });
+}
+function placeCabins() {
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  const keep = new Set([O.VENT, O.VENTX, O.SHRINE, O.LAMP, O.HEARTH, O.GROTTO, O.GROTTOX, O.STATUE, O.STATUEX, O.WILLOW]);
+  const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !keep.has(OB[i]);
+  const seen = new Uint8Array(N * N);
+  for (let s0 = 0; s0 < N * N; s0++) {
+    if (BI[s0] !== SNOW || !LV[s0] || seen[s0]) continue;
+    const patch = [s0];
+    seen[s0] = 1;
+    for (let k = 0; k < patch.length; k++) for (const dd of DI) {
+      const n = patch[k] + dd;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== SNOW || !LV[n]) continue;
+      seen[n] = 1; patch.push(n);
+    }
+    const want = CABIN_COUNT(patch.length);
+    for (let k = 0, tries = 0; k < want && tries < 400; tries++) {
+      const i0 = patch[Math.floor(hs(s0 % N + tries, k, 211) * patch.length)], X0 = i0 % N, Z0 = (i0 - X0) / N, L = LV[i0];
+      const d = Math.floor(hs(X0, Z0, 212) * 4), W = d & 1 ? 6 : 4, D = d & 1 ? 4 : 6;
+      // the cabin and its porch and a tile all round (the steps, the chimney, the woodpile): one level of open snow
+      let ok = true;
+      for (let r = Z0 - 1; r <= Z0 + D && ok; r++) for (let c = X0 - 1; c <= X0 + W && ok; c++) {
+        if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) { ok = false; break; }
+        const i = T(c, r);
+        if (LV[i] !== L || BI[i] !== SNOW || !open(i)) ok = false;
+      }
+      if (!ok) continue;
+      const m = { d, X0, Z0, L, house: [], porch: [], door: null, posts: [] };
+      const [mx, mz] = cabP(m, 2, 3);
+      if (cabins.some(q => Math.hypot(q.x - mx, q.z - mz) < 40)) continue;
+      k++;
+      m.x = mx; m.z = mz;
+      for (let r = Z0 - 1; r <= Z0 + D; r++) for (let c = X0 - 1; c <= X0 + W; c++) { const i = T(c, r); OB[i] = 0; FARM[i] = 3; }
+      const h = q => hs(X0, Z0, 213 + q);
+      const tileAt = (a, b) => cabP(m, a + 0.5, b + 0.5).map(Math.floor), hset = new Set(), porch = new Map();
+      // the house: 4 x 5 behind the porch, a back corner (1 x 1 or 1 x 2) left out
+      const notchA = h(0) < 0.5 ? 0 : 3, notchB = h(1) < 0.5 ? 5 : 4;
+      for (let b = 1; b <= 5; b++) for (let a = 0; a < 4; a++) {
+        if (a === notchA && b >= notchB) continue;
+        const [c, r] = tileAt(a, b), i = T(c, r);
+        FL[i] = 1; piece(c, r); hset.add(i); m.house.push([c, r]);
+      }
+      for (let a = 0; a < 4; a++) { const [c, r] = tileAt(a, 0), i = T(c, r); FL[i] = 1; piece(c, r); porch.set(i, a); m.porch.push([c, r]); }
+      m.doorA = h(2) < 0.5 ? 1 : 2;
+      m.houseI = T(...tileAt(1, 3));
+      for (const [c, r] of m.porch) roofOver.set(T(c, r), m.houseI);
+      // log walls all round the house, the door onto the porch
+      for (const [c, r] of m.house) for (let dd = 0; dd < 4; dd++) {
+        const n = T(c + DC[dd], r + DR[dd]);
+        if (hset.has(n)) continue;
+        const [ec, er, ew] = edgeOf(c, r, dd), door = porch.get(n) === m.doorA;
+        (ew ? WW : WN)[T(ec, er)] = door ? KIND_VAL.door : KIND_VAL.logwall;
+        piece(ec, er);
+        if (door) m.door = [ec, er, ew];
+      }
+      // the porch rail: along its front and ends, open in front of the door for the steps
+      for (const [c, r] of m.porch) for (let dd = 0; dd < 4; dd++) {
+        const n = T(c + DC[dd], r + DR[dd]);
+        if (hset.has(n) || porch.has(n)) continue;
+        if (porch.get(T(c, r)) === m.doorA && !porch.has(n)) {
+          // (the open side is the one straight out from the door: not along the porch)
+          const [fx, fz] = cabP(m, m.doorA + 0.5, -0.5);
+          if (Math.floor(fx) === c + DC[dd] && Math.floor(fz) === r + DR[dd]) continue;
+        }
+        const [ec, er, ew] = edgeOf(c, r, dd);
+        (ew ? WW : WN)[T(ec, er)] = KIND_VAL.fence;
+        piece(ec, er);
+      }
+      // the porch roof's posts, the chimney, the woodpile: round things in the way
+      const y = L * STEP, add = (a, b, R, kind) => {
+        const [x, z] = cabP(m, a, b), i = T(Math.floor(x), Math.floor(z)), q = { x, z, y, R, kind, m };
+        if (!pillars.has(i)) pillars.set(i, []);
+        pillars.get(i).push(q);
+        return q;
+      };
+      m.posts = [add(0.12, 0.12, 0.1, 'post'), add(3.88, 0.12, 0.1, 'post')];
+      m.chimneyA = notchA === 0 ? 4.3 : -0.3;
+      add(m.chimneyA, 2.6, 0.36, 'block');
+      add(notchA === 0 ? -0.35 : 4.35, 2.2, 0.32, 'block'); add(notchA === 0 ? -0.35 : 4.35, 2.8, 0.32, 'block');
+      m.anchor = T(...tileAt(0, 0));
+      cabinAt.set(m.anchor, m);
+      cabins.push(m);
+    }
+  }
+}
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
@@ -1996,6 +2099,10 @@ function finishTowns() {
   buildGrottoFalls();
   buildObelisks();
   buildWillows();
+  for (const m of cabins) {
+    makeDoor(...m.door);
+    makeRoom(m.house, '#eef3f8', b => roofMesh(b, { snow: true, extra: base => cabinPorchRoof(m, base) }));
+  }
   for (const m of mausoleums) {
     // the pair of doors: the first hung at its low end, the second at its high end, so they meet in the middle
     const [e1, e2] = m.doors.sort((p, q) => p[2] ? p[1] - q[1] : p[0] - q[0]);
@@ -7599,6 +7706,51 @@ function mausExtras(m) {
   P(G.box, MARBLE_LT, 2, y + 0.7, 3.1, { sx: 0.8, sy: 0.1, sz: 1.48 });
   P(G.box, MARBLE, 2, y + 0.78, 3.1, { sx: 0.46, sy: 0.07, sz: 1.36 });
 }
+// a cabin's porch post: a peeled log on a flat stone
+function cabinPost(q) {
+  part(G.box, '#7a7884', q.x, q.y + 0.04, q.z, { sx: 0.24, sy: 0.08, sz: 0.24 });
+  part(G.cyl8, '#7a5634', q.x, q.y + 0.04 + (WALL_H - 0.5) / 2, q.z, { sx: 0.16, sy: WALL_H - 0.5, sz: 0.16 });
+}
+// what stands about a cabin besides its pieces, drawn with the chunk of its front-left porch tile: log steps up
+// to the porch, a stone chimney against one side (snow on its cap), a woodpile under snow against the other
+const cabinAt = new Map();   // the front-left porch tile -> its cabin
+function cabinExtras(m) {
+  const y = m.L * STEP, P = (geo, col, a, yy, b, o) => cabPart(m, geo, col, a, yy, b, o), snow = '#eef3f8';
+  P(G.box, '#6a4a2c', m.doorA + 0.5, y + 0.05, -0.18, { sx: 0.9, sy: 0.1, sz: 0.3 });
+  P(G.cyl8, '#7a5634', m.doorA + 0.5, y + 0.03, -0.42, { sx: 0.12, sy: 0.9, sz: 0.12, rz: Math.PI / 2 });
+  // the chimney: a stack of rough stones, broad at the foot, up past the ridge, a slab on top
+  const ca = m.chimneyA, top = WALL_H + 1.7;
+  for (let n = 0, yy = 0; yy < top; n++) {
+    const hgt = 0.22 + hs(m.X0 + n, m.Z0, 220) * 0.1, wd = yy < 1 ? 0.72 : 0.56;
+    P(G.box, shade(CC('#7a7684'), 0.78 + hs(m.X0, m.Z0 + n, 221) * 0.35), ca, y + yy + hgt / 2, 2.6, { sx: wd, sy: hgt, sz: wd + 0.06, ry: (hs(m.X0, n, 222) - 0.5) * 0.1 });
+    yy += hgt;
+  }
+  P(G.box, '#5e5a66', ca, y + top + 0.05, 2.6, { sx: 0.66, sy: 0.08, sz: 0.7 });
+  P(G.box, '#1a1614', ca, y + top + 0.1, 2.6, { sx: 0.3, sy: 0.04, sz: 0.34 });
+  P(G.dodec, snow, ca + 0.2 * Math.sign(2 - ca), y + top + 0.1, 2.6, { sx: 0.3, sy: 0.12, sz: 0.6 });
+  // the woodpile: rows of log ends between two stakes, snow on top
+  const wa = ca > 2 ? -0.35 : 4.35;
+  for (let row = 0; row < 3; row++) for (let n = 0; n < 5 - row; n++) {
+    const k = hs(m.X0 + n, m.Z0 + row, 225);
+    P(G.cyl8, shade(CC('#8a6440'), 0.8 + k * 0.3), wa, y + 0.1 + row * 0.17, 2.05 + (n + row * 0.5) * 0.19, { sx: 0.18, sy: 0.5, sz: 0.18, rz: Math.PI / 2 });
+  }
+  for (const b of [1.92, 3.08]) P(G.box, '#5a3c24', wa, y + 0.32, b, { sx: 0.06, sy: 0.64, sz: 0.06 });
+  P(G.dodec, snow, wa, y + 0.58, 2.5, { sx: 0.5, sy: 0.14, sz: 1.1 });
+}
+// a cabin's porch roof, drawn with its house's roof (so it goes with it): a lean-to of snow from the eave over the
+// porch's front, boards under it, a beam on the posts, icicles along its edge
+function cabinPorchRoof(m, base) {
+  const W3 = (a, yy, b) => { const [x, z] = cabP(m, a, b); return [x, yy, z]; }, Y = b => base - 0.5 * (1 - b);
+  const snow = CC('#eef3f8'), board = CC('#5a3e26');
+  quad(W3(-0.1, Y(1) + 0.06, 1), W3(4.1, Y(1) + 0.06, 1), W3(4.1, Y(-0.1) + 0.06, -0.1), W3(-0.1, Y(-0.1) + 0.06, -0.1), snow);
+  quad(W3(-0.1, Y(1) - 0.04, 1), W3(4.1, Y(1) - 0.04, 1), W3(4.1, Y(-0.1) - 0.04, -0.1), W3(-0.1, Y(-0.1) - 0.04, -0.1), board);
+  quad(W3(-0.1, Y(-0.1) + 0.06, -0.1), W3(4.1, Y(-0.1) + 0.06, -0.1), W3(4.1, Y(-0.1) - 0.1, -0.1), W3(-0.1, Y(-0.1) - 0.1, -0.1), board);
+  cabPart(m, G.box, '#6a4a2c', 2, Y(0.12) - 0.12, 0.12, { sx: 4, sy: 0.12, sz: 0.14 });
+  for (let n = 0; n < 14; n++) {
+    const a = 0.1 + n * 0.28 + hs(m.X0 + n, m.Z0, 226) * 0.1, len = 0.08 + hs(m.X0, m.Z0 + n, 227) * 0.22;
+    cabPart(m, G.cone4, '#cfe6f6', a, Y(-0.1) - 0.1 - len / 2, -0.08, { sx: 0.05, sy: len, sz: 0.05, rx: Math.PI });
+  }
+}
 // walls in front of you while you're indoors, drawn only to waist height (see updateCutaway)
 const cutEdges = new Set();
 const CUT_H = 0.55;
@@ -7760,9 +7912,11 @@ function buildPieces(cx, cz, ch) {
     if (WN[i]) wallPiece(c, r, 0, WN[i]);
     if (WW[i]) wallPiece(c, r, 1, WW[i]);
     const pl = pillars.get(i);
-    if (pl) for (const q of pl) if (q.col) marbleColumn(q.x, q.y, q.z, cutEdges.has(q.key));
+    if (pl) for (const q of pl) if (q.col) marbleColumn(q.x, q.y, q.z, cutEdges.has(q.key)); else if (q.kind === 'post') cabinPost(q);
     const m = mausAt.get(i);
     if (m && m.anchor === i) mausExtras(m);
+    const cb = cabinAt.get(i);
+    if (cb) cabinExtras(cb);
   }
   ch.build = bufBuild.mesh(groundMat);
 }
@@ -7918,7 +8072,8 @@ function settleBuildings() {
   }
   regroup.clear();
 }
-function roofMesh(rm) {   // rm: a building
+// (o.snow: lying deep in snow, icicles along the eaves; o.extra(base): more drawn into the same mesh)
+function roofMesh(rm, o = {}) {   // rm: a building
   let top = 0;
   const outside = [];
   const oseen = new Set();
@@ -7940,7 +8095,8 @@ function roofMesh(rm) {   // rm: a building
     return m;
   };
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const tileA = CC(rm.color), tileB = shade(tileA, 0.87), ridge = shade(tileA, 0.68);
+  const tileA = o.snow ? CC('#eef3f8') : CC(rm.color), tileB = o.snow ? CC('#e2eaf2') : shade(tileA, 0.87), ridge = o.snow ? CC('#4a3220') : shade(tileA, 0.68);
+  const snowLip = CC('#f4f8fb'), ice = CC('#cfe6f6');
   const Y = (x, z) => base + Math.min(2.6, f(x, z)) * ROOF_SLOPE;
   rm.roofY = Y;
   const colAt = h => { const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
@@ -7961,8 +8117,18 @@ function roofMesh(rm) {   // rm: a building
       if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
       const [ka, kb] = EDGE_K[d], ax = c + CX[ka], az = r + CZ[ka], bx = c + CX[kb], bz = r + CZ[kb];
       quad([ax, base, az], [ax, base - 0.14, az], [bx, base - 0.14, bz], [bx, base, bz], ridge);
+      if (o.snow) {
+        // the snow's edge rolled over the eave, and icicles under it
+        const ox = DC[d] * 0.07, oz = DR[d] * 0.07;
+        quad([ax + ox, base + 0.08, az + oz], [ax + ox, base - 0.05, az + oz], [bx + ox, base - 0.05, bz + oz], [bx + ox, base + 0.08, bz + oz], snowLip);
+        for (let n = 0; n < 4; n++) {
+          const t = (n + 0.2 + hs(c * 3 + d, r, 80 + n) * 0.6) / 4, len = 0.08 + hs(c, r * 3 + d, 84 + n) * 0.2;
+          part(G.cone4, ice, ax + (bx - ax) * t + ox * 0.6, base - 0.14 - len / 2, az + (bz - az) * t + oz * 0.6, { sx: 0.05, sy: len, sz: 0.05, rx: Math.PI });
+        }
+      }
     }
   }
+  if (o.extra) o.extra(base);
   const m = bufTmp.mesh(roofMat);
   OUT = save;
   return m;
@@ -11847,7 +12013,7 @@ function removePiece() {
   const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
   if (BI[T(target.c, target.r)] === TOWN || (across >= 0 && BI[across] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
   const farmV = FARM[T(target.c, target.r)] || (across >= 0 ? FARM[across] : 0);
-  if (farmV) { sfx.nope(); toast(farmV === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.'); return; }
+  if (farmV) { sfx.nope(); toast(farmV === 3 ? 'That cabin is someone else\'s.' : farmV === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.'); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
   const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
@@ -12312,8 +12478,8 @@ function update(dt) {
   // ----- roofs: hidden over the building you stand in, and all of them while building -----
   const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z)));
   let inBld = inside ? rooms.get(inside).bld : 0;
-  // (on a mausoleum's portico, under its roof, the roof goes too)
-  if (!inBld) { const m = mausAt.get(T(Math.floor(H.x), Math.floor(H.z))), b = m && bldOf(m.cellaI); if (b) inBld = b.id; }
+  // (on a mausoleum's portico or a cabin's porch, under its roof, the roof goes too)
+  if (!inBld) { const j = roofOver.get(T(Math.floor(H.x), Math.floor(H.z))), b = j !== undefined && bldOf(j); if (b) inBld = b.id; }
   for (const b of buildings.values()) b.mesh.visible = mode !== 'build' && b.id !== inBld;
   updateCutaway(inside);
 
@@ -13958,6 +14124,9 @@ window.GAME = {
   camYaw: () => yaw,
   tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
+  cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
+    room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
+    inside: cabP(m, 1.5, 3.5), porchAt: cabP(m, 0.5, 0.5), outside: cabP(m, m.doorA + 0.5, -0.6) })),
   willows: () => willows.map(w => ({ x: w.x, z: w.z, L: w.L, anchor: OB[w.anchor] === O.WILLOW, mesh: !!w.mesh, top: w.top ? w.top.visible : null, limbs: w.limbs ? w.limbs.visible : null, topVerts: w.top ? w.top.geometry.attributes.position.count : 0, cast: !!(w.mesh && w.mesh.castShadow),
     verts: w.mesh ? w.mesh.geometry.attributes.position.count : 0, wv: w.mesh ? w.mesh.geometry.attributes.wv.count : 0 })),
   mausoleums: () => mausoleums.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, floors: m.tiles.filter(([c, r]) => FL[T(c, r)] === 3).length,
