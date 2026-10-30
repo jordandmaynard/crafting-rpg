@@ -36,6 +36,9 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #target .tname { font-family: var(--display); font-size: var(--hb-name, 11px); color: var(--bone); text-shadow: 2px 2px 0 #000; margin-bottom: 6px; }
 #target .meter { position: relative; height: var(--hb-bigH, 12px); background: var(--hb-back, #1a0e10); border: 2px solid #000; box-shadow: 3px 3px 0 #000; }
 #target .meter i { box-shadow: inset 0 -3px 0 var(--hb-fillDark, #a8781a); }
+/* a monster's level, in a ring to the left of its bar */
+.lvl { position: absolute; right: calc(100% + 5px); top: 50%; transform: translateY(-50%); width: 15px; height: 15px; box-sizing: border-box; display: grid; place-items: center; border-radius: 50%; background: var(--panel, #282430); border: 2px solid #000; box-shadow: inset 0 0 0 1px var(--hb-fill, #e8b830); font-family: var(--display); font-size: 7px; line-height: 1; color: var(--bone); }
+#target .meter .lvl { width: 24px; height: 24px; font-size: 10px; right: calc(100% + 8px); }
 .float { position: absolute; font-family: var(--display); font-size: 11px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -50%); animation: rise 0.9s steps(9) forwards; white-space: nowrap; }
 @keyframes rise { to { transform: translate(-50%, -240%); opacity: 0; } }
 
@@ -327,7 +330,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 <div id="bar"></div>
 <div id="modeTag" hidden>BUILD MODE</div>
 <div id="prompt" hidden></div>
-<div id="target" hidden><div class="tname"></div><div class="meter"><b></b><i></i></div></div>
+<div id="target" hidden><div class="tname"></div><div class="meter"><b></b><span class="lvl"></span><i></i></div></div>
 <div id="toast" hidden></div>
 <div id="padCursor" hidden></div>
 <div id="touchUI" hidden>
@@ -402,7 +405,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   <div class="sheet">
     <div class="winBar" id="mapBar"><span class="card-title">MAP</span><button id="mapClose" title="Close (M)" aria-label="Close">X</button></div>
     <div class="mapview"><canvas id="bigmap" width="640" height="640"></canvas><canvas id="bigLabels"></canvas></div>
-    <div class="maprow"><span id="mapSeed">SEED</span><span class="kb-only">WHEEL ZOOMS · DRAG PANS · M OR ESC CLOSES</span><span class="pad-only"><g-p>LS</g-p> PANS · <g-p>RT</g-p> <g-p>LT</g-p> ZOOM · <g-p>B</g-p> CLOSES</span><button id="plotsBtn">PLOTS: OFF</button><button id="newWorld">NEW WORLD</button></div>
+    <div class="maprow"><span id="mapSeed">SEED</span><span class="kb-only">WHEEL ZOOMS · DRAG PANS · M OR ESC CLOSES</span><span class="pad-only"><g-p>LS</g-p> PANS · <g-p>RT</g-p> <g-p>LT</g-p> ZOOM · <g-p>B</g-p> CLOSES</span><button id="plotsBtn">PLOTS: OFF</button><button id="bandsBtn" title="Debug: the danger bands (distance from towns), 1 to 10">BANDS: OFF</button><button id="newWorld">NEW WORLD</button></div>
     <div class="maprow"><button id="revealBtn">REVEAL ALL (N): OFF</button><span class="seedEntry"><input id="seedInput" type="text" inputmode="numeric" maxlength="10" placeholder="SEED" autocomplete="off"><button id="seedGo">LOAD SEED</button></span><button id="seedMode">EACH LOAD: NEW SEED</button></div>
     <div class="maprow"><span class="mapShow">NAMES <button data-show="biomes">BIOMES</button><button data-show="waters">WATERS</button><button data-show="roads">ROADS</button><button data-show="towns">TOWNS</button></span><button id="travelBtn" disabled>CLICK A TOWN TO TRAVEL</button></div>
   </div>
@@ -869,6 +872,7 @@ async function generate(progress) {
   pourLava();
   settleWater();
   keepApart();
+  computeBands();
   progress(0.88, 'GROWING THE WILDS'); await nextFrame();
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) placeScenery(c, r);
@@ -2727,6 +2731,30 @@ function placeVents() {
 const ROCK_RATE = { [FOREST]: 0.02, [MEADOW]: 0.015, [GRAVE]: 0.02, [DEEP]: 0.015, [WASTES]: 0.012, [SNOW]: 0.04, [DESERT]: 0.023 };
 const ORE_ROCKS = { copper: 1 / 3, iron: 1 / 5, verdane: 1 / 10, caerite: 1 / 18, orivane: 1 / 32, auralith: 1 / 56 };
 const ORE_ROCK_OF = [['copper', O.COPPER], ['iron', O.IRON], ...FANTASY.map(m => [m.k, m.o])];
+// Danger bands: every tile's straight-line distance to the nearest town's well, cut into BAND_N bands that each hold
+// an equal share of the land (1 nearest the towns, 10 farthest out). Each metal's rocks only grow from its ORE_BAND out
+// (stone grows everywhere), and a monster's level is the band it spawns in.
+const BAND_N = 10, BAND = new Uint8Array(N * N);
+const ORE_BAND = { copper: 2, iron: 4, verdane: 6, caerite: 7, orivane: 8, auralith: 9 };
+let bandEdges = [], showBands = false, bandCv = null;   // (bandCv: the map's debug view, see bandCanvas)
+function computeBands() {
+  const D = new Float32Array(N * N);
+  let land = 0;
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    let best = 1e12;
+    for (const t of towns) { const dx = c - t.c, dz = r - t.r, d = dx * dx + dz * dz; if (d < best) best = d; }
+    const i = T(c, r);
+    D[i] = Math.sqrt(best);
+    if (LV[i]) land++;
+  }
+  const L = new Float32Array(land);
+  for (let i = 0, k = 0; i < N * N; i++) if (LV[i]) L[k++] = D[i];
+  L.sort();
+  bandEdges = Array.from({ length: BAND_N - 1 }, (_, k) => L[Math.floor((k + 1) / BAND_N * land)] || 0);
+  for (let i = 0; i < N * N; i++) { let b = 1; while (b < BAND_N && D[i] >= bandEdges[b - 1]) b++; BAND[i] = b; }
+  bandCv = null;
+}
+const bandAt = (x, z) => BAND[T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1))] || 1;
 function placeScenery(c, r) {
   const i = T(c, r);
   if (!LV[i] || SH[i] || FL[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;
@@ -2739,7 +2767,7 @@ function placeScenery(c, r) {
   if (rocks && !WT[i] && !LAVA[i]) {
     const k3 = hs(c, r, 47);
     let at = 0;
-    for (const [m, o] of ORE_ROCK_OF) if (k3 < rocks * (at += ORE_ROCKS[m])) { OB[i] = o; return; }
+    for (const [m, o] of ORE_ROCK_OF) if (k3 < rocks * (at += ORE_ROCKS[m])) { if (BAND[i] >= ORE_BAND[m]) { OB[i] = o; return; } break; }
   }
   switch (b) {
     case TOWN: {
@@ -9235,7 +9263,7 @@ function spawnFoe(kind, x, z) {
   const d = FOE[kind], f = rigFor(crowdOf(kind));
   f.g.position.set(x, surfaceY(x, z), z);
   const sh = new GFX.Object3D(); sh.position.set(x, surfaceY(x, z) + 0.02, z);
-  const foe = Object.assign(f, { kind, def: d, x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
+  const foe = Object.assign(f, { kind, def: d, level: bandAt(x, z), x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
     home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
   foes.push(foe);
   return foe;
@@ -11723,7 +11751,7 @@ function updateFoeBars(dt) {
       if (!alive) { if (f.barEl) f.barEl.remove(); barFoes.delete(f); }
       continue;
     }
-    if (!f.barEl) { f.barEl = document.createElement('div'); f.barEl.className = 'fbar'; f.barEl.innerHTML = '<b></b><i></i>'; $('fx').appendChild(f.barEl); }
+    if (!f.barEl) { f.barEl = document.createElement('div'); f.barEl.className = 'fbar'; f.barEl.innerHTML = `<b></b><span class="lvl">${f.level}</span><i></i>`; $('fx').appendChild(f.barEl); }
     const p = f.g.position;
     v3.set(p.x, foeTop(f) + HPBAR.raise, p.z).project(camera);
     f.barEl.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
@@ -11734,6 +11762,7 @@ function updateFoeBars(dt) {
   const el = $('target');
   if (!targetFoe || targetT <= 0 || !foes.includes(targetFoe) && targetFoe.hp > 0) { el.hidden = true; return; }
   el.querySelector('.tname').textContent = targetFoe.def.name;
+  el.querySelector('.lvl').textContent = targetFoe.level;
   drawBar(el.querySelector('.meter i'), el.querySelector('.meter b'), targetFoe);
   el.hidden = false;
 }
@@ -13410,8 +13439,9 @@ function drawBigMap() {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(mapCv, 0, 0);
   if (showPlots) ctx.drawImage(plotCv, 0, 0);
+  if (showBands) ctx.drawImage(bandCanvas(), 0, 0);
   ctx.imageSmoothingEnabled = true;
-  if (!mapReveal) ctx.drawImage(fogCv, 0, 0, N, N);
+  if (!mapReveal && !showBands) ctx.drawImage(fogCv, 0, 0, N, N);
   if (showPlots && bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // markers stay their own size at any zoom
@@ -13500,6 +13530,27 @@ function rebuildWorld(v) {
 }
 $('respawn').onclick = respawn;
 $('plotsBtn').onclick = togglePlots;
+// Debug view: the danger bands over the big map, nearest the towns green through to farthest violet, with the fog off
+// while they show
+const BAND_COLORS = ['#3fae5a', '#86c246', '#c4d03c', '#ecc838', '#f0a030', '#e8702a', '#d8443a', '#c03070', '#8e3aa8', '#5a40c0'];
+function bandCanvas() {
+  if (bandCv) return bandCv;
+  bandCv = document.createElement('canvas'); bandCv.width = bandCv.height = N;
+  const g = bandCv.getContext('2d'), img = g.createImageData(N, N), rgb = BAND_COLORS.map(h => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16)));
+  for (let i = 0; i < N * N; i++) {
+    const b = BAND[i], [R, G, B] = rgb[(b || 1) - 1], c = i % N, r = (i / N) | 0;
+    // a darker line where the band changes
+    const edge = (c + 1 < N && BAND[i + 1] !== b) || (r + 1 < N && BAND[i + N] !== b), k = edge ? 0.45 : 1;
+    img.data.set([R * k, G * k, B * k, edge ? 230 : LV[i] ? 120 : 60], i * 4);
+  }
+  g.putImageData(img, 0, 0);
+  return bandCv;
+}
+$('bandsBtn').onclick = () => {
+  showBands = !showBands;
+  $('bandsBtn').textContent = 'BANDS: ' + (showBands ? 'ON' : 'OFF');
+  if (mapOpen) drawBigMap();
+};
 $('revealBtn').onclick = toggleReveal;
 // load a world by its seed (kept for later loads if seeds are being kept, else for this load only)
 function loadSeed() {
@@ -14395,6 +14446,8 @@ window.GAME = {
   plants: () => { let n = 0; for (const ch of chunks.values()) if (ch.plant) n += ch.plant.geometry.attributes.position.array.length / 3; return { verts: n, trample: trample.on, view: [...trample.view] }; },
   prints: () => ({ n: prints.length, list: prints.slice(-6).map(p => ({ feet: p.feet, snow: p.snow, x: +p.x.toFixed(2), z: +p.z.toFixed(2) })), corner: prCorner, on: PRINT_U.prV.value.w }),
   ghPoint: (x, z) => { groundHazeSite(Math.round(camTarget.x), Math.round(camTarget.z)); const c0 = Math.round(camTarget.x) - GH_TILES / 2, r0 = Math.round(camTarget.z) - GH_TILES / 2, k = (Math.floor((z - r0) * GH_TPT) * GH_N + Math.floor((x - c0) * GH_TPT)) * 4; return { y: ghSite[k], share: ghSite[k + 2] }; },
+  bands: () => { const n = new Array(BAND_N + 1).fill(0), ore = {}; for (let i = 0; i < N * N; i++) { if (LV[i]) n[BAND[i]]++; const m = OBJ[OB[i]] && OBJ[OB[i]].give; if (m && /Ore$/.test(m)) { ore[m] = ore[m] || {}; ore[m][BAND[i]] = (ore[m][BAND[i]] || 0) + 1; } } return { edges: bandEdges.map(e => Math.round(e)), land: n.slice(1), ore }; },
+  foeLevels: () => foes.map(f => f.kind + ':' + f.level + '@' + bandAt(f.x, f.z)),
   ores: () => { const n = {}; for (let i = 0; i < N * N; i++) n[OB[i]] = (n[OB[i]] || 0) + 1; return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), ...Object.fromEntries(ORE_ROCK_OF.map(([m, o]) => [m, n[o] || 0])), ids: ORE_ROCK_OF.map(([, o]) => o) }; },
   findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
   strike: (c, r) => { const i = T(c, r); strikeProp(i, c, r, 1, 0); return OB[i]; },
