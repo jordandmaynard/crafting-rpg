@@ -260,6 +260,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 #bigmap { display: block; image-rendering: pixelated; border: 3px solid #000; }
 .mapview { position: relative; }
 #bigLabels { position: absolute; left: 3px; top: 3px; pointer-events: none; }
+.mapShow { display: flex; gap: 6px; align-items: center; }
+.mapShow button.off { color: var(--dim); border-style: dashed; opacity: 0.6; }
 .maprow { display: flex; gap: 10px; align-items: center; justify-content: space-between; width: 100%; font-family: var(--display); font-size: 8px; color: var(--dim); }
 .seedEntry { display: flex; gap: 6px; align-items: center; }
 #seedInput { width: 110px; font-family: var(--display); font-size: 9px; padding: 5px 6px; background: #0b0912; color: #efe4c8; border: 2px solid #000; outline: none; }
@@ -389,6 +391,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     <div class="mapview"><canvas id="bigmap" width="640" height="640"></canvas><canvas id="bigLabels"></canvas></div>
     <div class="maprow"><span id="mapSeed">SEED</span><span class="kb-only">WHEEL ZOOMS · DRAG PANS · M OR ESC CLOSES</span><span class="pad-only"><g-p>LS</g-p> PANS · <g-p>RT</g-p> <g-p>LT</g-p> ZOOM · <g-p>B</g-p> CLOSES</span><button id="plotsBtn">PLOTS: OFF</button><button id="newWorld">NEW WORLD</button></div>
     <div class="maprow"><button id="revealBtn">REVEAL ALL (N): OFF</button><span class="seedEntry"><input id="seedInput" type="text" inputmode="numeric" maxlength="10" placeholder="SEED" autocomplete="off"><button id="seedGo">LOAD SEED</button></span><button id="seedMode">EACH LOAD: NEW SEED</button></div>
+    <div class="maprow"><span class="mapShow">NAMES <button data-show="biomes">BIOMES</button><button data-show="waters">WATERS</button><button data-show="roads">ROADS</button><button data-show="towns">TOWNS</button></span><button id="travelBtn" disabled>CLICK A TOWN TO TRAVEL</button></div>
   </div>
 </div>
 
@@ -13100,12 +13103,46 @@ function toggleReveal() {
   miniT = 0;
   if (mapOpen) drawBigMap();
 }
+// Fast travel: click a town you've seen on the big map, then the button under it takes you to its well
+let travelTo = null;
+const townSeen = t => mapReveal || fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] < 128;
+function pickTravel(t) {
+  travelTo = t;
+  const b = $('travelBtn');
+  b.disabled = !t;
+  b.textContent = t ? 'FAST TRAVEL TO ' + t.name.toUpperCase() : 'CLICK A TOWN TO TRAVEL';
+  drawBigMap();
+}
+function fastTravel() {
+  const t = travelTo;
+  if (!t || !H.alive) return;
+  if (mapOpen) toggleMap();
+  [H.x, H.z] = [t.c + 0.5, t.r + 2.5]; H.y = surfaceY(H.x, H.z);
+  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon();
+  H.invuln = 2;
+  camTarget.set(H.x, H.y, H.z);
+  miniT = 0;
+  toast('You travel to ' + titleCase(t.name) + '.', 'calm');
+}
+$('travelBtn').onclick = fastTravel;
+// the map's NAMES buttons: biome regions, waters (lakes, seas, rivers), roads and towns, each on or off (kept)
+const MAP_SHOW_KEY = 'emberwild.mapShow';
+const MAP_SHOW = { biomes: true, waters: true, roads: true, towns: true };
+try { Object.assign(MAP_SHOW, JSON.parse(localStorage.getItem(MAP_SHOW_KEY) || '{}')); } catch (err) { }
+function setMapShow(k, on) {
+  MAP_SHOW[k] = on;
+  try { localStorage.setItem(MAP_SHOW_KEY, JSON.stringify(MAP_SHOW)); } catch (err) { }
+  for (const b of document.querySelectorAll('.mapShow button')) b.classList.toggle('off', !MAP_SHOW[b.dataset.show]);
+  if (mapOpen) drawBigMap();
+}
+for (const b of document.querySelectorAll('.mapShow button')) b.onclick = () => setMapShow(b.dataset.show, !MAP_SHOW[b.dataset.show]);
+setMapShow('towns', MAP_SHOW.towns);
 function toggleMap() {
   mapOpen = !mapOpen;
   $('mapModal').hidden = !mapOpen;
   keys.clear(); mouse.down = false;
   // (it opens at the zoom you left it at, on you)
-  if (mapOpen) { bigView.x = H.x; bigView.z = H.z; bigClamp(); drawBigMap(); }
+  if (mapOpen) { bigView.x = H.x; bigView.z = H.z; bigClamp(); pickTravel(null); }
 }
 // The big map: the wheel zooms in and out about the cursor, and dragging pans it.
 const bigView = { zoom: 1, x: N / 2, z: N / 2, drag: null };
@@ -13126,7 +13163,20 @@ $('bigmap').addEventListener('wheel', e => {
   bigClamp(); drawBigMap();
 }, { passive: false });
 $('bigmap').addEventListener('pointerdown', e => { bigView.drag = { px: bigPx(e), x: bigView.x, z: bigView.z }; $('bigmap').setPointerCapture(e.pointerId); });
-$('bigmap').addEventListener('pointerup', () => { bigView.drag = null; });
+$('bigmap').addEventListener('pointerup', e => {
+  const d = bigView.drag; bigView.drag = null;
+  if (!d) return;
+  // a click (not a drag): picks the town under it to travel to, or none
+  const [px, pz] = bigPx(e);
+  if (Math.hypot(px - d.px[0], pz - d.px[1]) > 6) return;
+  let pick = null, best = 18;
+  for (const t of towns) {
+    if (!townSeen(t)) continue;
+    const [x, z] = worldToBig(t.c, t.r), dd = Math.hypot(x - px, z - pz);
+    if (dd < best) { best = dd; pick = t; }
+  }
+  pickTravel(pick);
+});
 $('bigmap').addEventListener('pointermove', e => {
   const [px, pz] = bigPx(e);
   if (bigView.drag) {
@@ -13139,7 +13189,7 @@ $('bigmap').addEventListener('pointermove', e => {
 });
 $('bigmap').addEventListener('pointerleave', () => { if (bigHover) { bigHover = 0; drawBigMap(); } });
 function drawBigMap() {
-  const big = $('bigmap'), side = Math.max(256, Math.min(innerWidth - 80, innerHeight - 120, 900));
+  const big = $('bigmap'), side = Math.max(256, Math.min(innerWidth - 80, innerHeight - 165, 900));
   big.style.width = big.style.height = side + 'px';
   if (big.width !== N) big.width = big.height = N;
   const ctx = big.getContext('2d'), Z = bigView.zoom;
@@ -13156,6 +13206,7 @@ function drawBigMap() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // markers stay their own size at any zoom
   for (const t of towns) { const [x, z] = worldToBig(t.c, t.r); ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8); }
+  if (travelTo) { const [x, z] = worldToBig(travelTo.c, travelTo.r); ctx.strokeStyle = '#000'; ctx.lineWidth = 6; ctx.strokeRect(x - 11, z - 11, 22, 22); ctx.strokeStyle = '#f2c14e'; ctx.lineWidth = 3; ctx.strokeRect(x - 11, z - 11, 22, 22); }
   drawMapLabels(side);
   ctx.fillStyle = '#8de8dc';
   for (const rm of rooms.values()) { const [x, z] = worldToBig(rm.tiles[0][0], rm.tiles[0][1]); ctx.fillRect(x - 3, z - 3, 6, 6); }
@@ -13212,12 +13263,14 @@ function drawMapLabels(side) {
     }
   };
   for (const t of towns) {
-    if (!mapReveal && fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] >= 128) continue;
+    if (!MAP_SHOW.towns || !townSeen(t)) continue;
     const [x, z] = at(t.c, t.r);
     place([t.name], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
   // regions, lakes, seas, rivers and roads you've found, biggest first
-  const found = regions.filter(g => g.found || mapReveal).map(g => [g, REGION_INK[g.biome]]).concat(features.filter(f => f.found || mapReveal).map(f => [f, FEATURE_INK[f.kind]]));
+  // (each sort only if its NAMES button on the map is on)
+  const found = regions.filter(g => MAP_SHOW.biomes && (g.found || mapReveal)).map(g => [g, REGION_INK[g.biome]])
+    .concat(features.filter(f => MAP_SHOW[f.kind === 'road' ? 'roads' : 'waters'] && (f.found || mapReveal)).map(f => [f, FEATURE_INK[f.kind]]));
   for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink);
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123) or kept (the
@@ -14084,6 +14137,10 @@ window.GAME = {
     for (const ch of chunks.values()) { if (ch.web) webs += ch.web.geometry.attributes.position.count; if (ch.spider) spiders += ch.spider.geometry.attributes.position.count; }
     return { kinds, heat: heatMesh ? heatMesh.geometry.attributes.position.count / 6 : 0, heatOn: !!(heatMesh && heatMesh.visible), dayK: AMB_U.dayK.value, webVerts: webs, spiderVerts: spiders };
   },
+  // the map: town k's marker on the page (for a test click), the picked town, travel, the NAMES filters
+  townPx: k => { const r = $('bigmap').getBoundingClientRect(), [x, z] = worldToBig(towns[k].c, towns[k].r); return [r.left + x / N * r.width, r.top + z / N * r.height]; },
+  travelPick: () => travelTo && travelTo.name, travel: () => fastTravel(), mapShow: (k, on) => (k && setMapShow(k, on), { ...MAP_SHOW }),
+  toggleMap: () => toggleMap(),
   teleport: (x, z) => { H.x = x; H.z = z; H.y = surfaceY(x, z); camTarget.set(H.x, H.y, H.z); },
   give: (w, s) => { if (w) addItem('wood', w); if (s) addItem('stone', s); },
   setClock: c => { SKY.timeOfDay = c * 24; advanceClock(0); },
