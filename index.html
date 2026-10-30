@@ -130,7 +130,11 @@ body.pad canvas { cursor: none; }
 #inv .card-title span { color: var(--dim); }
 #doll, #pack { display: grid; grid-template-columns: repeat(var(--cols), var(--box)); grid-auto-rows: var(--box); gap: calc(var(--cell) * 0.07); }
 #doll { --cols: 3; grid-template-rows: repeat(4, var(--box)); row-gap: calc(var(--cell) * 0.22); padding-bottom: calc(var(--cell) * 0.17); }
-#pack { --cols: 5; }
+#pack, #store { --cols: 5; }
+#store { display: grid; grid-template-columns: repeat(var(--cols), var(--box)); grid-auto-rows: var(--box); gap: calc(var(--cell) * 0.07); }
+#storeCol { padding-left: calc(var(--cell) * 0.3); border-left: 3px solid var(--panel-edge); }
+/* with a chest open the window's three columns wide, so its squares shrink to fit */
+#inv.storing { --cell: max(44px, min(96px, calc((100vh - 280px) / 5), calc((100vw - 200px) / 14))); }
 .trashRow { display: flex; justify-content: flex-end; margin-top: calc(var(--cell) * 0.1); }
 #trash { width: calc(var(--cell) * 0.62); height: calc(var(--cell) * 0.62); display: grid; place-items: center; border: 2px dashed var(--panel-edge); background: rgba(0, 0, 0, 0.25); }
 #trash svg { width: 72%; height: 72%; image-rendering: pixelated; }
@@ -342,6 +346,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   <div class="invBody">
     <div><div class="card-title">GEAR <span id="armorVal"></span></div><div id="doll"></div></div>
     <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div><div class="trashRow"><div id="trash" title="Drag something here to throw it away"></div></div></div>
+    <div id="storeCol" hidden><div class="card-title"><span id="storeTitle"></span> <span id="storeCount"></span></div><div id="store"></div></div>
   </div>
   <div id="station" hidden>
     <div class="card-title"><span id="stTitle"></span> <span id="stTakes"></span></div>
@@ -2611,7 +2616,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -2669,6 +2674,8 @@ def(O.SMELTER, { name: 'smelter', tile: true });
 def(O.TANRACK, { name: 'tanning rack', tile: true });
 // a built station or crafting table stands on 2 x 2 tiles: drawn from its north-west one, the other three (STATIONX) its ground
 def(O.STATIONX, { name: 'station', tile: true });
+def(O.CRATE, { name: 'wooden crate', tile: true });
+def(O.CHEST, { name: 'iron chest', tile: true });
 // the stations you build to refine raw materials (see Stations), what each takes in and what it makes of it
 const STATION_KIND = {
   sawtable: { o: O.SAWTABLE, name: 'SAW TABLE', refine: { wood: 'planks' } },
@@ -2678,11 +2685,16 @@ const STATION_KIND = {
   // the crafting tables you build: they refine nothing, but are used as the towns' are (craft: their recipes)
   armortable: { o: O.TANTABLE, name: 'ARMOR CRAFTING TABLE', refine: {}, craft: 'tan' },
   weapontable: { o: O.WEAPONTABLE, name: 'WEAPON CRAFTING TABLE', refine: {}, craft: 'weapon' },
+  // storage: squares that take anything (store: how many), the crate on one tile (foot: 1), the chest on 2 x 2
+  crate: { o: O.CRATE, name: 'WOODEN CRATE', refine: {}, store: 10, foot: 1 },
+  chest: { o: O.CHEST, name: 'IRON CHEST', refine: {}, store: 20 },
 };
+// how many tiles across a station stands (2 but for the crate)
+const stFoot = k => STATION_KIND[k].foot || 2;
 const isStation = k => k in STATION_KIND;
 const REFINE = { time: 2 };   // seconds to refine one (T > Stations)
 const STATION_IN = 2, STATION_OUT = 8;   // squares in a station's input and output
-const stations = new Map();   // tile -> { c, r, kind, ry, inp, inN, out, outN, t, spin, busy, fx, parts }
+const stations = new Map();   // tile -> { c, r, kind, ry, inp, inN, out, outN, box, boxN, t, spin, busy, fx, parts }
 let openSt = null;   // the station whose window is open
 [O.BUSH, O.SNOWBUSH, O.DRYBUSH, O.FLOWERS, O.MUSHROOM, O.REEDS, O.LILY, O.GRASS, O.BONES, O.LOG, O.FERN, O.PUMICE].forEach(id => def(id, {}));
 
@@ -7282,40 +7294,44 @@ function house(x, z, k, ry) {
 // the tannery's armor crafting table: a heavy plank bench with a hide spread on it, a scraping knife and a pot of tannin
 function tanTable(x, z, c, r) {
   const y = surfaceY(x, z), ry = TABLES.find(t => t.c === c && t.r === r)?.ry || 0, wood = '#7a5232', dark = '#4a3020';
+  // (built as a station, 2 x 2, it stands TABLE_LOW lower on shorter legs)
+  const L = stations.has(T(c, r)) ? TABLE_LOW : 0, k = 1 - L / 0.5;
   const at = (a, b) => [x + Math.cos(ry) * a + Math.sin(ry) * b, z - Math.sin(ry) * a + Math.cos(ry) * b];
-  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.2); part(G.box, dark, px, y + 0.25, pz, { sx: 0.08, sy: 0.5, sz: 0.08, ry }); }
-  part(G.box, wood, x, y + 0.53, z, { sx: 0.9, sy: 0.07, sz: 0.56, ry });
-  part(G.box, dark, x, y + 0.2, z, { sx: 0.78, sy: 0.05, sz: 0.06, ry });
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.2); part(G.box, dark, px, y + 0.25 * k, pz, { sx: 0.08, sy: 0.5 * k, sz: 0.08, ry }); }
+  part(G.box, wood, x, y + 0.53 - L, z, { sx: 0.9, sy: 0.07, sz: 0.56, ry });
+  part(G.box, dark, x, y + 0.2 * k, z, { sx: 0.78, sy: 0.05, sz: 0.06, ry });
   // the hide: a pelt with its four legs splayed, darker down the spine
-  part(G.box, '#b07a4a', x, y + 0.575, z, { sx: 0.5, sy: 0.02, sz: 0.36, ry: ry + 0.12 });
-  part(G.box, '#8a5a34', x, y + 0.588, z, { sx: 0.4, sy: 0.012, sz: 0.1, ry: ry + 0.12 });
-  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.22, sb * 0.2); part(G.box, '#a8724a', px, y + 0.575, pz, { sx: 0.1, sy: 0.018, sz: 0.08, ry: ry + 0.5 * sa * sb }); }
-  const [kx, kz] = at(0.34, -0.17); part(G.box, '#c8ccd4', kx, y + 0.58, kz, { sx: 0.16, sy: 0.015, sz: 0.04, ry: ry - 0.4 });
-  const [vx, vz] = at(-0.33, -0.16); part(G.cyl8, '#5a4a3a', vx, y + 0.63, vz, { sx: 0.13, sy: 0.14, sz: 0.13 });
-  part(G.cyl8, '#3a2014', vx, y + 0.705, vz, { sx: 0.1, sy: 0.01, sz: 0.1 });
+  part(G.box, '#b07a4a', x, y + 0.575 - L, z, { sx: 0.5, sy: 0.02, sz: 0.36, ry: ry + 0.12 });
+  part(G.box, '#8a5a34', x, y + 0.588 - L, z, { sx: 0.4, sy: 0.012, sz: 0.1, ry: ry + 0.12 });
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.22, sb * 0.2); part(G.box, '#a8724a', px, y + 0.575 - L, pz, { sx: 0.1, sy: 0.018, sz: 0.08, ry: ry + 0.5 * sa * sb }); }
+  const [kx, kz] = at(0.34, -0.17); part(G.box, '#c8ccd4', kx, y + 0.58 - L, kz, { sx: 0.16, sy: 0.015, sz: 0.04, ry: ry - 0.4 });
+  const [vx, vz] = at(-0.33, -0.16); part(G.cyl8, '#5a4a3a', vx, y + 0.63 - L, vz, { sx: 0.13, sy: 0.14, sz: 0.13 });
+  part(G.cyl8, '#3a2014', vx, y + 0.705 - L, vz, { sx: 0.1, sy: 0.01, sz: 0.1 });
 }
 // the smithy's weapon crafting table: a bench with a little anvil at one end, a sword and a spear laid out, a hammer and a
 // rack of bow staves leant at the back
 function weaponTable(x, z, c, r) {
   const y = surfaceY(x, z), ry = TABLES.find(t => t.c === c && t.r === r)?.ry || 0, wood = '#6a4a30', dark = '#3a2618', steel = '#c8ccd4';
+  // (built as a station, 2 x 2, it stands TABLE_LOW lower on shorter legs)
+  const L = stations.has(T(c, r)) ? TABLE_LOW : 0, k = 1 - L / 0.5;
   const at = (a, b) => [x + Math.cos(ry) * a + Math.sin(ry) * b, z - Math.sin(ry) * a + Math.cos(ry) * b];
-  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.2); part(G.box, dark, px, y + 0.25, pz, { sx: 0.08, sy: 0.5, sz: 0.08, ry }); }
-  part(G.box, wood, x, y + 0.53, z, { sx: 0.9, sy: 0.07, sz: 0.56, ry });
-  part(G.box, dark, x, y + 0.2, z, { sx: 0.78, sy: 0.05, sz: 0.06, ry });
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.2); part(G.box, dark, px, y + 0.25 * k, pz, { sx: 0.08, sy: 0.5 * k, sz: 0.08, ry }); }
+  part(G.box, wood, x, y + 0.53 - L, z, { sx: 0.9, sy: 0.07, sz: 0.56, ry });
+  part(G.box, dark, x, y + 0.2 * k, z, { sx: 0.78, sy: 0.05, sz: 0.06, ry });
   // the anvil: a dark block on a waist, its horn out to the side
   const [ax, az] = at(-0.27, -0.04);
-  part(G.box, '#3a3640', ax, y + 0.6, az, { sx: 0.12, sy: 0.07, sz: 0.1, ry });
-  part(G.box, '#4a4652', ax, y + 0.67, az, { sx: 0.22, sy: 0.07, sz: 0.13, ry });
-  const [hx, hz] = at(-0.42, -0.04); part(G.box, '#4a4652', hx, y + 0.675, hz, { sx: 0.09, sy: 0.04, sz: 0.06, ry });
+  part(G.box, '#3a3640', ax, y + 0.6 - L, az, { sx: 0.12, sy: 0.07, sz: 0.1, ry });
+  part(G.box, '#4a4652', ax, y + 0.67 - L, az, { sx: 0.22, sy: 0.07, sz: 0.13, ry });
+  const [hx, hz] = at(-0.42, -0.04); part(G.box, '#4a4652', hx, y + 0.675 - L, hz, { sx: 0.09, sy: 0.04, sz: 0.06, ry });
   // a sword and a spear laid along it, and a hammer
   const [sx, sz] = at(0.1, -0.12);
-  part(G.box, steel, sx, y + 0.575, sz, { sx: 0.4, sy: 0.015, sz: 0.04, ry });
-  const [gx, gz] = at(-0.11, -0.12); part(G.box, '#c8a040', gx, y + 0.58, gz, { sx: 0.03, sy: 0.02, sz: 0.13, ry });
-  const [px, pz] = at(-0.17, -0.12); part(G.box, '#5a3a22', px, y + 0.58, pz, { sx: 0.1, sy: 0.025, sz: 0.03, ry });
-  const [qx, qz] = at(0.05, 0.1); part(G.box, '#8a6440', qx, y + 0.578, qz, { sx: 0.66, sy: 0.022, sz: 0.022, ry });
-  const [tx, tz] = at(0.4, 0.1); part(G.box, steel, tx, y + 0.578, tz, { sx: 0.13, sy: 0.015, sz: 0.06, ry });
-  const [mx, mz] = at(0.3, -0.06); part(G.box, '#5a3a22', mx, y + 0.578, mz, { sx: 0.03, sy: 0.022, sz: 0.18, ry: ry + 0.3 });
-  const [nx, nz] = at(0.33, -0.15); part(G.box, '#4a4652', nx, y + 0.59, nz, { sx: 0.1, sy: 0.05, sz: 0.05, ry: ry + 0.3 });
+  part(G.box, steel, sx, y + 0.575 - L, sz, { sx: 0.4, sy: 0.015, sz: 0.04, ry });
+  const [gx, gz] = at(-0.11, -0.12); part(G.box, '#c8a040', gx, y + 0.58 - L, gz, { sx: 0.03, sy: 0.02, sz: 0.13, ry });
+  const [px, pz] = at(-0.17, -0.12); part(G.box, '#5a3a22', px, y + 0.58 - L, pz, { sx: 0.1, sy: 0.025, sz: 0.03, ry });
+  const [qx, qz] = at(0.05, 0.1); part(G.box, '#8a6440', qx, y + 0.578 - L, qz, { sx: 0.66, sy: 0.022, sz: 0.022, ry });
+  const [tx, tz] = at(0.4, 0.1); part(G.box, steel, tx, y + 0.578 - L, tz, { sx: 0.13, sy: 0.015, sz: 0.06, ry });
+  const [mx, mz] = at(0.3, -0.06); part(G.box, '#5a3a22', mx, y + 0.578 - L, mz, { sx: 0.03, sy: 0.022, sz: 0.18, ry: ry + 0.3 });
+  const [nx, nz] = at(0.33, -0.15); part(G.box, '#4a4652', nx, y + 0.59 - L, nz, { sx: 0.1, sy: 0.05, sz: 0.05, ry: ry + 0.3 });
   // bow staves leant against the bench's back
   for (const k of [-0.1, 0.05, 0.2]) { const [bx, bz] = at(k, 0.3); part(G.box, '#7a4a26', bx, y + 0.42, bz, { sx: 0.035, sy: 0.84, sz: 0.035, ry, rx: -0.2 }); }
 }
@@ -7327,8 +7343,10 @@ function weaponTable(x, z, c, r) {
 // walls still stand round it (they reach about a sixth of a tile in); its moving parts are scaled the same
 // (stationFx, updateStations).
 const STATION_LOOK = { size: 1.5 };
+// how much lower a built table's top is (from 0.53 up: about half), its legs shortened to suit
+const TABLE_LOW = 0.26;
 // the middle of a station's 2 x 2 tiles, and the station (if any) on a tile
-const stMid = st => [st.c + 1, st.r + 1];
+const stMid = st => { const h = stFoot(st.kind) / 2; return [st.c + h, st.r + h]; };
 const stationTile = new Map();   // each of its 4 tiles -> the station
 const partShrink = new GFX.Matrix4();
 function stationParts(draw, x, z, c, r) {
@@ -7341,13 +7359,15 @@ function stationAt(x, z, ry) { return (a, b) => [x + Math.cos(ry) * a + Math.sin
 // at one side and sawn planks stacked at the foot
 function sawTable(x, z, c, r) {
   const st = stations.get(T(c, r)), ry = st ? st.ry : 0, y = surfaceY(x, z), at = stationAt(x, z, ry), wood = '#8a6440', dark = '#4a3020';
-  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.22); part(G.box, dark, px, y + 0.25, pz, { sx: 0.08, sy: 0.5, sz: 0.08, ry }); }
-  part(G.box, wood, x, y + 0.53, z, { sx: 0.9, sy: 0.06, sz: 0.6, ry });
-  part(G.box, '#3a3640', x, y + 0.32, z, { sx: 0.26, sy: 0.22, sz: 0.3, ry });
-  const [fx, fz] = at(0.2, 0); part(G.box, '#6a6674', fx, y + 0.585, fz, { sx: 0.035, sy: 0.05, sz: 0.58, ry });
+  // (built as a station, 2 x 2, it stands TABLE_LOW lower on shorter legs)
+  const L = stations.has(T(c, r)) ? TABLE_LOW : 0, k = 1 - L / 0.5;
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * 0.36, sb * 0.22); part(G.box, dark, px, y + 0.25 * k, pz, { sx: 0.08, sy: 0.5 * k, sz: 0.08, ry }); }
+  part(G.box, wood, x, y + 0.53 - L, z, { sx: 0.9, sy: 0.06, sz: 0.6, ry });
+  part(G.box, '#3a3640', x, y + 0.32 * k, z, { sx: 0.26, sy: 0.22 * k, sz: 0.3, ry });
+  const [fx, fz] = at(0.2, 0); part(G.box, '#6a6674', fx, y + 0.585 - L, fz, { sx: 0.035, sy: 0.05, sz: 0.58, ry });
   const [l0x, l0z] = at(-0.27, -0.24), [l1x, l1z] = at(-0.27, 0.24);
-  seg(G.cyl8, '#7a5232', [l0x, y + 0.63, l0z], [l1x, y + 0.63, l1z], 0.075);
-  part(G.cyl8, '#c89a62', l0x, y + 0.63, l0z, { sx: 0.13, sy: 0.01, sz: 0.13 });
+  seg(G.cyl8, '#7a5232', [l0x, y + 0.63 - L, l0z], [l1x, y + 0.63 - L, l1z], 0.075);
+  part(G.cyl8, '#c89a62', l0x, y + 0.63 - L, l0z, { sx: 0.13, sy: 0.01, sz: 0.13 });
   for (let k = 0; k < 4; k++) { const [px, pz] = at(0.32 - (k & 1) * 0.02, -0.38); part(G.box, k & 1 ? '#c8a070' : '#b88a58', px, y + 0.02 + k * 0.035, pz, { sx: 0.26, sy: 0.03, sz: 0.09, ry: ry + Math.PI / 2 + (k - 1.5) * 0.04 }); }
   const [dx, dz] = at(0.0, -0.36); part(G.dodec, '#d8c08a', dx, y + 0.0, dz, { sx: 0.24, sy: 0.05, sz: 0.16, ry });
 }
@@ -7426,6 +7446,52 @@ function tanRack(x, z, c, r) {
   part(G.cyl8, '#5a4a3a', kx, y + 0.1, kz, { sx: 0.15, sy: 0.2, sz: 0.15 });
   part(G.cyl8, '#3a2014', kx, y + 0.195, kz, { sx: 0.12, sy: 0.01, sz: 0.12 });
 }
+// a wooden crate: a box of planks in a frame of darker battens, its lid's boards across; on its own tile, but pushed
+// flush against any wall beside it (WALL_HALF: how far each kind of wall reaches in from the tile's edge)
+const CRATE_SIZE = 0.72;
+const WALL_HALF = [0, 0.11, 0.06, 0.13, 0.16, 0.06, 0.21, 0.05, 0.05, 0.05, 0.06, 0.06, 0.16];
+function crateAt(c, r) {
+  const h = CRATE_SIZE / 2, n = WN[T(c, r)], so = WN[T(c, r + 1)], w = WW[T(c, r)], e = WW[T(c + 1, r)];
+  const x = w && !e ? c + WALL_HALF[w] + h : e && !w ? c + 1 - WALL_HALF[e] - h : c + 0.5;
+  const z = n && !so ? r + WALL_HALF[n] + h : so && !n ? r + 1 - WALL_HALF[so] - h : r + 0.5;
+  return [x, z];
+}
+function crate(c, r) {
+  const st = stations.get(T(c, r)), ry = st ? st.ry : 0, [x, z] = crateAt(c, r), y = surfaceY(c + 0.5, r + 0.5), at = stationAt(x, z, ry);
+  const S = CRATE_SIZE, H2 = S * 0.8, wood = '#a8784a', dark = '#6a4428';
+  part(G.box, wood, x, y + H2 / 2, z, { sx: S - 0.02, sy: H2 - 0.02, sz: S - 0.02, ry });
+  // the battens round every edge
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * (S / 2 - 0.035), sb * (S / 2 - 0.035)); part(G.box, dark, px, y + H2 / 2, pz, { sx: 0.07, sy: H2, sz: 0.07, ry }); }
+  for (const yy of [0.035, H2 - 0.035]) for (const sa of [-1, 1]) {
+    const [px, pz] = at(sa * (S / 2 - 0.03), 0); part(G.box, dark, px, y + yy, pz, { sx: 0.06, sy: 0.07, sz: S, ry });
+    const [qx, qz] = at(0, sa * (S / 2 - 0.03)); part(G.box, dark, qx, y + yy, qz, { sx: S, sy: 0.07, sz: 0.06, ry });
+  }
+  // a cross brace on each face, and the lid's boards
+  for (const sb of [-1, 1]) { const [px, pz] = at(0, sb * (S / 2 - 0.005)); part(G.box, dark, px, y + H2 / 2, pz, { sx: S * 0.95, sy: 0.06, sz: 0.02, ry, rz: 0.72 }); }
+  for (const sa of [-1, 1]) { const [px, pz] = at(sa * (S / 2 - 0.005), 0); part(G.box, dark, px, y + H2 / 2, pz, { sx: 0.02, sy: 0.06, sz: S * 0.95, ry: ry + Math.PI / 2, rz: 0.72 }); }
+  for (let k = -1; k <= 1; k++) { const [px, pz] = at(0, k * S * 0.28); part(G.box, k ? wood : '#b88a58', px, y + H2 + 0.005, pz, { sx: S - 0.1, sy: 0.02, sz: S * 0.27, ry }); }
+}
+// an iron chest on 2 x 2 tiles: long and low, banded and riveted, with a curved lid, a lock plate and a handle each end
+function ironChest(x, z, c, r) {
+  const st = stations.get(T(c, r)), ry = st ? st.ry : 0, y = surfaceY(x, z), at = stationAt(x, z, ry);
+  const W = 1.5, D = 0.85, Hb = 0.5, iron = '#5a5664', dark = '#34303a', light = '#8c8a96';
+  part(G.box, iron, x, y + Hb / 2, z, { sx: W, sy: Hb, sz: D, ry });
+  // the lid: a flat top and a rounded crown along its length
+  part(G.box, iron, x, y + Hb + 0.05, z, { sx: W + 0.04, sy: 0.1, sz: D + 0.04, ry });
+  const [l0x, l0z] = at(-W / 2 - 0.02, 0), [l1x, l1z] = at(W / 2 + 0.02, 0);
+  seg(G.cyl8, iron, [l0x, y + Hb + 0.1, l0z], [l1x, y + Hb + 0.1, l1z], D * 0.42);
+  // bands over it, studded, and a dark foot
+  for (const a of [-0.55, -0.18, 0.18, 0.55]) {
+    const [px, pz] = at(a * W / 1.5 * 1.0, 0);
+    part(G.box, dark, px, y + Hb / 2 + 0.03, pz, { sx: 0.07, sy: Hb + 0.08, sz: D + 0.03, ry });
+    part(G.box, dark, px, y + Hb + 0.14, pz, { sx: 0.07, sy: 0.2, sz: D * 0.75, ry });
+    for (const sb of [-1, 1]) { const [qx, qz] = at(a * W / 1.5, sb * (D / 2 + 0.02)); part(G.box, light, qx, y + Hb * 0.7, qz, { sx: 0.035, sy: 0.035, sz: 0.02, ry }); }
+  }
+  part(G.box, dark, x, y + 0.03, z, { sx: W + 0.06, sy: 0.06, sz: D + 0.06, ry });
+  const [kx, kz] = at(0, -D / 2 - 0.02); part(G.box, '#c8a040', kx, y + Hb - 0.04, kz, { sx: 0.16, sy: 0.18, sz: 0.03, ry });
+  part(G.box, '#1a1620', kx, y + Hb - 0.06, kz, { sx: 0.03, sy: 0.06, sz: 0.035, ry });
+  for (const sa of [-1, 1]) { const [hx, hz] = at(sa * (W / 2 + 0.03), 0); part(G.box, light, hx, y + Hb * 0.62, hz, { sx: 0.04, sy: 0.05, sz: 0.24, ry }); }
+}
 function well(x, z) {
   const y = groundAt(x, z);
   part(G.cyl8, '#8a8494', x, y + 0.2, z, { sx: 0.84, sy: 0.4, sz: 0.84 });
@@ -7485,6 +7551,8 @@ function drawObject(o, c, r) {
     case O.SMELTER: return stationParts(smelter, x + 0.5, z + 0.5, c, r);
     case O.TANRACK: return stationParts(tanRack, x + 0.5, z + 0.5, c, r);
     case O.STATIONX: return;
+    case O.CRATE: return crate(c, r);
+    case O.CHEST: return ironChest(x + 0.5, z + 0.5, c, r);
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -7701,14 +7769,14 @@ const WALL_H = 2;   // (a level at 2x tile height: a floor on top of walls would
 // (the crafting tables: as the towns', for your own base)
 const COST = { armortable: { planks: 8, leather: 2 }, weapontable: { planks: 8, stoneBlock: 6 }, floor: { planks: 2 }, stonefloor: { stoneBlock: 2 }, wall: { planks: 2, stoneBlock: 2 }, door: { planks: 5 }, logwall: { wood: 4 }, stonewall: { stoneBlock: 4 }, hearth: { wood: 2, stone: 4 },
   fence: { wood: 1 }, stonefence: { stoneBlock: 2 }, gate: { planks: 3 }, ironfence: { ironIngot: 2 }, irongate: { ironIngot: 3 }, irondoor: { ironIngot: 6 },
-  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 } };
+  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 8 }, chest: { ironIngot: 12 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
 // what's on a tile's floor: 1 planks, 2 flagstones, 3 a mausoleum's marble
 const FLOOR_KIND = [null, 'floor', 'stonefloor', 'marblefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
 // the build menu's groups, each opening its own row of kinds
 const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'],
-  stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable'] };
+  stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable', 'crate', 'chest'] };
 const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
 const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence' || k === 'ironfence';
 const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate' || k === 'ironfence' || k === 'irongate';
@@ -9398,6 +9466,8 @@ const ICON = {
   grinder: iconArt(['.HHHHHHH.', '..HHHHH..', '.w.HHH.w.', '.w..H..w.', '.wSSSSSw.', '.wsssssw.', 'DDDDDDDDD', 'DDDDDDDDD'], { H: '#6a4a2c', w: '#7a5232', S: '#9a96a2', s: '#7e7a86', D: '#4e4a56' }),
   smelter: iconArt(['......CC.', '......CC.', '......CC.', '..SSSSCC.', '.SSSSSSSS', '.SSffSSSS', '.SSffSSSS', 'IIIIIIIII'], { C: '#6e6a74', S: '#7a7480', f: '#ff8a30', I: '#34303a' }),
   tanrack: iconArt(['P.......P', 'PRRRRRRRP', 'P.HHHHH.P', 'P.HhhhH.P', 'P.HHHHH.P', 'P.HHHHH.P', 'PRRRRRRRP', 'P.......P'], { P: '#4a3020', R: '#7a5232', H: '#b07a4a', h: '#8a5a34' }),
+  crate: iconArt(['.........', '.DDDDDDD.', '.DwwwwwD.', '.DwDwwwD.', '.DwwDwwD.', '.DwwwDwD.', '.DwwwwwD.', '.DDDDDDD.'], { D: '#6a4428', w: '#a8784a' }),
+  chest: iconArt(['.........', '..iiiii..', '.iIiIiIi.', '.DDDDDDD.', '.iIiyiIi.', '.iIiIiIi.', '.DDDDDDD.'], { i: '#5a5664', I: '#34303a', D: '#4a4652', y: '#c8a040' }),
   weapontable: iconArt(['.........', '.sssssh..', 'TTTTTTTTT', 'TTTTTTTTT', '.L.....L.', '.L.....L.', '.L.....L.'], { T: '#6a4a30', s: '#c8ccd4', h: '#5a3a22', L: '#3a2618' }),
   table: iconArt(['.........', '..hhhhh..', 'TTTTTTTTT', 'TTTTTTTTT', '.L.....L.', '.L.....L.', '.L.....L.'], { T: '#8a5a32', h: '#b07a4a', L: '#5a3a22' }),
   fist: iconArt(['..SSSSS..', '.SsSsSsS.', '.SSSSSSS.', '.SSSSSSS.', '..SSSSSS.', '...SSSS..', '...TTTT..', '...TTTT..'], { S: '#e0b48a', s: '#a8805a', T: '#3f6a8a' }),
@@ -9664,18 +9734,20 @@ function dressHero() {
 }
 dressHero();
 
-// A cell is ['gear', slot] or ['pack', index], or with a station open ['in', index] or ['out', index] of it; a
-// pack or station square also counts how many it holds. A station's input takes only what it refines, and
-// nothing can be put in its output.
-const cellGet = ([k, i]) => k === 'gear' ? GEAR[i] : k === 'in' ? openSt.inp[i] : k === 'out' ? openSt.out[i] : PACK[i];
-const cellCount = ([k, i]) => k === 'gear' ? (GEAR[i] ? 1 : 0) : k === 'in' ? openSt.inN[i] : k === 'out' ? openSt.outN[i] : PACK_N[i];
+// A cell is ['gear', slot] or ['pack', index], or with a station open ['in', index] or ['out', index] of it, or
+// with a crate or chest open ['box', index]; a pack, station or box square also counts how many it holds. A
+// station's input takes only what it refines, nothing can be put in its output, and a box takes anything.
+const cellGet = ([k, i]) => k === 'gear' ? GEAR[i] : k === 'in' ? openSt.inp[i] : k === 'out' ? openSt.out[i] : k === 'box' ? openSt.box[i] : PACK[i];
+const cellCount = ([k, i]) => k === 'gear' ? (GEAR[i] ? 1 : 0) : k === 'in' ? openSt.inN[i] : k === 'out' ? openSt.outN[i] : k === 'box' ? openSt.boxN[i] : PACK_N[i];
 const cellSet = ([k, i], id, n = 1) => {
   if (k === 'gear') GEAR[i] = id;
   else if (k === 'in') { openSt.inp[i] = id; openSt.inN[i] = id ? n : 0; }
   else if (k === 'out') { openSt.out[i] = id; openSt.outN[i] = id ? n : 0; }
+  else if (k === 'box') { openSt.box[i] = id; openSt.boxN[i] = id ? n : 0; }
   else { PACK[i] = id; PACK_N[i] = id ? n : 0; }
 };
-const fits = ([k, i], id) => !id || k === 'pack' || (k === 'in' ? !!(openSt && refinesTo(openSt, id)) : k === 'out' ? false : ITEMS[id].slot === i);
+const fits = ([k, i], id) => !id || k === 'pack' || k === 'box' || (k === 'in' ? !!(openSt && refinesTo(openSt, id)) : k === 'out' ? false : ITEMS[id].slot === i);
+const isStore = st => !!(st && STATION_KIND[st.kind].store);
 const sameCell = (a, b) => a && b && a[0] === b[0] && a[1] === b[1];
 const stackOf = id => ITEMS[id].stack || 1;
 // drop what's in one cell on another: the same material tops up the stack there, anything else trades
@@ -9721,11 +9793,24 @@ function takeItem(id, n) {
 function clickCell(c) {
   const id = cellGet(c);
   if (!id) return false;
-  if (c[0] === 'in' || c[0] === 'out') {
+  if (c[0] === 'in' || c[0] === 'out' || c[0] === 'box') {
     const n = cellCount(c), left = addItem(id, n);
     if (left === n) { toast('Your pack is full.'); sfx.nope(); return false; }
     cellSet(c, left ? id : null, left);
     sfx.equip(); renderInv();
+    return true;
+  }
+  // with a crate or chest open, what's clicked in the pack goes in it: topping up its stacks, then free squares
+  if (c[0] === 'pack' && isStore(openSt)) {
+    let n = PACK_N[c[1]];
+    for (let pass = 0; pass < 2 && n > 0; pass++) openSt.box.forEach((p, i) => {
+      if (n <= 0 || (pass === 0 ? p !== id : p !== null)) return;
+      const k = Math.min(n, stackOf(id) - (p ? openSt.boxN[i] : 0));
+      if (k > 0) { openSt.box[i] = id; openSt.boxN[i] += k; n -= k; }
+    });
+    if (n === PACK_N[c[1]]) { toast(`The ${STATION_KIND[openSt.kind].name.toLowerCase()} is full.`); sfx.nope(); return false; }
+    cellSet(c, n ? id : null, n);
+    sfx.equip(); renderInv(); renderStats();
     return true;
   }
   if (c[0] === 'pack' && openSt && refinesTo(openSt, id)) {
@@ -9771,11 +9856,12 @@ const cellKey = c => c[0] + ':' + c[1];
 function itemInfo(c) {
   const id = cellGet(c);
   if (!id && (c[0] === 'in' || c[0] === 'out')) return c[0] === 'in' ? `<b>INPUT</b> Put ${stationTakes(openSt).toLowerCase()} here, and it's refined into the output, one every ${REFINE.time} seconds.` : '<b>OUTPUT</b> What the station makes lands here. Click or drag it into your pack.';
+  if (!id && c[0] === 'box') return `<b>${STATION_KIND[openSt.kind].name}</b> An empty square. Click something in your pack to put it in here.`;
   if (!id) return c[0] === 'gear' ? `<b>${GEAR_SLOTS.find(g => g.slot === c[1]).name}</b> Nothing worn here.` : '<b>PACK</b> An empty square.';
   const it = ITEMS[id], abil = it.strike ? ` LMB ${it.strike}${it.q ? ', Q ' + it.q : ''}${it.e ? ', E ' + it.e : ''}.` : '';
   if (!it.slot) return `<b>${it.name.toUpperCase()} × ${cellCount(c)}</b> ${it.about} Stacks to ${it.stack}.`;
   const arm = it.armor ? ` Armor ${it.armor}.` : '';
-  return `<b>${it.name.toUpperCase()}</b> ${titleCase(it.slot)}.${arm}${abil} ${c[0] === 'gear' ? 'Click to take it off.' : 'Click to put it on.'}`;
+  return `<b>${it.name.toUpperCase()}</b> ${titleCase(it.slot)}.${arm}${abil} ${c[0] === 'gear' ? 'Click to take it off.' : c[0] === 'box' ? 'Click to take it out.' : isStore(openSt) ? 'Click to put it away.' : 'Click to put it on.'}`;
 }
 function renderInv() {
   const cell = (parent, c, html, at) => {
@@ -9793,8 +9879,17 @@ function renderInv() {
   }
   PACK.forEach((id, i) => cell(pack, ['pack', i], id ? ICON[ITEMS[id].icon] + (stackOf(id) > 1 ? `<span class="n">${PACK_N[i]}</span>` : '') : ''));
   // the station you're using, if any: its input, how far through the one it's on, and its output
-  $('station').hidden = !openSt;
-  if (openSt) {
+  // or the crate or chest you've opened, in a third column beside the pack
+  const store = isStore(openSt);
+  $('station').hidden = !openSt || store; $('storeCol').hidden = !store;
+  $('inv').classList.toggle('storing', store);
+  if (store) {
+    const box = $('store');
+    box.innerHTML = '';
+    openSt.box.forEach((id, i) => cell(box, ['box', i], id ? ICON[ITEMS[id].icon] + (stackOf(id) > 1 ? `<span class="n">${openSt.boxN[i]}</span>` : '') : ''));
+    $('storeTitle').textContent = STATION_KIND[openSt.kind].name;
+    $('storeCount').textContent = openSt.box.filter(Boolean).length + ' / ' + openSt.box.length;
+  } else if (openSt) {
     const sIn = $('stIn'), sOut = $('stOut'), stack = (id, n) => id ? ICON[ITEMS[id].icon] + `<span class="n">${n}</span>` : '';
     sIn.innerHTML = ''; sOut.innerHTML = '';
     openSt.inp.forEach((id, i) => cell(sIn, ['in', i], stack(id, openSt.inN[i])));
@@ -9816,7 +9911,7 @@ const stationTakes = st => Object.keys(STATION_KIND[st.kind].refine).map(id => I
 function toggleInv(open = !invOpen) {
   if (open && mode !== 'play') setMode('play');
   invOpen = open; $('inv').hidden = !open;
-  if (open) { if (openSt) invFocus = ['in', 0]; else if (invFocus[0] === 'in' || invFocus[0] === 'out') invFocus = ['gear', 'weapon']; renderInv(); placeInv(); }
+  if (open) { if (openSt) invFocus = [isStore(openSt) ? 'box' : 'in', 0]; else if (invFocus[0] === 'in' || invFocus[0] === 'out' || invFocus[0] === 'box') invFocus = ['gear', 'weapon']; renderInv(); placeInv(); }
   else { invPress = null; $('dragIcon').hidden = true; openSt = null; }
 }
 // where you've dragged the window to (its top left corner), kept on screen and remembered
@@ -10001,6 +10096,7 @@ const KIND_SLOT = {
   ironfence: { name: 'IRON FENCE', icon: 'ironfence' }, irondoor: { name: 'IRON DOOR', icon: 'irondoor' }, irongate: { name: 'IRON GATE', icon: 'irongate' },
   sawtable: { name: 'SAW TABLE', icon: 'sawtable' }, grinder: { name: 'GRINDER', icon: 'grinder' }, smelter: { name: 'SMELTER', icon: 'smelter' }, tanrack: { name: 'TANNING RACK', icon: 'tanrack' },
   armortable: { name: 'ARMOR CRAFTING TABLE', short: 'ARMOR TABLE', icon: 'table' }, weapontable: { name: 'WEAPON CRAFTING TABLE', short: 'WEAPON TABLE', icon: 'weapontable' },
+  crate: { name: 'WOODEN CRATE', short: 'CRATE', icon: 'crate' }, chest: { name: 'IRON CHEST', icon: 'chest' },
 };
 KIND_SLOT.stonefence.short = 'FIELDSTONE';
 const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawtable' };
@@ -11862,6 +11958,7 @@ ghostGeo.hearth = new GFX.CylinderGeometry(0.5, 0.5, 0.7, 8);
 ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
 ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
 for (const k in STATION_KIND) ghostGeo[k] = new GFX.BoxGeometry(1.9, 0.9, 1.9);
+ghostGeo.crate = new GFX.BoxGeometry(CRATE_SIZE, CRATE_SIZE * 0.8, CRATE_SIZE); ghostGeo.chest = new GFX.BoxGeometry(1.5, 0.75, 0.85);
 // a piece that will be queued (no materials to hand) shows white, as the queued ones themselves do
 const ghostQueue = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.35, depthWrite: false });
 const ghosts = [];
@@ -11937,7 +12034,7 @@ function buildSpot() {
   if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
   if (isFloor(buildKind)) return floorSpot(c, r, buildKind);
   if (buildKind === 'hearth') return hearthSpot(c, r);
-  if (isStation(buildKind)) return stationSpot(Math.round(p.x) - 1, Math.round(p.z) - 1, buildKind);
+  if (isStation(buildKind)) return stFoot(buildKind) === 1 ? stationSpot(c, r, buildKind) : stationSpot(Math.round(p.x) - 1, Math.round(p.z) - 1, buildKind);
   // walls and doors snap to the tile side nearest the cursor
   const u = p.x - c, v = p.z - r;
   const dist = [v, 1 - u, 1 - v, u];
@@ -12261,7 +12358,7 @@ function stationFx(st) {
   const parts = {};
   if (st.kind === 'sawtable') {
     const s = parts.blade = new GFX.Group();
-    s.position.set(0, 0.53, 0);
+    s.position.set(0, 0.53 - TABLE_LOW, 0);
     s.add(new GFX.Mesh(bladeGeo, stationMats.steel));
     for (let k = 0; k < 14; k++) { const a = k / 14 * Math.PI * 2, t = new GFX.Mesh(toothGeo, stationMats.teeth); t.position.set(0, Math.cos(a) * 0.195, Math.sin(a) * 0.195); t.rotation.x = -a + 0.5; s.add(t); }
     const hub = new GFX.Mesh(toothGeo, stationMats.hub); hub.scale.set(1.6, 1.4, 1.4); s.add(hub);
@@ -12299,19 +12396,21 @@ function outAdd(st, id) {
 }
 // the input square it's working on: the first with something it can refine and room for what that makes
 const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && outRoom(st, refinesTo(st, id)));
-const stTiles = (c, r) => [T(c, r), T(c + 1, r), T(c, r + 1), T(c + 1, r + 1)];
+const stTiles = (c, r, n = 2) => n === 1 ? [T(c, r)] : [T(c, r), T(c + 1, r), T(c, r + 1), T(c + 1, r + 1)];
+const markTiles = (c, r, n) => { markObj(c, r); if (n > 1) { markObj(c + 1, r + 1); markObj(c + 1, r); markObj(c, r + 1); } };
 function placeStation(s) {
   const i = T(s.c, s.r);
-  stTiles(s.c, s.r).forEach((t, k) => { OB[t] = k ? O.STATIONX : STATION_KIND[s.kind].o; });
-  const st = { c: s.c, r: s.r, kind: s.kind, ry: s.ry, inp: new Array(STATION_IN).fill(null), inN: new Array(STATION_IN).fill(0),
-    out: new Array(STATION_OUT).fill(null), outN: new Array(STATION_OUT).fill(0), t: 0, spin: 0, busy: false };
+  const f = stFoot(s.kind), store = STATION_KIND[s.kind].store || 0;
+  stTiles(s.c, s.r, f).forEach((t, k) => { OB[t] = k ? O.STATIONX : STATION_KIND[s.kind].o; });
+  const st = { c: s.c, r: s.r, kind: s.kind, ry: s.ry, inp: new Array(store ? 0 : STATION_IN).fill(null), inN: new Array(store ? 0 : STATION_IN).fill(0),
+    out: new Array(store ? 0 : STATION_OUT).fill(null), outN: new Array(store ? 0 : STATION_OUT).fill(0), box: new Array(store).fill(null), boxN: new Array(store).fill(0), t: 0, spin: 0, busy: false };
   stations.set(i, st);
-  for (const t of stTiles(s.c, s.r)) stationTile.set(t, st);
+  for (const t of stTiles(s.c, s.r, f)) stationTile.set(t, st);
   stationFx(st);
   // (a crafting table is used as a town's is)
   const craftKind = STATION_KIND[s.kind].craft;
   if (craftKind) TABLES.push({ c: s.c, r: s.r, x: s.c + 1, z: s.r + 1, ry: s.ry, kind: craftKind, built: true });
-  markObj(s.c, s.r); markObj(s.c + 1, s.r + 1); markObj(s.c + 1, s.r); markObj(s.c, s.r + 1);
+  markTiles(s.c, s.r, f);
 }
 // taken down: what's in it falls on the ground where it stood
 function takeDownStation(i) {
@@ -12320,32 +12419,32 @@ function takeDownStation(i) {
   const [x, z] = stMid(st);
   st.inp.forEach((id, k) => { if (id) dropLoot(id, st.inN[k], x, z); });
   st.out.forEach((id, k) => { if (id) dropLoot(id, st.outN[k], x, z); });
+  st.box.forEach((id, k) => { if (id) dropLoot(id, st.boxN[k], x, z); });
   scene.remove(st.fx);
   stations.delete(i);
   const tk = TABLES.findIndex(t => t.built && t.c === st.c && t.r === st.r);
   if (tk >= 0) { if (craftAt === TABLES[tk]) toggleCraft(null); TABLES.splice(tk, 1); }
-  for (const t of stTiles(st.c, st.r)) { OB[t] = 0; stationTile.delete(t); }
-  markObj(st.c, st.r); markObj(st.c + 1, st.r + 1); markObj(st.c + 1, st.r); markObj(st.c, st.r + 1);
+  for (const t of stTiles(st.c, st.r, stFoot(st.kind))) { OB[t] = 0; stationTile.delete(t); }
+  markTiles(st.c, st.r, stFoot(st.kind));
 }
-// a station placed on the tile under the cursor, facing you
-// a station on the 2 x 2 tiles round the grid corner nearest the cursor ((c, r) the north-west one), facing you:
-// all four clear, flat, dry, at one height, on your plot, with no wall between them
+// a station on the 2 x 2 tiles round the grid corner nearest the cursor ((c, r) the north-west one), or a crate on the
+// tile under it, facing you: all its tiles clear, flat, dry, at one height, on your plot, with no wall between them
 function stationSpot(c, r, kind) {
-  const i = T(c, r), all = stTiles(c, r);
+  const f = stFoot(kind), h = f / 2, i = T(c, r), all = stTiles(c, r, f);
   let ok = c >= 1 && r >= 1 && c < N - 2 && r < N - 2 && all.every(t => LV[t] > 0 && LV[t] === LV[i] && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && !OBJ[OB[t]].solid && !OBJ[OB[t]].tile)
-    && !WW[T(c + 1, r)] && !WW[T(c + 1, r + 1)] && !WN[T(c, r + 1)] && !WN[T(c + 1, r + 1)];
-  let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs 2 x 2 tiles of clear, flat, dry ground.`;
+    && (f === 1 || (!WW[T(c + 1, r)] && !WW[T(c + 1, r + 1)] && !WN[T(c, r + 1)] && !WN[T(c + 1, r + 1)]));
+  let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs ${f === 1 ? 'a tile' : '2 x 2 tiles'} of clear, flat, dry ground.`;
   if (ok && all.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
   if (ok) { const t = all.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
-  if (ok && standingIn(c + 1, r + 1, 1.25)) { ok = false; why = 'Something is standing in the way.'; }
-  const a = Math.atan2(-(H.x - c - 1), -(H.z - r - 1)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
-  return { kind, c, r, ok, why, x: c + 1, z: r + 1, y: LV[i] * STEP + 0.45, ry };
+  if (ok && standingIn(c + h, r + h, f === 1 ? 0.7 : 1.25)) { ok = false; why = 'Something is standing in the way.'; }
+  const a = Math.atan2(-(H.x - c - h), -(H.z - r - h)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
+  return { kind, c, r, ok, why, x: c + h, z: r + h, y: LV[i] * STEP + 0.45, ry };
 }
 const STATION_REACH = 2.1;
 const nearStation = () => {
   let best = null, bd = STATION_REACH;
   for (const st of stations.values()) {
-    const d = Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z);
+    const [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z) - (2 - stFoot(st.kind)) * 0.5;
     if (d < bd && Math.abs(LV[T(st.c, st.r)] * STEP - H.y) < 0.6) { bd = d; best = st; }
   }
   return best;
@@ -12380,7 +12479,7 @@ function updateStations(dt) {
     } else st.t = 0;
     // its parts come up to speed while it works, and run down after
     st.spin += ((st.busy ? 1 : 0) - st.spin) * Math.min(1, dt * (st.busy ? 3 : 1.2));
-    const p = st.parts, d = Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z);
+    const p = st.parts, [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z);
     st.fx.visible = d < 60; st.fx.scale.setScalar(STATION_LOOK.size);
     if (p.blade) p.blade.rotation.x -= dt * st.spin * 30;
     if (p.runner) p.runner.rotation.y += dt * st.spin * 2.2;
@@ -12399,7 +12498,7 @@ function updateStations(dt) {
     beep(f * (0.9 + Math.random() * 0.2), 0.08, { type, vol: 0.02 * (1 - humD / 7) + 0.004 });
   }
   if (openSt) {
-    if (!stations.has(T(openSt.c, openSt.r)) || Math.hypot(openSt.c + 1 - H.x, openSt.r + 1 - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
+    if (!stations.has(T(openSt.c, openSt.r)) || Math.hypot(stMid(openSt)[0] - H.x, stMid(openSt)[1] - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
     else { const bar = $('stProgress'); if (bar) bar.style.width = (openSt.busy ? openSt.t / REFINE.time * 100 : 0) + '%'; }
   }
 }
@@ -12427,7 +12526,7 @@ function removePiece() {
   if (farmV) { sfx.nope(); toast(farmV === 3 ? 'That cabin is someone else\'s.' : farmV === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.'); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
-  const big = isStation(target.kind) ? 1 : 0.5, mx = flatPiece ? target.c + big : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + big : target.w ? target.r + 0.5 : target.r;
+  const big = isStation(target.kind) ? stFoot(target.kind) / 2 : 0.5, mx = flatPiece ? target.c + big : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + big : target.w ? target.r + 0.5 : target.r;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
   buildCount[ch] = Math.max(0, buildCount[ch] - 1);
@@ -14483,13 +14582,16 @@ window.GAME = {
     return { lv, bi, sh, ob, water: Object.assign({ lake, river, canyon, bridge }, waterStats) };
   },
   begin,
-  stations: () => [...stations.values()].map(st => ({ c: st.c, r: st.r, kind: st.kind, ry: st.ry, inp: st.inp.map((id, i) => id && id + ':' + st.inN[i]), out: st.out.map((id, i) => id && id + ':' + st.outN[i]), busy: st.busy, t: st.t })),
+  stations: () => [...stations.values()].map(st => ({ c: st.c, r: st.r, kind: st.kind, ry: st.ry, inp: st.inp.map((id, i) => id && id + ':' + st.inN[i]), out: st.out.map((id, i) => id && id + ':' + st.outN[i]), box: st.box.map((id, i) => id && id + ':' + st.boxN[i]), busy: st.busy, t: st.t })),
   stationPut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.inp[slot] = id; st.inN[slot] = n; },
   stationOut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.out[slot] = id; st.outN[slot] = n; },
   buildQueue: () => [...buildQueue.values()].map(q => q.kind + '@' + q.c + ',' + q.r + (q.w !== undefined ? ':' + q.w : '')),
   floorAt: (c, r) => FL[T(c, r)],
   openStation: (c, r) => { openStation(stations.get(T(c, r))); return !$('station').hidden; },
   stationClick: (k, i) => clickCell([k, i]),
+  packCell: id => PACK.indexOf(id),
+  crateAt: (c, r) => crateAt(c, r),
+  invShown: () => ({ station: !$('station').hidden, store: !$('storeCol').hidden, title: $('storeTitle').textContent, count: $('storeCount').textContent, cells: document.querySelectorAll('#store .cell').length }),
   ambient: () => {
     const kinds = [0, 0, 0, 0, 0, 0, 0], a = ambMesh && ambMesh.geometry.attributes.sPart;
     if (a) for (let i = 0; i < a.count; i += 6) kinds[Math.round(a.array[i * 4 + 1])] += 1;
