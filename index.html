@@ -68,9 +68,9 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 
 #bar { position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); transform: translateX(-50%); display: flex; gap: 8px; pointer-events: none; }
 .slot { pointer-events: auto; cursor: pointer; position: relative; width: var(--slotW); height: var(--slotH); box-sizing: border-box; padding: 6px 4px 5px; display: flex; flex-direction: column; align-items: center; gap: 3px; overflow: hidden; }
-/* The bar's squares: each icon in a box --ic across (Jordan's 64px bar icons at 1x), its name under it on up to two
-   lines and its cost under that */
-:root { --slotW: 84px; --slotH: 112px; --ic: 64px; --slotFont: 7px; }
+/* The bar's squares: each icon in a box --ic across (Jordan's 64px bar icons at 1x) and its name on a line under it
+   (costs are in the tooltip) */
+:root { --slotW: 84px; --slotH: 86px; --ic: 64px; --slotFont: 7px; }
 .slot .ic { width: var(--ic); height: var(--ic); flex: none; display: grid; place-items: center; }
 .slot .ic svg { width: calc(var(--ic) * 0.84); height: calc(var(--ic) * 0.84); image-rendering: pixelated; }
 /* the hand-made icons at a whole multiple of their pixels, at least --t across where that fits */
@@ -105,12 +105,14 @@ body.touch #prompt, body.touch #jumpHint { pointer-events: auto; cursor: pointer
 body.pad canvas { cursor: none; }
 #padCursor { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid var(--gold); box-shadow: 0 0 0 1px #000; pointer-events: none; transform: rotate(45deg); }
 .slot .name { font-family: var(--display); font-size: var(--slotFont); line-height: 1.35; letter-spacing: 0.04em; color: var(--bone); text-align: center; max-height: 2.7em; overflow: hidden; }
-.slot .cost { font-family: var(--display); font-size: var(--slotFont); color: var(--gold); white-space: nowrap; margin-top: auto; }
+.slot .name { white-space: nowrap; }
 .slot .cd { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(5, 4, 9, 0.72); }
 .slot .cdn { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--display); font-size: 12px; color: var(--bone); text-shadow: 2px 2px 0 #000; }
 .slot:hover { border-color: var(--dim); }
 .slot.on { border-color: var(--gold); }
-.slot.poor .cost { color: var(--blood); }
+/* a build piece you can't afford: the whole icon in red (what's missing is in its tooltip) */
+.slot.poor .ic > * { filter: brightness(0.75) sepia(1) saturate(9) hue-rotate(-38deg); }
+.slot.poor .name { color: #e0645a; }
 .slot.locked { opacity: 0.45; }
 
 /* the gear window, all sized off --cell: a square's inside is 96px (3x a 32px icon), less where the screen's too short or narrow for it;
@@ -280,7 +282,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   #invInfo { max-width: 256px; }
   .recipe { grid-template-columns: 48px 1fr auto auto; gap: 8px; }
   .recipe .cell { width: 48px; height: 48px; --cell: 48px; }
-  :root { --slotW: 60px; --slotH: 80px; --ic: 32px; --slotFont: 5.5px; }   /* (phones: the 64s on 2x screens) */
+  :root { --slotW: 60px; --slotH: 58px; --ic: 32px; --slotFont: 5.5px; }   /* (phones: the 64s on 2x screens) */
   #mini { width: 140px; height: 140px; }
   #dayStrip { width: 140px; height: 20px; }
   #placePlate { width: 146px; padding: 8px 10px; }
@@ -9957,23 +9959,29 @@ const KIND_SLOT = {
   door: { name: 'WOODEN DOOR', icon: 'door' }, gate: { name: 'WOODEN GATE', icon: 'gate' },
   ironfence: { name: 'IRON FENCE', icon: 'ironfence' }, irondoor: { name: 'IRON DOOR', icon: 'irondoor' }, irongate: { name: 'IRON GATE', icon: 'irongate' },
   sawtable: { name: 'SAW TABLE', icon: 'sawtable' }, grinder: { name: 'GRINDER', icon: 'grinder' }, smelter: { name: 'SMELTER', icon: 'smelter' }, tanrack: { name: 'TANNING RACK', icon: 'tanrack' },
-  armortable: { name: 'ARMOR CRAFTING TABLE', icon: 'table' }, weapontable: { name: 'WEAPON CRAFTING TABLE', icon: 'weapontable' },
+  armortable: { name: 'ARMOR CRAFTING TABLE', short: 'ARMOR TABLE', icon: 'table' }, weapontable: { name: 'WEAPON CRAFTING TABLE', short: 'WEAPON TABLE', icon: 'weapontable' },
 };
+KIND_SLOT.stonefence.short = 'FIELDSTONE';
 const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawtable' };
 let subOpen = null;
 // costs as the bar shows them: 2W logs, 2S stone, 2P planks, 2B stone blocks, 2I iron ingots
 const COST_TAG = { wood: 'W', stone: 'S', planks: 'P', stoneBlock: 'B', ironIngot: 'I', copperIngot: 'C', ironOre: 'Io', copperOre: 'Co', leather: 'L' };
 const costText = k => Object.entries(COST[k]).map(([r, n]) => n + COST_TAG[r]).join(' ');
 const canAfford = k => Object.entries(COST[k]).every(([r, n]) => countItem(r) >= n);
+// a build slot's tooltip: what it costs, and what you're short of
+function costTip(name, k) {
+  const need = Object.entries(COST[k]), short = need.filter(([r, n]) => countItem(r) < n);
+  const list = a => a.map(([r, n]) => n + ' ' + ITEMS[r].name.toLowerCase()).join(', ');
+  return titleCase(name) + ' · costs ' + list(need) + (short.length ? ' · missing ' + list(short.map(([r, n]) => [r, n - countItem(r)])) : '');
+}
 let slotEls = [];
 function slotEl(s, parent) {
   // a group's slot shows the kind last picked from it
   const k = s.cat ? catPick[s.cat] : null, icon = k ? KIND_SLOT[k].icon : s.icon, cost = k || s.cost;
   const el = document.createElement('div');
   el.className = 'plate slot' + (s.cat ? ' cat' : '') + (s.locked ? ' locked' : '');
-  el.innerHTML = `<span class="key">${PAD.on && s.pad ? padGlyph(s.pad) : s.key}</span><div class="ic">${BAR_ICON[icon] || ICON[icon]}</div><span class="name">${k ? KIND_SLOT[k].name : s.name}</span>` +
-    (cost ? `<span class="cost">${costText(cost)}</span>` : '') + (s.cd ? '<div class="cd"></div><div class="cdn"></div>' : '');
-  el.title = s.cat ? s.name + ' (' + KIND_SLOT[k].name.toLowerCase() + ')' : cost ? s.name + ' · ' + costText(cost) : s.locked ? 'No ability: your weapon gives these' : s.name;
+  el.innerHTML = `<span class="key">${PAD.on && s.pad ? padGlyph(s.pad) : s.key}</span><div class="ic">${BAR_ICON[icon] || ICON[icon]}</div><span class="name">${k ? KIND_SLOT[k].short || KIND_SLOT[k].name : s.short || s.name}</span>` + (s.cd ? '<div class="cd"></div><div class="cdn"></div>' : '');
+  el.title = cost ? costTip(k ? KIND_SLOT[k].name : s.name, cost) : s.locked ? 'No ability: your weapon gives these' : s.name;
   el.addEventListener('click', () => { if (started) slotAction(s.id); });
   parent.appendChild(el);
   return { s, el, cost, cd: el.querySelector('.cd'), cdn: el.querySelector('.cdn') };
@@ -9986,7 +9994,7 @@ function renderBar() {
   renderTouch();
   // on the controller the group's own button steps through its row
   const catPad = { floors: 'X', walls: 'Y', doors: 'A', stations: 'LB' };
-  if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), pad: catPad[subOpen], name: KIND_SLOT[k].name, icon: KIND_SLOT[k].icon, cost: k }, sub)));
+  if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), pad: catPad[subOpen], name: KIND_SLOT[k].name, short: KIND_SLOT[k].short, icon: KIND_SLOT[k].icon, cost: k }, sub)));
   sub.hidden = !subOpen;
   $('modeTag').hidden = mode !== 'build';
   $('modeTag').classList.toggle('up', !!subOpen);
@@ -10020,7 +10028,10 @@ function updateBar() {
       cd.style.height = (f * 100) + '%';
       cdn.textContent = f > 0 ? Math.ceil(s.left()) : '';
     }
-    if (slot.cost) el.classList.toggle('poor', !canAfford(slot.cost));
+    if (slot.cost) {
+      el.classList.toggle('poor', !canAfford(slot.cost));
+      el.title = costTip(s.cat ? KIND_SLOT[catPick[s.cat]].name : s.name, slot.cost);
+    }
     if (mode === 'build') el.classList.toggle('on', s.cat ? catOf(buildKind) === s.cat : buildKind === s.id);
   }
 }
