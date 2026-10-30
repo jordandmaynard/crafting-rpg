@@ -6145,13 +6145,20 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location
 fn hgtAt(uv: vec2f) -> f32 { return textureSampleLevel(tWave, tWaveS, uv, 0.0).b; }
 fn hash2(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
 const ROT_B = mat2x2f(0.6, -0.8, 0.8, 0.6);
+const FLOW_P = 3.0;
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let xz = i.wpos.xz;
-  let q = xz / U.pattern - i.flow * U.flowT * 0.5;
-  let a = hgtAt(q / 6.0 + vec2f(0.011, 0.007) * U.flowT); let b = hgtAt(ROT_B * q / 3.4 - vec2f(0.008, -0.013) * U.flowT);
+  // carried along the flow in two staggered phases, each pushed only FLOW_P of flowT before it fades out and
+  // starts over, the other fading in: pushed for ever, the flow's turns stretched the pattern into streaks
+  let ph0 = fract(U.flowT / FLOW_P); let ph1 = fract(U.flowT / FLOW_P + 0.5);
+  let w0 = 1.0 - abs(1.0 - 2.0 * ph0); let w1 = 1.0 - w0;
+  let q0 = xz / U.pattern - i.flow * ph0 * FLOW_P * 0.5; let q1 = xz / U.pattern - i.flow * ph1 * FLOW_P * 0.5 + vec2f(1.7, 2.9);
+  let a0 = hgtAt(q0 / 6.0 + vec2f(0.011, 0.007) * U.flowT); let b0 = hgtAt(ROT_B * q0 / 3.4 - vec2f(0.008, -0.013) * U.flowT);
+  let a1 = hgtAt(q1 / 6.0 + vec2f(0.011, 0.007) * U.flowT); let b1 = hgtAt(ROT_B * q1 / 3.4 - vec2f(0.008, -0.013) * U.flowT);
+  let a = a0 * w0 + a1 * w1;
   let shore = (1.0 - smoothstep(0.0, 0.4, i.depth)) * U.shoreCrust;
   let melt = smoothstep(0.3 + U.crust * 0.3, 0.55 + U.crust * 0.3, a) * (1.0 - shore);
-  let seam = (1.0 - smoothstep(0.0, 0.05, abs(a - b))) * (1.0 - shore * 0.6);
+  let seam = ((1.0 - smoothstep(0.0, 0.05, abs(a0 - b0))) * w0 + (1.0 - smoothstep(0.0, 0.05, abs(a1 - b1))) * w1) * (1.0 - shore * 0.6);
   let pulse = 1.0 + U.pulseAmt * sin(U.time * 1.3 + a * 9.0);
   var col = vec3f(0.1, 0.04, 0.03) * (0.5 + 0.8 * max(dot(i.n, U.sunDir), 0.0));
   col = mix(col, vec3f(0.85, 0.22, 0.04) * pulse * U.glow * (1.0 + i.rip * 0.15), melt * 0.85);
