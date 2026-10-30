@@ -2611,7 +2611,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -2667,6 +2667,8 @@ def(O.SAWTABLE, { name: 'saw table', tile: true });
 def(O.GRINDER, { name: 'grinder', tile: true });
 def(O.SMELTER, { name: 'smelter', tile: true });
 def(O.TANRACK, { name: 'tanning rack', tile: true });
+// a built station or crafting table stands on 2 x 2 tiles: drawn from its north-west one, the other three (STATIONX) its ground
+def(O.STATIONX, { name: 'station', tile: true });
 // the stations you build to refine raw materials (see Stations), what each takes in and what it makes of it
 const STATION_KIND = {
   sawtable: { o: O.SAWTABLE, name: 'SAW TABLE', refine: { wood: 'planks' } },
@@ -5815,8 +5817,8 @@ function buildSmoke() {
   // (and a smelter's chimney while it works)
   for (const st of stations.values()) {
     if (st.kind !== 'smelter' || !st.busy || Math.abs(st.c - H.x) > SMOKE_R || Math.abs(st.r - H.z) > SMOKE_R) continue;
-    const [sx, sz] = stationAt(st.c + 0.5, st.r + 0.5, st.ry)(0, 0.14);
-    add(sx, surfaceY(st.c + 0.5, st.r + 0.5) + 2.0, sz, 0, 0.05);
+    const [mx, mz] = stMid(st), S = STATION_LOOK.size, [sx, sz] = stationAt(mx, mz, st.ry)(0, 0.14 * S);
+    add(sx, surfaceY(mx, mz) + 2.0 * S, sz, 0, 0.05);
   }
   if (!pos.length) return;
   const g = new GFX.BufferGeometry();
@@ -7321,9 +7323,13 @@ function weaponTable(x, z, c, r) {
 // moving parts (the saw's blade, the grinder's runner stone and gears, the smelter's fire) are built apart, by
 // stationFx, so they can turn while the station works; the rest is drawn with the chunk like any table. at(a, b)
 // is a point on the tile, a across the station and b from its front (-b, toward you when you built it) to its back.
-// A station is drawn shrunk to STATION_LOOK.size about the middle of its foot, so walls can stand on its sides
-// (they reach about a sixth of a tile in); its moving parts are scaled the same (stationFx, updateStations).
-const STATION_LOOK = { size: 0.7 };
+// A station stands on 2 x 2 tiles and is drawn at STATION_LOOK.size about the middle of them, as big as it can be while
+// walls still stand round it (they reach about a sixth of a tile in); its moving parts are scaled the same
+// (stationFx, updateStations).
+const STATION_LOOK = { size: 1.5 };
+// the middle of a station's 2 x 2 tiles, and the station (if any) on a tile
+const stMid = st => [st.c + 1, st.r + 1];
+const stationTile = new Map();   // each of its 4 tiles -> the station
 const partShrink = new GFX.Matrix4();
 function stationParts(draw, x, z, c, r) {
   const y = surfaceY(x, z), s = STATION_LOOK.size;
@@ -7472,12 +7478,13 @@ function drawObject(o, c, r) {
     case O.WELL: return well(x, z);
     case O.SHRINE: return shrine(x, z, k * 6);
     case O.HEARTH: return hearth(x, z, c, r);
-    case O.TANTABLE: return stations.has(T(c, r)) ? stationParts(tanTable, x, z, c, r) : tanTable(x, z, c, r);
-    case O.WEAPONTABLE: return stations.has(T(c, r)) ? stationParts(weaponTable, x, z, c, r) : weaponTable(x, z, c, r);
-    case O.SAWTABLE: return stationParts(sawTable, x, z, c, r);
-    case O.GRINDER: return stationParts(grinder, x, z, c, r);
-    case O.SMELTER: return stationParts(smelter, x, z, c, r);
-    case O.TANRACK: return stationParts(tanRack, x, z, c, r);
+    case O.TANTABLE: return stations.has(T(c, r)) ? stationParts(tanTable, x + 0.5, z + 0.5, c, r) : tanTable(x, z, c, r);
+    case O.WEAPONTABLE: return stations.has(T(c, r)) ? stationParts(weaponTable, x + 0.5, z + 0.5, c, r) : weaponTable(x, z, c, r);
+    case O.SAWTABLE: return stationParts(sawTable, x + 0.5, z + 0.5, c, r);
+    case O.GRINDER: return stationParts(grinder, x + 0.5, z + 0.5, c, r);
+    case O.SMELTER: return stationParts(smelter, x + 0.5, z + 0.5, c, r);
+    case O.TANRACK: return stationParts(tanRack, x + 0.5, z + 0.5, c, r);
+    case O.STATIONX: return;
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -11803,7 +11810,7 @@ function nearDoor() {
   return best;
 }
 const TABLE_REACH = 1.5;
-const nearTable = () => TABLES.find(t => Math.hypot(t.x - H.x, t.z - H.z) < TABLE_REACH && Math.abs(LV[T(t.c, t.r)] * STEP - H.y) < 0.6) || null;
+const nearTable = () => TABLES.find(t => Math.hypot(t.x - H.x, t.z - H.z) < (t.built ? STATION_REACH : TABLE_REACH) && Math.abs(LV[T(t.c, t.r)] * STEP - H.y) < 0.6) || null;
 // what F (A on the controller) does here: pick up loot, use an armor or weapon crafting table or a station, or open or shut a door
 function actionHere() {
   if (mode !== 'play' || !H.alive) return null;
@@ -11854,7 +11861,7 @@ ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo
 ghostGeo.hearth = new GFX.CylinderGeometry(0.5, 0.5, 0.7, 8);
 ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
 ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
-for (const k in STATION_KIND) ghostGeo[k] = new GFX.BoxGeometry(0.9, 0.9, 0.9);
+for (const k in STATION_KIND) ghostGeo[k] = new GFX.BoxGeometry(1.9, 0.9, 1.9);
 // a piece that will be queued (no materials to hand) shows white, as the queued ones themselves do
 const ghostQueue = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.35, depthWrite: false });
 const ghosts = [];
@@ -11884,7 +11891,7 @@ const plotWhy = i => PLOT[i] ? 'Claim this plot with a hearth before you build o
 const standingIn = (x, z, r) => [H, ...foes].some(e => Math.hypot(e.x - x, e.z - z) < r);
 function floorSpot(c, r, kind) {
   const i = T(c, r);
-  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH) && (!OBJ[OB[i]].tile || stations.has(i)) && BI[i] !== TOWN;
+  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH) && (!OBJ[OB[i]].tile || stationTile.has(i)) && BI[i] !== TOWN;
   let why = FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.';
   if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
   return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
@@ -11892,7 +11899,7 @@ function floorSpot(c, r, kind) {
 // a wall or door on the edge named by (ec, er, w)
 function edgeSpot(ec, er, w, kind) {
   const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1);
-  const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && (!OBJ[OB[i]].tile || stations.has(i)) && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH);
+  const flat = i => LV[i] > 0 && !SH[i] && !BR[i] && (!OBJ[OB[i]].tile || stationTile.has(i)) && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH);
   // along a cliff top only the high side needs to be clear and flat: the wall stands on its edge and may
   // overhang the slope below a little (no doors there, they'd open onto the drop)
   const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
@@ -11901,6 +11908,8 @@ function edgeSpot(ec, er, w, kind) {
   let why = (w ? WW : WN)[a] ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.'
     : cliff && isDoorKind(kind) ? `A ${kind} here would open onto the drop.` : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
   if (ok) for (const t of cliff ? [hi] : [a, b]) if (!claimedAt(t)) { ok = false; why = plotWhy(t); break; }
+  // (never through the middle of a station)
+  if (ok && stationTile.has(a) && stationTile.get(a) === stationTile.get(b)) { ok = false; why = `That would cut through the ${KIND_SLOT[stationTile.get(a).kind].name.toLowerCase()}.`; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   // keep anyone from being walled inside the wall itself
   if (ok) for (const e of [H, ...foes]) {
@@ -11928,7 +11937,7 @@ function buildSpot() {
   if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
   if (isFloor(buildKind)) return floorSpot(c, r, buildKind);
   if (buildKind === 'hearth') return hearthSpot(c, r);
-  if (isStation(buildKind)) return stationSpot(c, r, buildKind);
+  if (isStation(buildKind)) return stationSpot(Math.round(p.x) - 1, Math.round(p.z) - 1, buildKind);
   // walls and doors snap to the tile side nearest the cursor
   const u = p.x - c, v = p.z - r;
   const dist = [v, 1 - u, 1 - v, u];
@@ -12011,15 +12020,15 @@ function placeSpot(s) {
   buildCount[ch]++;
   if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
-    FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH && !stations.has(i)) OB[i] = 0; markObj(s.c, s.r);
+    FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH && !stationTile.has(i)) OB[i] = 0; markObj(s.c, s.r);
     if (hearths.has(i)) shapeHearth(hearths.get(i));
-    if (stations.has(i)) seatStation(stations.get(i));
+    if (stationTile.has(i)) { const st = stationTile.get(i); seatStation(st); markObj(st.c, st.r); }
   } else if (s.kind === 'hearth') lightHearth(s.c, s.r);
   else if (isStation(s.kind)) placeStation(s);
   else {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
     // clear the grass and flowers either side
-    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH && !stations.has(i)) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
+    for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH && !stationTile.has(i)) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
     if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind);
     markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
     hearthsBy(s.c, s.r, s.w);
@@ -12049,13 +12058,13 @@ function placeMany(spots) {
   if (miss && !queue.length && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
 }
 // ---------- The build queue ----------
-// Floors, walls, fences and gates you can't pay for when you lay them are queued instead: drawn as white
+// Floors, walls, fences, doors and gates you can't pay for when you lay them are queued instead: drawn as white
 // see-through previews, they go up one at a time (every BUILD_QUEUE.every seconds, first laid first) as the
 // output squares of the stations on their plot hold what they cost, which is taken from there. Removing one
 // (REMOVE) takes it off the queue.
 const BUILD_QUEUE = { every: 0.35 };
 const buildQueue = new Map();   // spotKey -> { kind, c, r, w, x, y, z, ry, plot, mesh }
-const queueable = k => isFloor(k) || isWall(k) || k === 'gate' || k === 'irongate';
+const queueable = k => isFloor(k) || isWall(k) || isDoorKind(k);
 const spotKey = s => isFloor(s.kind) ? 'F' + T(s.c, s.r) : 'w' in s ? 'E' + edgeKey(s.c, s.r, s.w) : 'X' + T(s.c, s.r);
 const queueMat = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.3, depthWrite: false });
 // the claimed plot a piece stands on (a wall: either side of it)
@@ -12247,7 +12256,7 @@ function gearMesh(R, mat) {
 }
 // the moving parts of a station, in a group turned as it was built: spin is what turns, mouth the smelter's fire
 function stationFx(st) {
-  const g = new GFX.Group(), x = st.c + 0.5, z = st.r + 0.5, y = surfaceY(x, z);
+  const g = new GFX.Group(), [x, z] = stMid(st), y = surfaceY(x, z);
   g.position.set(x, y, z); g.rotation.y = st.ry; g.scale.setScalar(STATION_LOOK.size);
   const parts = {};
   if (st.kind === 'sawtable') {
@@ -12276,7 +12285,7 @@ function stationFx(st) {
   st.fx = g; st.parts = parts;
 }
 // its moving parts set on the ground (or the floor) under it
-function seatStation(st) { st.fx.position.y = surfaceY(st.c + 0.5, st.r + 0.5); }
+function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); }
 // what goes in, and what it becomes
 const refinesTo = (st, id) => id ? STATION_KIND[st.kind].refine[id] || null : null;
 // room in the output for one more of id
@@ -12290,47 +12299,53 @@ function outAdd(st, id) {
 }
 // the input square it's working on: the first with something it can refine and room for what that makes
 const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && outRoom(st, refinesTo(st, id)));
+const stTiles = (c, r) => [T(c, r), T(c + 1, r), T(c, r + 1), T(c + 1, r + 1)];
 function placeStation(s) {
   const i = T(s.c, s.r);
-  OB[i] = STATION_KIND[s.kind].o;
+  stTiles(s.c, s.r).forEach((t, k) => { OB[t] = k ? O.STATIONX : STATION_KIND[s.kind].o; });
   const st = { c: s.c, r: s.r, kind: s.kind, ry: s.ry, inp: new Array(STATION_IN).fill(null), inN: new Array(STATION_IN).fill(0),
     out: new Array(STATION_OUT).fill(null), outN: new Array(STATION_OUT).fill(0), t: 0, spin: 0, busy: false };
   stations.set(i, st);
+  for (const t of stTiles(s.c, s.r)) stationTile.set(t, st);
   stationFx(st);
   // (a crafting table is used as a town's is)
   const craftKind = STATION_KIND[s.kind].craft;
-  if (craftKind) TABLES.push({ c: s.c, r: s.r, x: s.c + 0.5, z: s.r + 0.5, ry: s.ry, kind: craftKind, built: true });
-  markObj(s.c, s.r);
+  if (craftKind) TABLES.push({ c: s.c, r: s.r, x: s.c + 1, z: s.r + 1, ry: s.ry, kind: craftKind, built: true });
+  markObj(s.c, s.r); markObj(s.c + 1, s.r + 1); markObj(s.c + 1, s.r); markObj(s.c, s.r + 1);
 }
 // taken down: what's in it falls on the ground where it stood
 function takeDownStation(i) {
   const st = stations.get(i);
   if (openSt === st) closeStation();
-  const x = st.c + 0.5, z = st.r + 0.5;
+  const [x, z] = stMid(st);
   st.inp.forEach((id, k) => { if (id) dropLoot(id, st.inN[k], x, z); });
   st.out.forEach((id, k) => { if (id) dropLoot(id, st.outN[k], x, z); });
   scene.remove(st.fx);
   stations.delete(i);
   const tk = TABLES.findIndex(t => t.built && t.c === st.c && t.r === st.r);
   if (tk >= 0) { if (craftAt === TABLES[tk]) toggleCraft(null); TABLES.splice(tk, 1); }
-  OB[i] = 0; markObj(st.c, st.r);
+  for (const t of stTiles(st.c, st.r)) { OB[t] = 0; stationTile.delete(t); }
+  markObj(st.c, st.r); markObj(st.c + 1, st.r + 1); markObj(st.c + 1, st.r); markObj(st.c, st.r + 1);
 }
 // a station placed on the tile under the cursor, facing you
+// a station on the 2 x 2 tiles round the grid corner nearest the cursor ((c, r) the north-west one), facing you:
+// all four clear, flat, dry, at one height, on your plot, with no wall between them
 function stationSpot(c, r, kind) {
-  const i = T(c, r);
-  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile;
-  let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs clear, flat, dry ground.`;
-  if (ok && BI[i] === TOWN) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
-  if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
-  if (ok && standingIn(c + 0.5, r + 0.5, 0.7)) { ok = false; why = 'Something is standing in the way.'; }
-  const a = Math.atan2(-(H.x - c - 0.5), -(H.z - r - 0.5)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
-  return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.45, ry };
+  const i = T(c, r), all = stTiles(c, r);
+  let ok = c >= 1 && r >= 1 && c < N - 2 && r < N - 2 && all.every(t => LV[t] > 0 && LV[t] === LV[i] && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && !OBJ[OB[t]].solid && !OBJ[OB[t]].tile)
+    && !WW[T(c + 1, r)] && !WW[T(c + 1, r + 1)] && !WN[T(c, r + 1)] && !WN[T(c + 1, r + 1)];
+  let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs 2 x 2 tiles of clear, flat, dry ground.`;
+  if (ok && all.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
+  if (ok) { const t = all.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
+  if (ok && standingIn(c + 1, r + 1, 1.25)) { ok = false; why = 'Something is standing in the way.'; }
+  const a = Math.atan2(-(H.x - c - 1), -(H.z - r - 1)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
+  return { kind, c, r, ok, why, x: c + 1, z: r + 1, y: LV[i] * STEP + 0.45, ry };
 }
-const STATION_REACH = 1.5;
+const STATION_REACH = 2.1;
 const nearStation = () => {
   let best = null, bd = STATION_REACH;
   for (const st of stations.values()) {
-    const d = Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z);
+    const d = Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z);
     if (d < bd && Math.abs(LV[T(st.c, st.r)] * STEP - H.y) < 0.6) { bd = d; best = st; }
   }
   return best;
@@ -12360,12 +12375,12 @@ function updateStations(dt) {
         outAdd(st, made);
         st.t = 0;
         if (openSt === st && invOpen) renderInv();
-        if (Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z) < 8) sfx.coin();
+        if (Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z) < 8) sfx.coin();
       }
     } else st.t = 0;
     // its parts come up to speed while it works, and run down after
     st.spin += ((st.busy ? 1 : 0) - st.spin) * Math.min(1, dt * (st.busy ? 3 : 1.2));
-    const p = st.parts, d = Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z);
+    const p = st.parts, d = Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z);
     st.fx.visible = d < 60; st.fx.scale.setScalar(STATION_LOOK.size);
     if (p.blade) p.blade.rotation.x -= dt * st.spin * 30;
     if (p.runner) p.runner.rotation.y += dt * st.spin * 2.2;
@@ -12384,7 +12399,7 @@ function updateStations(dt) {
     beep(f * (0.9 + Math.random() * 0.2), 0.08, { type, vol: 0.02 * (1 - humD / 7) + 0.004 });
   }
   if (openSt) {
-    if (!stations.has(T(openSt.c, openSt.r)) || Math.hypot(openSt.c + 0.5 - H.x, openSt.r + 0.5 - H.z) > 2.6) { closeStation(); if (invOpen) toggleInv(false); }
+    if (!stations.has(T(openSt.c, openSt.r)) || Math.hypot(openSt.c + 1 - H.x, openSt.r + 1 - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
     else { const bar = $('stProgress'); if (bar) bar.style.width = (openSt.busy ? openSt.t / REFINE.time * 100 : 0) + '%'; }
   }
 }
@@ -12402,7 +12417,7 @@ function removePiece() {
     if (!FL[i] && unqueue('F' + i)) { sfx.remove(); return; }
     for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[wallOn(c, r, d)], c: ec, r: er, w }; }
     if (!target && OB[i] === O.HEARTH) target = { kind: 'hearth', c, r };
-    if (!target && stations.has(i)) target = { kind: stations.get(i).kind, c, r };
+    if (!target && stationTile.has(i)) { const st = stationTile.get(i); target = { kind: st.kind, c: st.c, r: st.r }; }
     if (!target && FL[i]) target = { kind: FLOOR_KIND[FL[i]], c, r };
   }
   if (!target) { sfx.nope(); return; }
@@ -12412,11 +12427,11 @@ function removePiece() {
   if (farmV) { sfx.nope(); toast(farmV === 3 ? 'That cabin is someone else\'s.' : farmV === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.'); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
-  const mx = flatPiece ? target.c + 0.5 : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + 0.5 : target.w ? target.r + 0.5 : target.r;
+  const big = isStation(target.kind) ? 1 : 0.5, mx = flatPiece ? target.c + big : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + big : target.w ? target.r + 0.5 : target.r;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
   buildCount[ch] = Math.max(0, buildCount[ch] - 1);
-  if (isFloor(target.kind)) { const i = T(target.c, target.r); FL[i] = 0; markObj(target.c, target.r); if (stations.has(i)) seatStation(stations.get(i)); }
+  if (isFloor(target.kind)) { const i = T(target.c, target.r); FL[i] = 0; markObj(target.c, target.r); if (stationTile.has(i)) { const st = stationTile.get(i); seatStation(st); markObj(st.c, st.r); } }
   else if (target.kind === 'hearth') putOutHearth(T(target.c, target.r));
   else if (isStation(target.kind)) takeDownStation(T(target.c, target.r));
   else {
@@ -14202,7 +14217,7 @@ const TUNING = [
   ]],
   ['Stations', [
     [REFINE, 'time', 'Seconds to refine one (saw table, grinder, smelter, tanning rack)', 0.2, 30, 0.1],
-    [STATION_LOOK, 'size', 'Size (walls on its sides need it under about 0.68)', 0.3, 1.2, 0.01],
+    [STATION_LOOK, 'size', 'Size (walls round its 2 x 2 tiles need it under about 1.6)', 0.5, 2.2, 0.01],
   ]],
   ['Tumble', [
     [TUMBLE, 'time', 'How long the tumble lasts (seconds)', 0.15, 1.5, 0.01],
