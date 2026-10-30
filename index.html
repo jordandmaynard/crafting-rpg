@@ -417,7 +417,7 @@ document.body.classList.toggle('touch', MOBILE);
 // How high one level stands (the tuning panel's World section; changing it rebuilds the same world). 1 is the
 // first height the game had, 0.5 the half height it went to; slopes and ramps keep their widths either way.
 const STEP_KEY = 'emberwild.tileHeight';
-const WORLD = { tileHeight: (() => { try { const v = parseFloat(localStorage.getItem(STEP_KEY)); return v >= 0.25 && v <= 1.5 ? v : 1; } catch (err) { return 1; } })() };
+const WORLD = { tileHeight: (() => { try { const v = parseFloat(localStorage.getItem(STEP_KEY)); return v >= 0.25 && v <= 2 ? v : 1; } catch (err) { return 1; } })() };
 const N = 1024, CH = 32, NC = N / CH, STEP = WORLD.tileHeight, MAXL = 8;
 const T = (c, r) => r * N + c;
 const params = new URLSearchParams(location.search);
@@ -459,7 +459,13 @@ const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
 // 1-4: a one-tile ramp rising north, east, south or west; 5-8 and 9-12: the lower and upper halves of a
 // two-tile ramp, each rising half a level
 const RAMP_UP = [[1, 1, 0, 0], [0, 1, 1, 0], [0, 0, 1, 1], [1, 0, 0, 1]];
-const LIFT = [[0, 0, 0, 0], ...RAMP_UP, ...RAMP_UP.map(l => l.map(v => v / 2)), ...RAMP_UP.map(l => l.map(v => 0.5 + v / 2))];
+// (shapes: 0 flat, 1-4 a one-tile ramp, 5-8 and 9-12 the lower and upper halves of a two-tile one, 13-16, 17-20
+// and 21-24 the thirds of a three-tile one, each rising toward side (s - 1) & 3)
+const LIFT = [[0, 0, 0, 0], ...RAMP_UP, ...RAMP_UP.map(l => l.map(v => v / 2)), ...RAMP_UP.map(l => l.map(v => 0.5 + v / 2)),
+  ...[0, 1, 2].flatMap(k => RAMP_UP.map(l => l.map(v => (k + v) / 3)))];
+// ramps run longer when the levels are tall: three tiles at 2x height (never one), else two (or one where only
+// one fits)
+const RAMP_LEN = STEP > 1.25 ? 3 : 2, RAMP_MIN = STEP > 1.25 ? 2 : 1;
 const rampDir = s => (s - 1) & 3;
 // the corners along each side, and the neighbour's matching corners across it
 const EDGE_K = [[0, 1], [1, 2], [2, 3], [3, 0]], OPP_K = [[3, 2], [0, 3], [1, 0], [2, 1]];
@@ -828,7 +834,7 @@ async function generate(progress) {
     const d0 = Math.floor(hs(c, r, 11) * 4);
     for (let k = 0; k < 4; k++) {
       const d = (d0 + k) & 3, pair = canRampPair(i, d, lock), can = Math.floor(pair / (N * N));
-      if (can === 2 || (meadow && can === 1)) { setRampPair(i, d, lock, pair); break; }
+      if (can >= 2 || (meadow && can === 1)) { setRampPair(i, d, lock, pair); break; }
     }
   }
 
@@ -2461,16 +2467,23 @@ function placeTowns(rand) {
   });
 }
 
-// How long a ramp up from tile i toward side d can be: 2 when the ground below has room for it, 1 when
-// only a single tile fits, 0 when none does. The tile i always sits against the top.
+// How long a ramp up from tile i toward side d can be: as long as the ground below has room for, up to
+// RAMP_LEN tiles, or 0 when that's under RAMP_MIN. The tile i always sits against the top.
 function canRamp(i, d, lock) {
   if (SH[i] || lock[i] || !LV[i] || TN[i]) return 0;
   const top = i + DI[d], foot = i - DI[d], L = LV[i];
   if (!(LV[top] === L + 1 && !SH[top] && LV[foot] === L && !SH[foot] && !TN[top])) return 0;
-  const c = i % N, r = (i - c) / N, fc = c - 2 * DC[d], fr = r - 2 * DR[d];
-  if (fc < 0 || fr < 0 || fc >= N || fr >= N) return 1;
-  const foot2 = foot - DI[d];
-  return !lock[foot] && !TN[foot] && LV[foot2] === L && !SH[foot2] ? 2 : 1;
+  const c = i % N, r = (i - c) / N;
+  let len = 1;
+  // each tile further down needs a flat tile at the level below it, for its foot
+  while (len < RAMP_LEN) {
+    const fc = c - (len + 1) * DC[d], fr = r - (len + 1) * DR[d];
+    if (fc < 0 || fr < 0 || fc >= N || fr >= N) break;
+    const k = i - len * DI[d], foot2 = k - DI[d];
+    if (lock[k] || TN[k] || LV[foot2] !== L || SH[foot2]) break;
+    len++;
+  }
+  return len < RAMP_MIN ? 0 : len;
 }
 // Ramps come in pairs side by side, so every ramp is an even number of tiles wide (pairs that meet make wider
 // ones). The pair for tile i: the tile beside it, to whichever side also has room, and the length both allow.
@@ -2496,7 +2509,8 @@ function setRampPair(i, d, lock, pair) {
 function setRamp(i, d, lock, len = 1) {
   lock[i] = lock[i + DI[d]] = lock[i - DI[d]] = 1;
   if (len < 2) { SH[i] = d + 1; return; }
-  SH[i] = 9 + d; SH[i - DI[d]] = 5 + d; lock[i - 2 * DI[d]] = 1;
+  if (len < 3) { SH[i] = 9 + d; SH[i - DI[d]] = 5 + d; lock[i - 2 * DI[d]] = 1; return; }
+  SH[i] = 21 + d; SH[i - DI[d]] = 17 + d; SH[i - 2 * DI[d]] = 13 + d; lock[i - 2 * DI[d]] = lock[i - 3 * DI[d]] = 1;
 }
 
 async function connectAll(start, lock, rand, progress) {
@@ -3688,7 +3702,7 @@ const SLOPE_W = 0.5;
 // half-grid: s, how rough it is (1 on a cliff, 0 at the far side of the ground round one, so the roughness
 // dies out there); g, which way is uphill; and tp, 1 along a lip and 0 along a foot. It reaches one point past
 // the chunk all round, so cells on the chunk's edge can see whether the cell over the border is cut finer.
-const CLIFF_SUB = 3;
+const CLIFF_SUB = STEP > 1.25 ? 5 : 3;   // (finer where the cliffs are tall)
 const CF = { w: 0, s: null, gx: null, gz: null, tp: null };
 function cliffField(c0, r0, GW) {
   const W = GW + 2;
@@ -3776,7 +3790,7 @@ function roughCell(P, K, Q, flip, lifted) {
     // broad buttresses, narrow gullies (where the noise crosses zero) and ledges
     const bul = nX(x * 0.9 + 31.7, z * 0.9 - 12.3);
     const gr = Math.abs(nX(x * 1.7 + y * 0.18, z * 1.7 - y * 0.18)), gul = gr < 0.3 ? Math.sqrt(gr / 0.3) : 1;
-    let ld = y / STEP * 2.6 + nX(x * 0.6 + 7.1, z * 0.6) * 0.9; ld -= Math.floor(ld);
+    let ld = y / Math.min(1, STEP) * 2.6 + nX(x * 0.6 + 7.1, z * 0.6) * 0.9; ld -= Math.floor(ld);
     const gl = Math.hypot(gx, gz);
     if (gl > 1e-4) {
       const push = (0.07 * bul + 0.1 * (gul - 0.65) + 0.05 * (ld - 0.5)) * Math.min(1, gl / (0.5 * STEP)) * s / gl;
@@ -3787,7 +3801,7 @@ function roughCell(P, K, Q, flip, lifted) {
     o[1] += s * st * ((1 - tp) * 0.07 * Math.max(0, cr) - tp * 0.06 * Math.max(0, -cr));
     // strata and dark gullies on the face (the ground round a cliff keeps its own colour right up to the edge)
     if (!lifted) continue;
-    const sh = 1 + ((0.88 + 0.12 * Math.sin(y / STEP * 9.4 + bul * 3)) * (0.6 + 0.4 * gul) * (0.93 + 0.14 * ld) - 1) * Math.min(1, s);
+    const sh = 1 + ((0.88 + 0.12 * Math.sin(y / Math.min(1, STEP) * 9.4 + bul * 3)) * (0.6 + 0.4 * gul) * (0.93 + 0.14 * ld) - 1) * Math.min(1, s);
     col.r = kr * sh; col.g = kg * sh; col.b = kb * sh;
   }
   for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
@@ -4328,7 +4342,7 @@ fn grassColor(kind: u32) -> vec3f {
   if (((t.r >> q) & 1u) == 0u) { return o; }
   // (on a ramp, lifted to its slope there: LIFT's corners nw, ne, se, sw, a level each; fields are flat, and
   // their a is how grown the wheat is)
-  var lift = array<vec4f, ${LIFT.length}>(${LIFT.map(l => `vec4f(${l.map(v => v.toFixed(2)).join(', ')})`).join(', ')});
+  var lift = array<vec4f, ${LIFT.length}>(${LIFT.map(l => `vec4f(${l.map(v => v.toFixed(5)).join(', ')})`).join(', ')});
   let lc = lift[select(min(t.a, ${LIFT.length - 1}u), 0u, wheat)];
   let grown = select(1.0, f32(t.a) / 255.0, wheat);
   let rise = (lc.x * (1.0 - uv.x) + lc.y * uv.x) * (1.0 - uv.y) + (lc.w * (1.0 - uv.x) + lc.z * uv.x) * uv.y;
@@ -4620,7 +4634,7 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
       }
       const hollow = at && Math.hypot(c + 0.25 + (q & 1) * 0.5 - at[0], r + 0.25 + (q >> 1) * 0.5 - at[1]) < sol + 0.25;
       // a ramp's quarter, lying on its slope (no corner lifted by a higher tile beside it): which way it rises
-      // (bits 16-32: +x, -x, +z, -z) and whether at half a level a tile (64)
+      // (bits 16-32: +x, -x, +z, -z) and whether at half a level a tile (64) or a third (128)
       let ramp = 0;
       if (open && !level && SH[i]) {
         const a = ph[(lz + 1) * W + lx + 1], b = ph[(lz + 1) * W + lx + 2], cc = ph[(lz + 2) * W + lx + 1], dd = ph[(lz + 2) * W + lx + 2];
@@ -4628,7 +4642,7 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
         if (Math.abs(a - tileSurf(c, r, u0, v0)) < 1e-4 && Math.abs(b - tileSurf(c, r, u0 + 0.5, v0)) < 1e-4
           && Math.abs(cc - tileSurf(c, r, u0, v0 + 0.5)) < 1e-4 && Math.abs(dd - tileSurf(c, r, u0 + 0.5, v0 + 0.5)) < 1e-4) {
           const gx = b + dd - a - cc, gz = cc + dd - a - b, g = Math.max(Math.abs(gx), Math.abs(gz));
-          ramp = 8 | (Math.abs(gx) > Math.abs(gz) ? (gx > 0 ? 0 : 16) : (gz > 0 ? 32 : 48)) | (g < STEP * 0.75 ? 64 : 0);
+          ramp = 8 | (Math.abs(gx) > Math.abs(gz) ? (gx > 0 ? 0 : 16) : (gz > 0 ? 32 : 48)) | (g < STEP * 0.42 ? 128 : g < STEP * 0.75 ? 64 : 0);
         }
       }
       const bits = hollow ? 0 : (strict ? 1 : 0) | (level ? 2 : 0) | (open && !level && !ramp ? 4 : 0) | ramp;
@@ -4701,7 +4715,7 @@ fn dGround(t: vec4f, q: vec2i, xz: vec2f) -> f32 {
   var h = dH(t);
   if ((b & 8u) != 0u) {
     let d = xz - (vec2f(q) + 0.5) * 0.5;
-    let g = ${STEP.toFixed(6)} * select(1.0, 0.5, (b & 64u) != 0u);
+    let g = ${STEP.toFixed(6)} * select(select(1.0, 0.5, (b & 64u) != 0u), 1.0 / 3.0, (b & 128u) != 0u);
     let dir = (b >> 4u) & 3u;
     h += g * select(select(-d.y, d.y, dir == 2u), select(-d.x, d.x, dir == 0u), dir < 2u);
   }
@@ -13342,7 +13356,7 @@ let fpsAcc = 0, fpsN = 0, fps = 0;
 // picker. apply, if given, runs once the slider is let go.
 const TUNING = [
   ['World', [
-    [WORLD, 'tileHeight', 'Tile height per level (1 old, 0.5 half). Letting go rebuilds this world from scratch', 0.5, 1, 0.25, rebuildWorld],
+    [WORLD, 'tileHeight', 'Tile height per level (1 old, 0.5 half, 2 double: ramps 3 tiles long). Letting go rebuilds this world from scratch', 0.5, 2, 0.25, rebuildWorld],
   ]],
   ['Resources', [
     [RESOURCES, 'amount', 'How much everything gives: rocks, trees, ore, hides (× normal)', 'choice', [0.5, 1, 2, 4], 0.1],
@@ -14124,7 +14138,7 @@ window.GAME = {
   compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
-    const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(13).fill(0), ob = {};
+    const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(LIFT.length).fill(0), ob = {};
     for (let i = 0; i < N * N; i++) { lv[LV[i]]++; if (LV[i]) bi[BI[i]]++; sh[SH[i]]++; if (OB[i]) ob[OB[i]] = (ob[OB[i]] || 0) + 1; }
     let lake = 0, river = 0, canyon = 0, bridge = 0;
     for (let i = 0; i < N * N; i++) { if (WT[i] === 2) lake++; else if (WT[i] === 3) river++; if (CY[i]) canyon++; if (BR[i]) bridge++; }
@@ -14192,7 +14206,7 @@ window.GAME = {
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
-  raw: () => ({ N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
+  raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
@@ -14387,8 +14401,8 @@ window.GAME = {
       if (Math.max(Math.abs(dx), Math.abs(dz)) !== rad) continue;
       const i = T(c0 + dx, r0 + dz), s = SH[i];
       if (!s) continue;
-      if (s > 4 && s < 9) continue;
-      const d = rampDir(s), back = s > 8 ? 3 : 2, foot = i - DI[d] * back, top = i + DI[d] * 2;
+      if ((s > 4 && s < 9) || (s > 12 && s < 21)) continue;
+      const d = rampDir(s), back = s > 20 ? 4 : s > 8 ? 3 : 2, foot = i - DI[d] * back, top = i + DI[d] * 2;
       if (OB[foot + DI[d]] || OB[foot] || OB[i + DI[d]] || OB[top] || SH[foot] || SH[top] || LV[foot] !== LV[i] || LV[top] !== LV[i] + 1) continue;
       return { c: c0 + dx, r: r0 + dz, d, lv: LV[i] };
     }
