@@ -167,6 +167,12 @@ With more than one thing in reach to use with F (A), loot, a table, a station, a
 
 **Errors.** A frame that throws is caught: the game keeps running and a box at the top shows the error, where it happened and the version, with a COPY button, for browsers with no console to hand.
 
+## Hotbar
+
+The action bar sits at the bottom right and the hotbar at the bottom left: seven squares, keys 1-7 in play, each holding a weapon you have (worn or in the pack; a worn one's square is gold-edged, one you no longer have is dimmed). Its key, or a click, puts that weapon on, and the weapon you had goes into the pack square it came from; the hotbar squares never move on their own. Drag a weapon from the gear window onto a square to put it there, drag a square onto another to swap them or off the bar to empty it, or right-click it to empty it. You start with the sword, bow and spear in 1-3, and a weapon you craft goes in the first empty square. The hotbar hides in build mode, where the numbers pick pieces. On touch screens the action bar stays centred and the hotbar sits above the stick.
+
+**Into crates.** Each item a station sends into a touching crate or chest flies there as a see-through ghost of its icon (a screen-pinned billboard arcing over from the station), and the container swells for a moment as it lands. Crates and chests are their own meshes (storeBody) so they can.
+
 ## Build queue
 
 Floors, walls, fences, doors and gates you can't pay for when you lay them (in reach, on your claimed plot) are queued instead of refused: the preview shows white, and a queued piece stays as a see-through white preview. Queued pieces go up one at a time, every 0.35 s, strictly in the order they were laid: the next in line waits until the crates, chests and stations on its plot (outputs, then inputs) hold what it costs, and everything after it waits too. Its cost is taken from there, never from your pack.
