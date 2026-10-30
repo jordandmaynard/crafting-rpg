@@ -10180,6 +10180,8 @@ const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= Math.PI * 2;
 function hurtFoe(f, dmg, fromX, fromZ, knock = 3) {
   if (f.hp <= 0) return;
   f.hp -= dmg; f.hitT = 0; f.squish = 1; f.barHeat = 1; f.barAge = 0; f.aggro = true; f.calm = 0; f.homing = false;
+  // (hurt by anything: its bar shows over its head, as when pointed at)
+  f.barT = HPBAR.hold; barFoes.add(f);
   const dx = f.x - fromX, dz = f.z - fromZ, l = Math.hypot(dx, dz) || 1;
   f.kx = dx / l * knock; f.kz = dz / l * knock;
   floatText(String(dmg), f.x, f.y + 1.1, f.z, '#ffffff');
@@ -11358,12 +11360,12 @@ function castJump() {
   H.flip = f; H.canJump = null; H.swing = -1; H.bow = H.spear = null; H.invuln = Math.max(H.invuln, f.dur);
   sfx.dash();
 }
-// Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at)
-// and a bar shows over its head, staying 3 seconds after you look away, while its name and a big bar show at
-// the top of the screen, staying 1 second (another monster you point at takes that over at once).
+// Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at), or
+// hurt it by any means, and a bar shows over its head, staying 3 seconds after; its name and a big bar show at
+// the top of the screen only while you point at it (targetHold, 0 by default).
 // A hit flashes the bar and leaves the health just lost as a pale part that flares white and shrinks away,
 // as in neon-haze. All of it is in the tuning panel.
-const HPBAR = { hold: 3, targetHold: 1, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
+const HPBAR = { hold: 3, targetHold: 0, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
   width: 44, height: 5, bigWidth: 420, bigHeight: 12, nameSize: 11, opacity: 1,
   fill: '#e8b830', lost: '#f4e2b8', hot: '#ffffff', back: '#1a0e10' };
 const hbLost = new GFX.Color(), hbHot = new GFX.Color();
@@ -11427,7 +11429,7 @@ function updateFoeBars(dt) {
   }
   const hov = pickFoe();
   if (hov) { hov.barT = HPBAR.hold; targetFoe = hov; targetT = HPBAR.targetHold; barFoes.add(hov); }
-  else targetT -= dt;
+  else { targetT -= dt; if (targetT <= 0) targetFoe = null; }
   const rect = cv.getBoundingClientRect();
   for (const f of barFoes) {
     if (f !== hov) f.barT -= dt;
@@ -14163,6 +14165,8 @@ window.GAME = {
   action: () => { const a = actionHere(); useAction(); return a && a.kind; },
   armor: () => armor(),
   smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
+  poke: (n, dmg = 3) => { foes.slice(0, n).forEach(f => hurtFoe(f, dmg, H.x, H.z)); },
+  bars: () => ({ over: foes.filter(f => f.barEl && !f.barEl.hidden).length, top: !$('target').hidden }),
   crowd: () => ({ foes: foes.length, draws: CROWD_READ.draws, kinds: [...crowds.keys()], pieces: [...crowds.values()].reduce((n, C) => n + C.pieces.length, 0), shown: [...crowds.values()].reduce((n, C) => n + C.n, 0) }),
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
