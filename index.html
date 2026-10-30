@@ -2608,8 +2608,8 @@ def(O.ROCK, { name: 'rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.ICEROCK, { name: 'ice rock', solid: 0.3, hp: 4, give: 'stone' });
 def(O.SANDROCK, { name: 'sandstone', solid: 0.3, hp: 4, give: 'stone' });
 // ore rocks: rock pillars with the metal showing, that break into ore and no stone
-def(O.COPPER, { name: 'copper rock', solid: 0.3, hp: 4, give: 'copperOre', ore: '#d4773e' });
-def(O.IRON, { name: 'iron rock', solid: 0.3, hp: 4, give: 'ironOre', ore: '#b9bfc9' });
+def(O.COPPER, { name: 'copper rock', solid: 0.3, hp: 4, give: 'copperOre', ore: '#d4773e', needs: 'bone' });
+def(O.IRON, { name: 'iron rock', solid: 0.3, hp: 4, give: 'ironOre', ore: '#b9bfc9', needs: 'copper' });
 def(O.TOMB, { name: 'gravestone', solid: 0.2, hp: 3, give: 'stone' });
 def(O.HOUSE, { tile: true });
 def(O.WELL, { tile: true });
@@ -9369,8 +9369,8 @@ const ITEMS = {
   leatherHelmet: { name: 'Leather Helmet', slot: 'head', icon: 'leatherHelmet', armor: 1, mat: 'leather', trim: 'leatherDark' },
   wood: { name: 'Logs', icon: 'wood', stack: 200, pile: true, loot: 'material', about: 'Cut from trees. A saw table saws them into planks; wooden walls, fences, hearths and stations are built of them.' },
   stone: { name: 'Stone', icon: 'stone', stack: 200, pile: true, loot: 'material', about: 'Broken from rocks. A grinder cuts it into blocks; hearths and stations are built of it.' },
-  copperOre: { name: 'Copper Ore', icon: 'copperOre', stack: 100, pile: true, loot: 'material', about: 'Broken from copper rocks. A smelter makes it into ingots.' },
-  ironOre: { name: 'Iron Ore', icon: 'ironOre', stack: 100, pile: true, loot: 'material', about: 'Broken from iron rocks. A smelter makes it into ingots.' },
+  copperOre: { name: 'Copper Ore', icon: 'copperOre', stack: 100, pile: true, loot: 'material', about: 'Broken from copper rocks, with a bone weapon or better. A smelter makes it into ingots.' },
+  ironOre: { name: 'Iron Ore', icon: 'ironOre', stack: 100, pile: true, loot: 'material', about: 'Broken from iron rocks, with a copper weapon or better. A smelter makes it into ingots.' },
   hide: { name: 'Hide', icon: 'hide', stack: 100, loot: 'material', about: 'Taken from wolves and boars. A tanning rack works it into leather.' },
   planks: { name: 'Planks', icon: 'planks', stack: 200, pile: true, loot: 'material', about: 'Sawn from logs at a saw table. Floors, timber walls, doors, gates, crafting tables and the hafts of every weapon are made of them.' },
   stoneBlock: { name: 'Stone Blocks', icon: 'stoneBlock', stack: 200, pile: true, loot: 'material', about: 'Cut from stone at a grinder. Stone floors, walls and fieldstone walls are built of them.' },
@@ -10224,6 +10224,14 @@ const harvestCarry = { wood: 0, stone: 0, copperOre: 0, ironOre: 0, hide: 0, bon
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const o = OB[i], od = OBJ[o];
   const d = detach(i, c, r);
+  if (od.needs && tierRank(weapon().tier) < tierRank(od.needs)) {
+    // ore that wants a better weapon (def.needs): it shakes and rings, nothing comes off
+    d.shake = 0.5; d.sx = dirx; d.sz = dirz;
+    chips(d.x, LV[i] * STEP + 0.55, d.z, 'stone', 2);
+    sfx.clink();
+    if (time - tooHardT > 3) { tooHardT = time; toast(`Too hard for ${GEAR.weapon ? 'a ' + weapon().name.toLowerCase() : 'bare fists'}: ${od.name}s need a ${TIERS[od.needs].name.toLowerCase()} weapon or better.`); sfx.nope(); }
+    return;
+  }
   const before = d.hp;
   d.hp = Math.max(0, d.hp - dmg / SWING_DMG[0]);
   d.shake = 1; d.sx = dirx; d.sz = dirz;
@@ -10262,7 +10270,9 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   }
 }
 // said at most every few seconds, however often it's hit
-let packFullT = -9;
+let packFullT = -9, tooHardT = -9;
+// a weapon material's place in TIERS (wood 0 .. iron 3); bare fists are -1
+const tierRank = t => t ? Object.keys(TIERS).indexOf(t) : -1;
 function packFull() { if (time - packFullT > 3) { packFullT = time; toast('Your pack is full.'); sfx.nope(); } }
 // the trees and rocks within reach of the hero (on their level), for the whirl and the lunge
 function propsNear(reach, fn) {
