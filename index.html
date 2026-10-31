@@ -11222,7 +11222,7 @@ function syncButtons(e) {
   if (on & 1) { mouse.down = true; if (mode === 'build') pressBuild(); }
   if (on & 2) { mouse.right = true; mouse.turned = false; mouse.downX = mouse.lastX = e.clientX; }
   if (on & 4) { mouse.mid = true; mouse.lastX = e.clientX; }
-  if (off & 1) { mouse.down = false; if (drag) releaseBuild(); }
+  if (off & 1) { mouse.down = false; if (drag || moving) releaseBuild(); }
   // a right click that didn't turn the camera removes a piece in build mode
   if (off & 2) { mouse.right = false; if (!mouse.turned && mode === 'build') { if (moving) { moving = null; sfx.remove(); updateGhost(); } else removePiece(); } }
   if (off & 4) mouse.mid = false;
@@ -11503,7 +11503,7 @@ function pollPad(dt) {
   if (hit('LT')) { if (moving) { moving = null; sfx.remove(); } else removePiece(); }
   if (hit('R3')) slotAction('move');
   if (hit('RT')) pressBuild();
-  if (letGo('RT') && drag) releaseBuild();
+  if (letGo('RT') && (drag || moving)) releaseBuild();
 }
 
 // the point on the ground under the cursor: march the view ray down until it meets the terrain
@@ -12951,7 +12951,7 @@ function runBuildQueue(dt) {
 }
 function placePiece() {
   if (buildKind === 'remove') { removePiece(); return; }
-  if (buildKind === 'move') { moveClick(); return; }
+  if (buildKind === 'move') { if (moving) moveDrop(); else movePick(); return; }
   if (ghostSpot) placeMany([ghostSpot]);
 }
 // the left button: floors and walls start a drag, the rest go straight down
@@ -12963,6 +12963,7 @@ function pressBuild() {
   } else placePiece();
 }
 function releaseBuild() {
+  if (moving) { moveDrop(); return; }
   const d = drag;
   drag = null;
   if (d && d.spots) placeMany(d.spots);
@@ -13222,10 +13223,10 @@ function stationSpot(c, r, kind, self = null) {
 // a station's spot under the cursor point p: a crate on the tile, a 2 x 2 station round the nearest grid corner
 const stationSpotAt = (p, kind, self) => stFoot(kind) === 1 ? stationSpot(Math.floor(p.x), Math.floor(p.z), kind, self) : stationSpot(Math.round(p.x) - 1, Math.round(p.z) - 1, kind, self);
 // ---------- Move mode ----------
-// Click a station, crafting table, crate or chest on your plot to pick it up, then click where it should go. It
+// Drag a station, crafting table, crate or chest on your plot to where it should go (press, move, let go). It
 // keeps everything in it and keeps working the whole time: it stays where it was (with a ghost over it) until it's
 // set down, then its tiles, crafting table entry and moving parts go across to the new spot. Picking another tool,
-// leaving build mode, the right button or clicking it again puts it back.
+// leaving build mode, the right button or letting go where it can't go puts it back.
 let moving = null;
 function moveSpot() {
   const p = lastPick = pickGround(false);
@@ -13242,21 +13243,23 @@ function moveSpot() {
   const [x, z] = stMid(st);
   return { kind: st.kind, c: st.c, r: st.r, x, z, y: LV[T(st.c, st.r)] * STEP + 0.45, ry: st.ry, ok: true, go: true, st };
 }
-function moveClick() {
+// press on a piece to pick it up (v312: drag, not click and click again)...
+function movePick() {
   updateGhost();
   const s = ghostSpot;
-  if (!moving) {
-    if (!s || !s.st) { sfx.nope(); toast('Click a station, crafting table, crate or chest to move it.'); return; }
-    const [x, z] = stMid(s.st);
-    if (Math.hypot(x - H.x, z - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to pick that up.'); return; }
-    moving = s.st; sfx.remove();
-    toast(`Moving the ${KIND_SLOT[moving.kind].name.toLowerCase()}. Click where it should go; right click puts it back.`, 'calm');
-    updateGhost();
-    return;
-  }
-  if (!s) return;
-  if (s.c === moving.c && s.r === moving.r && s.ry === moving.ry) { moving = null; sfx.place(); updateGhost(); return; }
-  if (!s.go) { sfx.nope(); toast(s.why); return; }
+  if (!s || !s.st) { sfx.nope(); toast('Drag a station, crafting table, crate or chest to move it.'); return; }
+  const [x, z] = stMid(s.st);
+  if (Math.hypot(x - H.x, z - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to pick that up.'); return; }
+  moving = s.st; sfx.remove();
+  updateGhost();
+}
+// ...and let go to set it down there; somewhere it can't go, it stays where it was
+function moveDrop() {
+  if (!moving) return;
+  updateGhost();
+  const s = ghostSpot;
+  if (!s || (s.c === moving.c && s.r === moving.r && s.ry === moving.ry)) { moving = null; updateGhost(); return; }
+  if (!s.go) { moving = null; sfx.nope(); toast(s.why); updateGhost(); return; }
   relocateStation(moving, s);
   moving = null;
   sfx.place();
@@ -15700,7 +15703,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 311, crashSeen = new Map();
+const GAME_VERSION = 312, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15818,6 +15821,13 @@ window.GAME = {
     forcedPick = { x, y: LV[T(Math.floor(x), Math.floor(z))] * STEP, z, wall: null };
     updateGhost(); placePiece(); forcedPick = null;
     return { moving: moving && moving.kind, why: ghostSpot && ghostSpot.why };
+  },
+  moveDrag: (x0, z0, x1, z1) => {
+    if (buildKind !== 'move') setBuildKind('move');
+    forcedPick = { x: x0, y: 0, z: z0, wall: null }; pressBuild();
+    const held = moving && moving.kind;
+    forcedPick = { x: x1, y: 0, z: z1, wall: null }; updateGhost(); releaseBuild(); forcedPick = null;
+    return { held, moving: moving && moving.kind };
   },
   builtTables: () => TABLES.filter(t => t.built).map(t => [t.kind, t.c, t.r]),
   // tests: the world's arrays and helpers, to check them in bulk
