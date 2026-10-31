@@ -217,7 +217,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 body.noUI .hud, body.noUI #fx, body.noUI #sub, body.noUI #bar, body.noUI #modes, body.noUI #hotbar, body.noUI #modeTag, body.noUI #prompt, body.noUI #xpBar,
 body.noUI #target, body.noUI #toast, body.noUI #padCursor, body.noUI #tuning, body.noUI #gpuPanel { display: none !important; }
 #showUI { position: fixed; top: 10px; right: 10px; z-index: 30; padding: 6px 8px; font-size: 9px; opacity: 0; transition: opacity 0.2s; }
-#showUI:hover, #showUI:focus-visible { opacity: 0.85; }
+#showUI:hover, #showUI:focus-visible, #showUI.fps { opacity: 0.85; }
 body:not(.noUI) #showUI { display: none; }
 #fpsTag { align-self: flex-end; padding: 5px 8px; font-family: var(--display); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* the profiler (G), Crafting and Conquest's: frame rate, GPU and CPU time per part of the frame, and spike capture */
@@ -231,6 +231,7 @@ body:not(.noUI) #showUI { display: none; }
 .prof th, .prof td { text-align: left; padding: 1px 8px 1px 0; white-space: nowrap; }
 .prof th { color: var(--dim); font-weight: normal; }
 .prof td:nth-child(2) { text-align: right; }
+.prof td:first-child { white-space: normal; max-width: 300px; }
 .prof b { font-weight: normal; color: var(--bone); }
 .prof .ptrack { width: 140px; min-width: 80px; }
 .prof .pbar { display: block; height: 8px; background: var(--gold); opacity: 0.8; }
@@ -14511,7 +14512,9 @@ function updateSky() {
     wasNight = night;
   }
   const hour = clock * 24;
-  $('clock').textContent = hour < 5 ? 'Night' : hour < 8 ? 'Dawn' : hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : hour < 20 ? 'Dusk' : 'Night';
+  // (set only when it changes: writing the same text each frame still makes the browser lay out and repaint the plate)
+  const period = hour < 5 ? 'Night' : hour < 8 ? 'Dawn' : hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : hour < 20 ? 'Dusk' : 'Night';
+  if ($('clock').textContent !== period) $('clock').textContent = period;
   drawDayStrip();
   for (const id of ['clock', 'region']) { const e = $(id); if (e.title !== e.textContent) e.title = e.textContent; }
 }
@@ -15863,8 +15866,13 @@ function parchment() {
   if (parchPat.setTransform) parchPat.setTransform(new DOMMatrix().scale(512 / PARCH_IMG.naturalWidth));
   return parchPat;
 }
+// (phones draw the minimap 20 times a second, not every frame: each drawing is raster and upload work for the same GPU
+// the world needs, outside the profiler's timers)
+let miniDrawT = 0;
 function drawMini(dt) {
   miniT -= dt;
+  if (MOBILE && (miniDrawT -= dt) > 0) return;
+  miniDrawT = 0.05;
   // repaint when the clock says, or before the hero walks off the painted area
   const S = miniSnap.s, R = miniSnap.r, cx = miniSnap.x + R, cz = miniSnap.z + R;
   if (miniT <= 0 || S !== miniZoom || Math.max(Math.abs(H.x - cx), Math.abs(H.z - cz)) > 6 / Math.min(1, S) + 4) { paintMini(); miniT = 0.25; }
@@ -17129,6 +17137,10 @@ function frameBody(now) {
   if (fpsAcc > 0.5) {
     fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
     if (OPTIONS.showFps) fpsTag.textContent = `${Math.round(fps)} FPS · ${(1000 / fps).toFixed(1)} ms`;
+    // (with the HUD hidden, the frame rate shows on the SHOW UI button, so the HUD's own cost can be measured)
+    const su = $('showUI'), sut = OPTIONS.showFps && document.body.classList.contains('noUI') ? `SHOW UI · ${Math.round(fps)} FPS` : 'SHOW UI';
+    if (su.textContent !== sut) su.textContent = sut;
+    su.classList.toggle('fps', sut !== 'SHOW UI');
   }
   pollPad(dt);
   prof.lap('input');
@@ -17184,7 +17196,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 361, crashSeen = new Map();
+const GAME_VERSION = 362, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
