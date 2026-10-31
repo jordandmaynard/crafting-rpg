@@ -17,6 +17,8 @@ import * as M from './materials.js';
 
 const DEPTH = 'depth32float';
 const COLOR_RT = 'rgba16float';   // render targets keep light brighter than white, for eye adaptation and HDR
+// (a target's colorFormat overrides it, set before it's first drawn: 'rgba8unorm' halves a phone's memory traffic
+// when nothing needs light over white: no eye adaptation, HDR or bloom)
 const OBJ_PAGE = 4096;             // object blocks per uniform buffer
 const FRAME_SLOTS = 64;
 const SHADOW_FORMAT = 'depth32float';
@@ -207,7 +209,7 @@ class Renderer {
     let s = this._snaps.get(rt);
     if (!s || s.src !== g) {
       if (s) this._trash.push(s.colorT, s.depthT);
-      const colorT = this.device.createTexture({ size: [w, h], format: COLOR_RT, usage: T.TEXTURE_BINDING | T.COPY_DST });
+      const colorT = this.device.createTexture({ size: [w, h], format: rt.colorFormat || COLOR_RT, usage: T.TEXTURE_BINDING | T.COPY_DST });
       const depthT = this.device.createTexture({ size: [w, h], format: DEPTH, usage: T.TEXTURE_BINDING | T.COPY_DST });
       const tex = (t, depth) => { const x = new M.Texture(); x.isViewTexture = true; x.isDepthTexture = depth; x.view = t.createView(); return x; };
       s = { src: g, colorT, depthT, color: tex(colorT, false), depth: tex(depthT, true) };
@@ -537,6 +539,7 @@ class Renderer {
       for (const c of o.children) visit(c);
     };
     visit(scene);
+    this.info.casters = casters.length; if (this.keepCasters) this.lastCasters = casters;
     const pass = this._enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.shadowView, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 }, timestampWrites: this._tsw('shadow map') });
     this.info.passes++; this.info.passTotal = (this.info.passTotal || 0) + 1;
     pass.setBindGroup(0, this.frameBGShadow, [slot * FRAME_BYTES]);
@@ -646,12 +649,12 @@ class Renderer {
     if (!g || g.version !== rt.version) {
       if (g) this._trash.push(g.color, g.depth);
       const w = Math.max(1, rt.width | 0), h = Math.max(1, rt.height | 0), T = GPUTextureUsage;
-      const color = dev.createTexture({ size: [w, h], format: COLOR_RT, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_SRC });
+      const color = dev.createTexture({ size: [w, h], format: rt.colorFormat || COLOR_RT, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_SRC });
       const depth = dev.createTexture({ size: [w, h], format: DEPTH, usage: T.RENDER_ATTACHMENT | T.TEXTURE_BINDING | T.COPY_SRC });
       g = { color, depth, colorView: color.createView(), depthView: depth.createView(), version: rt.version, id: Math.random() };
       this._rts.set(rt, g);
     }
-    return { color: g.colorView, depth: g.depthView, format: COLOR_RT, width: rt.width, height: rt.height };
+    return { color: g.colorView, depth: g.depthView, format: rt.colorFormat || COLOR_RT, width: rt.width, height: rt.height };
   }
   // a texture's GPU copy and its sampler
   _texture(t) {

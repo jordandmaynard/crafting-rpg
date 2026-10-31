@@ -3283,6 +3283,9 @@ let camera = orthoCam;
 const OUTLINE = { on: 1, distance: 0.4, thickness: 1, strength: 0.73, color: '#000000' };
 const outlineRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
 outlineRT.depthTexture = new GFX.DepthTexture(1, 1);
+// phones (v361): the picture in 8 bits a channel, half the memory traffic of half floats. Nothing there needs light over
+// white (eye adaptation, HDR and bloom are off; turned on in T they'd clip at white).
+if (MOBILE) outlineRT.colorFormat = 'rgba8unorm';
 // the heat shimmer's offsets, in mosaic pixels, for the outline pass to read the whole picture shifted by (see HEAT)
 const heatRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
 outlineRT.depthTexture.type = GFX.UnsignedIntType;
@@ -3762,6 +3765,8 @@ function updateGI() {
 const shadowLayers = new GFX.Layers(); shadowLayers.enable(5);
 renderer.shadowLayers = shadowLayers;
 function renderWorld() {
+  // (the ground casts too unless SHADOWS.ground is off: phones, where its ~350k triangles were half the shadow map)
+  if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
   drawCrowds();
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
   const on = depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
@@ -3789,6 +3794,7 @@ function renderWorld() {
   // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
   const bend = on && WATER.refraction > 0;
   if (bend) { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
+  else { WATER_U.tRefr.value = noBend.color; WATER_U.tRefrD.value = noBend.depth; }
   WATER_U.refr.value = bend ? 1 : 0;
   renderer.passName = 'water';
   camera.layers.set(2); renderer.render(scene, camera);
@@ -5513,8 +5519,9 @@ webMat.emissive.set('#26262c');
 const WATER = { clarity: 2.09, turbidity: 2.13, waves: 2.5, waveSpeed: 2.75, rippleSize: 0.75, flow: 0.15, glitter: 2.6, roughness: 0.004, foam: 0, shoreFoam: 0,
   swell: 0.125, swellSize: 0.95, swellShade: 0.1, crests: 0, sparkle: 0.65, caustics: 1.1, shallows: 0, shoreLine: 0, shoreRipples: 0.65,
   causticFocus: 3.9, causticDepth: 0.1, refraction: 1.07 };
-// phones (v360): no caustics (2 ms a frame on Jordan's Adreno)
-if (MOBILE) WATER.caustics = 0;
+// phones (Jordan, v360-v361): no caustics (2 ms a frame on his Adreno) and no bending, whose copy of the picture
+// splits the frame's render pass in two
+if (MOBILE) { WATER.caustics = 0; WATER.refraction = 0; }
 const waveTex = (() => {
   // tileable value noise (lattices whose periods divide the texture): rg its slope, b the height, a foam lace
   const S = 256, rnd = mulberry32(7717), H = new Float32Array(S * S), F = new Float32Array(S * S);
@@ -6470,7 +6477,14 @@ function updateHeat() {
 }
 const caustics = new GFX.Caustics(renderer, waveTex);
 WATER_U.tCaus.value = caustics.texture;
-{ const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
+// what the water (and spray and smoke) read while there's no bending: a 1 × 1 copy of its own, depth cleared to far.
+// (It used to be a copy of outlineRT, which the next copy of outlineRT after a resize, the aim decal's, threw away
+// while the water still held it: "Destroyed texture" every frame with refraction 0.)
+const noBendRT = new GFX.WebGLRenderTarget(1, 1, { depthBuffer: true });
+renderer.setRenderTarget(noBendRT); renderer.clear();
+const noBend = renderer.snapshot(noBendRT);
+renderer.setRenderTarget(null);
+WATER_U.tRefr.value = noBend.color; WATER_U.tRefrD.value = noBend.depth;
 // splat this frame's caustics, before the water reads them
 function updateCaustics() {
   const P = 9 * Math.max(0.2, WATER.rippleSize), t = WATER_U.time.value, sd = WATER_U.sunDir.value;
@@ -14425,7 +14439,7 @@ function updateFog(dusk, day) {
 // the view's centre, slid only in whole texels of the map so shadow edges don't crawl as you walk.
 // lowAngle / fullAngle: the sun's (or moon's) height above the horizon, in degrees, where shadows have faded to
 // nothing, and where they reach full strength
-const SHADOWS = { on: 1, strength: 1, range: 23, softness: 0.5, lowAngle: 10, fullAngle: 50 };
+const SHADOWS = { on: 1, strength: 1, range: 23, softness: 0.5, lowAngle: 10, fullAngle: 50, ground: MOBILE ? 0 : 1 };
 sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);   // (phones: half, v360)
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
 const shX = new GFX.Vector3(), shY = new GFX.Vector3(), shZ = new GFX.Vector3(), shC = new GFX.Vector3();
@@ -16235,6 +16249,7 @@ const TUNING = [
   ]],
   ['Shadows', [
     [SHADOWS, 'on', 'Sun and moon shadows (0 off, 1 on)', 0, 1, 1],
+    [SHADOWS, 'ground', 'The ground casts shadows (cliffs onto the land below; off by default on phones)', 0, 1, 1],
     [renderer, 'mergePasses', 'Merge render passes (fewer GPU passes; joins profiler rows; on by default on phones)', 0, 1, 1],
     [SHADOWS, 'strength', 'How much light a shadow takes away', 0, 1, 0.01],
     [SHADOWS, 'range', 'Reach round the view (tiles; smaller is sharper)', 10, 100, 1],
@@ -17169,7 +17184,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 360, crashSeen = new Map();
+const GAME_VERSION = 361, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -17502,6 +17517,12 @@ window.GAME = {
   rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
   aimForce: k => { aimForce = k; },
   aimShown: () => aimMesh.visible,
+  casters: () => { renderer.keepCasters = true; const L = renderer.lastCasters || []; const by = {};
+    for (const m of L) { const k = (m.name || '') + '|' + (m.material && (m.material.name || m.material.type || (m.material.isShaderMaterial ? 'shader' : 'mat'))) + '|' + (m.isInstancedMesh ? 'inst' + m.count : '');
+      const g = m.geometry, tri = g.index ? g.index.count / 3 : g.attributes.position.count / 3; by[k] = by[k] || [0, 0]; by[k][0]++; by[k][1] += tri * (m.isInstancedMesh ? m.count : 1); }
+    const top = L.map(m => { const g = m.geometry; const tri = (g.index ? g.index.count / 3 : g.attributes.position.count / 3) * (m.isInstancedMesh ? m.count : 1);
+      const lay = m.layers.mask; const mt = m.material; return [tri | 0, lay, mt.isShaderMaterial ? 'sh' : mt.isMeshStandardMaterial ? 'std' : 'basic', !!(mt.colorWrite === false), (m.parent && m.parent.name) || '', Object.keys(m.userData || {}).join('/'), g.boundingSphere && g.boundingSphere.radius !== undefined ? (+g.boundingSphere.radius).toFixed(1) : '?']; }).sort((a, b) => b[0] - a[0]).slice(0, 30);
+    return { n: L.length, by: Object.entries(by).sort((a, b) => b[1][1] - a[1][1]).slice(0, 25), top }; },
   inv: open => toggleInv(open),
   pack: () => PACK.map((id, i) => id && [id, PACK_N[i]]),
   addItem: (id, n) => addItem(id, n),
