@@ -167,7 +167,7 @@ The day and night follow Crafting and Conquest's sky without drawing it: the sun
 
 ## Use (F) and the minimap
 
-With more than one thing in reach to use with F (A), loot, a table, a station, a crate or a door, F picks the one most nearly ahead of where you face, then the nearest. The N button in the minimap's corner turns to show where north is; clicking it locks north up (kept), and then the camera's view is drawn as a pale cone from you.
+With more than one thing in reach to use with F (A), loot, a table, a station, a crate or a door, F picks the one most nearly ahead of where you face, then the nearest. The N button in the minimap's corner turns to show where north is, with a red pointer on its north edge (v314) since an N reads the same upside down; clicking it locks north up (kept), and then the camera's view is drawn as a pale cone from you.
 
 **Errors.** A frame that throws is caught: the game keeps running and a box at the top shows the error, where it happened and the version, with a COPY button, for browsers with no console to hand.
 
