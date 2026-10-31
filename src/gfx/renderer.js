@@ -171,6 +171,7 @@ class Renderer {
   // offset of the last render's frame in it). The bind group leaves the haze out, so a pass can write it.
   compute(cb) {
     this._runPendingClear();
+    this._closePass();
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
     cb(this._timedEncoder(this._enc), this._frameBindGroup(true), this._lastFrameOff);
   }
@@ -213,6 +214,7 @@ class Renderer {
       this._snaps.set(rt, s);
     }
     this._runPendingClear();
+    this._closePass();
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
     this._enc.copyTextureToTexture({ texture: g.color }, { texture: s.colorT }, [w, h]);
     this._enc.copyTextureToTexture({ texture: g.depth }, { texture: s.depthT }, [w, h]);
@@ -238,12 +240,26 @@ class Renderer {
     const list = this._collect(scene, camera);
     const clear = this._pendingClear && this._pendingClear.target === this.target ? this._pendingClear : null;
     this._pendingClear = null;
-    const pass = this._enc.beginRenderPass({
-      colorAttachments: [{ view: tgt.color, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: clear ? clear.color : undefined }],
-      depthStencilAttachment: { view: tgt.depth, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store', depthClearValue: 1 },
-      timestampWrites: this._tsw(this.passName || 'scene'),
-    });
-    this.info.passes++;
+    // with mergePasses, a render into the same target as the one before it, with nothing in between (no copy,
+    // compute, shadow map, clear or send), carries on in the same render pass: a tiled (phone) GPU then doesn't write
+    // the whole picture and depth out to memory and read them back between them. Its profiler row joins the pass's.
+    const name = this.passName || 'scene';
+    let open = this._open, pass;
+    if (open && this.mergePasses && !clear && open.target === this.target && open.color === tgt.color && open.enc === this._enc) {
+      pass = open.pass;
+      const p = this.profiler;
+      if (open.ts >= 0 && p && p.names[open.ts] !== undefined && !p.names[open.ts].endsWith(name)) p.names[open.ts] += ' + ' + name;
+    } else {
+      this._closePass();
+      const ts = this._tsw(name);
+      pass = this._enc.beginRenderPass({
+        colorAttachments: [{ view: tgt.color, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: clear ? clear.color : undefined }],
+        depthStencilAttachment: { view: tgt.depth, depthLoadOp: clear ? 'clear' : 'load', depthStoreOp: 'store', depthClearValue: 1 },
+        timestampWrites: ts,
+      });
+      this.info.passes++; this.info.passTotal = (this.info.passTotal || 0) + 1;
+      this._open = open = { pass, target: this.target, color: tgt.color, enc: this._enc, ts: ts && this.profiler ? this.profiler.names.length - 1 : -1 };
+    }
     pass.setBindGroup(0, this._frameBindGroup(), [frameOff]);
     const override = scene.overrideMaterial;
     let lastPipe = null;
@@ -264,13 +280,21 @@ class Renderer {
       if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
       this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
     }
-    pass.end();
+    if (!this.mergePasses) this._closePass();
     if (!this.target || this.target.isCanvasTarget) this.flush();
     else this._queueFlush();
   }
 
+  // end the render pass left open for the next render to carry on in (see mergePasses)
+  _closePass() {
+    const o = this._open;
+    if (!o) return;
+    this._open = null;
+    o.pass.end();
+  }
   // send the frame's work
   flush() {
+    this._closePass();
     if (!this._enc) return;
     this._runPendingClear();
     const q = this.device.queue;
@@ -318,6 +342,7 @@ class Renderer {
     const c = this._pendingClear;
     if (!c) return;
     this._pendingClear = null;
+    this._closePass();
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
     const tgt = this._targetViews(c.target);
     this._enc.beginRenderPass({
@@ -492,6 +517,7 @@ class Renderer {
   }
   // (casters are the meshes on the camera's layers, or on shadowLayers when that's set)
   _renderShadow(scene, camera, sun) {
+    this._closePass();
     const sh = sun.shadow, cam = sh.camera;
     this._ensureShadow(Math.max(1, sh.mapSize.x | 0));
     cam.position.setFromMatrixPosition(sun.matrixWorld);
@@ -512,7 +538,7 @@ class Renderer {
     };
     visit(scene);
     const pass = this._enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.shadowView, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 }, timestampWrites: this._tsw('shadow map') });
-    this.info.passes++;
+    this.info.passes++; this.info.passTotal = (this.info.passTotal || 0) + 1;
     pass.setBindGroup(0, this.frameBGShadow, [slot * FRAME_BYTES]);
     let last = null;
     for (const mesh of casters) {
@@ -666,6 +692,9 @@ class Renderer {
     return s;
   }
   _module(code) {
+    // (shadowTaps 5: the sun's shadow from 5 of the 17 PCF taps, for phones; set before the first draw)
+    if (this.shadowTaps === 5) code = code.replace('for (var i = 0; i < 17; i++) { sum += textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + PCF[i] * r, z); }\n  return sum / 17.0;',
+      [3, 5, 8, 11, 13].map(i => `sum += textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + PCF[${i}] * r * 1.4, z);`).join(' ') + '\n  return sum / 5.0;');
     let m = this._modules.get(code);
     if (!m) {
       m = this.device.createShaderModule({ code });
