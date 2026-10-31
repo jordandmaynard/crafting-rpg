@@ -4275,7 +4275,7 @@ function updateTrample(dt) {
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
 const GRASS = { on: 1, density: 16, range: 30, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
-  variation: 0.1, soft: 0.81, flowerShape: 1, flowerCup: 0.1, flowerDome: 0.5, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
+  variation: 0.1, soft: 0.81, flowerSides: 4, flowerPeak: 1, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard; 8 and 9 a
 // field's wheat, its rows east-west or north-south (see Wheat below)
@@ -4338,7 +4338,7 @@ const GRASS_U = {
   cMeadow: { value: C(GRASS.meadowColor) }, cForest: { value: C(GRASS.forestColor) }, cSwamp: { value: C(GRASS.swampColor) }, cReed: { value: C(GRASS.reedColor) },
   wheat: { value: { x: 0.7, y: 0.12, z: 1, w: 0 } },  // wheat's height, how tall cut wheat stands (share), how thick it grows
   cWheatY: { value: C('#6aa32f') }, cWheatR: { value: C('#d8b450') }, cWheatE: { value: C('#e8c068') },   // young, ripe, its ears
-  bloom: { value: { x: 1, y: 0.1, z: 0.5, w: 0 } },   // flowers' shape (0 a pyramid head, 1 four tapered petals), the petal tips' lift, the middle's dome
+  bloom: { value: { x: 4, y: 1, z: 0, w: 0 } },       // flower heads' sides round (4 to FLOWER_SIDES), the height of their peak
 };
 const fl = k => `vec3f(${FLOWER[k].r.toFixed(3)}, ${FLOWER[k].g.toFixed(3)}, ${FLOWER[k].b.toFixed(3)})`;
 const grassMat = new GFX.ShaderMaterial({ uniforms: GRASS_U, side: GFX.DoubleSide, lit: true,
@@ -4395,6 +4395,8 @@ fn grassColor(kind: u32) -> vec3f {
   let cell = ii / S;
   let tile = vec2i(U.win.xy) + vec2i(i32(cell % n), i32(cell / n));
   if (any(tile < vec2i(0)) || any(tile >= vec2i(${N}))) { return o; }
+  // (corners past the flower heads' sides go unused)
+  if (vi >= 36u + 6u * u32(U.bloom.x)) { return o; }
   let t = vec4u(round(textureLoad(tGrass, tile, 0) * 255.0));
   let kind = t.r >> 4u;
   if (kind == 0u || kind > 9u) { return o; }
@@ -4454,15 +4456,18 @@ fn grassColor(kind: u32) -> vec3f {
     else { let k = gRand(h, b + 10u) * 2.0944 + f32(side + j) * 2.0944; p = vec3f(bl.off.x + cos(k) * bl.w, -0.03, bl.off.y + sin(k) * bl.w); }
     col = c * mix(0.62, 1.12, up);
   } else {
-    // the head, an octahedron: on grass a fifth blade in the middle (its lower half underground), on a flower
-    // the bloom at its stem's tip, on a reed a cattail near its top (on some)
+    // the head, a double pyramid (four sides, an octahedron; a flower's can have more, rounder as they go up): on
+    // grass a fifth blade in the middle (its lower half underground), on a flower the bloom at its stem's tip, on a
+    // reed a cattail near its top (on some)
     let f = (vi - 36u) / 3u; let j = (vi - 36u) % 3u;
+    let sides = select(4u, max(4u, u32(U.bloom.x)), variant == 1u);
+    if (f >= 2u * sides) { return o; }
     var ctr = vec3f(0.0); var rad = 0.022 * U.tuft.z * 1.1; var top = U.tuft.y * (0.8 + 0.3 * gRand(h, 6u)); var bot = 0.05;
     var c = grassC; var lit = vec2f(0.62, 1.12);
     if (variant == 1u) {
       let s = bladeOf(h, 0u, 1u);
       let fs = U.look.z;
-      ctr = vec3f(s.off.x + s.tip.x, s.h, s.off.y + s.tip.y); rad = 0.045 * fs; top = 0.03 * fs; bot = 0.02 * fs;
+      ctr = vec3f(s.off.x + s.tip.x, s.h, s.off.y + s.tip.y); rad = 0.045 * fs; top = 0.03 * fs * U.bloom.y; bot = 0.02 * fs;
       var fc = array<vec3f, 4>(${fl(0)}, ${fl(1)}, ${fl(2)}, ${fl(3)});
       c = fc[u32(gRand(h, 7u) * 3.999)]; lit = vec2f(0.85, 1.1);
     } else if (variant == 3u) {
@@ -4477,20 +4482,11 @@ fn grassColor(kind: u32) -> vec3f {
       if (gRand(h, 8u) > 0.6) { rad = 0.0; top = 0.0; bot = 0.0; }
       c = vec3f(0.353, 0.227, 0.133); lit = vec2f(0.85, 1.05);
     }
-    let k = select(f, f - 4u, f >= 4u);
-    if (variant == 1u && U.bloom.x > 0.5) {
-      // four petals, each a kite out from a low dome in the middle: widest a little way out, tapering to a point at
-      // its tip (the head's eight faces, two to a petal, either side of its spine)
-      let pt = f / 2u; let half = select(-1.0, 1.0, f % 2u == 1u);
-      let a0 = f32(pt) * 1.5708 + gRand(h, 11u);
-      let R = rad * 1.35;
-      if (j == 0u) { p = ctr + vec3f(0.0, R * U.bloom.z * 0.5, 0.0); col = c * lit.x; }
-      else if (j == 1u) { let a = a0 + half * 0.55; p = ctr + vec3f(cos(a) * R * 0.5, R * U.bloom.z * 0.25, sin(a) * R * 0.5); col = c * mix(lit.x, lit.y, 0.6); }
-      else { p = ctr + vec3f(cos(a0) * R, R * U.bloom.y, sin(a0) * R); col = c * lit.y; }
-    } else if (j == 2u) { p = ctr + select(vec3f(0.0, top, 0.0), vec3f(0.0, -bot, 0.0), f >= 4u); col = c * select(lit.y, lit.x, f >= 4u); }
+    let k = select(f, f - sides, f >= sides);
+    if (j == 2u) { p = ctr + select(vec3f(0.0, top, 0.0), vec3f(0.0, -bot, 0.0), f >= sides); col = c * select(lit.y, lit.x, f >= sides); }
     else {
-      let e = select(k + j, k + 1u - j, f >= 4u);
-      let a = f32(e) * 1.5708 + gRand(h, 11u);
+      let e = select(k + j, k + 1u - j, f >= sides);
+      let a = f32(e) * 6.2832 / f32(sides) + gRand(h, 11u);
       p = ctr + vec3f(cos(a) * rad, 0.0, sin(a) * rad);
       col = c * select(mix(lit.x, lit.y, 0.35), lit.x, variant == 0u);
     }
@@ -4531,9 +4527,10 @@ fn grassColor(kind: u32) -> vec3f {
   return vec4f(applyFog(c, viewDepth(i.world)), 0.0);
 }`,
 });
-// one tuft's 60 corners (four blades of three sides, and an eight-sided head), made up in the shader
+// one tuft's corners (four blades of three sides, and a head of up to FLOWER_SIDES × 2 faces), made up in the shader
+const FLOWER_SIDES = 12;
 const grassGeo = new GFX.BufferGeometry();
-grassGeo.setAttribute('position', new GFX.BufferAttribute(new Float32Array(60 * 3), 3));
+grassGeo.setAttribute('position', new GFX.BufferAttribute(new Float32Array((36 + 6 * FLOWER_SIDES) * 3), 3));
 grassGeo.instanceCount = 0;
 const grassMesh = new GFX.Mesh(grassGeo, grassMat);
 grassMesh.frustumCulled = false; grassMesh.receiveShadow = true; grassMesh.matrixAutoUpdate = false;
@@ -4551,7 +4548,7 @@ function updateGrass() {
   Object.assign(u.tuft.value, { x: Math.min(g.density, 16), y: g.height, z: g.width, w: g.lean });
   Object.assign(u.look.value, { x: g.variation, y: g.soft, z: g.flowerSize, w: g.reedHeight });
   Object.assign(u.share.value, { x: g.grass, y: g.flowers, z: g.reeds, w: g.flowerHeight });
-  Object.assign(u.bloom.value, { x: g.flowerShape, y: g.flowerCup, z: g.flowerDome });
+  Object.assign(u.bloom.value, { x: clamp(Math.round(g.flowerSides), 4, FLOWER_SIDES), y: g.flowerPeak });
   u.cMeadow.value.set(g.meadowColor); u.cForest.value.set(g.forestColor); u.cSwamp.value.set(g.swampColor); u.cReed.value.set(g.reedColor);
   Object.assign(u.wheat.value, { x: WHEAT.height, y: WHEAT.stub, z: WHEAT.density });
   u.cWheatY.value.set(WHEAT.youngColor); u.cWheatR.value.set(WHEAT.ripeColor); u.cWheatE.value.set(WHEAT.earColor);
@@ -14946,9 +14943,8 @@ const TUNING = [
     [GRASS, 'lean', 'How far the blades lean out', 0, 3, 0.05],
     [GRASS, 'flowerSize', 'Flower blossom size', 0.3, 3, 0.05],
     [GRASS, 'flowerHeight', 'Flower height', 0.3, 3, 0.05],
-    [GRASS, 'flowerShape', 'Flower shape (0 pyramid head, 1 four tapered petals)', 0, 1, 1],
-    [GRASS, 'flowerCup', 'Petal flowers: tips lifted', 0, 1, 0.01],
-    [GRASS, 'flowerDome', 'Petal flowers: middle domed up', 0, 1.5, 0.01],
+    [GRASS, 'flowerSides', 'Flower head: sides round (4 a pyramid, more rounder)', 4, 12, 1],
+    [GRASS, 'flowerPeak', 'Flower head: height of the peak', 0, 4, 0.05],
     [GRASS, 'reedHeight', 'Reed height (tiles)', 0.2, 1.2, 0.01],
     [GRASS, 'variation', 'How much each tuft\'s shade varies', 0, 0.5, 0.01],
     [GRASS, 'soft', 'Lit like the ground (0: each blade by its own sides)', 0, 1, 0.01],
@@ -15477,7 +15473,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 292, crashSeen = new Map();
+const GAME_VERSION = 293, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
