@@ -10485,13 +10485,14 @@ const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawt
 let subOpen = null;
 // costs as the bar shows them: 2W logs, 2S stone, 2P planks, 2B stone blocks, 2I iron ingots
 const COST_TAG = { wood: 'W', stone: 'S', planks: 'P', stoneBlock: 'B', ironIngot: 'I', copperIngot: 'C', ironOre: 'Io', copperOre: 'Co', leather: 'L' };
-const costText = k => Object.entries(COST[k]).map(([r, n]) => n + COST_TAG[r]).join(' ');
+const costText = k => Object.entries(COST[k]).map(([r, n]) => COST_TAG[r] ? n + COST_TAG[r] : n + ' ' + ITEMS[r].name.toLowerCase()).join(' ');
+// a cost in words, e.g. "8 planks, 4 iron ingots" (whatever materials it names, tagged or not)
+const costWords = a => a.map(([r, n]) => n + ' ' + ITEMS[r].name.toLowerCase()).join(', ');
 const canAfford = k => Object.entries(COST[k]).every(([r, n]) => haveCount(r) >= n);
 // a build slot's tooltip: what it costs, and what you're short of
 function costTip(name, k) {
   const need = Object.entries(COST[k]), short = need.filter(([r, n]) => haveCount(r) < n);
-  const list = a => a.map(([r, n]) => n + ' ' + ITEMS[r].name.toLowerCase()).join(', ');
-  return titleCase(name) + ' · costs ' + list(need) + (short.length ? ' · missing ' + list(short.map(([r, n]) => [r, n - haveCount(r)])) : '');
+  return titleCase(name) + ' · costs ' + costWords(need) + (short.length ? ' · missing ' + costWords(short.map(([r, n]) => [r, n - haveCount(r)])) : '');
 }
 let slotEls = [];
 function slotEl(s, parent) {
@@ -10549,9 +10550,10 @@ function updateBar() {
       cd.style.height = (f * 100) + '%';
       cdn.textContent = f > 0 ? Math.ceil(s.left()) : '';
     }
-    if (slot.cost) {
-      el.classList.toggle('poor', !canAfford(slot.cost));
-      el.title = costTip(s.cat ? KIND_SLOT[catPick[s.cat]].name : s.name, slot.cost);
+    const cost = s.cat ? catPick[s.cat] : slot.cost;   // a group's slot prices the kind picked from it now
+    if (cost) {
+      el.classList.toggle('poor', !canAfford(cost));
+      el.title = costTip(s.cat ? KIND_SLOT[cost].name : s.name, cost);
     }
     if (mode === 'build') el.classList.toggle('on', s.cat ? catOf(buildKind) === s.cat : buildKind === s.id);
   }
@@ -12747,7 +12749,10 @@ function settle(spots) {
     s.queue = s.ok && !far && !afford && queueable(s.kind) && !queued;
     if (s.ok && far) s.why = 'Too far away to build.';
     else if (s.ok && !afford && queued) s.why = 'That is queued already.';
-    else if (s.ok && !afford) s.why = 'Not enough materials: ' + costText(s.kind) + '.';
+    else if (s.ok && !afford) {
+      const short = Object.entries(cost).filter(([r, n]) => have[r] < n).map(([r, n]) => [r, n - Math.max(0, have[r])]);
+      s.why = 'Not enough materials: costs ' + costWords(Object.entries(cost)) + (short.length ? ', missing ' + costWords(short) : '') + '.';
+    }
     if (s.go) for (const [r, n] of Object.entries(cost)) have[r] -= n;
     if (s.queue) waitFor(waiting, pl, s.kind);
   }
@@ -15609,7 +15614,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 308, crashSeen = new Map();
+const GAME_VERSION = 309, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
