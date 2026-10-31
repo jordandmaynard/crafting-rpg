@@ -19,6 +19,11 @@
 //   and half the ground without them; the point lights' (lamps, the torch), unshadowed; and lava's glow. It keeps
 //   the light gathered and how much of what's behind gets through, which the outline pass lays over the picture
 //   (shaders.js, hazeApply).
+// - upsample: with `block` 2, the march runs once for each 2 × 2 block of mosaic pixels (a quarter of the rays), out
+//   to the block's farthest depth, keeping what it had gathered at the block's nearest depth too; then each mosaic
+//   pixel takes the four blocks round it, blended by nearness (bilinear) and by how well their depths match its own,
+//   each read at its depth between those two. So an edge between near and far keeps its own haze on each side, and
+//   flat ground blends smoothly with no blocks. Steps still fall evenly, the same for neighbours: no jitter.
 
 import { MAX_POINTS } from './shaders.js';
 
@@ -38,9 +43,25 @@ struct HP {
   tint: vec4f,          // the haze's colour; w: how much of the light it scatters toward the camera is added (lift)
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
-                        // how much of the sky's (for shafts with more contrast)
+                        // how much of the sky's (for shafts with more contrast); mosaic pixels a ray, each way (block)
 }
 @group(2) @binding(0) var<uniform> H: HP;
+`;
+
+// how far along its ray (0 near plane, 1 far) what mosaic pixel px sees lies: its middle scene sample's depth
+const DEPTH_T = /* wgsl */ `
+fn depthT(px: vec2i) -> f32 {
+  let ss = i32(H.dims.z);
+  let dsz = vec2i(textureDimensions(sceneDepth));
+  let dd = textureLoad(sceneDepth, min(px * ss + ss / 2, dsz - 1), 0);
+  if (F.camPos.w < 0.5) {
+    let near = H.range.x; let far = H.range.y;
+    let z = dd * 2.0 - 1.0;
+    let D = 2.0 * near * far / (far + near - z * (far - near));
+    return (D - near) / (far - near);
+  }
+  return dd;
+}
 `;
 
 const GLOW_WGSL = /* wgsl */ `
@@ -92,9 +113,12 @@ const MARCH_WGSL = /* wgsl */ `
 ${COMMON}
 @group(2) @binding(1) var sceneDepth: texture_depth_2d;
 @group(2) @binding(2) var glowTex: texture_2d<f32>;
-@group(2) @binding(3) var hazeOut: texture_storage_2d<${OUT_FORMAT}, write>;
+@group(2) @binding(3) var hazeN: texture_storage_2d<${OUT_FORMAT}, write>;
 @group(2) @binding(4) var noiseTex: texture_3d<f32>;
 @group(2) @binding(5) var noiseSamp: sampler;
+@group(2) @binding(6) var hazeF: texture_storage_2d<${OUT_FORMAT}, write>;
+@group(2) @binding(7) var hazeR: texture_storage_2d<rg32float, write>;
+${DEPTH_T}
 // smooth value noise in one lookup: the lattice is the texture, and reading it at the smoothstepped place inside
 // the cell makes the hardware's trilinear blend the smooth one (8 lattice values without 8 hashes)
 fn noise3(p: vec3f) -> f32 {
@@ -204,29 +228,36 @@ fn glowAt(p: vec3f, g: f32) -> vec3f {
 }
 @compute @workgroup_size(8, 8, 1)
 fn march(@builtin(global_invocation_id) id: vec3u) {
-  let res = vec2u(H.dims.xy);
-  if (id.x >= res.x || id.y >= res.y) { return; }
-  let uv = (vec2f(id.xy) + 0.5) / H.dims.xy;
+  // this ray's block of mosaic pixels (one pixel with block 1), the ray through its middle
+  let B = max(i32(H.glow.w), 1);
+  let res = vec2i(H.dims.xy);
+  let q = vec2i(id.xy);
+  if (any(q >= (res + B - 1) / B)) { return; }
+  let lo = q * B; let hi = min(lo + B - 1, res - 1);
+  let uv = (vec2f(lo + hi) * 0.5 + 0.5) / H.dims.xy;
   let a = mix(mix(H.cn[0].xyz, H.cn[1].xyz, uv.x), mix(H.cn[2].xyz, H.cn[3].xyz, uv.x), uv.y);
   let b = mix(mix(H.cf[0].xyz, H.cf[1].xyz, uv.x), mix(H.cf[2].xyz, H.cf[3].xyz, uv.x), uv.y);
-  let near = H.range.x; let far = H.range.y;
-  // how far along the ray (0 near plane, 1 far) what this pixel sees lies: its middle sample's depth
-  let ss = i32(H.dims.z);
-  let dsz = vec2i(textureDimensions(sceneDepth));
-  let dd = textureLoad(sceneDepth, min(vec2i(id.xy) * ss + ss / 2, dsz - 1), 0);
-  var tS = dd;
-  if (F.camPos.w < 0.5) {
-    let z = dd * 2.0 - 1.0;
-    let D = 2.0 * near * far / (far + near - z * (far - near));
-    tS = (D - near) / (far - near);
+  // the nearest and farthest of what the block's pixels see: marched to the farthest, and what was gathered by
+  // the nearest kept too
+  var tN = 2.0; var tS = -1.0;
+  for (var y = lo.y; y <= hi.y; y++) {
+    for (var x = lo.x; x <= hi.x; x++) { let t = depthT(vec2i(x, y)); tN = min(tN, t); tS = max(tS, t); }
   }
+  textureStore(hazeR, q, vec4f(tN, tS, 0.0, 0.0));
   // the stretch of the ray in the air
   var t0 = 0.0; var t1 = tS;
   if (abs(b.y - a.y) > 1e-6) {
     let tA = (H.range.z - a.y) / (b.y - a.y); let tB = (H.range.w - a.y) / (b.y - a.y);
     t0 = max(min(tA, tB), 0.0); t1 = min(max(tA, tB), tS);
   } else if (a.y > H.range.z || a.y < H.range.w) { t1 = 0.0; }
-  if (t1 <= t0) { textureStore(hazeOut, vec2i(id.xy), vec4f(0.0, 0.0, 0.0, 1.0)); return; }
+  if (t1 <= t0) {
+    textureStore(hazeN, q, vec4f(0.0, 0.0, 0.0, 1.0)); textureStore(hazeF, q, vec4f(0.0, 0.0, 0.0, 1.0));
+    return;
+  }
+  // where the nearest depth falls along the stretch (0 to 1), and what had been gathered by it
+  let sN = (tN - t0) / (t1 - t0);
+  var gotN = sN <= 0.0;
+  var SN = vec3f(0.0); var TN = 1.0;
   let n = max(i32(H.dims.w), 1);
   let pa = mix(a, b, t0); let seg = mix(a, b, t1) - pa; let len = length(seg);
   let V = normalize(a - b);
@@ -326,13 +357,60 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       L += 0.5 * (sky + skyP) * select(1.0, mix(1.0, sh, H.glow.z), shadeSky);
       L += 0.5 * (sunL + sunP) * mix(1.0, sh, H.glow.y);
       // what the step scatters toward the camera, less what it loses again before it leaves the step
+      if (!gotN && sN <= s) {
+        let tp = exp(-k * len * (sN - sP));
+        SN = S + T * H.tint.rgb * L * (1.0 - tp); TN = T * tp; gotN = true;
+      }
       let t = exp(-k * len * (s - sP));
       S += T * H.tint.rgb * L * (1.0 - t);
       T *= t;
     }
     sP = s; uP = u; wP = w; pP = p; shP = shE; skyP = sky; sunP = sunL; restP = rest;
   }
-  textureStore(hazeOut, vec2i(id.xy), vec4f(S * H.tint.w, T));
+  if (!gotN) { SN = S; TN = T; }
+  textureStore(hazeN, q, vec4f(SN * H.tint.w, TN));
+  textureStore(hazeF, q, vec4f(S * H.tint.w, T));
+}
+`;
+
+const UP_WGSL = /* wgsl */ `
+${COMMON}
+@group(2) @binding(1) var sceneDepth: texture_depth_2d;
+@group(2) @binding(2) var hazeN: texture_2d<f32>;
+@group(2) @binding(3) var hazeF: texture_2d<f32>;
+@group(2) @binding(4) var hazeR: texture_2d<f32>;
+@group(2) @binding(5) var hazeOut: texture_storage_2d<${OUT_FORMAT}, write>;
+${DEPTH_T}
+// each mosaic pixel's haze from the four blocks round it: by nearness, and by how far its depth lies outside each
+// block's (in tiles, against a tolerance that grows with the block's own spread of depths, so sloping ground
+// still blends evenly while a trunk's pixels don't take the ground's haze behind it); each block read at this
+// pixel's depth, between what it had at its nearest and its farthest
+@compute @workgroup_size(8, 8, 1)
+fn up(@builtin(global_invocation_id) id: vec3u) {
+  let res = vec2i(H.dims.xy);
+  let p = vec2i(id.xy);
+  if (any(p >= res)) { return; }
+  let B = max(f32(H.glow.w), 1.0);
+  let hres = vec2i(textureDimensions(hazeR));
+  let t = depthT(p);
+  let span = max(H.range.y - H.range.x, 1e-3);
+  let hp = (vec2f(p) + 0.5) / B - 0.5;
+  let base = vec2i(floor(hp)); let f = hp - floor(hp);
+  var sum = vec4f(0.0); var wsum = 0.0;
+  for (var k = 0; k < 4; k++) {
+    let o = vec2i(k & 1, k >> 1);
+    let bw = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
+    if (bw <= 0.0) { continue; }
+    let c = clamp(base + o, vec2i(0), hres - 1);
+    let r = textureLoad(hazeR, c, 0).xy;
+    let hn = textureLoad(hazeN, c, 0); let hf = textureLoad(hazeF, c, 0);
+    var v = hf;
+    if (r.y - r.x > 1e-7) { v = mix(hn, hf, clamp((t - r.x) / (r.y - r.x), 0.0, 1.0)); }
+    let miss = max(max(r.x - t, t - r.y), 0.0) / (1.0 / span + 2.0 * (r.y - r.x));
+    let w = bw / (1.0 + miss * miss);
+    sum += v * w; wsum += w;
+  }
+  textureStore(hazeOut, p, sum / max(wsum, 1e-30));
 }
 `;
 
@@ -354,6 +432,16 @@ export class LitHaze {
       { binding: 3, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
       { binding: 4, visibility: C, texture: { sampleType: 'float', viewDimension: '3d' } },
       { binding: 5, visibility: C, sampler: { type: 'filtering' } },
+      { binding: 6, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
+      { binding: 7, visibility: C, storageTexture: { access: 'write-only', format: 'rg32float' } },
+    ] });
+    this.bglUp = device.createBindGroupLayout({ entries: [
+      { binding: 0, visibility: C, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: C, texture: { sampleType: 'depth' } },
+      { binding: 2, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 3, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 4, visibility: C, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 5, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
     ] });
     // the wisps' noise lattice (repeating)
     this.noise = device.createTexture({ label: 'haze noise', size: [NOISE, NOISE, NOISE], dimension: '3d', format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
@@ -380,17 +468,27 @@ export class LitHaze {
     };
     this.glowPipe = pipe(GLOW_WGSL, 'haze glow', 'glow', this.bglGlow);
     this.marchPipe = pipe(MARCH_WGSL, 'haze march', 'march', this.bglMarch);
-    this.dims = [0, 0]; this.glowSize = 0;
+    this.upPipe = pipe(UP_WGSL, 'haze upsample', 'up', this.bglUp);
+    this.dims = [0, 0]; this.block = 0; this.glowSize = 0;
     this.on = false; this.key = 0;
     this._marchKey = ''; this._glowKey = '';
     this._v = [];
   }
 
-  _allocate(X, Y) {
-    if (this.out) this.out.destroy();
-    this.out = this.device.createTexture({ label: 'haze', size: [X, Y], format: OUT_FORMAT, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
+  // the haze a mosaic pixel, and the march's a block: what it had at the block's nearest depth and farthest, and
+  // those depths
+  _allocate(X, Y, B) {
+    for (const t of [this.out, this.near, this.far, this.range]) if (t) t.destroy();
+    const U = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING;
+    const tex = (label, size, format) => this.device.createTexture({ label, size, format, usage: U });
+    const hs = [Math.ceil(X / B), Math.ceil(Y / B)];
+    this.out = tex('haze', [X, Y], OUT_FORMAT);
+    this.near = tex('haze near', hs, OUT_FORMAT);
+    this.far = tex('haze far', hs, OUT_FORMAT);
+    this.range = tex('haze depths', hs, 'rg32float');
     this.outView = this.out.createView();
-    this.dims = [X, Y]; this.key++; this._marchKey = '';
+    this.nearView = this.near.createView(); this.farView = this.far.createView(); this.rangeView = this.range.createView();
+    this.dims = [X, Y]; this.block = B; this.key++; this._marchKey = '';
   }
   _allocateGlow(S) {
     if (this.glowTex) this.glowTex.destroy();
@@ -403,7 +501,7 @@ export class LitHaze {
   uniforms() { return [this.on ? 1 : 0, 0, 0, 0, this.dims[0], this.dims[1], 0, 0]; }
 
   // Each frame, after the scene is drawn and before what reads it. f: { on, camera, res: [x, y] (mosaic pixels),
-  // ss (scene samples a mosaic pixel, each way), depth ({ view, id }: the scene's depth), steps, top, bottom (world
+  // ss (scene samples a mosaic pixel, each way), block (mosaic pixels a ray, each way: 1 or 2), depth ({ view, id }: the scene's depth), steps, top, bottom (world
   // y the air runs between), density, height, floor, ground (y where the height field doesn't reach), sun,
   // forward, sky, lamps, lava, lavaHeight, shafts (how much of the sun's light shadows take out), shadeSky (and
   // how much of the sky's), wisps, wispSize,
@@ -413,7 +511,8 @@ export class LitHaze {
     this.on = !!f.on;
     if (!this.on) return;
     const X = Math.max(1, f.res[0] | 0), Y = Math.max(1, f.res[1] | 0);
-    if (X !== this.dims[0] || Y !== this.dims[1]) this._allocate(X, Y);
+    const B = Math.max(1, Math.round(f.block ?? 1));
+    if (X !== this.dims[0] || Y !== this.dims[1] || B !== this.block) this._allocate(X, Y, B);
     const S = Math.max(1, f.hfSize | 0);
     if (S !== this.glowSize) this._allocateGlow(S);
     const cam = f.camera, d = new Float32Array(PARAM_BYTES / 4);
@@ -430,7 +529,7 @@ export class LitHaze {
     d.set([f.lava, f.wisps, f.wispSize, performance.now() / 1000], 48);
     d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
-    d.set([f.lavaHeight, f.shafts, f.shadeSky, 0], 60);
+    d.set([f.lavaHeight, f.shafts, f.shadeSky, B], 60);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {
@@ -443,10 +542,15 @@ export class LitHaze {
       this._marchKey = mk;
       this.marchBG = this.device.createBindGroup({ layout: this.bglMarch, entries: [
         { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.depth.view },
-        { binding: 2, resource: this.glowView }, { binding: 3, resource: this.outView },
-        { binding: 4, resource: this.noiseView }, { binding: 5, resource: this.noiseSamp }] });
+        { binding: 2, resource: this.glowView }, { binding: 3, resource: this.nearView },
+        { binding: 4, resource: this.noiseView }, { binding: 5, resource: this.noiseSamp },
+        { binding: 6, resource: this.farView }, { binding: 7, resource: this.rangeView }] });
+      this.upBG = this.device.createBindGroup({ layout: this.bglUp, entries: [
+        { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.depth.view },
+        { binding: 2, resource: this.nearView }, { binding: 3, resource: this.farView },
+        { binding: 4, resource: this.rangeView }, { binding: 5, resource: this.outView }] });
     }
-    // (two passes, so the profiler times the ground and the march apart)
+    // (separate passes, so the profiler times the ground, the march and the upsample apart)
     this.renderer.compute((enc, frameBG, frameOff) => {
       if (ground) {
         const pass = enc.beginComputePass({ label: 'lit haze ground' });
@@ -462,8 +566,15 @@ export class LitHaze {
       pass.setBindGroup(1, this.emptyBG);
       pass.setPipeline(this.marchPipe);
       pass.setBindGroup(2, this.marchBG);
-      pass.dispatchWorkgroups(Math.ceil(X / 8), Math.ceil(Y / 8), 1);
+      pass.dispatchWorkgroups(Math.ceil(X / B / 8), Math.ceil(Y / B / 8), 1);
       pass.end();
+      const up = enc.beginComputePass({ label: 'lit haze upsample' });
+      up.setBindGroup(0, frameBG, [frameOff]);
+      up.setBindGroup(1, this.emptyBG);
+      up.setPipeline(this.upPipe);
+      up.setBindGroup(2, this.upBG);
+      up.dispatchWorkgroups(Math.ceil(X / 8), Math.ceil(Y / 8), 1);
+      up.end();
     });
   }
 }

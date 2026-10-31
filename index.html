@@ -3059,7 +3059,7 @@ renderer.setGI(gi);
 // color: the haze's own; lift: how much of the light it scatters toward you it adds (1 all; less keeps shadows and
 // near things darker, while far things still fade into it).
 const HAZE = { on: 1, lift: 0.5, shafts: 1, shadeSky: 1, density: 0.2, height: 1.8, floor: 0, top: 2, sun: 1.9, forward: 0.22, sky: 1, lamps: 1, lava: 1.2, lavaHeight: 6.5,
-  wispsOn: 1, wisps: 0.45, wispSize: 9.5, windSpeed: 4.4, color: '#ffffff', steps: 16 };
+  wispsOn: 1, wisps: 0.45, wispSize: 9.5, windSpeed: 4.4, color: '#ffffff', steps: 16, block: 2 };
 const haze = new GFX.LitHaze(renderer);
 renderer.setHaze(haze);
 const hazeTint = new GFX.Color();
@@ -3315,7 +3315,7 @@ function hazeOn() { return HAZE.on > 0.5 && HAZE.density > 0; }
 function updateHaze() {
   const res = outlineMat.uniforms.res.value, a = CLOUDS.direction * Math.PI / 180;
   hazeTint.set(HAZE.color);
-  haze.update({ on: hazeOn(), camera, res: [res.x, res.y], ss: ssNow, depth: renderer.textureView(outlineRT.depthTexture), steps: HAZE.steps,
+  haze.update({ on: hazeOn(), camera, res: [res.x, res.y], ss: ssNow, depth: renderer.textureView(outlineRT.depthTexture), steps: HAZE.steps, block: HAZE.block,
     top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
     sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wispsOn > 0.5 ? HAZE.wisps : 0, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
@@ -14228,6 +14228,7 @@ const TUNING = [
   ]],
   ['Lit haze', [
     [HAZE, 'on', 'Lit haze (0 off, 1 on)', 0, 1, 1],
+    [HAZE, 'block', 'One ray per this many pixels each way (2: a 2×2 block, blended back by depth)', 1, 2, 1],
     [HAZE, 'density', 'Density on the ground (a tile)', 0, 0.5, 0.005],
     [HAZE, 'height', 'Thins out over this many tiles up', 0.25, 20, 0.25],
     [HAZE, 'floor', 'Share left high up', 0, 1, 0.01],
@@ -14859,6 +14860,7 @@ function toggleProfiler() {
 }
 $('gpuBtn').addEventListener('click', e => { toggleProfiler(); e.currentTarget.blur(); });
 
+let sceneCountT = 0, sceneMeshes = 0;
 // a frame that throws is caught and shown (see showCrash), and the next one still comes, so the game keeps going
 function frame(now) {
   try { frameBody(now); } catch (err) { showCrash(err); }
@@ -14910,15 +14912,19 @@ function frameBody(now) {
   prof.lap('render (encode)');
   renderer.endFrame();
   prof.lap('submit');
-  CROWD_READ.foes = foes.length; CROWD_READ.draws = renderer.info.draws; CROWD_READ.fps = fps; renderer.info.draws = 0;
-  prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'}`;
+  CROWD_READ.foes = foes.length; CROWD_READ.draws = renderer.info.draws; CROWD_READ.fps = fps;
+  // (how many draws the frame made, and how many meshes the scene holds, counted twice a second: one that climbs
+  // while you stand still is a leak)
+  if (!profPanel.hidden && (sceneCountT -= real) < 0) { sceneCountT = 0.5; sceneMeshes = 0; scene.traverse(o => { if (o.isMesh) sceneMeshes++; }); }
+  prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'} · ${renderer.info.draws} draws · ${sceneMeshes} meshes`;
+  renderer.info.draws = 0;
   prof.frame(frameStart, now, profLive, `World built in ${(genMs / 1000).toFixed(1)} s. GPU rows are each pass's time; "scene" rows by what's drawn.`);
   spikes.end(performance.now() - frameStart, now, [dayNum, clock]);
   if (spikes.changed && !profPanel.hidden) showSpikes();
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 276, crashSeen = new Map();
+const GAME_VERSION = 277, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15199,6 +15205,8 @@ window.GAME = {
   smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
   poke: (n, dmg = 3) => { foes.slice(0, n).forEach(f => hurtFoe(f, dmg, H.x, H.z)); },
   bars: () => ({ over: foes.filter(f => f.barEl && !f.barEl.hidden).length, top: !$('target').hidden }),
+  // the scene's meshes, by the name of the top-level object they hang under (to find what climbs)
+  meshes: () => { const by = {}; let n = 0; for (const top of scene.children) { let k = 0; top.traverse(o => { if (o.isMesh) k++; }); if (k) { const key = top.name || top.type; by[key] = (by[key] || 0) + k; n += k; } } return { n, by }; },
   crowd: () => ({ foes: foes.length, draws: CROWD_READ.draws, kinds: [...crowds.keys()], pieces: [...crowds.values()].reduce((n, C) => n + C.pieces.length, 0), shown: [...crowds.values()].reduce((n, C) => n + C.n, 0) }),
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
