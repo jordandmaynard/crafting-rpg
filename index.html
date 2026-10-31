@@ -10550,7 +10550,10 @@ function renderBar() {
   document.body.classList.toggle('building', mode === 'build');
   bar.innerHTML = ''; sub.innerHTML = '';
   if (mode !== 'build') subOpen = null;
-  slotEls = (mode === 'play' ? playSlots().filter(s => !TOUCH.on || !TOUCH_IDS.includes(s.id)) : SLOTS[mode]).map(s => slotEl(s, bar));
+  // (in build mode with no plot of yours yet, only the hearth that claims one: the rest come once you have it)
+  const noPlot = mode === 'build' && !ownsPlot();
+  if (noPlot) { subOpen = null; if (buildKind !== 'hearth') { buildKind = 'hearth'; moving = null; } }
+  slotEls = (mode === 'play' ? playSlots().filter(s => !TOUCH.on || !TOUCH_IDS.includes(s.id)) : noPlot ? SLOTS.build.filter(s => s.id === 'hearth' || s.id === 'exit') : SLOTS[mode]).map(s => slotEl(s, bar));
   renderTouch();
   // on the controller the group's own button steps through its row
   const catPad = { floors: 'X', walls: 'Y', doors: 'A', stations: 'LB' };
@@ -10848,6 +10851,77 @@ function lootGlow(kind, x, z) {
   m.layers.set(3);   // (drawn with the haze, after the grass, so the tufts don't paint over it)
   lootFx.add(m);
   return m;
+}
+// Plot borders as walls of light (v318, Jordan): in build mode before any plot is yours, every plot near you is
+// outlined by a white wall standing on its edge, brightest along the ground and fading out as it goes up (after
+// Crafting and Conquest's crystal beams, lower), with faint streaks running up it. T > Plot walls.
+const PLOT_WALL = { height: 1.3, edge: 0.9, body: 0.22, fade: 1.6, streaks: 0.5, speed: 0.5, radius: 70, steady: 1 };
+const PLOT_WALL_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) h: f32, @location(1) u: f32 }
+@vertex fn vs(v: VIn) -> VOut {
+  var o: VOut;
+  let w = O.model * vec4f(v.position.x, v.position.y + v.wall.x * U.height, v.position.z, 1.0);
+  o.pos = F.viewProj * w; o.h = v.wall.x; o.u = v.wall.y;
+  return o;
+}
+fn hsh(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn nse(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let k = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hsh(i), hsh(i + vec2f(1, 0)), k.x), mix(hsh(i + vec2f(0, 1)), hsh(i + vec2f(1, 1)), k.x), k.y);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let t = F.camDir.w;
+  let h = i.h;
+  // a bright line along the ground, a faint body over it, both fading out to nothing at the top
+  let fade = exp(-h * U.fade) * (1.0 - smoothstep(0.7, 1.0, h));
+  let line = exp(-h * 22.0);
+  let streak = nse(vec2f(i.u * 3.0, h * 2.5 - t * U.speed)) * 0.65 + nse(vec2f(i.u * 7.0 + 5.0, h * 5.0 - t * U.speed * 1.6)) * 0.35;
+  let flow = mix(1.0, smoothstep(0.25, 0.85, streak) * 2.0, U.streaks);
+  let a = (U.edge * line + U.body * flow) * fade;
+  if (a < 0.003) { discard; }
+  let ex = select(1.0, max(eyeState[0], 1e-3), F.post.x > 0.5);
+  return vec4f(U.color * a * pow(ex, -U.steady), 1.0);
+}`;
+const plotWallMat = new GFX.ShaderMaterial({
+  uniforms: { color: { value: new GFX.Color('#ffffff') }, height: { value: 1 }, edge: { value: 1 }, body: { value: 1 }, fade: { value: 1 }, streaks: { value: 1 }, speed: { value: 1 }, steady: { value: 1 } },
+  attributes: { wall: 'vec2f' }, code: PLOT_WALL_WGSL,
+  transparent: true, depthWrite: false, blending: GFX.AdditiveBlending, side: GFX.DoubleSide,
+});
+plotWallMat.keepAlpha = true;
+let plotWall = { mesh: null, x: 1e9, z: 1e9 };
+// a quad up each plot tile's side that faces off the plot, for the plots within PLOT_WALL.radius of (x, z)
+function buildPlotWalls(x, z) {
+  const R = PLOT_WALL.radius, pos = [], wall = [];
+  for (const pl of plots) {
+    if (!pl || pl.claimed || pl.x1 < x - R || pl.x0 > x + R || pl.z1 < z - R || pl.z0 > z + R) continue;
+    for (const i of pl.edge) {
+      const c = i % N, r = (i - c) / N, y = LV[i] * STEP + 0.02;
+      for (let d = 0; d < 4; d++) {
+        if (PLOT[i + DI[d]] === pl.id) continue;
+        // the side's two corners (N, E, S, W)
+        const [ax, az, bx, bz] = d === 0 ? [c, r, c + 1, r] : d === 1 ? [c + 1, r, c + 1, r + 1] : d === 2 ? [c + 1, r + 1, c, r + 1] : [c, r + 1, c, r];
+        const ua = ax + az, ub = bx + bz;
+        pos.push(ax, y, az, bx, y, bz, bx, y, bz, ax, y, az, bx, y, bz, ax, y, az);
+        wall.push(0, ua, 0, ub, 1, ub, 0, ua, 1, ub, 1, ua);
+      }
+    }
+  }
+  if (plotWall.mesh) { scene.remove(plotWall.mesh); plotWall.mesh.geometry.dispose(); plotWall.mesh = null; }
+  plotWall.x = x; plotWall.z = z;
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('wall', new GFX.Float32BufferAttribute(wall, 2));
+  const m = plotWall.mesh = new GFX.Mesh(g, plotWallMat);
+  m.frustumCulled = false; m.renderOrder = 6; m.layers.set(3); m.castShadow = m.receiveShadow = false;
+  scene.add(m);
+}
+function ownsPlot() { return plots.some(pl => pl && pl.claimed); }
+function updatePlotWalls() {
+  const on = mode === 'build' && !ownsPlot();
+  if (!on) { if (plotWall.mesh) { scene.remove(plotWall.mesh); plotWall.mesh.geometry.dispose(); plotWall.mesh = null; plotWall.x = 1e9; } return; }
+  for (const k of ['height', 'edge', 'body', 'fade', 'streaks', 'speed', 'steady']) plotWallMat.uniforms[k].value = PLOT_WALL[k];
+  if (Math.hypot(H.x - plotWall.x, H.z - plotWall.z) > PLOT_WALL.radius * 0.3) buildPlotWalls(H.x, H.z);
 }
 function updateLootGlow() {
   for (const k in PRISM) PRISM_U[k].value = PRISM[k];
@@ -11212,7 +11286,8 @@ addEventListener('keydown', e => {
   else if (mode === 'build' && /^Digit[1-9]$/.test(e.code)) {
     const n = +e.code.slice(5);
     // with a group's row open, the numbers pick from it; otherwise they open the groups
-    if (subOpen) { const k = BUILD_CATS[subOpen][n - 1]; if (k) slotAction(k); }
+    if (!ownsPlot()) { if (n === 4) slotAction('hearth'); }
+    else if (subOpen) { const k = BUILD_CATS[subOpen][n - 1]; if (k) slotAction(k); }
     else if (n <= 3) openCat(['floors', 'walls', 'doors'][n - 1]);
     else if (n === 4) slotAction('hearth');
     else if (n === 5) openCat('stations');
@@ -11515,14 +11590,15 @@ function pollPad(dt) {
     const row = BUILD_CATS[cat], k = row[(row.indexOf(buildKind) + 1) % row.length];
     setBuildKind(k); renderBar();
   };
-  if (hit('X')) cycle('floors');
-  if (hit('Y')) cycle('walls');
-  if (hit('A')) cycle('doors');
+  const own = ownsPlot();
+  if (own && hit('X')) cycle('floors');
+  if (own && hit('Y')) cycle('walls');
+  if (own && hit('A')) cycle('doors');
   if (hit('RB')) slotAction('hearth');
-  if (hit('LB')) cycle('stations');
+  if (own && hit('LB')) cycle('stations');
   if (hit('B')) { if (subOpen) { subOpen = null; renderBar(); } else { setMode('play'); return; } }
   if (hit('LT')) { if (moving) { moving = null; sfx.remove(); } else removePiece(); }
-  if (hit('R3')) slotAction('move');
+  if (own && hit('R3')) slotAction('move');
   if (hit('RT')) pressBuild();
   if (letGo('RT') && (drag || moving)) releaseBuild();
 }
@@ -13019,6 +13095,7 @@ function lightHearth(c, r) {
   pl.claimed = true; pl.hearth = i;
   paintPlot(pl);
   toast('The hearth is lit. This plot is yours to build on.', 'good');
+  if (mode === 'build') renderBar();
 }
 // A wall (not a door) on a side of the hearth builds it into that wall as a fireplace. It stays on that wall
 // while the wall stands; if it comes down it moves only when just one wall is left round it, and turns back
@@ -13045,6 +13122,7 @@ function putOutHearth(i) {
   pl.claimed = false; pl.hearth = null;
   paintPlot(pl);
   toast('The hearth goes out. The plot is no longer yours.');
+  if (mode === 'build') renderBar();
 }
 // flames that flicker, smoke from the chimney, a crackle close by, and warmth that heals
 let crackleT = 0;
@@ -13951,6 +14029,7 @@ function update(dt) {
   updateCutaway(inside);
 
   updateGhost();
+  updatePlotWalls();
   updateSky();
   updateLamps();
 
@@ -15250,6 +15329,15 @@ const TUNING = [
     [BOW_POSE, 'volleyCrouch', 'Volley: crouch', 0, 0.8, 0.01],
     [BOW_POSE, 'rainLean', 'Rain: lean back', 0, 0.8, 0.01],
   ]],
+  ['Plot walls', [
+    [PLOT_WALL, 'height', 'Height (tiles)', 0.2, 4, 0.05],
+    [PLOT_WALL, 'edge', 'Bright line along the ground', 0, 3, 0.01],
+    [PLOT_WALL, 'body', 'Wall glow', 0, 1.5, 0.01],
+    [PLOT_WALL, 'fade', 'Fades out going up (higher: sooner)', 0, 6, 0.05],
+    [PLOT_WALL, 'streaks', 'Streaks running up it', 0, 1, 0.01],
+    [PLOT_WALL, 'speed', 'Streak speed', 0, 3, 0.05],
+    [PLOT_WALL, 'radius', 'Plots shown within (tiles)', 20, 200, 5],
+  ]],
   ['Spear moves', [
     [SPEAR_POSE, 'hands', 'Both hands on the spear (0: the old one-handed hold)', 0, 1, 1],
     [SPEAR_POSE, 'lunge', 'Step into a poke (tiles)', 0, 0.3, 0.005],
@@ -15891,7 +15979,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 317, crashSeen = new Map();
+const GAME_VERSION = 318, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16059,7 +16147,8 @@ window.GAME = {
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
   plotAt: (c, r) => PLOT[T(c, r)],
   // tests: claim the plot under a tile without a hearth
-  claimPlot: (c, r) => { const pl = plots[PLOT[T(c, r)]]; if (!pl) return false; pl.claimed = true; paintPlot(pl); return true; },
+  claimPlot: (c, r) => { const pl = plots[PLOT[T(c, r)]]; if (!pl) return false; pl.claimed = true; paintPlot(pl); if (mode === 'build') renderBar(); return true; },
+  plotWalls: () => ({ on: !!plotWall.mesh, quads: plotWall.mesh ? plotWall.mesh.geometry.attributes.position.count / 6 : 0 }), barIds: () => slotEls.map(e => e.s.id),
   // drag a floor area or a wall run from one ground point to another, through the same checks the cursor uses
   dragBuild: (kind, x0, z0, x1, z1) => {
     setBuildKind(kind);
