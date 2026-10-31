@@ -175,7 +175,7 @@ With more than one thing in reach to use with F (A), loot, a table, a station, a
 
 Squares follow V Rising's proportions as shares of the screen's height (measured off a 1564px tall screenshot of it): action bar 4.9% (1.35% apart), hotbar 4.7% (0.6% apart), pack and paper doll 5.1% (pack 0.5% apart, doll 1.2%), with floors so they stay usable on short screens. The action bar's names show only in build mode, on a line under each square. Painted icons scale smoothly into any box; a pixel icon is drawn at a whole multiple of its pixels where that fits and otherwise squeezed into its box until it's repainted.
 
-Every item icon (pack, paper doll, crates, stations, recipes, hotbar, and the icon being dragged or flying into a crate) has a 1px black outline drawn round its shape at run time, so the paintings stand out from the squares behind them. It turns white while the item is pressed or dragged. The painted item icons so far are the cloth shirt, pants and shoes, the wooden sword, bow, spear, axe and hammer, and the four building resources.
+Every item icon (pack, paper doll, crates, stations, recipes, hotbar, and the icon being dragged or flying into a crate) has a 1px black outline drawn round its shape at run time, so the paintings stand out from the squares behind them. It turns white while the item is pressed or dragged. The painted item icons so far are the cloth shirt, pants and shoes, the wooden sword, bow, spear, axe and hammer, and every resource raw and refined (logs, stone, planks, stone blocks, bone, hide, leather, wheat, flour, bread, rough sandstone, sand, glass, and each metal's ore and ingot, Auralith now prismatic like abalone).
 
 ## Hotbar
 
