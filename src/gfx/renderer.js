@@ -128,6 +128,14 @@ class Renderer {
   setSize(w, h) { this.domElement.width = Math.max(1, w | 0); this.domElement.height = Math.max(1, h | 0); }
   setClearColor(c, a = 1) { this.clearColor.set(c); this.clearAlpha = a; }
   setRenderTarget(rt) { this._runPendingClear(); this.target = rt || null; }
+  // a second canvas to draw into, see-through where nothing is drawn (the inventory's character view): hand it to
+  // setRenderTarget like a render target; each render into it goes to the page as it's sent
+  canvasTarget(canvas) {
+    const context = canvas.getContext('webgpu');
+    context.configure({ device: this.device, format: this.format, alphaMode: 'premultiplied' });
+    if (!this._liveCanvases) this._liveCanvases = new Set();
+    return { isCanvasTarget: true, canvas, context, tex: null, depth: null, depthView: null, get width() { return canvas.width; }, get height() { return canvas.height; } };
+  }
   getRenderTarget() { return this.target; }
   // clear the current target's colour and depth (done as the next pass on it begins)
   clear() { this._runPendingClear(); this._pendingClear = { target: this.target, color: [this.clearColor.r, this.clearColor.g, this.clearColor.b, this.clearAlpha] }; }
@@ -218,7 +226,7 @@ class Renderer {
     if (this.autoClear && !this._pendingClear) this.clear();
     if (scene.matrixAutoUpdate !== false) scene.updateMatrixWorld();
     if (!camera.parent) camera.updateMatrixWorld();
-    const lights = this._gatherLights(scene);
+    const lights = this.lightsOverride || this._gatherLights(scene);
     if (lights.sun && lights.sun.castShadow && this.shadowMap.enabled && (this.shadowMap.autoUpdate || this.shadowMap.needsUpdate)) {
       this._renderShadow(scene, camera, lights.sun);
       this.shadowMap.needsUpdate = false;
@@ -256,7 +264,7 @@ class Renderer {
       this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
     }
     pass.end();
-    if (!this.target) this.flush();
+    if (!this.target || this.target.isCanvasTarget) this.flush();
     else this._queueFlush();
   }
 
@@ -271,6 +279,7 @@ class Renderer {
     for (const t of this._trash) t.destroy();
     this._trash.length = 0;
     this._enc = null; this.frameSlot = 0; this.objSlot = 0; this._canvasTex = null;
+    if (this._liveCanvases) { for (const c of this._liveCanvases) c.tex = null; this._liveCanvases.clear(); }
   }
   // the canvas's pixels as RGBA bytes (for tests), after drawing a frame into it
   async readPixels() {
@@ -315,7 +324,7 @@ class Renderer {
       depthStencilAttachment: { view: tgt.depth, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 },
       timestampWrites: this._tsw('clear'),
     }).end();
-    if (!c.target) this.flush(); else this._queueFlush();
+    if (!c.target || c.target.isCanvasTarget) this.flush(); else this._queueFlush();
   }
   // (found once a frame: every render in it shares them)
   _gatherLights(scene) {
@@ -584,6 +593,16 @@ class Renderer {
   // the colour and depth views to draw into, made (or remade, after a resize) as needed
   _targetViews(rt) {
     const dev = this.device;
+    if (rt && rt.isCanvasTarget) {
+      if (!rt.tex) { rt.tex = rt.context.getCurrentTexture(); this._liveCanvases.add(rt); }
+      const t = rt.tex, w = t.width, h = t.height;
+      if (!rt.depth || rt.depth.width !== w || rt.depth.height !== h) {
+        if (rt.depth) rt.depth.destroy();
+        rt.depth = dev.createTexture({ size: [w, h], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+        rt.depthView = rt.depth.createView();
+      }
+      return { color: t.createView(), depth: rt.depthView, format: this.format, width: w, height: h };
+    }
     if (!rt) {
       if (!this._canvasTex) { this._canvasTex = this.context.getCurrentTexture(); this._lastCanvasTex = this._canvasTex; }
       const t = this._canvasTex, w = t.width, h = t.height;
