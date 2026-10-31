@@ -119,6 +119,8 @@ The scene is drawn into float targets, so light brighter than white survives unt
 
 HDR (the options menu, **O**) switches the canvas to float with extended tone mapping. On an HDR display, highlights (the sun on things, lava, lit haze) then ease off above white toward a peak you set, rather than clipping. Off, or on a display without HDR, everything over white clips as before.
 
+The options menu also has **Show frame rate**: frames a second and the frame's time in milliseconds, under the GPU button, with none of the profiler's measuring behind it.
+
 ## Bloom and the grade
 
 Bloom (`src/gfx/bloom.js`): each frame, after the haze and the eye adaptation, a compute pass keeps whatever is brighter than a threshold at half the mosaic's size, eased in so nothing pops. Two more passes blur it with a Gaussian, and the outline pass adds it back as a soft glow round the sun's ring, lava, lamps and bright shafts. Last of all comes the grade:

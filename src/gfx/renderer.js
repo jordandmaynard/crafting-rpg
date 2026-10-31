@@ -317,8 +317,11 @@ class Renderer {
     }).end();
     if (!c.target) this.flush(); else this._queueFlush();
   }
+  // (found once a frame: every render in it shares them)
   _gatherLights(scene) {
+    if (this._lights && this._lights.frame === this._frameNo && this._lights.scene === scene) return this._lights.L;
     const L = { hemi: null, sun: null, points: [] };
+    this._lights = { frame: this._frameNo, scene, L };
     scene.traverse(o => {
       if (!o.isLight || !o.visible) return;
       if (o.isHemisphereLight) { if (!L.hemi) L.hemi = o; }

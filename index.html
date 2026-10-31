@@ -256,6 +256,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune .tune-row { display: flex; gap: 8px; margin-top: 10px; }
 .tune textarea { width: 100%; height: 80px; margin-top: 8px; font: 12px ui-monospace, monospace; background: rgba(0, 0, 0, 0.35); color: var(--bone); border: 2px solid var(--panel-edge); box-sizing: border-box; }
 #tuneBtn, #optsBtn, #gpuBtn { padding: 6px 8px; font-size: 9px; align-self: flex-end; }
+#fpsTag { align-self: flex-end; padding: 5px 8px; font-family: var(--display); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* the profiler (G), Crafting and Conquest's: frame rate, GPU and CPU time per part of the frame, and spike capture */
 .prof { position: fixed; right: max(330px, calc(env(safe-area-inset-right, 0px) + 330px)); top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 7; min-width: 300px; max-width: min(520px, calc(100% - 32px)); max-height: calc(100% - 100px); overflow: auto; overscroll-behavior: contain; padding: 10px 12px; box-sizing: border-box; background: rgba(18, 14, 26, 0.94); border: 3px solid var(--panel-edge); box-shadow: 4px 4px 0 #000; font: 16px/1.05 var(--body); font-variant-numeric: tabular-nums; color: var(--bone); -webkit-user-select: text; user-select: text; }
 @media (max-width: 860px) { .prof { right: 16px; } }
@@ -368,6 +369,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   <button id="optsBtn" title="Options (O)">OPTIONS</button>
   <button id="tuneBtn" title="Pixel and outline tuning (T)">TUNE</button>
   <button id="gpuBtn" title="Profiler: frame rate, GPU and CPU time per part of the frame, spike capture (G)">GPU</button>
+  <div class="plate" id="fpsTag" hidden title="Frames a second (Options: Show frame rate)"></div>
 </div>
 <div id="tuning" class="tune" hidden></div>
 <div id="gpuPanel" class="prof" hidden><div class="plive"></div><div class="pspike"></div></div>
@@ -437,6 +439,7 @@ button:disabled { opacity: 0.45; cursor: default; }
     <h1 id="optsTitle">OPTIONS</h1>
     <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
+    <label class="opt check"><input type="checkbox" id="optFps"><span>Show frame rate: frames a second and the frame's time, in the corner (nothing else is measured)</span></label>
     <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's or spear's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
     <button class="go" id="optsClose">DONE</button>
   </div>
@@ -2922,6 +2925,8 @@ renderer.shadowMap.enabled = true;
 stage.appendChild(renderer.domElement);
 const cv = renderer.domElement;
 const scene = new GFX.Scene();
+// (renderWorld brings every world matrix up to date once a frame, rather than the renderer in each of its renders)
+scene.matrixAutoUpdate = false;
 // distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
 const FOG = { on: 1, start: 0, end: 31, amount: 0.8, day: '#b8c4d8', dusk: '#d8a890', night: '#020203' };
 scene.fog = new GFX.Fog('#b8c4d8', 1e5, 1e5 + 1);
@@ -3285,7 +3290,7 @@ function eyeExposure() {
 // hdrPeak × white (src/gfx/renderer.js setHDR).
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false };
+  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false };
   try { return Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { return d; }
 })();
 let optsOpen = false;
@@ -3294,6 +3299,7 @@ function applyOptions() {
   $('optHdr').checked = OPTIONS.hdr; $('optPeak').value = OPTIONS.hdrPeak; $('optPeakV').textContent = OPTIONS.hdrPeak.toFixed(1);
   $('optPeak').disabled = !OPTIONS.hdr;
   $('optRelease').checked = OPTIONS.attackOnRelease;
+  $('optFps').checked = OPTIONS.showFps; $('fpsTag').hidden = !OPTIONS.showFps;
   try { localStorage.setItem(OPTIONS_KEY, JSON.stringify(OPTIONS)); } catch (err) { /* private window: just this visit */ }
 }
 function toggleOptions(open = !optsOpen) {
@@ -3305,6 +3311,7 @@ function toggleOptions(open = !optsOpen) {
   }
 }
 $('optHdr').addEventListener('change', () => { OPTIONS.hdr = $('optHdr').checked; applyOptions(); });
+$('optFps').addEventListener('change', () => { OPTIONS.showFps = $('optFps').checked; applyOptions(); });
 $('optRelease').addEventListener('change', () => { OPTIONS.attackOnRelease = $('optRelease').checked; applyOptions(); });
 $('optPeak').addEventListener('input', () => { OPTIONS.hdrPeak = parseFloat($('optPeak').value); applyOptions(); });
 $('optsClose').addEventListener('click', () => toggleOptions(false));
@@ -3440,6 +3447,7 @@ function renderWorld() {
   updateTrunkCut();
   updateWillows();
   updateCaustics();
+  scene.updateMatrixWorld();
   // the ground first, on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow
   // map is drawn in it, from the ground's and the world's casters both (shadowLayers)
   renderer.passName = 'ground';   // (the profiler's names for each render's pass)
@@ -8516,9 +8524,14 @@ function stepGround(until) {
   return ch;
 }
 // the chunk's next step: what stands on it (1), then its pieces, grass and drift (2)
+// the props cut out of chunk ch shown, once its objects are drawn without them
+function showDetached(ch) {
+  for (const d of detached.values()) if (Math.floor(d.c / CH) === ch.cx && Math.floor(d.r / CH) === ch.cz) d.g.visible = true;
+}
 function finishChunk(ch) {
   const t0 = performance.now();
-  if (ch.stage === 0) {
+  // (ch.redo: a streamed-in chunk's objects drawn again the same way, after a prop was cut out of them)
+  if (ch.stage === 0 || ch.redo) {
     // what stands on it, a band of rows a step (drawn into BAND_BUFS, which another chunk can take over, and then
     // this one starts again), then its meshes made, one a step, and swapped in together
     if (bandOwner !== ch) { bandOwner = ch; ch.band = 0; ch.made = {}; objBufs(BAND_BUFS, true); }
@@ -8531,7 +8544,7 @@ function finishChunk(ch) {
     else {
       for (const k of OBJ_MESHES) swapMesh(ch, k, ch.made[k]);
       bandOwner = null; ch.made = null;
-      ch.stage = 1;
+      if (ch.redo) { ch.redo = false; showDetached(ch); } else ch.stage = 1;
     }
     const k = ch.stage || ch.band > bands ? 2 : 1;
     chunkTime.parts[k] = Math.max(chunkTime.parts[k], performance.now() - t0);
@@ -8557,6 +8570,7 @@ function rebuildObjects(c, r) {
   if (!ch) return;
   // (one still streaming in draws its objects again from the first band)
   if (ch.stage === 0) { if (bandOwner === ch) bandOwner = null; return; }
+  if (ch.redo) { ch.redo = false; if (bandOwner === ch) bandOwner = null; showDetached(ch); }
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
   swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'metal', tmp.metal); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
@@ -8573,6 +8587,7 @@ function rebuildPieces(c, r) {
 function dropChunk(key) {
   const ch = chunks.get(key);
   chunkMeshes(ch).forEach(m => { scene.remove(m); m.geometry.dispose(); });
+  if (ch.redo) { ch.redo = false; if (bandOwner === ch) bandOwner = null; showDetached(ch); }
   // anything half-chopped in here heals and goes back into the chunk
   for (const [i, d] of detached) if (Math.floor(d.c / CH) === ch.cx && Math.floor(d.r / CH) === ch.cz && !d.falling) { scene.remove(d.g); detached.delete(i); }
   chunks.delete(key);
@@ -8612,7 +8627,7 @@ function streamChunks(budgetMs) {
       ch = stepGround(until); built++;
       if (!ch) continue;
     }
-    while (ch.stage < 2 && (budgetMs === Infinity || !built || performance.now() - t0 <= budgetMs)) { finishChunk(ch); built++; }
+    while ((ch.stage < 2 || ch.redo) && (budgetMs === Infinity || !built || performance.now() - t0 <= budgetMs)) { finishChunk(ch); built++; }
     ch.used = streamFrame;
   }
   if (chunks.size > CHUNK_KEEP) {
@@ -10775,7 +10790,11 @@ function detach(i, c, r) {
   [OUT, GLOW, METAL] = save;
   d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false };
   detached.set(i, d);
-  rebuildObjects(c, r);
+  // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
+  // once took 8-20 ms, a spike on the first blow); till they swap in, the chunk's own copy stands and this one hides
+  const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
+  if (ch && ch.stage === 2) { g.visible = false; if (ch.redo && bandOwner === ch) bandOwner = null; ch.redo = true; }
+  else rebuildObjects(c, r);
   return d;
 }
 // Every blow takes toughness off a prop in proportion to its damage (a plain swing takes one point), and
@@ -14861,6 +14880,7 @@ function toggleProfiler() {
 $('gpuBtn').addEventListener('click', e => { toggleProfiler(); e.currentTarget.blur(); });
 
 let sceneCountT = 0, sceneMeshes = 0;
+const fpsTag = $('fpsTag');
 // a frame that throws is caught and shown (see showCrash), and the next one still comes, so the game keeps going
 function frame(now) {
   try { frameBody(now); } catch (err) { showCrash(err); }
@@ -14871,7 +14891,11 @@ function frameBody(now) {
   spikes.begin();
   prof.lap(null);
   const real = (now - last) / 1000, dt = Math.min(0.05, real); last = now;
-  fpsAcc += real; fpsN++; if (fpsAcc > 1) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
+  fpsAcc += real; fpsN++;
+  if (fpsAcc > 0.5) {
+    fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
+    if (OPTIONS.showFps) fpsTag.textContent = `${Math.round(fps)} FPS · ${(1000 / fps).toFixed(1)} ms`;
+  }
   pollPad(dt);
   prof.lap('input');
   if (started && !mapOpen && !optsOpen && !spikes.holding) update(dt);
@@ -14924,7 +14948,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 277, crashSeen = new Map();
+const GAME_VERSION = 278, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -14962,6 +14986,28 @@ let genMs = 0;
 window.GAME = {
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
   prof: () => prof,
+  // how long the first blow on a prop takes to cut it out of its chunk: the chunk's objects drawn again, and its grass
+  detachProbe: () => {
+    const ch = [...chunks.values()].find(c => c.stage !== 0); if (!ch) return null;
+    const c = ch.cx * CH + 4, r = ch.cz * CH + 4, t0 = performance.now(); buildObjects(ch.cx, ch.cz, {}); const t1 = performance.now(); grassChunk(ch.cx, ch.cz); const t2 = performance.now(); rebuildObjects(c, r); const t3 = performance.now();
+    return { build: t1 - t0, grass: t2 - t1, rebuild: t3 - t2 };
+  },
+  // strike the nearest tree or rock once: how long it took, and whether its chunk is still redrawing / it's shown
+  chop: () => {
+    let best = null;
+    for (let dr = -8; dr <= 8; dr++) for (let dc = -8; dc <= 8; dc++) { const c = Math.floor(H.x) + dc, r = Math.floor(H.z) + dr, i = T(c, r); if (OBJ[OB[i]].hp && !detached.has(i) && (!best || Math.hypot(dc, dr) < best[3])) best = [i, c, r, Math.hypot(dc, dr)]; }
+    if (!best) return null;
+    const [i, c, r] = best, t0 = performance.now(); strikeProp(i, c, r, 1, 0, 0.01); const ms = performance.now() - t0;
+    return { ms, i };
+  },
+  chopState: i => { const d = detached.get(i), ch = d && chunks.get(Math.floor(d.r / CH) * NC + Math.floor(d.c / CH)); return d && { shown: d.g.visible, redo: !!(ch && ch.redo) }; },
+  // what one frame's scene walks cost on the CPU (ms each, averaged over n)
+  cpuProbe: (n = 20) => {
+    const t = f => { const a = performance.now(); for (let i = 0; i < n; i++) f(); return (performance.now() - a) / n; };
+    let nodes = 0; scene.traverse(() => nodes++);
+    return { nodes, matrices: t(() => scene.updateMatrixWorld()), walk: t(() => scene.traverse(o => o.visible)), lights: t(() => renderer._gatherLights(scene)),
+      collect: t(() => renderer._collect(scene, camera)), renderWorld: t(() => { renderWorld(); renderer.flush(); }) };
+  },
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
   compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
