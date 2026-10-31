@@ -116,6 +116,7 @@ body:not(.building) #bar .name { display: none; }
 /* the hand-made icons at a whole multiple of their pixels, at least --t across where that fits */
 .slot img.px { --t: var(--ic); }
 .slot img.paint { width: var(--ic); height: var(--ic); image-rendering: auto; border-radius: 3px; }
+.slot .ic svg.vec { width: var(--ic); height: var(--ic); image-rendering: auto; }
 /* painted icons fill their square and are drawn smooth wherever they go */
 img.paint, .cell img.paint, .flyIcon img.paint, #dragIcon img.paint { display: block; image-rendering: auto; pointer-events: none; -webkit-user-drag: none; }
 .cell img.paint { width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); }
@@ -9756,6 +9757,22 @@ function preloadPaint(k, sizes) {
 }
 const paintImg = (k, sizes) => (preloadPaint(k, sizes), `<img class="paint" src="icons/paint/${k}-64.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-64.webp?v=${PAINT_REV} 64w, icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`);
 for (const k of ['dash', 'bag', 'hammer', 'map', 'floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'hearth', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable']) BAR_ICON[k] = paintImg(k, 'max(66px, calc(9.8vh - 14px))');
+// the move tool: four green arrows lying on a flat 2:1 isometric tile of stone, drawn as vectors
+BAR_ICON.move = (() => {
+  const w = 4, a = 13, h = 10, t = 27;
+  const arm = [[w, w], [a, w], [a, h], [t, 0], [a, -h], [a, -w], [w, -w]];
+  const pts = [0, 1, 2, 3].flatMap(q => arm.map(([x, y]) => [[x, y], [y, -x], [-x, -y], [-y, x]][q])).map(p => p.join(',')).join(' ');
+  const iso = 'matrix(0.76,0.38,-0.76,0.38,0,0)', ns = 'vector-effect="non-scaling-stroke"';
+  return `<svg class="vec" viewBox="0 0 100 100" aria-hidden="true">
+    <g transform="translate(50,57)">
+      <g transform="translate(0,7)"><rect x="-31" y="-31" width="62" height="62" transform="${iso}" fill="#4e463e" stroke="#16141a" stroke-width="2.4" ${ns}/></g>
+      <rect x="-31" y="-31" width="62" height="62" transform="${iso}" fill="#8f877a" stroke="#16141a" stroke-width="2.4" ${ns}/>
+      <rect x="-26" y="-26" width="52" height="52" transform="${iso}" fill="none" stroke="#a69d8e" stroke-width="1.2" ${ns}/>
+      <g transform="translate(0,2.5)"><polygon points="${pts}" transform="${iso}" fill="#1d3a1a" opacity="0.55"/></g>
+      <polygon points="${pts}" transform="${iso}" fill="#4cc64a" stroke="#123a14" stroke-width="2.2" stroke-linejoin="round" ${ns}/>
+      <polygon points="${pts}" transform="${iso} translate(-1.2,-1.2) scale(0.82)" fill="#8ef07a" opacity="0.45"/>
+    </g></svg>`;
+})();
 // (the weapons' abilities: each strike under its bar key, sword slash, bow shoot, spear thrust)
 for (const [k, f] of [['sword', 'slash'], ['whirl', 'whirl'], ['lunge', 'lunge'], ['bow', 'shoot'], ['volley', 'volley'], ['rain', 'rain'],
   ['spear', 'thrust'], ['flurry', 'flurry'], ['harpoon', 'harpoon']]) BAR_ICON[k] = paintImg(f, 'max(26px, calc(4.9vh - 14px))');
@@ -10466,6 +10483,7 @@ const SLOTS = {
     { id: 'cat:doors', key: '3', pad: 'A', name: 'DOORS', cat: 'doors' },
     { id: 'hearth', key: '4', pad: 'RB', name: 'HEARTH', icon: 'hearth', cost: 'hearth' },
     { id: 'cat:stations', key: '5', pad: 'LB', name: 'STATIONS', cat: 'stations' },
+    { id: 'move', key: '6', pad: 'R3', name: 'MOVE', icon: 'move' },
     { id: 'remove', key: 'RMB', pad: 'LT', name: 'REMOVE', icon: 'remove' },
     { id: 'exit', key: 'B', pad: 'B', name: 'DONE', icon: 'hammer' },
   ],
@@ -11177,6 +11195,7 @@ addEventListener('keydown', e => {
     else if (n <= 3) openCat(['floors', 'walls', 'doors'][n - 1]);
     else if (n === 4) slotAction('hearth');
     else if (n === 5) openCat('stations');
+    else if (n === 6) slotAction('move');
   }
   else if (mode === 'play' && /^Digit[1-7]$/.test(e.code)) useHot(+e.code.slice(5) - 1);
   if (e.code === 'KeyQ') pressAbility('q');
@@ -11205,7 +11224,7 @@ function syncButtons(e) {
   if (on & 4) { mouse.mid = true; mouse.lastX = e.clientX; }
   if (off & 1) { mouse.down = false; if (drag) releaseBuild(); }
   // a right click that didn't turn the camera removes a piece in build mode
-  if (off & 2) { mouse.right = false; if (!mouse.turned && mode === 'build') removePiece(); }
+  if (off & 2) { mouse.right = false; if (!mouse.turned && mode === 'build') { if (moving) { moving = null; sfx.remove(); updateGhost(); } else removePiece(); } }
   if (off & 4) mouse.mid = false;
 }
 cv.addEventListener('pointerdown', e => {
@@ -11481,7 +11500,8 @@ function pollPad(dt) {
   if (hit('RB')) slotAction('hearth');
   if (hit('LB')) cycle('stations');
   if (hit('B')) { if (subOpen) { subOpen = null; renderBar(); } else { setMode('play'); return; } }
-  if (hit('LT')) removePiece();
+  if (hit('LT')) { if (moving) { moving = null; sfx.remove(); } else removePiece(); }
+  if (hit('R3')) slotAction('move');
   if (hit('RT')) pressBuild();
   if (letGo('RT') && drag) releaseBuild();
 }
@@ -12645,14 +12665,14 @@ function showGhosts(spots) {
 }
 function setMode(m) {
   mode = m;
-  H.swing = -1; H.bow = H.spear = null; drag = null;
+  H.swing = -1; H.bow = H.spear = null; drag = null; moving = null;
   renderBar();
   showGhosts([]); showPlotHover(0);
   if (m === 'build') toast(PAD.on ? 'Build mode. Claim a plot with a hearth (RB), then build on it: X floors, Y walls, A doors. Hold RT and move to lay rows.'
     : 'Build mode. Claim a plot with a hearth (4), then build on it: 1 floors, 2 walls, 3 doors. Drag to lay rows.', 'calm');
   if (m === 'build') { PAD.cur.x = Math.sin(H.face) * 2.5; PAD.cur.z = Math.cos(H.face) * 2.5; }
 }
-function setBuildKind(k) { buildKind = k; const cat = catOf(k); if (cat) catPick[cat] = k; updateBar(); }
+function setBuildKind(k) { buildKind = k; if (k !== 'move') moving = null; const cat = catOf(k); if (cat) catPick[cat] = k; updateBar(); }
 const BUILD_RANGE = 12;
 const plotWhy = i => PLOT[i] ? 'Claim this plot with a hearth before you build on it.' : 'You can only build on a plot you have claimed.';
 const standingIn = (x, z, r) => [H, ...foes].some(e => Math.hypot(e.x - x, e.z - z) < r);
@@ -12704,7 +12724,7 @@ function buildSpot() {
   if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
   if (isFloor(buildKind)) return floorSpot(c, r, buildKind);
   if (buildKind === 'hearth') return hearthSpot(c, r);
-  if (isStation(buildKind)) return stFoot(buildKind) === 1 ? stationSpot(c, r, buildKind) : stationSpot(Math.round(p.x) - 1, Math.round(p.z) - 1, buildKind);
+  if (isStation(buildKind)) return stationSpotAt(p, buildKind);
   // walls and doors snap to the tile side nearest the cursor
   const u = p.x - c, v = p.z - r;
   const dist = [v, 1 - u, 1 - v, u];
@@ -12772,6 +12792,7 @@ function queueWaits() {
 }
 function updateGhost() {
   if (mode !== 'build' || !H.alive || buildKind === 'remove') { showGhosts([]); ghostSpot = null; drag = null; showPlotHover(0); return; }
+  if (buildKind === 'move') { const s = ghostSpot = moveSpot(); ghostOk = !!(s && s.go); showGhosts(s ? [s] : []); showPlotHover(lastPick ? plotAt(lastPick.x, lastPick.z) : 0); return; }
   let spots;
   if (drag) spots = drag.spots = settle(dragSpots());
   else { const s = ghostSpot = buildSpot(); spots = s ? settle([s]) : []; }
@@ -12930,6 +12951,7 @@ function runBuildQueue(dt) {
 }
 function placePiece() {
   if (buildKind === 'remove') { removePiece(); return; }
+  if (buildKind === 'move') { moveClick(); return; }
   if (ghostSpot) placeMany([ghostSpot]);
 }
 // the left button: floors and walls start a drag, the rest go straight down
@@ -13186,9 +13208,9 @@ function takeDownStation(i) {
 }
 // a station on the 2 x 2 tiles round the grid corner nearest the cursor ((c, r) the north-west one), or a crate on the
 // tile under it, facing you: all its tiles clear, flat, dry, at one height, on your plot, with no wall between them
-function stationSpot(c, r, kind) {
+function stationSpot(c, r, kind, self = null) {
   const f = stFoot(kind), h = f / 2, i = T(c, r), all = stTiles(c, r, f);
-  let ok = c >= 1 && r >= 1 && c < N - 2 && r < N - 2 && all.every(t => LV[t] > 0 && LV[t] === LV[i] && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && !OBJ[OB[t]].solid && !OBJ[OB[t]].tile)
+  let ok = c >= 1 && r >= 1 && c < N - 2 && r < N - 2 && all.every(t => LV[t] > 0 && LV[t] === LV[i] && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && ((self && stationTile.get(t) === self) || (!OBJ[OB[t]].solid && !OBJ[OB[t]].tile)))
     && (f === 1 || (!WW[T(c + 1, r)] && !WW[T(c + 1, r + 1)] && !WN[T(c, r + 1)] && !WN[T(c + 1, r + 1)]));
   let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs ${f === 1 ? 'a tile' : '2 x 2 tiles'} of clear, flat, dry ground.`;
   if (ok && all.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
@@ -13196,6 +13218,68 @@ function stationSpot(c, r, kind) {
   if (ok && standingIn(c + h, r + h, f === 1 ? 0.7 : 1.25)) { ok = false; why = 'Something is standing in the way.'; }
   const a = Math.atan2(-(H.x - c - h), -(H.z - r - h)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
   return { kind, c, r, ok, why, x: c + h, z: r + h, y: LV[i] * STEP + 0.45, ry };
+}
+// a station's spot under the cursor point p: a crate on the tile, a 2 x 2 station round the nearest grid corner
+const stationSpotAt = (p, kind, self) => stFoot(kind) === 1 ? stationSpot(Math.floor(p.x), Math.floor(p.z), kind, self) : stationSpot(Math.round(p.x) - 1, Math.round(p.z) - 1, kind, self);
+// ---------- Move mode ----------
+// Click a station, crafting table, crate or chest on your plot to pick it up, then click where it should go. It
+// keeps everything in it and keeps working the whole time: it stays where it was (with a ghost over it) until it's
+// set down, then its tiles, crafting table entry and moving parts go across to the new spot. Picking another tool,
+// leaving build mode, the right button or clicking it again puts it back.
+let moving = null;
+function moveSpot() {
+  const p = lastPick = pickGround(false);
+  if (!p) return null;
+  if (moving) {
+    const s = stationSpotAt(p, moving.kind, moving);
+    s.go = s.ok && Math.hypot(s.x - H.x, s.z - H.z) <= BUILD_RANGE;
+    if (s.ok && !s.go) s.why = 'Too far away to move it there.';
+    return s;
+  }
+  // nothing carried: the piece under the cursor lights up
+  const st = stationTile.get(T(Math.floor(p.x), Math.floor(p.z)));
+  if (!st) return null;
+  const [x, z] = stMid(st);
+  return { kind: st.kind, c: st.c, r: st.r, x, z, y: LV[T(st.c, st.r)] * STEP + 0.45, ry: st.ry, ok: true, go: true, st };
+}
+function moveClick() {
+  updateGhost();
+  const s = ghostSpot;
+  if (!moving) {
+    if (!s || !s.st) { sfx.nope(); toast('Click a station, crafting table, crate or chest to move it.'); return; }
+    const [x, z] = stMid(s.st);
+    if (Math.hypot(x - H.x, z - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to pick that up.'); return; }
+    moving = s.st; sfx.remove();
+    toast(`Moving the ${KIND_SLOT[moving.kind].name.toLowerCase()}. Click where it should go; right click puts it back.`, 'calm');
+    updateGhost();
+    return;
+  }
+  if (!s) return;
+  if (s.c === moving.c && s.r === moving.r && s.ry === moving.ry) { moving = null; sfx.place(); updateGhost(); return; }
+  if (!s.go) { sfx.nope(); toast(s.why); return; }
+  relocateStation(moving, s);
+  moving = null;
+  sfx.place();
+  puff(s.x, s.y - 0.4, s.z, '#c8bca0', 5, 0.7);
+  updateGhost();
+}
+// carry a station across to spot s, contents, work and all
+function relocateStation(st, s) {
+  const f = stFoot(st.kind), tb = TABLES.find(t => t.built && t.c === st.c && t.r === st.r);
+  const oldC = st.c, oldR = st.r;
+  for (const t of stTiles(st.c, st.r, f)) { OB[t] = 0; stationTile.delete(t); }
+  stations.delete(T(st.c, st.r));
+  markTiles(oldC, oldR, f);
+  st.c = s.c; st.r = s.r; st.ry = s.ry;
+  stTiles(s.c, s.r, f).forEach((t, k) => { OB[t] = k ? O.STATIONX : STATION_KIND[st.kind].o; stationTile.set(t, st); });
+  stations.set(T(s.c, s.r), st);
+  if (tb) Object.assign(tb, { c: s.c, r: s.r, x: s.c + 1, z: s.r + 1, ry: s.ry });
+  const [x, z] = stMid(st);
+  st.fx.position.set(x, surfaceY(x, z), z); st.fx.rotation.y = st.ry;
+  markTiles(s.c, s.r, f);
+  for (const [c, r] of [[oldC, oldR], [s.c, s.r]]) { paintMapTile(c, r); markPieces(c, r); }
+  flushDirty();
+  if (openSt === st && invOpen) renderInv();
 }
 const STATION_REACH = 2.1;
 const nearStation = () => {
@@ -15616,7 +15700,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 310, crashSeen = new Map();
+const GAME_VERSION = 311, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15728,6 +15812,14 @@ window.GAME = {
     forcedPick = null;
     return { ok: ghostOk, why: ghostSpot && ghostSpot.why };
   },
+  // tests: move mode, a click at ground point (x, z): picks up or sets down
+  moveAt: (x, z) => {
+    if (buildKind !== 'move') setBuildKind('move');
+    forcedPick = { x, y: LV[T(Math.floor(x), Math.floor(z))] * STEP, z, wall: null };
+    updateGhost(); placePiece(); forcedPick = null;
+    return { moving: moving && moving.kind, why: ghostSpot && ghostSpot.why };
+  },
+  builtTables: () => TABLES.filter(t => t.built).map(t => [t.kind, t.c, t.r]),
   // tests: the world's arrays and helpers, to check them in bulk
   resources: a => { if (a) RESOURCES.amount = a; return RESOURCES.amount; },
   grass: () => {
