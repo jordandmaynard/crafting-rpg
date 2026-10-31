@@ -13819,7 +13819,7 @@ function spend(id, n) {
 // Floors, walls, fences, doors and gates you can't pay for when you lay them (from the pack and everything stored
 // on the plot) are queued instead: drawn as white see-through previews, they go up one at a time (every
 // BUILD_QUEUE.every seconds) as the crates, chests and stations on their plot come to hold what they cost, which is
-// taken from there. Order is kept for each material: a piece waits behind any piece laid before it that needs
+// taken from there (and from your pack while you stand on that plot). Order is kept for each material: a piece waits behind any piece laid before it that needs
 // something it needs too, but not behind one that needs only other things. Removing one (REMOVE) takes it off the
 // queue.
 const BUILD_QUEUE = { every: 0.35 };
@@ -13860,9 +13860,12 @@ function runBuildQueue(dt) {
     }
     // (one that can't be paid for yet, or needs something an earlier one is waiting on, waits, and holds up
     // everything after it that needs any of the same)
-    const sts = plotStores(q.plot), cost = Object.entries(COST[q.kind]), w = waiting.get(q.plot);
-    if (cost.some(([id]) => w && w.has(id)) || !cost.every(([id, n]) => storedCount(sts, id) >= n)) { waitFor(waiting, q.plot, q.kind); continue; }
-    for (const [id, n] of cost) takeStored(sts, id, n);
+    // (paid from the plot's stores, and from your pack too while you stand on that plot: Jordan, v364)
+    const sts = plotStores(q.plot), cost = Object.entries(COST[q.kind]), w = waiting.get(q.plot), onPlot = homePlot() === q.plot;
+    const have = id => storedCount(sts, id) + (onPlot ? countItem(id) : 0);
+    if (cost.some(([id]) => w && w.has(id)) || !cost.every(([id, n]) => have(id) >= n)) { waitFor(waiting, q.plot, q.kind); continue; }
+    for (const [id, n] of cost) if (onPlot) spend(id, n); else takeStored(sts, id, n);
+    if (onPlot && invOpen) renderInv();
     s.paid = true;
     placeSpot(s);
     flushDirty();
@@ -17196,7 +17199,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 363, crashSeen = new Map();
+const GAME_VERSION = 364, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
