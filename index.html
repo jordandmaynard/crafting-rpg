@@ -12377,10 +12377,23 @@ function axeBlocked(a, x0, z0) {
   const up = a.y - LV[i] * STEP;
   return up >= -0.1 && up <= 4;
 }
+// (v352, Jordan) the throw winds up first, a flat forehand like a frisbee: drawn back round on the right, then
+// whipped round and let go out in front (AXE_POSE.throwAt of throwTime), the arm following through
 function castAxeThrow() {
-  if (mode !== 'play' || !H.alive || H.cdQ > 0 || axeThrow || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
-  const a = Math.atan2(aim.x, aim.z);
-  H.face = a; H.swing = -1; H.cdQ = AXE.throwCd;
+  if (mode !== 'play' || !H.alive || H.cdQ > 0 || axeThrow || H.axeWind >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
+  H.face = Math.atan2(aim.x, aim.z); H.swing = -1; H.cdQ = AXE.throwCd;
+  H.axeWind = 0; H.axeLet = false;
+  sfx.swing();
+}
+function updateAxeWind(dt) {
+  if (!H.alive || weapon().kind !== 'axe' || H.dash >= 0 || H.flip) { H.axeWind = -1; return; }
+  H.axeWind += dt;
+  const T = AXE_POSE.throwTime;
+  if (!H.axeLet && H.axeWind >= T * AXE_POSE.throwAt) { H.axeLet = true; H.face = Math.atan2(aim.x, aim.z); launchAxe(); }
+  if (H.axeWind >= T) H.axeWind = -1;
+}
+function launchAxe() {
+  const a = H.face;
   axeThrow = { x: H.x + Math.sin(a) * 0.4, y: H.y + 0.62, z: H.z + Math.cos(a) * 0.4, dx: Math.sin(a), dz: Math.cos(a), dist: 0, out: true,
     hit: new Set(), spin: 0, tier: weapon().tier, t: 0, back: 0, rev: 0 };
   axeSpin.tiers.forEach((c, k) => { c.visible = WEAPON_TIERS[k] === axeThrow.tier; });
@@ -14549,10 +14562,10 @@ function update(dt) {
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
     } else if (m) {
-      const slow = (H.swing >= 0 ? (H.strike === 'smash' && H.combo === 3 ? 0 : 0.45) : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
+      const slow = (H.swing >= 0 ? (H.strike === 'smash' && H.combo === 3 ? 0 : 0.45) : H.axeWind >= 0 ? 0.45 : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
       // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
-      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
+      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !(H.axeWind >= 0)) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
     }
     vx += H.kx; vz += H.kz;
     H.kx *= Math.max(0, 1 - dt * 9); H.kz *= Math.max(0, 1 - dt * 9);
@@ -14574,11 +14587,12 @@ function update(dt) {
     if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear) startSwing();
     if (H.bow) updateBow(dt);
     if (H.spear) updateSpear(dt);
+    if (H.axeWind >= 0) updateAxeWind(dt);
     if (H.swing >= 0) {
       H.swing += dt;
       if (H.strike === 'smash' && H.combo === 3 && H.leap) leapStep(); else H.leap = null;
       const len = swingTime();
-      if (!H.hitDone && H.swing > len * (H.strike !== 'smash' || H.punch ? 0.4 : H.combo === 3 ? HAMMER.landAt : HAMMER_POSE.hitAt)) {
+      if (!H.hitDone && H.swing > len * (H.punch ? 0.4 : H.strike === 'chop' ? AXE_POSE.hitAt : H.strike !== 'smash' ? 0.4 : H.combo === 3 ? HAMMER.landAt : HAMMER_POSE.hitAt)) {
         H.hitDone = true;
         if (H.punch) swingHit(PUNCH.range, PUNCH.arc, PUNCH.dmg);
         else if (H.combo === 3) smashHit();
@@ -14588,7 +14602,7 @@ function update(dt) {
           cutArc(S.range[c], S.arc[c], H.face);
           // (the slash's arc flat, the axe's tipped on the diagonal, the uppercut's stood up)
           arcT = 0; arcMesh.rotation.y = H.face; arcMesh.scale.set(c === 1 ? -1 : 1, 1, 1);
-          arcMesh.rotation.z = H.strike === 'chop' ? (c === 1 ? -0.75 : 0.75) : H.strike === 'smash' && c === 2 ? Math.PI / 2 : 0;
+          arcMesh.rotation.z = H.strike === 'smash' && c === 2 ? Math.PI / 2 : 0;
         }
       }
       if (H.swing > len) H.swing = -1;
@@ -14963,6 +14977,46 @@ function hamRam() {
   const d = yawPitch(0, HAMMER_POSE.ramPitch);
   return hamPose([-0.05, 0.08, 0.14], { d, u: upright(d) }, { chestX: 0.15, crouch: HAMMER_POSE.crouch * 0.5 });
 }
+// The axe in one hand (v352, Jordan): the three blows sweep level (no longer on the diagonal), right to left, back,
+// then a bigger one right to left with a step; the throw winds up as a flat forehand, like a frisbee; the buzzsaw
+// holds it out flat at the side, the bit leading the spin. Plans as the hammer's (chest frame), with w easing them
+// on over the arm's own pose; the hand goes round its shoulder after the haft (biased forward, so it never comes
+// in through the chest). The bit points opposite u (its head is rolled a quarter turn), so u = -(the way it moves).
+// AXE_POSE is T > Axe moves.
+const AXE_POSE = { windup: 0.3, strikeEnd: 0.62, hitAt: 0.47, sweepBack: 2.0, sweepThrough: 1.6, reach: 0.2, height: 0.12,
+  twist: 0.7, hips: 0.3, crouch: 0.25, step: 0.3, lean: 0.15, bigger: 1.3, throwTime: 0.42, throwAt: 0.6, throwBack: 1.7 };
+let axPlan = null, axFreeze = null;
+// the hand's grip for a haft way d: round the right shoulder, the reach out along d (pushed forward)
+function axeGrip(d, y) {
+  const P = AXE_POSE, sh = hero.armR.position, f = nrm3([d[0], 0, d[2] + 0.6]);
+  return [sh.x + f[0] * P.reach, y, sh.z + f[2] * P.reach];
+}
+function axeSweep(phiFrom, phiTo, u, W, S, big, o = {}) {
+  const P = AXE_POSE, wind = smooth(0, W, u), k = smooth(W, S, u), sg = Math.sign(phiTo - phiFrom);
+  const phi = u < W ? phiFrom - sg * 0.2 * wind : phiFrom - sg * 0.2 + (phiTo - phiFrom + sg * 0.2) * k, w = arcWay(phi, 0);
+  const turn = (u < W ? -wind : -1 + 1.8 * k) * sg;
+  return { g: axeGrip(w.d, P.height), d: w.d, u: w.u.map(v => -sg * v), w: smooth(0, W * 0.6, u) * (1 - smooth(S + 0.08, 1, u)), body: true,
+    chestY: P.twist * big * turn, hips: P.hips * big * turn, chestX: P.lean * k, crouch: P.crouch * big * (u < W ? 0.5 * wind : 0.5 + 0.5 * k), step: P.step * big, ...o };
+}
+function axePlan() {
+  const P = AXE_POSE;
+  const kind = axFreeze ? axFreeze[0] : H.axeWind >= 0 ? 'throw' : H.swing >= 0 && H.strike === 'chop' ? H.combo : H.whirl >= 0 && H.whirlKind === 'buzz' ? 'buzz' : null;
+  if (kind === null) return null;
+  const u = axFreeze ? axFreeze[1] : 0;
+  if (kind === 'buzz') {
+    // out flat at the right side, the haft level and a little forward, the bit leading the spin (forward)
+    const t = axFreeze ? u * AXE.buzzTime : H.whirl, d = nrm3([-1, -0.05, 0.15]);
+    return { g: [hero.armR.position.x - 0.21, P.height + 0.06, 0.04], d, u: [0, 0, -1], w: smooth(0, 0.1, t) * (1 - smooth(AXE.buzzTime - 0.1, AXE.buzzTime, t)) };
+  }
+  if (kind === 'throw') {
+    // drawn back round on the right, low and flat, then whipped round and let go out in front, following through
+    const v = axFreeze ? u : Math.min(1, H.axeWind / P.throwTime), R = P.throwAt;
+    return axeSweep(-P.throwBack, 0.9, v, R * 0.65, R + 0.12, 1.1, { crouch: P.crouch * 0.8 * smooth(0, R, v) * (1 - smooth(R + 0.1, 1, v)) });
+  }
+  const v = axFreeze ? u : Math.min(1, H.swing / swingTime());
+  if (kind === 2) return axeSweep(-(P.sweepBack + 0.2), P.sweepThrough + 0.6, v, P.windup * 1.2, P.strikeEnd, P.bigger);
+  return kind === 1 ? axeSweep(P.sweepBack, -P.sweepThrough, v, P.windup, P.strikeEnd, 1) : axeSweep(-P.sweepBack, P.sweepThrough, v, P.windup, P.strikeEnd, 1);
+}
 // a point (or a direction) in the chest's frame into obj's, and back
 function chestTo(obj, x, y, z, dir) {
   _ikM.copy(obj.matrixWorld).invert(); _ikG.copy(hero.chest.matrixWorld);
@@ -14975,35 +15029,49 @@ function chestFrom(obj, x, y, z) {
   return _ikV.set(x, y, z).applyMatrix4(obj.matrixWorld).applyMatrix4(_ikM);
 }
 const _hamM = new GFX.Matrix4();
-function hammerHands() {
-  const p = hamPlan, A = 0.1, B = 0.15, ar = hero.armR.position;
+const hammerHands = () => weaponHands(hamPlan, hero.hammer);
+// the right hand onto a plan's grip and the weapon (obj, hung from the right hand) turned onto its haft way d and
+// face way u; with p.w under 1 eased between that and the pose the arm already had. Then the left hand, if two.
+function weaponHands(p, obj) {
+  const A = 0.1, B = 0.15, ar = hero.armR.position, W = p.w == null ? 1 : p.w;
+  if (W <= 0.001) return;
+  const ea = hero.armR.rotation, ee = hero.elbows[1].rotation, ew = hero.wrists[1].rotation, q = obj.quaternion;
+  const was = W < 1 ? [ea.x, ea.y, ea.z, ee.x, ew.x, ew.y, ew.z, q.x, q.y, q.z, q.w] : null;
   hero.g.updateMatrixWorld();
   // the right hand on the grip, its elbow out to the right and down
   hamMiss[1] = armIK(hero.armR, hero.elbows[1], p.g[0] - ar.x, p.g[1] - ar.y, p.g[2] - ar.z, -0.7, -0.7, -0.15, A, B);
   hero.wrists[1].rotation.set(0, 0, 0);
   hero.g.updateMatrixWorld();
-  // the hammer turned so its haft lies along d and its faces along u
+  // the weapon turned so its haft lies along d and its faces (or the axe's bit, opposite) along u
   const D = chestTo(hero.wrists[1], p.d[0], p.d[1], p.d[2], true).clone().normalize();
   const U = chestTo(hero.wrists[1], p.u[0], p.u[1], p.u[2], true).clone();
   U.addScaledVector(D, -U.dot(D)).normalize();
   const X = new GFX.Vector3().crossVectors(U, D);
   _hamM.set(X.x, U.x, D.x, 0, X.y, U.y, D.y, 0, X.z, U.z, D.z, 0, 0, 0, 0, 1);
-  hero.hammer.quaternion.setFromRotationMatrix(_hamM);
+  obj.quaternion.setFromRotationMatrix(_hamM);
+  if (was) {
+    const L = (a, b) => a + (b - a) * W;
+    hero.armR.rotation.set(L(was[0], ea.x), L(was[1], ea.y), L(was[2], ea.z));
+    hero.elbows[1].rotation.x = L(was[3], ee.x);
+    hero.wrists[1].rotation.set(L(was[4], ew.x), L(was[5], ew.y), L(was[6], ew.z));
+    const sg = was[7] * q.x + was[8] * q.y + was[9] * q.z + was[10] * q.w < 0 ? -1 : 1;
+    const qx = L(was[7], sg * q.x), qy = L(was[8], sg * q.y), qz = L(was[9], sg * q.z), qw = L(was[10], sg * q.w), ql = Math.hypot(qx, qy, qz, qw) || 1;
+    obj.quaternion.set(qx / ql, qy / ql, qz / ql, qw / ql);
+  }
   hamMiss[0] = 0;
-  if (p.two < 0.01) return;
+  if (!p.two || p.two < 0.01) return;
   // the left hand on the haft (above or below the right, never on it), as near its shoulder as it goes, eased on
   hero.g.updateMatrixWorld();
-  const gp = chestFrom(hero.hammer, 0, 0, 0).clone(), al = hero.armL.position, d = p.d;
+  const gp = chestFrom(obj, 0, 0, 0).clone(), al = hero.armL.position, d = p.d;
   let s = (al.x - gp.x) * d[0] + (al.y - gp.y) * d[1] + (al.z - gp.z) * d[2];
   s = clamp(s, -0.11, 0.3);
   if (Math.abs(s) < 0.07) s = s < 0 ? -0.07 : 0.07;
-  const was = [hero.armL.rotation.x, hero.armL.rotation.y, hero.armL.rotation.z, hero.elbows[0].rotation.x];
-  hero.armL.rotation.order = 'YXZ';
+  const wasL = [hero.armL.rotation.x, hero.armL.rotation.y, hero.armL.rotation.z, hero.elbows[0].rotation.x];
   hamMiss[0] = armIK(hero.armL, hero.elbows[0], gp.x + d[0] * s - al.x, gp.y + d[1] * s - al.y, gp.z + d[2] * s - al.z, 0.7, -0.7, -0.15, A, B);
   const t = p.two;
   if (t < 1) {
-    hero.armL.rotation.set(was[0] + (hero.armL.rotation.x - was[0]) * t, was[1] + (hero.armL.rotation.y - was[1]) * t, was[2] + (hero.armL.rotation.z - was[2]) * t);
-    hero.elbows[0].rotation.x = was[3] + (hero.elbows[0].rotation.x - was[3]) * t;
+    hero.armL.rotation.set(wasL[0] + (hero.armL.rotation.x - wasL[0]) * t, wasL[1] + (hero.armL.rotation.y - wasL[1]) * t, wasL[2] + (hero.armL.rotation.z - wasL[2]) * t);
+    hero.elbows[0].rotation.x = wasL[3] + (hero.elbows[0].rotation.x - wasL[3]) * t;
   }
   hero.wrists[0].rotation.set(0, 0, 0);
 }
@@ -15011,6 +15079,7 @@ function animateHero(dt) {
   const bowHeld = mode === 'play' && H.alive && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
   bowUp = H.bow || bowHeld ? Math.min(1, bowUp + dt / 0.12) : Math.max(0, bowUp - dt / 0.2);
   hamPlan = mode === 'play' && H.alive && weapon().kind === 'hammer' && H.dash < 0 && !H.flip ? hammerPlan() : null;
+  axPlan = mode === 'play' && H.alive && weapon().kind === 'axe' && H.dash < 0 && !H.flip ? axePlan() : null;
   // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
   // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
@@ -15156,12 +15225,16 @@ function animateHero(dt) {
     const out = -0.35 - 1.25 * jab, guard = -0.6;
     ax = H.combo ? guard : out;
     hero.armL.rotation.set(H.combo ? out : guard, 0, 0.08);
-  } else if (H.swing >= 0 && H.strike === 'chop') {
-    // the axe comes down on the diagonal: from high on one side to low on the other, the last from right overhead
-    const len = swingTime(), u = smooth(0, 1, Math.min(1, H.swing / (len * 0.62))), side = H.combo === 1 ? -1 : 1;
-    if (H.combo === 2) { ax = -3.0 + u * 2.5; ay = 0.55 - u * 1.0; }
-    else { ax = -2.6 + u * 1.9; ay = side * (0.9 - u * 1.6); }
+  } else if (axPlan && axPlan.body) {
+    // the axe's level sweeps and the throw's wind-up, in one hand (weaponHands puts the arm and the axe on the plan at
+    // the end): the body's part, the free arm out the other way for balance
+    const p = axPlan, w = p.w;
     sx = Math.PI / 2;
+    chestY = p.chestY * w; chestX = p.chestX * w;
+    for (const k of [0, 1]) { legAdd[k] -= p.crouch * w; kneeAdd[k] += p.crouch * 2 * w; }
+    legAdd[0] -= p.step * w; legAdd[1] += p.step * 0.5 * w;
+    const o = Math.abs(p.chestY) * w;
+    hero.armL.rotation.set(-0.25 - 0.4 * o, 0, 0.08 + 0.6 * o); elbowL = -0.6 * o;
   } else if (H.swing >= 0) {
     const P = SWORD_POSE, len = swingTime(), u = Math.min(1, H.swing / len);
     // wind: how far into the wind-up (back to 0 as the blow lands), cut: through the blow, back: easing out after
@@ -15214,7 +15287,7 @@ function animateHero(dt) {
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
-  hero.axe.rotation.x = hero.sword.rotation.x; hero.hammer.rotation.set(hero.sword.rotation.x, 0, 0);
+  hero.axe.rotation.set(hero.sword.rotation.x, 0, 0); hero.hammer.rotation.set(hero.sword.rotation.x, 0, 0);
   hero.axeHead.visible = !axeThrow;   // (it's out, spinning)
   // upright at rest; while attacking, held dead level against the arm's swing and the lean every frame (only the
   // turn between the two is eased, so it never lags into a tilt as the arm swings back)
@@ -15224,7 +15297,7 @@ function animateHero(dt) {
   hero.spear.rotation.set(-Math.PI / 2 + SPEAR_POSE.restTilt * (1 - spearHeld) + (Math.PI / 2 - ax - bend - spTilt) * spearHeld, 0, 0);
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
-  hero.body.rotation.y = stance ? -stance : H.spear ? twist : hamPlan ? hamPlan.hips : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * (H.strike === 'slash' ? 0.12 : 0.25) : 0;
+  hero.body.rotation.y = stance ? -stance : H.spear ? twist : hamPlan ? hamPlan.hips : axPlan && axPlan.body ? axPlan.hips * axPlan.w : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * (H.strike === 'slash' ? 0.12 : 0.25) : 0;
   hero.body.rotation.x = bend || (on && f < 0 ? f * WALK.lean * 0.85 : 0);
   // a bend at the waist: the body tips forward about the hips (it hangs from the feet, so it's shifted back to keep
   // them there) and the legs are turned back to stand straight under them
@@ -15280,6 +15353,7 @@ function animateHero(dt) {
   if (H.spear && spearPlan && !tucked) spearHands();
   else spearPlan = null;
   if (hamPlan && !tucked) hammerHands();
+  if (axPlan && !tucked) weaponHands(axPlan, hero.axe);
 }
 
 function updateFoe(f, dt, night) {
@@ -16617,6 +16691,24 @@ const TUNING = [
     [HAMMER, 'chargeCd', 'Charge: cooldown (seconds)', 0.5, 30, 0.5],
     [HAMMER, 'rockMult', 'Damage to rocks and ore (times)', 1, 5, 0.25],
   ]],
+  ['Axe moves', [
+    [AXE_POSE, 'windup', 'Blows: wind-up share', 0.05, 0.6, 0.01],
+    [AXE_POSE, 'strikeEnd', 'Blows: through by', 0.3, 0.9, 0.01],
+    [AXE_POSE, 'hitAt', 'Blows: strikes at', 0.2, 0.9, 0.01],
+    [AXE_POSE, 'sweepBack', 'Blows: drawn back round (radians)', 0.5, 3, 0.01],
+    [AXE_POSE, 'sweepThrough', 'Blows: swung through to', 0, 2.5, 0.01],
+    [AXE_POSE, 'reach', 'Hand out from the shoulder', 0.05, 0.25, 0.005],
+    [AXE_POSE, 'height', 'Hand height', -0.1, 0.3, 0.005],
+    [AXE_POSE, 'twist', 'Shoulders turn', 0, 1.5, 0.01],
+    [AXE_POSE, 'hips', 'Hips turn', 0, 1, 0.01],
+    [AXE_POSE, 'crouch', 'Crouch', 0, 0.6, 0.01],
+    [AXE_POSE, 'step', 'Left foot forward', 0, 0.6, 0.01],
+    [AXE_POSE, 'lean', 'Lean', 0, 0.6, 0.01],
+    [AXE_POSE, 'bigger', 'Third blow: bigger by', 1, 2, 0.01],
+    [AXE_POSE, 'throwTime', 'Throw: wind-up and throw (seconds)', 0.15, 1, 0.01],
+    [AXE_POSE, 'throwAt', 'Throw: lets go at this share', 0.3, 0.9, 0.01],
+    [AXE_POSE, 'throwBack', 'Throw: drawn back round (radians)', 1, 3.2, 0.01],
+  ]],
   ['Hammer moves', [
     [HAMMER_POSE, 'restX', 'On the shoulder: hand across (- right)', -0.25, 0.1, 0.005],
     [HAMMER_POSE, 'restY', 'On the shoulder: hand height', -0.1, 0.3, 0.005],
@@ -16920,7 +17012,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 351, crashSeen = new Map();
+const GAME_VERSION = 352, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -17208,7 +17300,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
+  tune: { SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
@@ -17224,11 +17316,12 @@ window.GAME = {
   moveItem: (from, to) => moveItem(from, to),
   // the hammer's pose held (kind 'rest', 0-3 a blow, 'charge'; u through it), or let go (null); and how it sits
   hamFreeze: (kind, u) => { hamFreeze = kind == null ? null : [kind, u]; },
+  axFreeze: (kind, u) => { axFreeze = kind == null ? null : [kind, u]; },
   hamState: () => {
     hero.g.updateMatrixWorld();
     const w = o => { const v = heroFrom(o, 0, 0, 0); return [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)]; };
-    const head = heroFrom(hero.hammer, 0, 0, 0.47).clone();
-    return { plan: !!hamPlan, miss: hamMiss.map(v => +v.toFixed(3)), grip: w(hero.hammer), head: [head.x, head.y, head.z].map(v => +v.toFixed(3)),
+    const wpn = weapon().kind === 'axe' ? hero.axe : hero.hammer, head = heroFrom(wpn, 0, 0, 0.47).clone(), bit = heroFrom(hero.axe, 0, -0.15, 0.46).clone();
+    return { plan: !!(hamPlan || axPlan), bit: [bit.x, bit.y, bit.z].map(v => +v.toFixed(3)), miss: hamMiss.map(v => +v.toFixed(3)), grip: w(wpn), head: [head.x, head.y, head.z].map(v => +v.toFixed(3)),
       handL: (() => { const v = heroFrom(hero.wrists[0], 0, -0.05, 0.02); return [v.x, v.y, v.z].map(x => +x.toFixed(3)); })(), wave: smashWave && { r: Math.min(HAMMER.smashRadius, HAMMER.waveSpeed * smashWave.t), hit: smashWave.hit.size } };
   },
   clickCell: c => clickCell(c),
