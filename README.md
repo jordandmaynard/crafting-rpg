@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v359:** profiler (Jordan, mobile frame time puzzle): CPU row 'waiting for screen image' split out of 'render (encode)' (getCurrentTexture time, renderer.info.texWait, prof.lapSplit); 'Between frames' table with main-thread idle and 'GPU done, after last submit' (queue.onSubmittedWorkDone latency, prof.watchDone). Close button (×) on the profiler panel so phones can shut it.
+
 **v358:** fantasy aim indicators (Jordan: the glow read as sci-fi). AIM_FX.style 1 (default) draws aimed shapes as ink on the ground: a wobbly hand-drawn parchment-coloured outline over a dark halo, hatched fill and chevrons down lines and cones; round areas (rain, ground smash) become gold rune circles with turning glyphs. Style 0 is the old additive glow. All under T > Aim decal. Axe and hammer ability icons from Jordan's axe-hammer-abilities-v1 kit (icons/paint chop, axethrow, rend, smash, groundsmash, charge).
 
 **v357:** crafting window text spacing (Jordan): the "Owned / Needed" caption sits below the materials panel's top border and corner notch (panel padding 12px top, list 88px), and the status line starts at left 140 (16px) so it clears the bottom-left corner bracket.

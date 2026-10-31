@@ -23,6 +23,9 @@ export class GpuProfiler {
     this.cpuMs = 0;
     this.lastT = 0;
     this.shown = 0;
+    this.doneMs = 0;        // smoothed: from the frame's last submit to the GPU reporting all its work done
+    this.donePending = false;
+    this.doneSeen = false;
     if (this.hasTimestamps) {
       this.qs = device.createQuerySet({ type: 'timestamp', count: MAX_PASSES * 2 });
       this.resolveBuf = device.createBuffer({ size: MAX_PASSES * 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
@@ -89,6 +92,34 @@ export class GpuProfiler {
     }, () => { this.pending = false; });
   }
 
+  // After the frame's last submit: when the GPU (and the browser's GPU process before it) has finished everything
+  // sent so far. One watch at a time; it covers the queue's backlog too, so it grows when frames pile up.
+  watchDone() {
+    if (this.donePending || !this.device.queue.onSubmittedWorkDone) return;
+    this.donePending = true;
+    const t0 = performance.now();
+    this.device.queue.onSubmittedWorkDone().then(() => {
+      const ms = performance.now() - t0;
+      this.doneMs = this.doneSeen ? this.doneMs + (ms - this.doneMs) * SMOOTH : ms;
+      this.doneSeen = true;
+      this.donePending = false;
+    }, () => { this.donePending = false; });
+  }
+
+  // A lap with part of its time split out into a row of its own (the encode's wait for the screen's image)
+  lapSplit(name, partName, partMs) {
+    const t = performance.now();
+    if (this.on && name) {
+      const ms = t - this.lapT, part = Math.min(ms, Math.max(0, partMs));
+      for (const [nm, v] of [[name, ms - part], [partName, part]]) {
+        const p = this.cpu.get(nm);
+        this.cpu.set(nm, p === undefined ? v : p + (v - p) * SMOOTH);
+      }
+    }
+    this.lapT = t;
+    this.spikes?.lap(name);
+  }
+
   // CPU side: time since the previous lap (JavaScript only), smoothed. lap(null) just starts the clock.
   lap(name) {
     const t = performance.now();
@@ -106,6 +137,7 @@ export class GpuProfiler {
     this.cpu.clear();
     this.order = [];
     this.shown = 0;
+    this.doneSeen = false;
     return this.on;
   }
 
@@ -135,6 +167,10 @@ export class GpuProfiler {
         ? table('GPU pass', 'GPU ms', rows, 'All passes', gpuTotal)
         : `<div class="gnote">This browser doesn't expose GPU timestamps (timestamp-query), so only frame timing is shown.</div>`) +
       table('CPU (JavaScript)', 'CPU ms', [...this.cpu], 'All CPU', this.cpuMs) +
+      `<table><tr><th>Between frames</th><th>ms</th></tr>` +
+      `<tr><td>idle (main thread waiting)</td><td><b>${Math.max(0, this.frameMs - this.cpuMs).toFixed(2)}</b></td></tr>` +
+      `<tr><td>GPU done, after last submit</td><td><b>${this.doneSeen ? this.doneMs.toFixed(2) : '…'}</b></td></tr></table>` +
+      `<div class="gnote">GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck.</div>` +
       `<div class="gnote">${extra}` +
       (this.hasTimestamps ? ' Chrome rounds GPU times to 0.1 ms unless chrome://flags "WebGPU Developer Features" is on.' : '') + '</div>';
   }

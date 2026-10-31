@@ -191,6 +191,7 @@ class Renderer {
     this.flush();
     this.passName = '';
     const p = this.profiler;
+    if (p && p.on) p.watchDone();
     if (!p || !p.names.length) return;
     const enc = this.device.createCommandEncoder();
     p.resolve(enc);
@@ -596,7 +597,7 @@ class Renderer {
   _targetViews(rt) {
     const dev = this.device;
     if (rt && rt.isCanvasTarget) {
-      if (!rt.tex) { rt.tex = rt.context.getCurrentTexture(); this._liveCanvases.add(rt); }
+      if (!rt.tex) { const t0 = performance.now(); rt.tex = rt.context.getCurrentTexture(); this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._liveCanvases.add(rt); }
       const t = rt.tex, w = t.width, h = t.height;
       if (!rt.depth || rt.depth.width !== w || rt.depth.height !== h) {
         if (rt.depth) rt.depth.destroy();
@@ -606,7 +607,7 @@ class Renderer {
       return { color: t.createView(), depth: rt.depthView, format: this.format, width: w, height: h };
     }
     if (!rt) {
-      if (!this._canvasTex) { this._canvasTex = this.context.getCurrentTexture(); this._lastCanvasTex = this._canvasTex; }
+      if (!this._canvasTex) { const t0 = performance.now(); this._canvasTex = this.context.getCurrentTexture(); this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._lastCanvasTex = this._canvasTex; }
       const t = this._canvasTex, w = t.width, h = t.height;
       if (!this._canvasDepth || this._canvasDepth.width !== w || this._canvasDepth.height !== h) {
         if (this._canvasDepth) this._canvasDepth.destroy();
