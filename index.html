@@ -2944,19 +2944,14 @@ let camera = orthoCam;
 // tiles further back than this pixel (an edge with something behind it), this pixel is stroked. It runs on
 // the low-res buffer, so the stroke is whole mosaic pixels, `thickness` of them wide.
 const OUTLINE = { on: 1, distance: 0.4, thickness: 1, strength: 0.73, color: '#000000' };
-// The second outline (T > Crease outline), Crafting and Conquest's Sobel strokes on normals: a stroke
-// wherever the surface turns by more than `angle` degrees across a 3 × 3 kernel of mosaic pixels.
-const SOBEL = { on: 0, angle: 40, thickness: 1, strength: 0.5, color: '#000000' };
-const normRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
-const normalMat = new GFX.MeshNormalMaterial({ flatShading: true, side: GFX.DoubleSide });
 const outlineRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
 outlineRT.depthTexture = new GFX.DepthTexture(1, 1);
 // the heat shimmer's offsets, in mosaic pixels, for the outline pass to read the whole picture shifted by (see HEAT)
 const heatRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
 outlineRT.depthTexture.type = GFX.UnsignedIntType;
 const outlineMat = new GFX.ShaderMaterial({
-  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, tNormal: { value: normRT.texture }, res: { value: new GFX.Vector2(1, 1) },
-    useDepth: { value: 1 }, useSobel: { value: 0 }, sStep: { value: 1 }, sTh: { value: 0.7 }, sStrength: { value: 0.5 }, sColor: { value: new GFX.Color() },
+  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, res: { value: new GFX.Vector2(1, 1) },
+    useDepth: { value: 1 },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
     gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 },
@@ -2965,7 +2960,7 @@ const outlineMat = new GFX.ShaderMaterial({
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
 // the scene is drawn ss × ss times finer than the mosaic: a mosaic pixel's colour is the average of its
-// samples, and its depth and normal are read at its middle sample
+// samples, and its depth is read at its middle sample
 fn mid(px: vec2f) -> vec2i { return vec2i(clamp(px, vec2f(0.0), U.res - 1.0) * U.ss + floor(U.ss * 0.5)); }
 // depth back from the near plane in world units (empty sky reads as far): linear for the orthographic
 // camera, unprojected for the perspective one
@@ -2975,8 +2970,6 @@ fn depthAt(px: vec2f) -> f32 {
   let z = d * 2.0 - 1.0;
   return 2.0 * U.near * U.far / (U.far + U.near - z * (U.far - U.near)) - U.near;
 }
-// the view-space normal there (empty sky counts as the centre's, so it never strokes)
-fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px), 0); return select(g.rgb * 2.0 - 1.0, n0, g.a < 0.5); }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   // (where hot air rises, the whole picture, strokes and all, is read a few pixels off: see HEAT)
   var px = floor(i.pos.xy);
@@ -2994,18 +2987,6 @@ fn normalAt(px: vec2f, n0: vec3f) -> vec3f { let g = textureLoad(tNormal, mid(px
     }
   }
   col /= U.ss * U.ss;
-  if (U.useSobel > 0.5) {
-    let g0 = textureLoad(tNormal, mid(px), 0);
-    if (g0.a > 0.5) {
-      let n0 = g0.rgb * 2.0 - 1.0; let s = U.sStep;
-      let a = normalAt(px + vec2f(-s, -s), n0); let b = normalAt(px + vec2f(0.0, -s), n0); let c = normalAt(px + vec2f(s, -s), n0);
-      let d = normalAt(px + vec2f(-s, 0.0), n0); let f = normalAt(px + vec2f(s, 0.0), n0);
-      let g = normalAt(px + vec2f(-s, s), n0); let h = normalAt(px + vec2f(0.0, s), n0); let k = normalAt(px + vec2f(s, s), n0);
-      let nx = (c + 2.0 * f + k) - (a + 2.0 * d + g); let ny = (g + 2.0 * h + k) - (a + 2.0 * b + c);
-      let e2 = smoothstep(U.sTh, U.sTh * 1.3, sqrt(dot(nx, nx) + dot(ny, ny)) * 0.25);
-      col = mix(col, U.sColor, e2 * U.sStrength * haze);
-    }
-  }
   // grass tufts mark themselves with alpha 0 (see grassMat) and, unless GRASS.outline, get no depth stroke;
   // deep snow and sand with alpha 0.25 (driftMat), none unless DRIFT.outline
   let ma = textureLoad(tColor, mid(px), 0).a;
@@ -3437,8 +3418,8 @@ const shadowLayers = new GFX.Layers(); shadowLayers.enable(5);
 renderer.shadowLayers = shadowLayers;
 function renderWorld() {
   drawCrowds();
-  const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0, sobelOn = SOBEL.on > 0.5 && SOBEL.strength > 0;
-  const on = depthOn || sobelOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
+  const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
+  const on = depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
   renderer.clear();
   // the renderer draws the sun's shadow map anew in every render, keeping only casters on the camera's
@@ -3491,37 +3472,11 @@ function renderWorld() {
     camera.layers.set(8); renderer.render(scene, camera);
     renderer.setClearColor('#0b0912', 1);
   }
-  if (sobelOn) {
-    // the same view again with every surface drawn as its normal, sky left clear
-    renderer.setRenderTarget(normRT);
-    renderer.setClearColor(0x000000, 0); renderer.clear();
-    scene.overrideMaterial = normalMat; tallVisible(false); groundHaze.mesh.visible = false; lootFx.visible = false;
-    const grassOn = grassMesh.visible, driftOn = driftMesh.visible; grassMesh.visible = driftMesh.visible = false;
-    const sprayOn = sprayMesh && sprayMesh.visible; if (sprayMesh) sprayMesh.visible = false;
-    const smokeOn = smokeMesh && smokeMesh.visible; if (smokeMesh) smokeMesh.visible = false;
-    const ambOn = ambMesh && ambMesh.visible; if (ambMesh) ambMesh.visible = false;
-    renderer.passName = 'normals (Sobel)';
-    camera.layers.set(5); renderer.render(scene, camera);
-    camera.layers.set(0); renderer.render(scene, camera);
-    camera.layers.set(2); renderer.render(scene, camera);
-    camera.layers.set(1); renderer.render(scene, camera);
-    camera.layers.set(3); renderer.render(scene, camera);
-    scene.overrideMaterial = null; tallVisible(true); groundHaze.mesh.visible = groundHaze.on; lootFx.visible = true;
-    grassMesh.visible = grassOn; driftMesh.visible = driftOn;
-    if (sprayMesh) sprayMesh.visible = sprayOn;
-    if (smokeMesh) smokeMesh.visible = smokeOn;
-    if (ambMesh) ambMesh.visible = ambOn;
-    renderer.setClearColor('#0b0912', 1);
-  }
   const u = outlineMat.uniforms;
-  u.useDepth.value = depthOn ? 1 : 0; u.useSobel.value = sobelOn ? 1 : 0; u.grassLine.value = GRASS.outline; u.driftLine.value = DRIFT.outline;
+  u.useDepth.value = depthOn ? 1 : 0; u.grassLine.value = GRASS.outline; u.driftLine.value = DRIFT.outline;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
   u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
-  // the kernel's spacing: the stroke falls on both sides of a crease, so half the thickness
-  u.sStep.value = Math.max(1, Math.round(SOBEL.thickness / 2));
-  u.sTh.value = 2 * Math.sin(SOBEL.angle * Math.PI / 360);   // how far apart two unit normals that far apart are
-  u.sStrength.value = SOBEL.strength; u.sColor.value.set(SOBEL.color);
   renderer.setRenderTarget(null);
   renderer.clear();
   renderer.passName = 'outline + post to screen';
@@ -4177,11 +4132,6 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 // the cut: from the view's centre (the hero) toward the camera
 function updateTrunkCut() {
   TRUNK_U.cutC.value.set(camTarget.x, camTarget.z); TRUNK_U.cutDir.value.set(Math.sin(yaw), Math.cos(yaw));
-}
-// the trunks and the unseen crowns stay out of the normals pass (it has no cut, and the crowns aren't there)
-function tallVisible(v) {
-  for (const ch of chunks.values()) { if (ch.trunk) ch.trunk.visible = v; if (ch.canopy) ch.canopy.visible = v; }
-  for (const w of willows) { if (w.mesh) w.mesh.visible = v; if (w.top) { w.top.visible = v && w.topShown; w.limbs.visible = v && w.limbsShown; } }
 }
 
 // ---------- Plants that bend (T > Plants) ----------
@@ -13681,7 +13631,7 @@ function resize() {
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   ssNow = Math.max(1, Math.min(4, Math.round(PIXEL.antiAlias)));
   renderer.setSize(rw, rh, false);
-  outlineRT.setSize(rw * ssNow, rh * ssNow); normRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
+  outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
   cv.style.width = rw * px + 'px'; cv.style.height = rh * px + 'px';
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
@@ -14736,13 +14686,6 @@ const TUNING = [
     [OUTLINE, 'strength', 'Strength', 0, 1, 0.01],
     [OUTLINE, 'color', 'Outline colour', 'color'],
   ]],
-  ['Crease outline', [
-    [SOBEL, 'on', 'Sobel crease outline (0 off, 1 on)', 0, 1, 1],
-    [SOBEL, 'angle', 'Stroke where the surface turns more than (degrees)', 1, 120, 1],
-    [SOBEL, 'thickness', 'Thickness (mosaic pixels)', 1, 8, 1],
-    [SOBEL, 'strength', 'Strength', 0, 1, 0.01],
-    [SOBEL, 'color', 'Crease colour', 'color'],
-  ]],
 ];
 const TUNE_CLOSED_KEY = 'emberwild.tuneClosed';
 const tuneClosed = (() => { try { return new Set(JSON.parse(localStorage.getItem(TUNE_CLOSED_KEY) || '[]')); } catch (err) { return new Set(); } })();
@@ -14951,7 +14894,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 279, crashSeen = new Map();
+const GAME_VERSION = 280, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15009,7 +14952,7 @@ window.GAME = {
     const t = f => { const a = performance.now(); for (let i = 0; i < n; i++) f(); return (performance.now() - a) / n; };
     let nodes = 0; scene.traverse(() => nodes++);
     return { nodes, matrices: t(() => scene.updateMatrixWorld()), walk: t(() => scene.traverse(o => o.visible)), lights: t(() => renderer._gatherLights(scene)),
-      collect: t(() => renderer._collect(scene, camera)), renderWorld: t(() => { renderWorld(); renderer.flush(); }) };
+      collect: t(() => renderer._walk(scene, camera, false)), renderWorld: t(() => { renderWorld(); renderer.flush(); }) };
   },
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
@@ -15204,7 +15147,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SOBEL, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
+  tune: { PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,

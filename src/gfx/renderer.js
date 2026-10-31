@@ -440,12 +440,23 @@ class Renderer {
     return [page.bg, k * OBJ_BYTES];
   }
   // what the camera's layers can see, sorted for drawing
+  // What a render draws: the scene is walked once a frame for a camera (every layer, culled and sorted), and each
+  // render takes the meshes on its camera's layers from that, in the same order. (A scene with an override
+  // material is walked for each render, as before.)
   _collect(scene, camera) {
+    if (scene.overrideMaterial) return this._walk(scene, camera, true);
+    let c = this._seen;
+    if (!c || c.frame !== this._frameNo || c.scene !== scene || c.camera !== camera) c = this._seen = { frame: this._frameNo, scene, camera, list: this._walk(scene, camera, false) };
+    const out = [], L = camera.layers;
+    for (const it of c.list) if (it.mesh.layers.test(L)) out.push(it);
+    return out;
+  }
+  _walk(scene, camera, layered) {
     const fr = this._frustum.setFromProjectionMatrix(this._m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     const opaque = [], clear = [], override = scene.overrideMaterial, vp = this._m, v = this._v;
     const visit = o => {
       if (!o.visible) return;
-      if (o.isMesh && o.layers.test(camera.layers) && !(o.isInstancedMesh && !o.count)) {
+      if (o.isMesh && (!layered || o.layers.test(camera.layers)) && !(o.isInstancedMesh && !o.count)) {
         const mat = override || o.material;
         if (mat && mat.visible && (!o.frustumCulled || this._inFrustum(o, fr))) {
           const e = o.matrixWorld.elements;
