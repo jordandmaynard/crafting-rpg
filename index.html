@@ -10166,7 +10166,8 @@ BAR_ICON.move = (() => {
 })();
 // (the weapons' abilities: each strike under its bar key, sword slash, bow shoot, spear thrust)
 for (const [k, f] of [['sword', 'slash'], ['whirl', 'whirl'], ['lunge', 'lunge'], ['bow', 'shoot'], ['volley', 'volley'], ['rain', 'rain'],
-  ['spear', 'thrust'], ['flurry', 'flurry'], ['harpoon', 'harpoon']]) BAR_ICON[k] = paintImg(f, 'max(26px, calc(4.9vh - 14px))');
+  ['spear', 'thrust'], ['flurry', 'flurry'], ['harpoon', 'harpoon'], ['axe', 'chop'], ['boomerang', 'axethrow'], ['rend', 'rend'],
+  ['warhammer', 'smash'], ['stunsmash', 'groundsmash'], ['charge', 'charge']]) BAR_ICON[k] = paintImg(f, 'max(26px, calc(4.9vh - 14px))');
 for (const k of ['clothShirt', 'clothPants', 'clothBoots', 'sword_wood', 'bow_wood', 'spear_wood', 'axe_wood', 'hammer_wood', 'stone', 'wood', 'planks', 'stoneBlock',
   'bone', 'hide', 'leather', 'wheat', 'flour', 'bread', 'roughSandstone', 'sand', 'glassPane', 'emptyBottle', 'boneDust', ...['copper', 'iron', ...FANTASY.map(m => m.k)].flatMap(k => [k + 'Ore', k + 'Ingot'])]) ICON[k] = paintImg(k, 'max(34px, 5.12vh)');
 function setDpr() { document.documentElement.style.setProperty('--dpr', devicePixelRatio || 1); }
@@ -12869,7 +12870,12 @@ function updateArrows(dt) {
 // whatever the eye's exposure (steady).
 // each shape is filled faintly and edged brighter: for each, the edge's width (tiles, inside the shape), the edge's
 // and the fill's brightness, and for the shot the box's width
-const AIM_FX = { color: '#34628d', steady: 1,
+// style 0 is the old glow; 1 is ink on the ground (a wobbly hand-drawn outline in `ink` over a dark `shadow` halo,
+// a hatched fill, chevrons down the lines) with the round areas drawn as gold rune circles (`rune`)
+const AIM_FX = { style: 1, color: '#34628d', steady: 1,
+  ink: '#efdcae', shadow: '#2a170b', shadowA: 0.55, opacity: 0.9, inkWidth: 0.07, shadowWidth: 0.05, wobble: 0.035,
+  hatch: 3.2, hatchWidth: 0.16, hatchA: 0.32, wash: 0.07, chevrons: 1.1, chevronA: 0.75,
+  rune: '#e6bf62', runeGlow: 1.35, runeGap: 0.6, runeSpin: 0.12, runeWidth: 0.05,
   shotWidth: 0.45, shotEdge: 0.03, shotEdgeBright: 1.5, shotFill: 0.4,
   volleyEdge: 0.04, volleyEdgeBright: 2, volleyFill: 0.75,
   rainEdge: 0.08, rainEdgeBright: 1.9, rainFill: 0.65,
@@ -12882,7 +12888,10 @@ const AIM_FX = { color: '#34628d', steady: 1,
 const AIM_NU = 84, AIM_NV = 72;
 const AIM_U = { tD: { value: WATER_U.tRefrD.value }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
   len: { value: 20 }, taper: { value: 0 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
-  color: { value: new GFX.Color('#ffb347') } };
+  color: { value: new GFX.Color('#ffb347') }, style: { value: 1 }, ink: { value: new GFX.Color('#efdcae') }, shadow: { value: new GFX.Color('#2a170b') },
+  rune: { value: new GFX.Color('#e6bf62') }, shadowA: { value: 0.55 }, opacity: { value: 0.9 }, inkW: { value: 0.07 }, shadowW: { value: 0.05 }, wobble: { value: 0.035 },
+  hatch: { value: 3.2 }, hatchW: { value: 0.16 }, hatchA: { value: 0.32 }, wash: { value: 0.07 }, chev: { value: 1.1 }, chevA: { value: 0.75 },
+  runeGlow: { value: 1.35 }, runeGap: { value: 0.6 }, runeSpin: { value: 0.12 }, runeW: { value: 0.05 } };
 const AIM_WGSL = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) w: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
@@ -12914,6 +12923,104 @@ fn aimShape(d: vec2f) -> f32 {
   let half = U.cone * 0.5;
   return aimBand(q.x * sin(half) - abs(q.y) * cos(half));
 }
+// ---- the ink style ----
+fn aimHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn aimNoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(aimHash(i), aimHash(i + vec2f(1.0, 0.0)), u.x), mix(aimHash(i + vec2f(0.0, 1.0)), aimHash(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+// 1 on a stroke w wide centred on distance 0 (soft edges)
+fn aimLine(dist: f32, w: f32) -> f32 { return 1.0 - smoothstep(w * 0.5 - 0.012, w * 0.5 + 0.012, abs(dist)); }
+fn aimSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  return length(pa - ba * clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0));
+}
+// how far inside the shape (tiles; < 0 outside), and the half-width there (for the chevrons)
+fn aimInside(d: vec2f, q: vec2f) -> vec2f {
+  if (U.kind < 0.5 || U.kind > 2.5) {
+    let hw = U.boxW * 0.5;
+    var din = min(hw - abs(q.y), min(q.x - 0.45, U.len - q.x));
+    var w = hw;
+    if (U.taper > 0.0) {
+      din = min(din, (hw * (U.len - q.x) / U.taper - abs(q.y)) * U.taper / length(vec2f(U.taper, hw)));
+      w = min(hw, hw * (U.len - q.x) / U.taper);
+    }
+    return vec2f(din, w);
+  }
+  let half = U.cone * 0.5;
+  let din = min(q.x * sin(half) - abs(q.y) * cos(half), min(q.x - 0.45, U.len - q.x));
+  return vec2f(din, q.x * tan(half));
+}
+// the ink colour and its alpha at ground point g (relative to the origin)
+fn aimInk(g: vec2f, wp: vec2f) -> vec4f {
+  let wob = (aimNoise(wp * 2.3) - 0.5) * 2.0 * U.wobble + (aimNoise(wp * 7.1 + 13.0) - 0.5) * 0.6 * U.wobble;
+  let iw = U.inkW * (0.75 + 0.5 * aimNoise(wp * 1.3 + 5.0));
+  var col = U.ink;
+  var dw: f32; var hw = 0.0; var q = vec2f(0.0);
+  var glyph = 0.0; var glyphH = 0.0;
+  let hwd = 2.0 * U.shadowW;
+  if (U.kind > 1.5 && U.kind < 2.5) {
+    // a rune circle: two rings, glyphs turning slowly between them
+    col = U.rune * U.runeGlow;
+    let r = length(g);
+    dw = U.radius - r + wob * 0.5;
+    let gap = min(max(U.runeGap, 0.2), U.radius * 0.45);
+    let inner = U.radius - gap;
+    glyph = max(glyph, aimLine(r - inner + wob * 0.4, iw * 0.8)); glyphH = max(glyphH, aimLine(r - inner + wob * 0.4, iw * 0.8 + hwd));
+    // the glyph band
+    let mid = U.radius - gap * 0.5;
+    let n = max(6.0, floor(6.2831853 * mid / (gap * 1.05)));
+    let ang = atan2(g.y, g.x) / 6.2831853 + 0.5 + F.camDir.w * U.runeSpin / 6.2831853;
+    let cell = floor(fract(ang) * n);
+    let cw = 6.2831853 * mid / n;
+    let lp = vec2f((fract(fract(ang) * n) - 0.5) * cw, r - mid) / (gap * 0.62);
+    if (abs(lp.x) < 0.95 && abs(lp.y) < 0.95) {
+      // three strokes between points on a 3 x 3 grid, picked by the cell
+      var gd = 9.0;
+      for (var k = 0; k < 3; k++) {
+        let h0 = aimHash(vec2f(cell, f32(k) * 7.3 + 1.0)); let h1 = aimHash(vec2f(cell + 31.0, f32(k) * 3.1 + 2.0));
+        let a = vec2f(floor(h0 * 3.0) - 1.0, floor(fract(h0 * 9.0) * 3.0) - 1.0) * 0.55;
+        var b = vec2f(floor(h1 * 3.0) - 1.0, floor(fract(h1 * 9.0) * 3.0) - 1.0) * 0.55;
+        if (distance(a, b) < 0.1) { b = -a + vec2f(0.0, 0.55); }
+        gd = min(gd, aimSeg(lp, a, b));
+      }
+      glyph = max(glyph, aimLine(gd * gap * 0.62, U.runeW)); glyphH = max(glyphH, aimLine(gd * gap * 0.62, U.runeW + hwd));
+    }
+    if (r < inner - iw) { glyph = max(glyph, aimLine(r - inner * 0.22, iw * 0.7) * 0.8); glyphH = max(glyphH, aimLine(r - inner * 0.22, iw * 0.7 + hwd) * 0.8); }
+  } else {
+    let f = U.dir.xz;
+    q = vec2f(dot(g, f), g.x * f.y - g.y * f.x);
+    let ins = aimInside(g, q);
+    dw = ins.x + wob;
+    hw = ins.y;
+    // chevrons down the middle, pointing the way it goes
+    if (U.chev > 0.05 && q.x > 0.9 && q.x < U.len - 0.5) {
+      let sp = U.chev;
+      let xl = fract(q.x / sp) * sp;
+      let k = 0.9;
+      let ch = min(hw * 0.5, 0.42);
+      let cd = abs(xl - sp * 0.5 + abs(q.y) * k) / sqrt(1.0 + k * k);
+      if (abs(q.y) < ch) { glyph = max(glyph, aimLine(cd, iw * 0.85) * U.chevA); glyphH = max(glyphH, aimLine(cd, iw * 0.85 + hwd) * U.chevA); }
+    }
+  }
+  // the outline, just inside the edge, and its dark halo
+  let stroke = max(aimLine(dw - iw * 0.5, iw), glyph);
+  let halo = max(aimLine(dw - iw * 0.5, iw + hwd), glyphH);
+  // the fill: a faint wash and hand-hatched lines
+  var fill = 0.0;
+  if (dw > iw) {
+    let hd = dot(wp, vec2f(0.70710678, 0.70710678)) * U.hatch + (aimNoise(wp * 3.0) - 0.5) * 0.35;
+    let hl = 1.0 - smoothstep(U.hatchW - 0.06, U.hatchW + 0.06, abs(fract(hd) - 0.5) * 2.0);
+    let fade = 0.6 + 0.4 * aimNoise(wp * 0.9 + 3.0);
+    fill = U.wash + hl * U.hatchA * fade;
+  }
+  let aInk = max(stroke, fill);
+  let aSh = halo * U.shadowA;
+  let a = aInk + aSh * (1.0 - aInk);
+  if (a < 0.003) { return vec4f(0.0); }
+  let c = (col * aInk + U.shadow * aSh * (1.0 - aInk)) / a;
+  return vec4f(c, a * U.opacity);
+}
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let dims = vec2i(textureDimensions(tD));
   let zb = textureLoad(tD, clamp(vec2i(i.pos.xy), vec2i(0), dims - 1), 0);
@@ -12926,9 +13033,14 @@ fn aimShape(d: vec2f) -> f32 {
   if (F.camPos.w > 0.5) { s = i.w + normalize(F.camDir.xyz) * (vs - vb); }
   let up = s.y - i.w.y;
   if (up < -0.6 || up > 0.62) { discard; }
+  let ex = select(1.0, max(eyeState[0], 1e-3), F.post.x > 0.5);
+  if (U.style > 0.5) {
+    let k = aimInk(s.xz - U.origin.xz, s.xz);
+    if (k.a < 0.003) { discard; }
+    return vec4f(k.rgb * pow(ex, -U.steady), k.a);
+  }
   let a = aimShape(s.xz - U.origin.xz);
   if (a < 0.003) { discard; }
-  let ex = select(1.0, max(eyeState[0], 1e-3), F.post.x > 0.5);
   return vec4f(U.color * a * pow(ex, -U.steady), 1.0);
 }`;
 const aimMat = new GFX.ShaderMaterial({ uniforms: AIM_U, code: AIM_WGSL, transparent: true, depthTest: false, depthWrite: false,
@@ -13011,6 +13123,11 @@ function updateAimDecal() {
   U.taper.value = S.taper ? Math.min(S.taper, S.len - 0.5) : 0;
   U.boxW.value = S.boxW || 0; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
   U.color.value.set(AIM_FX.color);
+  U.style.value = A.style; aimMat.blending = A.style ? GFX.NormalBlending : GFX.AdditiveBlending;
+  U.ink.value.set(A.ink); U.shadow.value.set(A.shadow); U.rune.value.set(A.rune);
+  U.shadowA.value = A.shadowA; U.opacity.value = A.opacity; U.inkW.value = A.inkWidth; U.shadowW.value = A.shadowWidth; U.wobble.value = A.wobble;
+  U.hatch.value = A.hatch; U.hatchW.value = A.hatchWidth; U.hatchA.value = A.hatchA; U.wash.value = A.wash; U.chev.value = A.chevrons; U.chevA.value = A.chevronA;
+  U.runeGlow.value = A.runeGlow; U.runeGap.value = A.runeGap; U.runeSpin.value = A.runeSpin; U.runeW.value = A.runeWidth;
 }
 // ---------- The spear ----------
 // The poke stabs straight out the way you aim, striking every foe along a line `reach` tiles long and `width`
@@ -16609,7 +16726,26 @@ const TUNING = [
     [HPBAR, 'back', 'Empty bar', 'color'],
   ]],
   ['Aim decal', [
-    [AIM_FX, 'color', 'Colour', 'color'],
+    [AIM_FX, 'style', 'Style (0 glow, 1 ink + runes)', 0, 1, 1],
+    [AIM_FX, 'ink', 'Ink: colour', 'color'],
+    [AIM_FX, 'shadow', 'Ink: halo colour', 'color'],
+    [AIM_FX, 'shadowA', 'Ink: halo strength', 0, 1, 0.01],
+    [AIM_FX, 'shadowWidth', 'Ink: halo width (tiles)', 0, 0.3, 0.005],
+    [AIM_FX, 'opacity', 'Ink: opacity', 0.1, 1, 0.01],
+    [AIM_FX, 'inkWidth', 'Ink: line width (tiles)', 0.01, 0.3, 0.005],
+    [AIM_FX, 'wobble', 'Ink: hand-drawn wobble (tiles)', 0, 0.15, 0.005],
+    [AIM_FX, 'hatch', 'Ink: hatch lines a tile', 0, 10, 0.1],
+    [AIM_FX, 'hatchWidth', 'Ink: hatch line width', 0, 1, 0.01],
+    [AIM_FX, 'hatchA', 'Ink: hatch strength', 0, 1, 0.01],
+    [AIM_FX, 'wash', 'Ink: fill wash', 0, 0.6, 0.01],
+    [AIM_FX, 'chevrons', 'Ink: chevron spacing (tiles, 0 off)', 0, 3, 0.05],
+    [AIM_FX, 'chevronA', 'Ink: chevron strength', 0, 1, 0.01],
+    [AIM_FX, 'rune', 'Runes: colour', 'color'],
+    [AIM_FX, 'runeGlow', 'Runes: brightness', 0.2, 4, 0.05],
+    [AIM_FX, 'runeGap', 'Runes: ring band width (tiles)', 0.2, 1.5, 0.05],
+    [AIM_FX, 'runeWidth', 'Runes: glyph line width (tiles)', 0.01, 0.2, 0.005],
+    [AIM_FX, 'runeSpin', 'Runes: turning speed (radians a second)', -1, 1, 0.01],
+    [AIM_FX, 'color', 'Glow: colour', 'color'],
     [AIM_FX, 'steady', 'Steady against eye exposure', 0, 1, 0.05],
     [AIM_FX, 'shotWidth', 'Shot: box width (tiles)', 0.1, 3, 0.05],
     [AIM_FX, 'shotEdge', 'Shot: edge width (tiles)', 0, 0.5, 0.01],
@@ -17021,7 +17157,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 357, crashSeen = new Map();
+const GAME_VERSION = 358, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
