@@ -422,7 +422,7 @@ body:not(.noUI) #showUI { display: none; }
   <div class="invBar" id="invBar"><span class="card-title">INVENTORY</span><button id="invClose" title="Close (Tab)" aria-label="Close">X</button></div>
   <div class="invBody">
     <div><div class="card-title">GEAR <span id="armorVal"></span></div><div id="doll"></div></div>
-    <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div><div class="trashRow"><div id="refineBtn" class="invAct" title="Refine: send everything raw to this plot's stations"></div><div id="stashBtn" class="invAct" title="Stash: put everything else away in this plot's crates and chests"></div><div id="trash" title="Drag something here to throw it away"></div></div></div>
+    <div><div class="card-title">PACK <span id="packCount"></span></div><div id="pack"></div><div class="trashRow"><div id="refineBtn" class="invAct" title="Refine (R): send everything raw to this plot's stations, shared out evenly"></div><div id="stashBtn" class="invAct" title="Stash: put everything else away in this plot's crates and chests"></div><div id="trash" title="Drag something here to throw it away"></div></div></div>
     <div id="storeCol" hidden><div class="card-title"><span id="storeTitle"></span> <span id="storeCount"></span></div><div id="store"></div></div>
   </div>
   <div id="station" hidden>
@@ -458,7 +458,7 @@ body:not(.noUI) #showUI { display: none; }
       <li class="pad-only"><span><g-p>MENU</g-p> build mode: <g-p>X</g-p> floors, <g-p>Y</g-p> walls, <g-p>A</g-p> doors (press again for the next kind), <g-p>RB</g-p> hearth, <g-p>LB</g-p> stations. <g-p>RS</g-p> moves the build cursor, <g-p>RT</g-p> places (hold and move to lay a row), <g-p>LT</g-p> removes, <g-p>B</g-p> done.</span></li>
       <li>Close a room with walls and doors and a roof goes up (rooms that meet across a wall share one roof). It hides while you are inside, and you heal faster under it.</li>
       <li>Towns are safe. The wilds grow bolder at night.</li>
-      <li class="kb-only"><span><kbd>M</kbd> map (wheel zooms it and the minimap), <kbd>P</kbd> plot outlines on the maps, wheel to zoom, hold the right mouse button and drag (or <kbd>Z</kbd> / <kbd>C</kbd>) to turn the camera. <kbd>H</kbd> hides the HUD (and brings it back).</span></li>
+      <li class="kb-only"><span><kbd>M</kbd> map (wheel zooms it and the minimap), <kbd>P</kbd> plot outlines on the maps, wheel to zoom, hold the right mouse button and drag (or <kbd>Z</kbd> / <kbd>C</kbd>) to turn the camera. <kbd>H</kbd> hides the HUD (and brings it back). <kbd>R</kbd> sends the raw materials in your pack to your plot's refining stations.</span></li>
       <li class="pad-only"><span><g-p>VIEW</g-p> map, <g-p>L3</g-p> plot outlines, <g-p>DU</g-p> <g-p>DD</g-p> zoom, <g-p>DL</g-p> <g-p>DR</g-p> turn the camera 45°, hold <g-p>LT</g-p> and move <g-p>RS</g-p> to turn it freely. An Xbox controller works as soon as you press a button on it.</span></li>
     </ul>
     <div class="loading"><span id="loadText">SHAPING THE WORLD</span><span id="seedText"></span></div>
@@ -3716,11 +3716,11 @@ function seg(geo, color, a, b, r, into = 'world') {
   emitPart(geo, color, into);
 }
 // (while partPre is set, every piece is moved by it too: see stationParts)
-let partPre = null;
+let partPre = null, partAll = null;   // (partAll: every piece into that one buffer, whatever it says: moveGhost)
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
+  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -8867,6 +8867,7 @@ function makeHuman() {
   wear('spear', spear);
   const spearShaft = pivot(spear, 0, 0, 0);
   look(spearShaft, 'spear');
+  spear.rotation.order = 'YXZ';   // (turned onto the shaft's line in both hands: spearHands)
   spear.rotation.x = -Math.PI / 2;
   // the axe and the hammer, in the right hand like the sword (each on an inner pivot, so the axe can leave the hand
   // when it's thrown), each rolled a quarter turn about its haft so the blade, or the hammer's face, points down
@@ -10178,12 +10179,15 @@ function refineAll() {
     if (!to.length) return;
     let n = PACK_N[i];
     raw += n;
-    for (const st of to) st.inp.forEach((p, k) => { if (n > 0 && p === id) { const t = Math.min(n, stackOf(id) - st.inN[k]); st.inN[k] += t; n -= t; } });
+    // shared out one at a time to whichever station that takes it has the least waiting (v316, Jordan: with two
+    // or more alike they're load balanced, so the lot comes out soonest), onto its pile of the same, else a free square
+    const room = st => { const k = st.inp.findIndex((p, q) => p === id && st.inN[q] < stackOf(id)); return k >= 0 ? k : st.inp.indexOf(null); };
     while (n > 0) {
-      const free = to.filter(st => st.inp.includes(null));
-      if (!free.length) break;
-      const st = free.reduce((a, b) => waiting(a) <= waiting(b) ? a : b), k = st.inp.indexOf(null), t = Math.min(n, stackOf(id));
-      st.inp[k] = id; st.inN[k] = t; n -= t;
+      let best = null, bk = -1;
+      for (const st of to) { const k = room(st); if (k >= 0 && (!best || waiting(st) < waiting(best))) { best = st; bk = k; } }
+      if (!best) break;
+      if (!best.inp[bk]) { best.inp[bk] = id; best.inN[bk] = 0; }
+      best.inN[bk]++; n--;
     }
     moved += PACK_N[i] - n;
     PACK_N[i] = n; if (!n) PACK[i] = null;
@@ -10219,7 +10223,7 @@ $('refineBtn').innerHTML = ICON.smelter; $('stashBtn').innerHTML = ICON.chest;
 $('refineBtn').addEventListener('click', () => { audioOn(); refineAll(); });
 $('stashBtn').addEventListener('click', () => { audioOn(); stashAll(); });
 const ACT_INFO = {
-  refineBtn: '<b>REFINE</b> Sends everything raw in your pack to the refining stations on this plot.',
+  refineBtn: '<b>REFINE (R)</b> Sends everything raw in your pack to the refining stations on this plot, shared out so alike stations finish together.',
   stashBtn: '<b>STASH</b> Puts everything in your pack that isn\'t raw into the crates and chests on this plot, topping up like stacks first.',
 };
 let actHome = -1;
@@ -11189,6 +11193,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM' || (e.code === 'Escape' && mapOpen)) { toggleMap(); e.preventDefault(); return; }
   if (e.code === 'KeyP' && !e.repeat) { togglePlots(); return; }
   if (e.code === 'KeyN' && !e.repeat && mapOpen) { toggleReveal(); return; }
+  if (e.code === 'KeyR' && !e.repeat && started && !mapOpen && !e.ctrlKey && !e.metaKey && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) { audioOn(); refineAll(); }
   if (e.code === 'KeyH' && !e.repeat && !e.ctrlKey && !e.metaKey && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) toggleUI();
   if (e.code === 'KeyL' && !e.repeat) {
     GI.on = (Math.round(GI.on) + 1) % 3; tuning.refresh();
@@ -12807,8 +12812,14 @@ function queueWaits() {
   return waiting;
 }
 function updateGhost() {
-  if (mode !== 'build' || !H.alive || buildKind === 'remove') { showGhosts([]); ghostSpot = null; drag = null; showPlotHover(0); return; }
-  if (buildKind === 'move') { const s = ghostSpot = moveSpot(); ghostOk = !!(s && s.go); showGhosts(s ? [s] : []); showPlotHover(lastPick ? plotAt(lastPick.x, lastPick.z) : 0); return; }
+  if (mode !== 'build' || !H.alive || buildKind === 'remove') { showGhosts([]); moveGhost(null); ghostSpot = null; drag = null; showPlotHover(0); return; }
+  if (buildKind === 'move') {
+    const s = ghostSpot = moveSpot(); ghostOk = !!(s && s.go);
+    // carried: a ghost of the station itself; pointed at: the box lights it up
+    showGhosts(s && !moving ? [s] : []); moveGhost(moving ? s : null);
+    showPlotHover(lastPick ? plotAt(lastPick.x, lastPick.z) : 0); return;
+  }
+  moveGhost(null);
   let spots;
   if (drag) spots = drag.spots = settle(dragSpots());
   else { const s = ghostSpot = buildSpot(); spots = s ? settle([s]) : []; }
@@ -13244,6 +13255,35 @@ const stationSpotAt = (p, kind, self) => stFoot(kind) === 1 ? stationSpot(Math.f
 // set down, then its tiles, crafting table entry and moving parts go across to the new spot. Picking another tool,
 // leaving build mode, the right button or letting go where it can't go puts it back.
 let moving = null;
+// the station being dragged, drawn as a ghost of itself where it would go (v316, Jordan): its own pieces drawn again
+// (turned the way it would face) into a buffer of their own, moved across to the spot
+const ghostBuf = new Buf();
+let moveGhostMesh = null, moveGhostKey = '';
+function moveGhost(s) {
+  const st = moving;
+  if (!st || !s) { if (moveGhostMesh) moveGhostMesh.visible = false; return; }
+  const key = st.kind + ',' + st.c + ',' + st.r + ',' + s.ry;
+  if (key !== moveGhostKey) {
+    moveGhostKey = key;
+    const ry = st.ry, o = OB[T(st.c, st.r)], [x, z] = objPos(st.c, st.r, o);
+    st.ry = s.ry; partAll = ghostBuf; ghostBuf.n = 0;
+    try {
+      // (a crate or chest without its storeBody, which would replace its own mesh)
+      if (st.kind === 'crate') crate(st.c, st.r);
+      else if (st.kind === 'chest') ironChest(x + 0.5, z + 0.5, st.c, st.r);
+      else drawObject(o, st.c, st.r);
+    } finally { partAll = null; st.ry = ry; }
+    if (moveGhostMesh) { scene.remove(moveGhostMesh); moveGhostMesh.geometry.dispose(); moveGhostMesh = null; }
+    moveGhostMesh = ghostBuf.mesh(ghostMat);
+    if (!moveGhostMesh) return;
+    moveGhostMesh.renderOrder = 4; moveGhostMesh.castShadow = moveGhostMesh.receiveShadow = false;
+    scene.add(moveGhostMesh);
+  }
+  if (!moveGhostMesh) return;
+  const [mx, mz] = stMid(st);
+  moveGhostMesh.visible = true; moveGhostMesh.material = s.go ? ghostMat : ghostBad;
+  moveGhostMesh.position.set(s.x - mx, surfaceY(s.x, s.z) - surfaceY(mx, mz), s.z - mz);
+}
 function moveSpot() {
   const p = lastPick = pickGround(false);
   if (!p) return null;
@@ -13973,6 +14013,76 @@ let bowUp = 0;
 // feet apart and the knees soft. On the loose the hand flies back (follow), the bow arm dips (recoil) and the
 // string shivers. The volley lays the bow over flat (cant) and crouches; the rain leans back.
 const BOW_POSE = { shoulders: 0.7, bowTurn: 0.75, elbowUp: 0.3, stance: 0.12, knees: 0.15, follow: 0.08, recoil: 0.12, string: 0.03, cant: 1.2, volleyCrouch: 0.25, rainLean: 0.25 };
+// The spear in both hands (T > Spear moves, v315): the right hand near the butt, by the hip, the left on the shaft
+// ahead of it, the shaft laid across the body (butt at the right hip, tip out in front of the middle). The shoulders
+// turn round to the right so the left arm can reach across to it, the head turned back onto the aim; a poke drives
+// the right hand through and the shaft slides through the left, the shoulders squaring up. Both arms are solved as
+// two bones onto their grips each frame (spearHands). hands 0 = the old one-handed hold.
+const SPEAR_POSE = { hands: 1, lunge: 0.12, turn: 0.6, turnThrust: 0.9, height: -0.07, across: 0.12, slide: 0.08, lead: 0.04, gripMin: 0.06, step: 0.22, knees: 0.25, elbowOut: 0.6 };
+// two-bone arm: from its shoulder (pos, in the arm's parent frame) onto target t, the elbow pushed toward pole p
+// (both in that frame); A shoulder to elbow, B elbow to the grip. Sets the arm's YXZ turn and the elbow's bend, and
+// says how far the grip falls short
+const _ikM = new GFX.Matrix4(), _ikG = new GFX.Matrix4(), _ikV = new GFX.Vector3(), _ikO = new GFX.Vector3();
+function armIK(arm, elbow, tx, ty, tz, px, py, pz, A, B) {
+  const tl = Math.hypot(tx, ty, tz) || 1, d = clamp(tl, 0.06, A + B - 1e-4);
+  const vx = tx / tl, vy = ty / tl, vz = tz / tl;
+  const pv = px * vx + py * vy + pz * vz; px -= pv * vx; py -= pv * vy; pz -= pv * vz;
+  const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+  const al = Math.acos(clamp((A * A + d * d - B * B) / (2 * A * d), -1, 1)), bend = Math.PI - Math.acos(clamp((A * A + B * B - d * d) / (2 * A * B), -1, 1));
+  const ca = Math.cos(al), sa = Math.sin(al);
+  const Yx = -(ca * vx + sa * px), Yy = -(ca * vy + sa * py), Yz = -(ca * vz + sa * pz);
+  const Zx = sa * vx - ca * px, Zy = sa * vy - ca * py, Zz = sa * vz - ca * pz;
+  const Xy = Yz * Zx - Yx * Zz;
+  arm.rotation.set(Math.asin(clamp(-Zy, -1, 1)), Math.atan2(Zx, Zz), Math.atan2(Xy, Yy));
+  elbow.rotation.x = -bend;
+  return Math.max(0, tl - (A + B));
+}
+// a point (x, y, z) in the hero's own frame (hero.g: feet at 0, facing +z, its right toward -x) into obj's frame
+// (dir: a direction, no move)
+function heroTo(obj, x, y, z, dir) {
+  _ikM.copy(obj.matrixWorld).invert(); _ikG.copy(hero.g.matrixWorld);
+  _ikV.set(x, y, z).applyMatrix4(_ikG).applyMatrix4(_ikM);
+  if (dir) { _ikO.set(0, 0, 0).applyMatrix4(_ikG).applyMatrix4(_ikM); _ikV.sub(_ikO); }
+  return _ikV;
+}
+function heroFrom(obj, x, y, z) {
+  _ikM.copy(hero.g.matrixWorld).invert();
+  return _ikV.set(x, y, z).applyMatrix4(obj.matrixWorld).applyMatrix4(_ikM);
+}
+let spearPlan = null, spearMiss = [0, 0];
+function spearHands() {
+  const P = SPEAR_POSE, pl = spearPlan, A = 0.1, B = 0.15, L = SPEAR_TIP + P.slide;
+  // (a step into the poke: the whole figure carried forward, the tip's mark kept where it was)
+  const lunge = P.lunge * pl.out;
+  hero.g.position.z += lunge;
+  hero.g.updateMatrixWorld();
+  const sL = heroFrom(hero.armL, 0, 0, 0).clone(), sR = heroFrom(hero.armR, 0, 0, 0).clone();
+  // the shaft: its tip out ahead at pl.tip (turned by pl.jab for a flurry's jabs), laid across from the right hip
+  const y = (sL.y + sR.y) / 2 + P.height, j = pl.jab, a = P.across;
+  const tx = Math.sin(j) * pl.tip, tz = Math.cos(j) * pl.tip - lunge;
+  const dx = Math.sin(j + a), dz = Math.cos(j + a);
+  const rx = tx - L * dx, rz = tz - L * dz;
+  // the right hand onto its grip, the elbow back and out to the right
+  let t = heroTo(hero.chest, rx, y, rz).sub(hero.armR.position);
+  const tr = [t.x, t.y, t.z];
+  let q = heroTo(hero.chest, -P.elbowOut, -0.4, -1, true);
+  spearMiss[1] = armIK(hero.armR, hero.elbows[1], ...tr, q.x, q.y, q.z, A, B);
+  hero.wrists[1].rotation.set(0, 0, 0);
+  hero.g.updateMatrixWorld();
+  // the spear turned to lie along the shaft's line, from wherever the hand got to
+  const w = heroTo(hero.wrists[1], dx, 0, dz, true), wl = Math.hypot(w.x, w.y, w.z) || 1;
+  hero.spear.rotation.set(-Math.asin(clamp(w.y / wl, -1, 1)), Math.atan2(w.x, w.z), 0);
+  hero.g.updateMatrixWorld();
+  // the left hand on the shaft ahead of the right, as near in front of its shoulder as the shaft lets it (so the shaft
+  // slides through it on a poke), the elbow out to the left and down
+  const g = heroFrom(hero.spear, 0, 0, 0).clone();
+  const s = clamp((sL.x - g.x) * dx + (sL.z - g.z) * dz + P.lead, P.gripMin, L - 0.22);
+  t = heroTo(hero.chest, g.x + dx * s, g.y, g.z + dz * s).sub(hero.armL.position);
+  const tl = [t.x, t.y, t.z];
+  q = heroTo(hero.chest, P.elbowOut + 0.2, -0.6, -0.2, true);
+  spearMiss[0] = armIK(hero.armL, hero.elbows[0], ...tl, q.x, q.y, q.z, A, B);
+  hero.wrists[0].rotation.set(0, 0, 0);
+}
 let bowFollow = 0;
 // The sword's blows with the joints (T > Sword moves): each sweep winds up (the first `windup` of its time: the arm
 // drawn back further, the elbow cocked, the wrist laid back and the shoulders turned away), then cuts through,
@@ -14027,12 +14137,23 @@ function animateHero(dt) {
     // swung back by the hip), so the reach out to thrustTip comes from the body: leaning in at the waist, the
     // shoulder turned into it, and the arm swung forward as far as level to bring the tip where it should be
     bend = SPEAR.lean * out; twist = SPEAR.twist * out;
+    if (SPEAR_POSE.hands) {
+      // both hands (spearHands, after the body's set): the shoulders turned round to the right so the left arm reaches
+      // the shaft, squaring up as it drives; the feet staggered, the left ahead
+      const P = SPEAR_POSE;
+      spearPlan = { tip: SPEAR.holdTip + (SPEAR.thrustTip - SPEAR.holdTip) * out, jab: ay, out };
+      shoulder = P.turn + (P.turnThrust - P.turn) * out; chestY = -shoulder;
+      thrust = P.slide;
+      legAdd[0] -= P.step; legAdd[1] += P.step * 0.5; kneeAdd[0] += P.knees; kneeAdd[1] += P.knees * 0.6;
+    } else {
+    spearPlan = null;
     thrust = SPEAR.holdTip - SPEAR_TIP + SPEAR_ARM * Math.sin(SPEAR_BACK);
     const tip = SPEAR.holdTip + (SPEAR.thrustTip - SPEAR.holdTip) * out;
     const shoulder = 0.28 * Math.sin(bend) + 0.175 * Math.sin(twist);
     const phi = Math.asin(clamp((shoulder - (tip - SPEAR_TIP - thrust)) / SPEAR_ARM, -1, 1));
     ax = phi - bend; ay -= twist;
     hero.armL.rotation.set(-0.5, 0, 0.1);
+    }
   } else if (bowUp > 0) {
     // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin;
     // held up between shots while the attack is held, and lowered after
@@ -14166,7 +14287,7 @@ function animateHero(dt) {
   // turn between the two is eased, so it never lags into a tilt as the arm swings back)
   spearHeld += ((H.spear ? 1 : 0) - spearHeld) * Math.min(1, dt * 30);
   if (spearHeld < 0.01) spearHeld = 0;
-  hero.spear.rotation.x = -Math.PI / 2 + (Math.PI / 2 - ax - bend) * spearHeld;
+  hero.spear.rotation.set(-Math.PI / 2 + (Math.PI / 2 - ax - bend) * spearHeld, 0, 0);
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
   hero.body.rotation.y = stance ? -stance : H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * (H.strike === 'slash' ? 0.12 : 0.25) : 0;
@@ -14221,6 +14342,8 @@ function animateHero(dt) {
   [[hero.legL, 0], [hero.legR, 1]].forEach(([leg, k]) => {
     hero.ankles[k].rotation.x = tucked ? 0 : -(hero.body.rotation.x + leg.rotation.x + hero.knees[k].rotation.x) * WALK.foot - (legAdd[k] + kneeAdd[k]) * (1 - WALK.foot);
   });
+  if (H.spear && spearPlan && !tucked) spearHands();
+  else spearPlan = null;
 }
 
 function updateFoe(f, dt, night) {
@@ -15105,6 +15228,20 @@ const TUNING = [
     [BOW_POSE, 'volleyCrouch', 'Volley: crouch', 0, 0.8, 0.01],
     [BOW_POSE, 'rainLean', 'Rain: lean back', 0, 0.8, 0.01],
   ]],
+  ['Spear moves', [
+    [SPEAR_POSE, 'hands', 'Both hands on the spear (0: the old one-handed hold)', 0, 1, 1],
+    [SPEAR_POSE, 'lunge', 'Step into a poke (tiles)', 0, 0.3, 0.005],
+    [SPEAR_POSE, 'turn', 'Shoulders turned right, held (radians: lets the left arm reach)', 0, 1.4, 0.01],
+    [SPEAR_POSE, 'turnThrust', 'Shoulders turned, at full thrust', -0.6, 1.4, 0.01],
+    [SPEAR_POSE, 'height', 'Shaft height below the shoulders (tiles)', -0.25, 0, 0.005],
+    [SPEAR_POSE, 'across', 'Shaft laid across the body (radians)', 0, 0.6, 0.01],
+    [SPEAR_POSE, 'slide', 'Right hand up from the butt (tiles)', -0.15, 0.15, 0.005],
+    [SPEAR_POSE, 'lead', 'Left hand ahead of its shoulder (tiles)', -0.15, 0.2, 0.005],
+    [SPEAR_POSE, 'gripMin', 'Hands at least this far apart (tiles)', 0.05, 0.4, 0.005],
+    [SPEAR_POSE, 'step', 'Left foot forward', 0, 0.6, 0.01],
+    [SPEAR_POSE, 'knees', 'Knees bent', 0, 0.8, 0.01],
+    [SPEAR_POSE, 'elbowOut', 'Elbows out to the sides', 0, 1.5, 0.01],
+  ]],
   ['Cloud shadows', [
     [CLOUDS, 'strength', 'How much a cloud dims the sun (0 none)', 0, 1, 0.01],
     [CLOUDS, 'cover', 'Cloud cover', 0, 1, 0.01],
@@ -15719,7 +15856,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 314, crashSeen = new Map();
+const GAME_VERSION = 316, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15842,10 +15979,13 @@ window.GAME = {
     if (buildKind !== 'move') setBuildKind('move');
     forcedPick = { x: x0, y: 0, z: z0, wall: null }; pressBuild();
     const held = moving && moving.kind;
-    forcedPick = { x: x1, y: 0, z: z1, wall: null }; updateGhost(); releaseBuild(); forcedPick = null;
-    return { held, moving: moving && moving.kind };
+    forcedPick = { x: x1, y: 0, z: z1, wall: null }; updateGhost();
+    const ghost = moveGhostMesh && moveGhostMesh.visible ? { verts: moveGhostMesh.geometry.attributes.position.count, ok: moveGhostMesh.material === ghostMat, at: [moveGhostMesh.position.x, moveGhostMesh.position.z].map(v => +v.toFixed(2)) } : null;
+    releaseBuild(); forcedPick = null;
+    return { held, moving: moving && moving.kind, ghost };
   },
   uiShown: () => !document.body.classList.contains('noUI'), toggleUI: on => toggleUI(on),
+  spearHands: t => { if (H.spear && t !== undefined) { H.spear.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } hero.g.updateMatrixWorld(); const hR = heroFrom(hero.spear, 0, 0, 0).clone(), hL = heroFrom(hero.wrists[0], 0, -0.05, 0.02).clone(), tip = heroFrom(hero.spearShaft, 0, 0, SPEAR_TIP).clone(), butt = heroFrom(hero.spearShaft, 0, 0, -SPEAR_BUTT).clone(); const dx = tip.x - butt.x, dy = tip.y - butt.y, dz = tip.z - butt.z, dl = Math.hypot(dx, dy, dz); const ux = hL.x - butt.x, uy = hL.y - butt.y, uz = hL.z - butt.z, along = (ux * dx + uy * dy + uz * dz) / dl; const off = Math.hypot(ux - dx * along / dl, uy - dy * along / dl, uz - dz * along / dl); const r = v => [v.x, v.y, v.z].map(n => +n.toFixed(2)); return { t: H.spear && +H.spear.t.toFixed(2), right: r(hR), left: r(hL), tip: r(tip), butt: r(butt), leftOffShaft: +off.toFixed(3), leftAlong: +along.toFixed(2), miss: spearMiss.map(m => +m.toFixed(3)), chest: +hero.chest.rotation.y.toFixed(2), head: +hero.head.rotation.y.toFixed(2) }; },
   builtTables: () => TABLES.filter(t => t.built).map(t => [t.kind, t.c, t.r]),
   // tests: the world's arrays and helpers, to check them in bulk
   resources: a => { if (a) RESOURCES.amount = a; return RESOURCES.amount; },
@@ -15990,7 +16130,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
+  tune: { SPEAR_POSE, SPEAR, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
