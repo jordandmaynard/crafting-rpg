@@ -8709,6 +8709,7 @@ function makeHuman() {
     wear('shirt', box(fore, 0.076, 0.11, 0.086, 0, -0.045, 0, heroTunic)); wear('skinTorso', box(fore, 0.066, 0.11, 0.076, 0, -0.045, 0, heroSkin));
     const hand = pivot(fore, 0, WRIST - ELBOW, 0);
     wrists.push(hand);
+    hand.rotation.order = 'XZY';   // (a roll about the hand's own length first, then the bend)
     box(hand, 0.07, 0.07, 0.075, 0, -0.035, 0, heroSkin);
     wear('pads', box(arm, 0.11, 0.07, 0.12, 0, -0.005, 0, leatherDark));
     // the fantasy sets' shoulder plates, a second tier over them from Orivane up
@@ -9649,7 +9650,7 @@ for (const k of ['dash', 'bag', 'hammer', 'map']) BAR_ICON[k] = paintImg(k, 'max
 // (the weapons' abilities: each strike under its bar key, sword slash, bow shoot, spear thrust)
 for (const [k, f] of [['sword', 'slash'], ['whirl', 'whirl'], ['lunge', 'lunge'], ['bow', 'shoot'], ['volley', 'volley'], ['rain', 'rain'],
   ['spear', 'thrust'], ['flurry', 'flurry'], ['harpoon', 'harpoon']]) BAR_ICON[k] = paintImg(f, 'max(26px, calc(4.9vh - 14px))');
-for (const k of ['clothShirt', 'clothPants', 'clothBoots', 'sword_wood', 'bow_wood', 'spear_wood', 'stone', 'wood', 'planks', 'stoneBlock']) ICON[k] = paintImg(k, 'max(34px, 5.12vh)');
+for (const k of ['clothShirt', 'clothPants', 'clothBoots', 'sword_wood', 'bow_wood', 'spear_wood', 'axe_wood', 'hammer_wood', 'stone', 'wood', 'planks', 'stoneBlock']) ICON[k] = paintImg(k, 'max(34px, 5.12vh)');
 function setDpr() { document.documentElement.style.setProperty('--dpr', devicePixelRatio || 1); }
 setDpr();
 addEventListener('resize', setDpr);
@@ -13689,7 +13690,7 @@ let bowUp = 0;
 // elbow (worked out from where the string is, the elbow out behind along the arrow and raised by elbowUp), the
 // feet apart and the knees soft. On the loose the hand flies back (follow), the bow arm dips (recoil) and the
 // string shivers. The volley lays the bow over flat (cant) and crouches; the rain leans back.
-const BOW_POSE = { shoulders: 0.45, elbowUp: 0.3, stance: 0.12, knees: 0.15, follow: 0.08, recoil: 0.12, string: 0.03, cant: 1.2, volleyCrouch: 0.25, rainLean: 0.25 };
+const BOW_POSE = { shoulders: 0.7, bowTurn: 0.75, elbowUp: 0.3, stance: 0.12, knees: 0.15, follow: 0.08, recoil: 0.12, string: 0.03, cant: 1.2, volleyCrouch: 0.25, rainLean: 0.25 };
 let bowFollow = 0;
 // The sword's blows with the joints (T > Sword moves): each sweep winds up (the first `windup` of its time: the arm
 // drawn back further, the elbow cocked, the wrist laid back and the shoulders turned away), then cuts through,
@@ -13764,20 +13765,27 @@ function animateHero(dt) {
     // stood side-on (the body turned BOW.turn degrees to the right, the shoulders on round further) with the head
     // and both arms turned back onto the aim, so the bow's held out across the body
     stance = BOW.turn * Math.PI / 180 * raise; shoulder = P.shoulders * raise; chestY = -shoulder;
-    const yl = -0.08 * raise + stance + shoulder;
+    // the bow arm reaches out ahead of the aim by bowTurn and the wrist turns the bow back onto it, so the arrow (and
+    // the string) lies out in front of the chest where the drawing hand can reach it
+    const dl = P.bowTurn * raise, yAim = -0.08 * raise + stance + shoulder, yl = yAim - dl;
     hero.armL.rotation.set(out, yl, 0.08);
-    // the volley shot with the bow laid over flat, a hint of a cant otherwise
+    wrist[0][1] = dl;
+    // the volley shot with the bow laid over flat, a hint of a cant otherwise (a roll about the hand's own axis)
     wrist[0][2] = -(volley ? P.cant : 0.12) * smooth(0, 0.3, tu) * raise;
-    // the drawing hand on the string: from its shoulder (in the chest's frame) the string's out along the bow arm,
-    // then back toward you by the nock's offset and the pull. The arm can't reach it braced, so the hand grabs it
-    // where it can (pmin, the arm straight) and draws it back from there to the anchor, the elbow bending and
-    // rising out behind along the arrow.
-    const so = Math.sin(out), dx = -so * Math.sin(yl), dy = -Math.cos(out), dz = -so * Math.cos(yl), cd = 0.35 * dx;
-    const REACH = 0.25, kMax = -cd + Math.sqrt(Math.max(0, cd * cd - 0.35 * 0.35 + REACH * REACH)), pmin = clamp(0.13 - kMax, 0, BOW.draw);
+    // the drawing hand on the string: from its shoulder (in the chest's frame) the wrist's out along the bow arm (a),
+    // the string back from it toward you along the arrow (e) by the nock's offset and the pull. The arm can't reach
+    // it braced, so the hand grabs it where it can (pmin, the arm straight) and draws it back from there to the
+    // anchor, the elbow bending and rising out behind along the arrow.
+    const so = Math.sin(out), co = Math.cos(out), cl = Math.cos(dl), sl = Math.sin(dl);
+    const ax0 = -so * Math.sin(yl), ay0 = -co, az0 = -so * Math.cos(yl);
+    const dx = cl * ax0 + sl * Math.cos(yl), dy = cl * ay0, dz = cl * az0 - sl * Math.sin(yl);
+    const cx = 0.35 + 0.2 * ax0 - 0.07 * dx, cy = 0.2 * ay0 - 0.07 * dy, cz = 0.2 * az0 - 0.07 * dz;
+    const REACH = 0.25, ce = cx * dx + cy * dy + cz * dz, disc = ce * ce - (cx * cx + cy * cy + cz * cz) + REACH * REACH;
+    const pmin = clamp(disc > 0 ? ce - Math.sqrt(disc) : ce, 0, BOW.draw);
     const grab = smooth(0, 0.25, tu), draw = smooth(0.25, 1, tu);
     pull = !b || b.fired ? 0 : pmin * grab + (BOW.draw - pmin) * draw;
-    const k = 0.13 - (b && b.fired ? BOW.draw : pull), fo = P.follow * bowFollow;
-    const tx = 0.35 + dx * k - dx * fo, ty = dy * k - dy * fo + 0.4 * fo, tz = dz * k - dz * fo;
+    const k = (b && b.fired ? BOW.draw : pull) + P.follow * bowFollow, fo = P.follow * bowFollow;
+    const tx = cx - dx * k, ty = cy - dy * k + 0.4 * fo, tz = cz - dz * k;
     // two bones (shoulder to elbow 0.1, elbow to the fingers 0.15): the elbow pushed out back along the arrow and up
     const A = 0.1, B = 0.15, tl = Math.hypot(tx, ty, tz) || 1, d = clamp(tl, 0.06, A + B - 1e-4);
     const vx = tx / tl, vy = ty / tl, vz = tz / tl;
@@ -14786,6 +14794,7 @@ const TUNING = [
   ]],
   ['Bow moves', [
     [BOW_POSE, 'shoulders', 'Shoulders turned on past the hips (radians)', 0, 1.2, 0.01],
+    [BOW_POSE, 'bowTurn', 'Bow arm out ahead, the wrist turning the bow back onto the aim (string in front of the chest)', 0, 1.4, 0.01],
     [BOW_POSE, 'elbowUp', 'Drawing elbow raised', -1, 1.5, 0.01],
     [BOW_POSE, 'stance', 'Feet apart', 0, 0.4, 0.01],
     [BOW_POSE, 'knees', 'Knees soft', 0, 0.8, 0.01],
@@ -15410,7 +15419,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 298, crashSeen = new Map();
+const GAME_VERSION = 299, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
