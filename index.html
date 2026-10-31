@@ -2723,7 +2723,7 @@ const FANTASY = [
   { k: 'verdane', name: 'Verdane', o: O.VERDANE, ore: '#5aae7c', ingot: '#74b892' },
   { k: 'caerite', name: 'Caerite', o: O.CAERITE, ore: '#3c8ae6', ingot: '#4a90e0' },
   { k: 'orivane', name: 'Orivane', o: O.ORIVANE, ore: '#a274dc', ingot: '#9a74c4' },
-  { k: 'auralith', name: 'Auralith', o: O.AURALITH, ore: '#f48a24', ingot: '#f08a2a' },
+  { k: 'auralith', name: 'Auralith', o: O.AURALITH, ore: '#8fe0d0', ingot: '#d6c8f4' },
 ];
 // every metal a weapon can be made of, weakest first (fists come before them all)
 const METAL_TIERS = ['wood', 'bone', 'copper', 'iron', ...FANTASY.map(m => m.k)];
@@ -3374,7 +3374,7 @@ function chunkGI(cx, cz) {
       // what stands on it, and the roofs over it (each building's is one mesh of its own), cut into runs
       const roofs = [];
       for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
-      const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.metal), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
+      const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.metal), leaks: true }, { geo: geo(ch.prism), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
         { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs];
       job.st = GFX.rasterStart(cx, cz, job.ground);
       job.runs = parts.filter(part => GFX.rasterTris(part) > 0); job.t = 0;
@@ -3583,10 +3583,10 @@ class Buf {
     return shadowy(new GFX.Mesh(g, mat));
   }
 }
-let OUT = new Buf(), GLOW = new Buf(), METAL = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
+let OUT = new Buf(), GLOW = new Buf(), METAL = new Buf(), PRISMB = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
 // (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
 const bufWeb = new Buf();
-const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf(), bufTmpMetal = new Buf();
+const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
   constructor() { super(); this.b = new Float32Array(this.p.length); }
@@ -3700,7 +3700,7 @@ let partPre = null;
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
+  const B = into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -5097,6 +5097,44 @@ const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 // ore metal: part metallic and polished, so its faces flash in a tight highlight as they turn to the light
 const METAL_LOOK = { metalness: 0.46, roughness: 0.4 };
 const metalMat = flatMat({ vertexColors: true, metalness: METAL_LOOK.metalness, roughness: METAL_LOOK.roughness });
+// Auralith, the top metal, is prismatic like abalone shell (T > Auralith shimmer): each face's colour runs round the
+// rainbow with how square-on you see it (bands: turns of it from face-on to edge-on), swirled across the surface
+// (swirl) and drifting slowly with time, washed toward white by 1 - sat. It's lit like polished metal and glows a
+// little in its own colours. The ore rock's chunks, the hero's Auralith armor and weapons, and its dropped ore
+// and ingots all use it; `base` is each one's shade (the dark fullers, the pale trims) and the chunks' vertex
+// colours shade it too.
+const PRISM = { bands: 1.3, swirl: 0.45, drift: 0.03, sat: 0.62, bright: 1, metal: 0.55, rough: 0.28, glow: 0.12 };
+const PRISM_U = Object.fromEntries(Object.keys(PRISM).map(k => [k, { value: PRISM[k] }]));
+const prismMats = new Map();
+function prismMat(shade = 1, vc = false, glow = 1) {
+  const key = shade + '/' + vc + '/' + glow;
+  if (prismMats.has(key)) return prismMats.get(key);
+  const m = new GFX.ShaderMaterial({ uniforms: { ...PRISM_U, shade: { value: shade }, glowK: { value: glow } }, vertexColors: vc, lit: true,
+    code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, ${vc ? 'v.color' : 'vec3f(1.0)'}, w - F.camPos.xyz);
+}
+fn prism(t: f32) -> vec3f { return 0.5 + 0.5 * cos(6.28318 * (vec3f(t) + vec3f(0.0, 0.33, 0.67))); }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N = flatNormal(i.eye);
+  let nv = clamp(dot(N, toEye(i.world)), 0.0, 1.0);
+  let t = U.bands * (1.0 - nv) + U.swirl * (0.5 * sin(dot(i.world, vec3f(1.7, 2.3, 1.1))) + dot(N, vec3f(0.6, 0.9, 0.4))) + F.camDir.w * U.drift;
+  let iri = mix(vec3f(1.0), prism(t), U.sat);
+  let lum = ${vc ? 'dot(i.color, vec3f(0.3, 0.59, 0.11)) / 0.85' : '1.0'};
+  let c = shadeLit(iri * U.bright * U.shade * lum, iri * U.glow * U.glowK, U.metal, U.rough, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+  });
+  prismMats.set(key, m);
+  return m;
+}
+// (the colour the ore rock's light cycles through, as the shader's rainbow, washed the same)
+function prismLight(out, t) {
+  const v = [0, 0.33, 0.67].map(d => 1 - PRISM.sat + PRISM.sat * (0.5 + 0.5 * Math.cos(Math.PI * 2 * (t + d))));
+  return out.setRGB(v[0], v[1], v[2]);
+}
 // spiderweb threads: lit, a touch aglow, and writing alpha 0 so the outline pass draws no stroke round them
 const webMat = flatMat({ vertexColors: true, side: GFX.DoubleSide, opacity: 0 });
 // Every so often a spider drops down from its web on a thread, hangs there bobbing a moment, then climbs back up
@@ -6849,8 +6887,8 @@ const ROCK_COLOR = { [WASTES]: '#4a403c', [SNOW]: '#a8c4dc', [DESERT]: '#b8865a'
 // Ore rocks (T > Ore rocks), after Crafting and Conquest's ore: a rock pillar with tapered, four-sided chunks
 // of the metal sticking out of it all round, leaning out of the stone at odd angles and narrowing to their
 // tips, each its own shade; and a couple broken off, lying at its foot. Call after rock() with the same x, z, k.
-const ORE_LOOK = { copper: '#ff9500', iron: '#b9bfc9', verdane: '#5aae7c', caerite: '#3c8ae6', orivane: '#a862fe', auralith: '#ffdc5c', chunks: 4, size: 1.5 };
-function oreChunks(x, z, k, metal) {
+const ORE_LOOK = { copper: '#ff9500', iron: '#b9bfc9', verdane: '#5aae7c', caerite: '#3c8ae6', orivane: '#a862fe', auralith: '#e8e4f4', chunks: 4, size: 1.5 };
+function oreChunks(x, z, k, metal, into = 'metal') {
   const y = groundAt(x, z), h = 0.95 + k * 0.35, lean = (k - 0.5) * 0.25, spin = k * 6, S = ORE_LOOK.size, base = CC(metal);
   // the pillar's axis, as rock() leans and turns it
   const ux = -Math.sin(lean) * Math.cos(spin), uy = Math.cos(lean), uz = Math.sin(lean) * Math.sin(spin);
@@ -6865,12 +6903,12 @@ function oreChunks(x, z, k, metal) {
     const px = x + ux * u * h + dx * rr, py = y + h * 0.45 + uy * u * h, pz = z + uz * u * h + dz * rr;
     // half sunk in the stone, its tip out along (dx st, ct, dz st)
     part(G.frust4, shade(base, 0.8 + hash(x, z, 80 + j) * 0.45), px + dx * st * len * 0.3, py + ct * len * 0.3, pz + dz * st * len * 0.3,
-      { sx: w * 2, sy: len, sz: w * 2, rz: -tilt, ry: a - Math.PI / 2, into: 'metal' });
+      { sx: w * 2, sy: len, sz: w * 2, rz: -tilt, ry: a - Math.PI / 2, into });
   }
   // broken off at its foot
   for (let j = 0; j < 2; j++) {
     const a = k * 7 + j * 2.6 + 1, d = 0.42 + hash(x, z, 90 + j) * 0.08, s = (0.07 + hash(x, z, 92 + j) * 0.03) * S;
-    part(G.oct, shade(base, 0.85 + j * 0.2), x + Math.sin(a) * d, y + s * 0.4, z + Math.cos(a) * d, { sx: s * 1.4, sy: s, sz: s * 1.1, ry: a, rz: 0.3, into: 'metal' });
+    part(G.oct, shade(base, 0.85 + j * 0.2), x + Math.sin(a) * d, y + s * 0.4, z + Math.cos(a) * d, { sx: s * 1.4, sy: s, sz: s * 1.1, ry: a, rz: 0.3, into });
   }
 }
 // Ore streaks, from before the ore rocks (not drawn): two pale bars across the boulder's face, tilted with its
@@ -7464,7 +7502,7 @@ function drawObject(o, c, r) {
     case O.ROCK: return rock(x, z, k2, BI[T(c, r)] === WASTES ? '#4a403c' : '#7a7684');
     case O.ICEROCK: return rock(x, z, k2, '#a8c4dc');
     case O.COPPER: case O.IRON: { rock(x, z, k2, ROCK_COLOR[BI[T(c, r)]] || '#7a7684'); return oreChunks(x, z, k2, o === O.COPPER ? ORE_LOOK.copper : ORE_LOOK.iron); }
-    case O.VERDANE: case O.CAERITE: case O.ORIVANE: case O.AURALITH: { rock(x, z, k2, ROCK_COLOR[BI[T(c, r)]] || '#7a7684'); return oreChunks(x, z, k2, ORE_LOOK[OBJ[o].metal]); }
+    case O.VERDANE: case O.CAERITE: case O.ORIVANE: case O.AURALITH: { rock(x, z, k2, ROCK_COLOR[BI[T(c, r)]] || '#7a7684'); return oreChunks(x, z, k2, ORE_LOOK[OBJ[o].metal], OBJ[o].metal === 'auralith' ? 'prism' : 'metal'); }
     case O.SANDROCK: return rock(x, z, k2, '#b8865a');
     case O.BUSH: return bush(x, z, k2, BI[T(c, r)] === SWAMP ? '#4a6a34' : BI[T(c, r)] === DEEP ? '#355f2c' : '#3f7a34');
     case O.SNOWBUSH: return bush(x, z, k2, '#dde8f2');
@@ -7650,12 +7688,12 @@ function shrine(x, z, k) {
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 // (the buffers objects are drawn into: one set for building a chunk's at once, and one for a chunk streaming in
 // a band of rows at a time, which keeps its part-drawn objects over frames)
-const OBJ_BUFS = { obj: bufObj, glow: bufGlow, metal: new Buf(), trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider };
-const BAND_BUFS = { obj: new Buf(), glow: new Buf(), metal: new Buf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf() };
+const OBJ_BUFS = { obj: bufObj, glow: bufGlow, metal: new Buf(), prism: new Buf(), trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider };
+const BAND_BUFS = { obj: new Buf(), glow: new Buf(), metal: new Buf(), prism: new Buf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf() };
 const OBJ_BAND = 8;      // rows of tiles in a band
 let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUFS
 function objBufs(B, clear) {
-  OUT = B.obj; GLOW = B.glow; METAL = B.metal; TRUNK = B.trunk; CANOPY = B.canopy; PLANT = B.plant; WEB = B.web; SPIDER = B.spider;
+  OUT = B.obj; GLOW = B.glow; METAL = B.metal; PRISMB = B.prism; TRUNK = B.trunk; CANOPY = B.canopy; PLANT = B.plant; WEB = B.web; SPIDER = B.spider;
   if (clear) for (const k in B) B[k].n = 0;
 }
 function objRows(cx, cz, ra, rb) {
@@ -7686,11 +7724,12 @@ function furrows(c, r, i) {
     if (FIELD[after] !== dir) t3(R1, L1, T1, foot, foot, top);
   }
 }
-const OBJ_MESHES = ['obj', 'glow', 'metal', 'trunk', 'plant', 'canopy', 'web', 'spider'];
+const OBJ_MESHES = ['obj', 'glow', 'metal', 'prism', 'trunk', 'plant', 'canopy', 'web', 'spider'];
 function objMesh(B, ch, k) {
   if (k === 'obj') ch.obj = B.obj.mesh(groundMat);
   else if (k === 'glow') ch.glow = B.glow.mesh(glowMat);
   else if (k === 'metal') ch.metal = B.metal.mesh(metalMat);
+  else if (k === 'prism') ch.prism = B.prism.mesh(prismMat(1, true));
   else if (k === 'trunk') ch.trunk = B.trunk.mesh(trunkMat);
   else if (k === 'plant') ch.plant = B.plant.mesh(plantMat);
   else if (k === 'canopy') { ch.canopy = B.canopy.mesh(castOnlyMat); if (ch.canopy) ch.canopy.castShadow = true; }
@@ -8370,7 +8409,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -8448,7 +8487,7 @@ function rebuildObjects(c, r) {
   if (ch.redo) { ch.redo = false; if (bandOwner === ch) bandOwner = null; showDetached(ch); }
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'metal', tmp.metal); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
+  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'metal', tmp.metal); swapMesh(ch, 'prism', tmp.prism); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
   grassChunk(ch.cx, ch.cz);
 }
 function rebuildPieces(c, r) {
@@ -8543,6 +8582,8 @@ const HERO_MAT = {
   ...Object.fromEntries(FANTASY.flatMap(m => [[m.k, flatMat({ color: m.ingot, roughness: 0.3, metalness: 0.65 })], [m.k + 'Dark', flatMat({ color: shadeHex(m.ingot, -0.45), roughness: 0.4, metalness: 0.55 })]])),
 };
 // the spear, butt to tip along z from the hand: [w, h, d, z] (the ghost spears' shape), its tip SPEAR_TIP out
+// (Auralith armor in the prismatic shimmer)
+HERO_MAT.auralith = prismMat(1); HERO_MAT.auralithDark = prismMat(0.55);
 const SPEAR_BOXES = [[0.032, 0.032, 0.82, 0.19], [0.045, 0.045, 0.06, 0.6], [0.07, 0.02, 0.14, 0.69], [0.04, 0.04, 0.05, 0.785]];
 const SPEAR_TIP = 0.81, SPEAR_BUTT = 0.22;
 // Each weapon in each material, box by box ([w, h, d, x, y, z, material, rx, rz] in the hand's frame: the blade or
@@ -8560,6 +8601,8 @@ const WM = {
   ...Object.fromEntries(FANTASY.flatMap(m => [[m.k, flatMat({ color: m.ingot, roughness: 0.25, metalness: 0.6 })], [m.k + 'Dark', flatMat({ color: shadeHex(m.ingot, -0.5), roughness: 0.35, metalness: 0.55 })],
     [m.k + 'Trim', flatMat({ color: shadeHex(m.ingot, 0.45), roughness: 0.3, metalness: 0.5 })], [m.k + 'Gem', flatMat({ color: shadeHex(m.ore, 0.3), emissive: m.ore })]])),
 };
+// (Auralith weapons in the prismatic shimmer: the fuller darker, the trim paler, the gem glowing)
+WM.auralith = prismMat(1.05); WM.auralithDark = prismMat(0.5); WM.auralithTrim = prismMat(1.3); WM.auralithGem = prismMat(1.2, false, 5);
 // a bow's limbs: two bends each side from the grip to the tip (0.12, ±0.32 in y, z), and a recurve flicked out past it
 function bowLimbs(mat, recurve, tipMat) {
   const out = [];
@@ -10714,6 +10757,7 @@ function lootGlow(kind, x, z) {
   return m;
 }
 function updateLootGlow() {
+  for (const k in PRISM) PRISM_U[k].value = PRISM[k];
   for (const m of Object.values(lootMats)) for (const k of ['beam', 'height', 'width', 'sparks', 'sparkSize', 'orbit', 'rise', 'pool', 'steady']) m.uniforms[k].value = LOOT_FX[k];
 }
 
@@ -10727,9 +10771,9 @@ const hideGeo = new GFX.BoxGeometry(0.42, 0.025, 0.3), spineGeo = new GFX.BoxGeo
 const logMat = flatMat({ color: '#8a5a32' }), logGeo = new GFX.CylinderGeometry(0.065, 0.065, 0.44, 6).rotateZ(Math.PI / 2);
 const pebbleMat = flatMat({ color: '#8c8a96' }), pebbleGeo = new GFX.DodecahedronGeometry(0.1, 0);
 const boneLootMat = flatMat({ color: '#e4dac0' }), boneGeo = new GFX.CylinderGeometry(0.025, 0.025, 0.3, 5).rotateZ(Math.PI / 2), knobGeo = new GFX.DodecahedronGeometry(0.035, 0);
-const oreMats = { copperOre: flatMat({ color: OBJ[O.COPPER].ore }), ironOre: flatMat({ color: OBJ[O.IRON].ore }), ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', flatMat({ color: m.ore })])) };
+const oreMats = { copperOre: flatMat({ color: OBJ[O.COPPER].ore }), ironOre: flatMat({ color: OBJ[O.IRON].ore }), ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', m.k === 'auralith' ? prismMat(0.95) : flatMat({ color: m.ore })])) };
 const plankMat = flatMat({ color: '#c89a62' }), plankGeo = new GFX.BoxGeometry(0.42, 0.035, 0.1), blockMat = flatMat({ color: '#9a96a2' }), blockGeo = new GFX.BoxGeometry(0.14, 0.12, 0.14);
-const ingotMats = { copperIngot: flatMat({ color: '#e08850' }), ironIngot: flatMat({ color: '#a8aeb8' }), ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ingot', flatMat({ color: m.ingot })])) }, ingotGeo = new GFX.CylinderGeometry(0.06, 0.085, 0.24, 4, 1).rotateZ(Math.PI / 2).rotateX(Math.PI / 4);
+const ingotMats = { copperIngot: flatMat({ color: '#e08850' }), ironIngot: flatMat({ color: '#a8aeb8' }), ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ingot', m.k === 'auralith' ? prismMat(1.1) : flatMat({ color: m.ingot })])) }, ingotGeo = new GFX.CylinderGeometry(0.06, 0.085, 0.24, 4, 1).rotateZ(Math.PI / 2).rotateX(Math.PI / 4);
 const leatherMat = flatMat({ color: '#9a6638' }), leatherGeo = new GFX.BoxGeometry(0.34, 0.03, 0.26);
 const sandstoneMat = flatMat({ color: '#c89a64' }), sandMat = flatMat({ color: '#e0c07a' }), glassMat = flatMat({ color: '#bfe4ee' }), glassGeo = new GFX.BoxGeometry(0.3, 0.02, 0.24);
 const flourMat = flatMat({ color: '#ece4d2' }), flourTie = flatMat({ color: '#a8845a' }), breadMat = flatMat({ color: '#b87a3c' }), breadTop = flatMat({ color: '#e0b878' });
@@ -10842,20 +10886,21 @@ function detach(i, c, r) {
   let d = detached.get(i);
   if (d) return d;
   const o = OB[i];
-  const save = [OUT, GLOW, METAL];
-  OUT = bufTmp; GLOW = bufTmpGlow; METAL = bufTmpMetal; bufTmp.n = 0; bufTmpGlow.n = 0; bufTmpMetal.n = 0;
+  const save = [OUT, GLOW, METAL, PRISMB];
+  OUT = bufTmp; GLOW = bufTmpGlow; METAL = bufTmpMetal; PRISMB = bufTmpPrism; bufTmp.n = 0; bufTmpGlow.n = 0; bufTmpMetal.n = 0; bufTmpPrism.n = 0;
   drawObject(o, c, r);
   const [x, z] = objPos(c, r, o), y = LV[i] * STEP;
   // recentre on the trunk so it can shake and topple about its foot
-  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; }
+  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; }
   const g = new GFX.Group();
   const m = bufTmp.mesh(groundMat); if (m) g.add(m);
   // (and what of it glows: the fantasy ores' crystal tips, seams and embers)
   const mg = bufTmpGlow.mesh(glowMat); if (mg) g.add(mg);
   const mm = bufTmpMetal.mesh(metalMat); if (mm) g.add(mm);
+  const mp = bufTmpPrism.mesh(prismMat(1, true)); if (mp) g.add(mp);
   g.position.set(x, y, z);
   scene.add(g);
-  [OUT, GLOW, METAL] = save;
+  [OUT, GLOW, METAL, PRISMB] = save;
   d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false };
   detached.set(i, d);
   // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
@@ -13393,7 +13438,8 @@ function updateLamps() {
     if (!p) { l.intensity = 0; return; }
     if (p[2] === 3) {
       const metal = OBJ[OB[p[3]]].metal;
-      l.color.set(ORE_LOOK[metal]); l.distance = ORE_GLOW.range;
+      if (metal === 'auralith') prismLight(l.color, time * 0.08 + p[0] * 0.13 + p[1] * 0.07); else l.color.set(ORE_LOOK[metal]);
+      l.distance = ORE_GLOW.range;
       l.position.set(p[0], heightAt(p[0], p[1]) + 0.9, p[1]);
       l.intensity = ORE_GLOW[metal] * (0.5 + night * 0.7);
       return;
@@ -14858,6 +14904,16 @@ const TUNING = [
     [SWORD_POSE, 'whirlCrouch', 'Whirlwind: crouch', 0, 0.8, 0.01],
     [SWORD_POSE, 'lungeDepth', 'Lunge: depth of the front knee', 0, 1.5, 0.01],
   ]],
+  ['Auralith shimmer', [
+    [PRISM, 'bands', 'Rainbow turns from face-on to edge-on', 0, 4, 0.05],
+    [PRISM, 'swirl', 'Swirl across the surface', 0, 2, 0.05],
+    [PRISM, 'drift', 'Drift with time', 0, 0.3, 0.005],
+    [PRISM, 'sat', 'Colour (0 white, 1 full rainbow)', 0, 1, 0.01],
+    [PRISM, 'bright', 'Brightness', 0.2, 2, 0.01],
+    [PRISM, 'metal', 'How metallic', 0, 1, 0.01],
+    [PRISM, 'rough', 'Roughness', 0.05, 1, 0.01],
+    [PRISM, 'glow', 'Glow in its own colours', 0, 1, 0.01],
+  ]],
   ['Levels', [
     [XP, 'perKill', 'Experience a kill drops (a level 1 foe)', 0, 100, 1],
     [XP, 'levelBonus', 'More for each level the foe is over 1 (share of that)', 0, 2, 0.05],
@@ -15492,7 +15548,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 306, crashSeen = new Map();
+const GAME_VERSION = 307, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
