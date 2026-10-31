@@ -3305,13 +3305,16 @@ $('optsClose').addEventListener('click', () => toggleOptions(false));
 $('optsBtn').addEventListener('click', e => { toggleOptions(); e.currentTarget.blur(); });
 applyOptions();
 function hazeOn() { return HAZE.on > 0.5 && HAZE.density > 0; }
+// (how far into the sun's or moon's light we are: 0 at the handover, 1 outside its fades; the haze's shadowed sky
+// follows it too)
+let lightFade = 1;
 // after the scene's drawn, before the outline pass lays it over
 function updateHaze() {
   const res = outlineMat.uniforms.res.value, a = CLOUDS.direction * Math.PI / 180;
   hazeTint.set(HAZE.color);
   haze.update({ on: hazeOn(), camera, res: [res.x, res.y], ss: ssNow, depth: renderer.textureView(outlineRT.depthTexture), steps: HAZE.steps, block: HAZE.block,
     top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
-    sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
+    sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky * lightFade, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wispsOn > 0.5 ? HAZE.wisps : 0, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
     tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10] });
 }
@@ -13154,7 +13157,7 @@ function removePiece() {
 const SKY = {
   timeOfDay: 8,          // hours, 0-24
   timeSpeed: 4,          // game hours that pass per real minute (0 = the clock stands still)
-  handover: 10,          // seconds the sun fades out over before it sets (and the moon in after), and back at dawn
+  handover: 5,           // seconds the sun fades out over before it sets (and the moon in after), and back at dawn
   latitude: 24,          // degrees north: how high the sun climbs
   season: 12,            // the sun's declination in degrees: +23 midsummer, 0 equinox, -23 midwinter
   north: 0,              // which way north is on the map, degrees (0: up the map, so the noon sun is to the south)
@@ -13242,7 +13245,7 @@ function updateSky() {
   // light's colour and direction (and its shadows) only ever swap while it's dark
   const dh = Math.max(0.02, SKY.handover * SKY.timeSpeed / 60), yAt = h => sunDirection(Object.assign({}, SKY, { timeOfDay: (SKY.timeOfDay + h + 24) % 24 }))[1];
   const yF = yAt(dh), yB = yAt(-dh), share = (a, b) => smoothstep(0, 1, clamp(a / Math.max(1e-6, a - b), 0, 1));
-  const lightFade = y >= 0 ? Math.min(yF < 0 ? share(y, yF) : 1, yB < 0 ? share(y, yB) : 1)
+  lightFade = y >= 0 ? Math.min(yF < 0 ? share(y, yF) : 1, yB < 0 ? share(y, yB) : 1)
     : Math.min(yB > 0 ? share(-y, -yB) : 1, yF > 0 ? share(-y, -yF) : 1);
   if (y >= 0) {
     const t = sunTransmittance(y), risen = smoothstep(-0.009, 0.05, y) * lightFade;
@@ -15429,7 +15432,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 301, crashSeen = new Map();
+const GAME_VERSION = 302, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
