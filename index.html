@@ -9825,7 +9825,8 @@ addEventListener('resize', setDpr);
 // ---------- Gear and the pack ----------
 // What you wear goes on the paper doll, one item to a slot; everything else rides in the pack, where
 // materials stack (up to `stack` to a square). Your weapon decides your attack (LMB) and the abilities on Q
-// and E: with no weapon you punch and have none. Armour takes ARMOR_PER of each blow per point worn; mat
+// and E: with no weapon you punch and have none. Armour takes armor / (armor + K × the foe's level) off each blow
+// (armorCut, LEVEL_DIFF); mat
 // and trim are the HERO_MAT colours the hero wears it in.
 const ITEMS = {
   clothShirt: { name: 'Cloth Shirt', slot: 'chest', icon: 'clothShirt', armor: 0, mat: 'tunic', trim: 'hood' },
@@ -9886,7 +9887,14 @@ for (const [t, tr] of Object.entries(TIERS)) for (const [w, wp] of Object.entrie
   ITEMS[w + '_' + t] = { name: tr.name + ' ' + wp.name, slot: 'weapon', icon: w + '_' + t, strike: wp.strike, q: wp.q, e: wp.e, kind: w, tier: t };
 // a weapon stroke's damage in what the weapon's made of (bare fists hit as they are)
 const wdmg = d => Math.round(d * (GEAR.weapon ? WEAPON_TIER[ITEMS[GEAR.weapon].tier] : 1));
-const ARMOR_PER = 0.04;
+// v323+: armour cuts a blow by A / (A + armorK × attacker level), at most armorCap, as WoW and Diablo do it
+// (each point adds the same effective health; the same armour stops less from a higher-level foe). And the
+// level gap scales damage both ways: each level you're over a foe, your blows on it do perLevel more (×(1+p)^gap)
+// and its blows on you that much less; under it, the reverse. The gap counts up to maxGap levels.
+const LEVEL_DIFF = { armorK: 8, armorCap: 0.75, perLevel: 0.1, maxGap: 10 };
+const armorCut = (lvl = 1) => { const a = armor(); return a > 0 ? Math.min(LEVEL_DIFF.armorCap, a / (a + LEVEL_DIFF.armorK * Math.max(1, lvl))) : 0; };
+const levelGap = (lvl = 1) => clamp((H.level || 1) - lvl, -LEVEL_DIFF.maxGap, LEVEL_DIFF.maxGap);
+const gapMul = g => Math.pow(1 + LEVEL_DIFF.perLevel, g);
 const armor = () => Object.values(GEAR).reduce((a, id) => a + (id && ITEMS[id].armor || 0), 0);
 const FISTS = { name: 'Bare Fists', strike: 'punch' };
 const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' }, shoot: { name: 'SHOOT', icon: 'bow' }, poke: { name: 'POKE', icon: 'spear' },
@@ -10310,6 +10318,7 @@ function renderInv() {
   actHome = -1; litActs();
   renderHot();
   $('armorVal').textContent = 'ARMOR ' + armor();
+  $('armorVal').title = `Takes ${Math.round(armorCut(H.level || 1) * 100)}% off blows from a level ${H.level || 1} foe (armor ÷ (armor + ${LEVEL_DIFF.armorK} × its level))`;
   showInfo();
 }
 function showInfo() {
@@ -11245,6 +11254,8 @@ function propsNear(reach, fn, x = H.x, z = H.z, y = H.y) {
 const angDiff = (a, b) => { let d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
 function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
   if (f.hp <= 0) return;
+  // (your level over its: more; under: less)
+  if (dmg > 0) dmg = Math.max(1, Math.round(dmg * gapMul(levelGap(f.level || 1))));
   f.hp -= dmg; f.hitT = 0; f.squish = 1; f.barHeat = 1; f.barAge = 0; f.aggro = true; f.calm = 0; f.homing = false;
   // (hurt by anything: its bar shows over its head, as when pointed at)
   f.barT = HPBAR.hold; barFoes.add(f);
@@ -11297,9 +11308,9 @@ function propAhead(range, arc, a) {
   }
   return best;
 }
-function hurtHero(dmg, fromX, fromZ) {
+function hurtHero(dmg, fromX, fromZ, lvl = 1) {
   if (!H.alive || H.invuln > 0) return;
-  dmg = Math.max(1, Math.round(dmg * (1 - armor() * ARMOR_PER)));
+  dmg = Math.max(1, Math.round(dmg * gapMul(-levelGap(lvl)) * (1 - armorCut(lvl))));
   H.hp -= dmg; H.hurtT = 0; H.lastHurt = time;
   const dx = H.x - fromX, dz = H.z - fromZ, l = Math.hypot(dx, dz) || 1;
   H.kx = dx / l * 3.5; H.kz = dz / l * 3.5;
@@ -14601,7 +14612,7 @@ function updateFoe(f, dt, night) {
     f.face += angDiff(Math.atan2(dx, dz), f.face) * Math.min(1, dt * 6);
     if (f.atk > 0.45 && !f.struck) {
       f.struck = true;
-      if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2 && see) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z); }
+      if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2 && see) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z, f.level || 1); }
     }
     if (f.atk > 0.85) { f.atk = -1; f.cd = 0.9 + Math.random() * 0.5; }
   } else if (f.aggro) {
@@ -15443,6 +15454,10 @@ const TUNING = [
     [XP, 'base', 'Experience to reach level 2', 10, 1000, 5],
     [XP, 'growth', 'How fast each level needs more (level n takes base × n^this)', 0, 3, 0.05],
     [XP, 'orbLife', 'Experience orbs last (seconds)', 5, 300, 5],
+    [LEVEL_DIFF, 'armorK', 'Armor: K (cut = armor ÷ (armor + K × foe level))', 1, 40, 0.5],
+    [LEVEL_DIFF, 'armorCap', 'Armor: most it can cut', 0.2, 0.95, 0.01],
+    [LEVEL_DIFF, 'perLevel', 'Level gap: damage up/down per level (×(1+this)^gap)', 0, 0.5, 0.01],
+    [LEVEL_DIFF, 'maxGap', 'Level gap: counts up to (levels)', 1, 20, 1],
   ]],
   ['Bow moves', [
     [BOW_POSE, 'shoulders', 'Shoulders turned on past the hips (radians)', 0, 1.2, 0.01],
@@ -16108,7 +16123,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 323, crashSeen = new Map();
+const GAME_VERSION = 324, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16437,7 +16452,7 @@ window.GAME = {
   dropLoot: (id, n, x, z) => dropLoot(id, n, x ?? H.x + 0.5, z ?? H.z),
   drops: () => drops.map(d => [d.id, d.n]),
   action: () => { const a = actionHere(); useAction(); return a && a.kind; },
-  armor: () => armor(),
+  armor: () => armor(), armorCut: l => armorCut(l), gapMul: l => gapMul(levelGap(l)), heroHit: (dmg, l) => { const h0 = H.hp; H.invuln = 0; hurtHero(dmg, H.x + 1, H.z, l); return h0 - H.hp; },
   smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
   xp: () => ({ level: H.level, xp: H.xp, need: xpNeed(H.level), orbs: orbs.filter(o => o.xp).map(o => o.xp), lvlText: $('heroLvl').textContent, fill: $('xpFill').style.width }), giveXp: n => gainXp(n),
   poke: (n, dmg = 3) => { foes.slice(0, n).forEach(f => hurtFoe(f, dmg, H.x, H.z)); },
