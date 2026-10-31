@@ -222,6 +222,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v332 (HUD layout):** the action bar (attack, Q, E, dash) sits along the bottom left with the hotbar just above it, and Pack / Build / Map sit in a row under the health plate. The inventory now opens higher (top 56) so it covers that row and clears the hotbar. In build mode the hotbar hides and the build bar sits bottom centre.
 
+**v333:** the fog edge stays as soft as it is at the start, on the minimap and the big map. Each reveal now keeps the larger of what was uncovered and the new soft disc (fogSeen, one byte a fog cell), where stacking soft cut-outs used to wear the fade down to a hard rim.
+
 **v330:** the unexplored fades out softly to the parchment, as the old fog did, and the minimap's fog is the same parchment now. The compass rose and scale sit straight on the map, haloed in paper so they read over the land, with no paper box behind them. A bookmark that's off slides in behind the frame so only its glyph peeks out; switched on, it slides out with its name and the glyph to the right of it.
 
 **Hide UI** (v313): the HIDE UI button under OPTIONS at the top right, or **H**, hides the whole HUD (health and level, minimap, place plate, time strip, the top-right buttons, the bars, hotbar, experience bar, prompts, toasts, the target bar, health bars over foes and floating numbers) for a clear view. Windows you open (pack, crafting, map) still show, and touch controls stay. H again, or the faint SHOW UI button that appears when you point at the top right corner, brings it back.

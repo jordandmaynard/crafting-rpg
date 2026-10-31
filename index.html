@@ -15133,21 +15133,33 @@ function paintMap() {
   const img = mapCtx.createImageData(N, N), d = img.data;
   for (let i = 0; i < N * N; i++) { const [R, Gc, B] = tileRGB(i); d[i * 4] = R; d[i * 4 + 1] = Gc; d[i * 4 + 2] = B; d[i * 4 + 3] = 255; }
   mapCtx.putImageData(img, 0, 0);
-  fogCtx.fillStyle = '#0b0912'; fogCtx.fillRect(0, 0, N / 8, N / 8);
+  fogCtx.fillStyle = '#0b0912'; fogCtx.fillRect(0, 0, N / 8, N / 8); fogSeen.fill(0);
 }
 function paintMapTile(c, r) {
   const [R, Gc, B] = tileRGB(T(c, r));
   mapCtx.fillStyle = `rgb(${R | 0},${Gc | 0},${B | 0})`;
   mapCtx.fillRect(c, r, 1, 1);
 }
+// How much of each fog cell is uncovered (0-255). Each reveal keeps the larger of the old value and the new soft disc, so
+// the edge keeps the same wide fade wherever you've walked; stacking soft stamps (as destination-out did) ate the fade
+// away to a hard rim after a few seconds in one place. The fog canvas is rewritten from this, a small square at a time.
+const FOG_N = N / 8, fogSeen = new Uint8Array(FOG_N * FOG_N);
+const FOG_IN = 1.5, FOG_OUT = 6.5;
 function revealFog() {
-  fogCtx.save();
-  fogCtx.globalCompositeOperation = 'destination-out';
-  const g = fogCtx.createRadialGradient(H.x / 8, H.z / 8, 2, H.x / 8, H.z / 8, 6);
-  g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-  fogCtx.fillStyle = g;
-  fogCtx.fillRect(H.x / 8 - 6, H.z / 8 - 6, 12, 12);
-  fogCtx.restore();
+  const hx = H.x / 8, hz = H.z / 8;
+  const c0 = Math.max(0, Math.floor(hx - FOG_OUT)), c1 = Math.min(FOG_N - 1, Math.ceil(hx + FOG_OUT));
+  const r0 = Math.max(0, Math.floor(hz - FOG_OUT)), r1 = Math.min(FOG_N - 1, Math.ceil(hz + FOG_OUT));
+  const w = c1 - c0 + 1, h = r1 - r0 + 1;
+  if (w <= 0 || h <= 0) return;
+  const img = fogCtx.createImageData(w, h), d = img.data;
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const i = r * FOG_N + c, t = clamp((FOG_OUT - Math.hypot(c + 0.5 - hx, r + 0.5 - hz)) / (FOG_OUT - FOG_IN), 0, 1);
+    const v = Math.round(t * t * (3 - 2 * t) * 255);
+    if (v > fogSeen[i]) fogSeen[i] = v;
+    const k = ((r - r0) * w + c - c0) * 4;
+    d[k] = 11; d[k + 1] = 9; d[k + 2] = 18; d[k + 3] = 255 - fogSeen[i];
+  }
+  fogCtx.putImageData(img, c0, r0);
 }
 const mini = $('mini'), miniCtx = mini.getContext('2d');
 let miniT = 0;
@@ -16468,7 +16480,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 332, crashSeen = new Map();
+const GAME_VERSION = 333, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16875,7 +16887,7 @@ window.GAME = {
     }
     return null;
   },
-  reveal: () => fogCtx.clearRect(0, 0, N / 8, N / 8),
+  reveal: () => { fogCtx.clearRect(0, 0, N / 8, N / 8); fogSeen.fill(255); },
   mapOpts: () => ({ reveal: mapReveal, seedMode, seed: SEED, stored: seedStore.get(SEED_KEY), hash: location.hash }),
   toggleReveal, setSeedMode,
   O,
