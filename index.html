@@ -10917,9 +10917,65 @@ function buildPlotWalls(x, z) {
   scene.add(m);
 }
 function ownsPlot() { return plots.some(pl => pl && pl.claimed); }
+// ...and the ground round you tinted: green on any plot's tiles, red off them (not over water), fading out
+// toward PLOT_TINT.radius
+const PLOT_TINT = { inside: '#4ade6a', outside: '#ff4a3a', alpha: 0.22, radius: 45 };
+const PLOT_TINT_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) t: vec2f }
+@vertex fn vs(v: VIn) -> VOut {
+  var o: VOut;
+  o.pos = F.viewProj * (O.model * vec4f(v.position, 1.0)); o.t = v.tint;
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let a = U.alpha * i.t.y;
+  if (a < 0.003) { discard; }
+  return vec4f(mix(U.outside, U.inside, step(0.5, i.t.x)), a);
+}`;
+const plotTintMat = new GFX.ShaderMaterial({
+  uniforms: { inside: { value: new GFX.Color(PLOT_TINT.inside) }, outside: { value: new GFX.Color(PLOT_TINT.outside) }, alpha: { value: PLOT_TINT.alpha } },
+  attributes: { tint: 'vec2f' }, code: PLOT_TINT_WGSL,
+  transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+});
+plotTintMat.keepAlpha = true;
+let plotTint = { mesh: null, x: 1e9, z: 1e9 };
+function dropPlotTint() { if (plotTint.mesh) { scene.remove(plotTint.mesh); plotTint.mesh.geometry.dispose(); plotTint.mesh = null; } plotTint.x = 1e9; }
+function buildPlotTint(x, z) {
+  dropPlotTint();
+  const R = PLOT_TINT.radius, c0 = Math.floor(x), r0 = Math.floor(z), pos = [], tint = [];
+  const hh = new Float32Array(9);
+  for (let r = Math.max(1, r0 - R); r <= Math.min(N - 2, r0 + R); r++) for (let c = Math.max(1, c0 - R); c <= Math.min(N - 2, c0 + R); c++) {
+    const d = Math.hypot(c + 0.5 - x, r + 0.5 - z);
+    if (d > R) continue;
+    const i = T(c, r);
+    if (WT[i] >= 2) continue;
+    const ins = PLOT[i] ? 1 : 0, f = Math.min(1, (R - d) / (R * 0.35));
+    // one quad for a flat tile, four half-tile quads where it bends (ramps, cliff lips)
+    let flat = true;
+    for (let k = 0; k < 9; k++) { hh[k] = pointH(c * 2 + (k % 3), r * 2 + ((k / 3) | 0)); if (hh[k] !== hh[0]) flat = false; }
+    const q = (a, b, s) => {
+      const x2 = c * 2 + a, z2 = r * 2 + b, p = (u, v) => { pos.push(u / 2, hh[(v - r * 2) * 3 + (u - c * 2)] + 0.04, v / 2); tint.push(ins, f); };
+      p(x2, z2); p(x2, z2 + s); p(x2 + s, z2 + s); p(x2, z2); p(x2 + s, z2 + s); p(x2 + s, z2);
+    };
+    if (flat) q(0, 0, 2); else for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) q(a, b, 1);
+  }
+  plotTint.x = x; plotTint.z = z; plotTint.R = R;
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('tint', new GFX.Float32BufferAttribute(tint, 2));
+  const m = plotTint.mesh = new GFX.Mesh(g, plotTintMat);
+  m.frustumCulled = false; m.renderOrder = 4; m.castShadow = m.receiveShadow = false;
+  scene.add(m);
+}
+let plotPicking = false;
 function updatePlotWalls() {
   const on = mode === 'build' && !ownsPlot();
-  if (!on) { if (plotWall.mesh) { scene.remove(plotWall.mesh); plotWall.mesh.geometry.dispose(); plotWall.mesh = null; plotWall.x = 1e9; } return; }
+  // the map and minimap show the plots in this state too: repaint them when it changes
+  if (on !== plotPicking) { plotPicking = on; miniT = 0; if (!on) miniHover = bigHover = 0; if (mapOpen) drawBigMap(); }
+  if (!on) { if (plotWall.mesh) { scene.remove(plotWall.mesh); plotWall.mesh.geometry.dispose(); plotWall.mesh = null; plotWall.x = 1e9; } dropPlotTint(); return; }
+  plotTintMat.uniforms.inside.value.set(PLOT_TINT.inside); plotTintMat.uniforms.outside.value.set(PLOT_TINT.outside); plotTintMat.uniforms.alpha.value = PLOT_TINT.alpha;
+  if (Math.hypot(H.x - plotTint.x, H.z - plotTint.z) > PLOT_TINT.radius * 0.25 || plotTint.R !== PLOT_TINT.radius) buildPlotTint(H.x, H.z);
   for (const k of ['height', 'edge', 'body', 'fade', 'streaks', 'speed', 'steady']) plotWallMat.uniforms[k].value = PLOT_WALL[k];
   if (Math.hypot(H.x - plotWall.x, H.z - plotWall.z) > PLOT_WALL.radius * 0.3) buildPlotWalls(H.x, H.z);
 }
@@ -14715,6 +14771,8 @@ const mini = $('mini'), miniCtx = mini.getContext('2d');
 let miniT = 0;
 // Plot outlines on the maps are off until P (or the map's PLOTS button) turns them on.
 let showPlots = false;
+// (and always while you're in build mode with no plot of your own yet, to pick one)
+const plotsOnMap = () => showPlots || (mode === 'build' && !ownsPlot());
 function togglePlots() {
   showPlots = !showPlots;
   $('plotsBtn').textContent = 'PLOTS: ' + (showPlots ? 'ON' : 'OFF');
@@ -14738,7 +14796,7 @@ function paintMini() {
   g.fillStyle = '#0b0912'; g.fillRect(0, 0, side, side);
   g.imageSmoothingEnabled = false;
   g.drawImage(mapCv, x0, z0, R * 2, R * 2, 0, 0, side, side);
-  if (showPlots) {
+  if (plotsOnMap()) {
     g.drawImage(plotCv, x0, z0, R * 2, R * 2, 0, 0, side, side);
     if (miniHover) { const pl = plots[miniHover]; g.drawImage(plotFill(pl), (pl.x0 - x0) * S, (pl.z0 - z0) * S, (pl.x1 - pl.x0 + 1) * S, (pl.z1 - pl.z0 + 1) * S); }
   }
@@ -14746,7 +14804,7 @@ function paintMini() {
   if (!mapReveal) g.drawImage(fogCv, x0 / 8, z0 / 8, R / 4, R / 4, 0, 0, side, side);
 }
 $('mini').addEventListener('pointermove', e => {
-  if (!showPlots) return;
+  if (!plotsOnMap()) return;
   const rect = mini.getBoundingClientRect(), k = mini.width / rect.width;
   const x = (e.clientX - rect.left) * k - mini.width / 2, y = (e.clientY - rect.top) * k - mini.width / 2;
   const cs = Math.cos(-miniRot()), sn = Math.sin(-miniRot());
@@ -14918,7 +14976,7 @@ $('bigmap').addEventListener('pointermove', e => {
     bigView.x = bigView.drag.x - (px - bigView.drag.px[0]) / bigView.zoom; bigView.z = bigView.drag.z - (pz - bigView.drag.px[1]) / bigView.zoom;
     bigClamp(); drawBigMap(); return;
   }
-  if (!showPlots) return;
+  if (!plotsOnMap()) return;
   const id = plotAt(...bigToWorld(px, pz));
   if (id !== bigHover) { bigHover = id; drawBigMap(); }
 });
@@ -14934,11 +14992,11 @@ function drawBigMap() {
   ctx.setTransform(Z, 0, 0, Z, N / 2 - bigView.x * Z, N / 2 - bigView.z * Z);
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(mapCv, 0, 0);
-  if (showPlots) ctx.drawImage(plotCv, 0, 0);
+  if (plotsOnMap()) ctx.drawImage(plotCv, 0, 0);
   if (showBands) ctx.drawImage(bandCanvas(), 0, 0);
   ctx.imageSmoothingEnabled = true;
   if (!mapReveal && !showBands) ctx.drawImage(fogCv, 0, 0, N, N);
-  if (showPlots && bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
+  if (plotsOnMap() && bigHover) { const pl = plots[bigHover]; ctx.imageSmoothingEnabled = false; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); ctx.imageSmoothingEnabled = true; }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // markers stay their own size at any zoom
   for (const t of towns) { const [x, z] = worldToBig(t.c, t.r); ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8); }
@@ -15337,6 +15395,8 @@ const TUNING = [
     [PLOT_WALL, 'streaks', 'Streaks running up it', 0, 1, 0.01],
     [PLOT_WALL, 'speed', 'Streak speed', 0, 3, 0.05],
     [PLOT_WALL, 'radius', 'Plots shown within (tiles)', 20, 200, 5],
+    [PLOT_TINT, 'alpha', 'Ground tint (green on plots, red off them)', 0, 0.8, 0.01],
+    [PLOT_TINT, 'radius', 'Ground tinted within (tiles)', 10, 120, 5],
   ]],
   ['Spear moves', [
     [SPEAR_POSE, 'hands', 'Both hands on the spear (0: the old one-handed hold)', 0, 1, 1],
@@ -15979,7 +16039,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 318, crashSeen = new Map();
+const GAME_VERSION = 319, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16148,6 +16208,7 @@ window.GAME = {
   plotAt: (c, r) => PLOT[T(c, r)],
   // tests: claim the plot under a tile without a hearth
   claimPlot: (c, r) => { const pl = plots[PLOT[T(c, r)]]; if (!pl) return false; pl.claimed = true; paintPlot(pl); if (mode === 'build') renderBar(); return true; },
+  plotTint: () => ({ on: !!plotTint.mesh, verts: plotTint.mesh ? plotTint.mesh.geometry.attributes.position.count : 0, map: plotsOnMap() }),
   plotWalls: () => ({ on: !!plotWall.mesh, quads: plotWall.mesh ? plotWall.mesh.geometry.attributes.position.count / 6 : 0 }), barIds: () => slotEls.map(e => e.s.id),
   // drag a floor area or a wall run from one ground point to another, through the same checks the cursor uses
   dragBuild: (kind, x0, z0, x1, z1) => {
