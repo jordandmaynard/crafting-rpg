@@ -230,6 +230,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v336 (HUD layout):** the action bar and the mode buttons sit together in the bottom right corner. The hotbar is back along the bottom left with eight squares (keys 1-8), each number on a key tab under it like the action and mode buttons, so all three rows share one baseline. A fourth mode button, Settings (O), opens the options; its gear (ui/icon-mode-settings.webp) is drawn by art/src/icon-mode-settings.py in the kit's brass style.
 
+**v337:** every skin image named in the page (button and slot states, map bookmarks, frames) is fetched and decoded at load (skinKept), so hover, pressed and selected states no longer flash the first time.
+
 **v330:** the unexplored fades out softly to the parchment, as the old fog did, and the minimap's fog is the same parchment now. The compass rose and scale sit straight on the map, haloed in paper so they read over the land, with no paper box behind them. A bookmark that's off slides in behind the frame so only its glyph peeks out; switched on, it slides out with its name and the glyph to the right of it.
 
 **Hide UI** (v313): the HIDE UI button under OPTIONS at the top right, or **H**, hides the whole HUD (health and level, minimap, place plate, time strip, the top-right buttons, the bars, hotbar, experience bar, prompts, toasts, the target bar, health bars over foes and floating numbers) for a clear view. Windows you open (pack, crafting, map) still show, and touch controls stay. H again, or the faint SHOW UI button that appears when you point at the top right corner, brings it back.
