@@ -9475,11 +9475,15 @@ function drawCrowds() {
   foeShadows.count = foes.length; foeShadows.needsUpdate = true;
   for (const C of crowds.values()) for (const pc of C.pieces) { pc.mesh.count = C.n; pc.mesh.needsUpdate = true; }
 }
+// a foe's health grows with its level: its kind's hp × (1 + perLevel × (level - 1)), so the band 9-10 foes take
+// about as many blows from an Auralith weapon as band 1's do from a wooden one (WEAPON_TIER)
+const FOE_HP = { perLevel: 0.35 };
+const foeMaxHp = (d, lvl) => Math.round(d.hp * (1 + FOE_HP.perLevel * (Math.max(1, lvl) - 1)));
 function spawnFoe(kind, x, z) {
-  const d = FOE[kind], f = rigFor(crowdOf(kind));
+  const d = FOE[kind], f = rigFor(crowdOf(kind)), lvl = bandAt(x, z), mhp = foeMaxHp(d, lvl);
   f.g.position.set(x, surfaceY(x, z), z);
   const sh = new GFX.Object3D(); sh.position.set(x, surfaceY(x, z) + 0.02, z);
-  const foe = Object.assign(f, { kind, def: d, level: bandAt(x, z), x, z, y: surfaceY(x, z), hp: d.hp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
+  const foe = Object.assign(f, { kind, def: d, level: lvl, x, z, y: surfaceY(x, z), hp: mhp, maxHp: mhp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
     home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
   foes.push(foe);
   return foe;
@@ -12719,7 +12723,7 @@ function pickFoe() {
 }
 // the fill, the health just lost behind it and the hit flash, for a bar's two parts
 function drawBar(fill, lost, f) {
-  const hp = clamp(f.hp / f.def.hp, 0, 1), shown = Math.max(hp, f.shownHp ?? hp), h = f.barHeat || 0;
+  const hp = clamp(f.hp / f.maxHp, 0, 1), shown = Math.max(hp, f.shownHp ?? hp), h = f.barHeat || 0;
   fill.style.width = hp * 100 + '%';
   fill.style.filter = h > 0.01 && HPBAR.flash > 0 ? `brightness(${1 + HPBAR.flash * h})` : '';
   lost.style.left = hp * 100 + '%';
@@ -12732,7 +12736,7 @@ function updateFoeBars(dt) {
   // the pale part catches up and the flash cools on every monster, so a bar you point at later is up to date
   styleBars();
   for (const f of foes) {
-    const hp = clamp(f.hp / f.def.hp, 0, 1);
+    const hp = clamp(f.hp / f.maxHp, 0, 1);
     f.barAge = (f.barAge ?? 1e9) + dt;
     if (f.shownHp == null || hp > f.shownHp) f.shownHp = hp;
     else if (f.barAge >= HPBAR.delay) f.shownHp += (hp - f.shownHp) * (1 - Math.exp(-HPBAR.trailRate * dt));
@@ -15458,6 +15462,7 @@ const TUNING = [
     [LEVEL_DIFF, 'armorCap', 'Armor: most it can cut', 0.2, 0.95, 0.01],
     [LEVEL_DIFF, 'perLevel', 'Level gap: damage up/down per level (×(1+this)^gap)', 0, 0.5, 0.01],
     [LEVEL_DIFF, 'maxGap', 'Level gap: counts up to (levels)', 1, 20, 1],
+    [FOE_HP, 'perLevel', 'Foe health: more per level over 1 (share of its base; new foes)', 0, 1.5, 0.05],
   ]],
   ['Bow moves', [
     [BOW_POSE, 'shoulders', 'Shoulders turned on past the hips (radians)', 0, 1.2, 0.01],
@@ -16123,7 +16128,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 324, crashSeen = new Map();
+const GAME_VERSION = 325, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16422,7 +16427,7 @@ window.GAME = {
   // the worn weapon's strike, Q or E; the foes' hammer and axe states; the thrown axe
   weaponCast: k => k === 'q' || k === 'e' ? useAbility(k) : startSwing(),
   cdReset: () => { H.cdQ = H.cdE = 0; },
-  foeStates: () => foes.map(f => ({ kind: f.kind, hp: f.hp, x: +f.x.toFixed(2), z: +f.z.toFixed(2), stun: +(f.stunT || 0).toFixed(2), bleed: !!f.bleed, carried: !!f.carried })),
+  foeStates: () => foes.map(f => ({ kind: f.kind, level: f.level, maxHp: f.maxHp, hp: f.hp, x: +f.x.toFixed(2), z: +f.z.toFixed(2), stun: +(f.stunT || 0).toFixed(2), bleed: !!f.bleed, carried: !!f.carried })),
   axeOut: () => axeThrow && { why: axeThrow.why, y: +axeThrow.y.toFixed(2), out: axeThrow.out, dist: +axeThrow.dist.toFixed(2), x: +axeThrow.x.toFixed(2), z: +axeThrow.z.toFixed(2) },
   heroState: () => ({ x: +H.x.toFixed(2), z: +H.z.toFixed(2), swing: +H.swing.toFixed(2), combo: H.combo, strike: H.strike, whirl: +H.whirl.toFixed(2), lunge: +H.lunge.toFixed(2), kind: H.lungeKind, weapon: GEAR.weapon }),
   harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
