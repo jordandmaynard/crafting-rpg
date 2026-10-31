@@ -10890,10 +10890,11 @@ const plotWallMat = new GFX.ShaderMaterial({
 plotWallMat.keepAlpha = true;
 let plotWall = { mesh: null, x: 1e9, z: 1e9 };
 // a quad up each plot tile's side that faces off the plot, for the plots within PLOT_WALL.radius of (x, z)
-function buildPlotWalls(x, z) {
+function buildPlotWalls(x, z, own) {
   const R = PLOT_WALL.radius, pos = [], wall = [];
+  plotWall.own = own;
   for (const pl of plots) {
-    if (!pl || pl.claimed || pl.x1 < x - R || pl.x0 > x + R || pl.z1 < z - R || pl.z0 > z + R) continue;
+    if (!pl || pl.claimed !== own || pl.x1 < x - R || pl.x0 > x + R || pl.z1 < z - R || pl.z0 > z + R) continue;
     for (const i of pl.edge) {
       const c = i % N, r = (i - c) / N, y = LV[i] * STEP + 0.02;
       for (let d = 0; d < 4; d++) {
@@ -10973,11 +10974,15 @@ function updatePlotWalls() {
   const on = mode === 'build' && !ownsPlot();
   // the map and minimap show the plots in this state too: repaint them when it changes
   if (on !== plotPicking) { plotPicking = on; miniT = 0; if (!on) miniHover = bigHover = 0; if (mapOpen) drawBigMap(); }
-  if (!on) { if (plotWall.mesh) { scene.remove(plotWall.mesh); plotWall.mesh.geometry.dispose(); plotWall.mesh = null; plotWall.x = 1e9; } dropPlotTint(); return; }
+  // with a plot of your own, build mode outlines just that one, in blue
+  const own = mode === 'build' && !on;
+  if (!on && !own) { if (plotWall.mesh) { scene.remove(plotWall.mesh); plotWall.mesh.geometry.dispose(); plotWall.mesh = null; plotWall.x = 1e9; } dropPlotTint(); return; }
+  for (const k of ['height', 'edge', 'body', 'fade', 'streaks', 'speed', 'steady']) plotWallMat.uniforms[k].value = PLOT_WALL[k];
+  plotWallMat.uniforms.color.value.set(own ? PLOT_BLUE : '#ffffff');
+  if (plotWall.own !== own || Math.hypot(H.x - plotWall.x, H.z - plotWall.z) > PLOT_WALL.radius * 0.3) buildPlotWalls(H.x, H.z, own);
+  if (own) { dropPlotTint(); return; }
   plotTintMat.uniforms.inside.value.set(PLOT_TINT.inside); plotTintMat.uniforms.outside.value.set(PLOT_TINT.outside); plotTintMat.uniforms.alpha.value = PLOT_TINT.alpha;
   if (Math.hypot(H.x - plotTint.x, H.z - plotTint.z) > PLOT_TINT.radius * 0.25 || plotTint.R !== PLOT_TINT.radius) buildPlotTint(H.x, H.z);
-  for (const k of ['height', 'edge', 'body', 'fade', 'streaks', 'speed', 'steady']) plotWallMat.uniforms[k].value = PLOT_WALL[k];
-  if (Math.hypot(H.x - plotWall.x, H.z - plotWall.z) > PLOT_WALL.radius * 0.3) buildPlotWalls(H.x, H.z);
 }
 function updateLootGlow() {
   for (const k in PRISM) PRISM_U[k].value = PRISM[k];
@@ -11787,7 +11792,7 @@ function castLunge() {
 // `chargeTime` seconds with the hammer out in front; a foe you meet is struck and carried along before you, and
 // if you or a foe you carry runs into anything solid (a wall, a tree, a rock, a cliff), they're all struck again.
 // Axes strike trees for `treeMult` times their damage, hammers rocks and ore for `rockMult`. Knock-backs in tiles.
-const AXE = { throwRange: 7, throwSpeed: 15, throwBack: 18, throwEase: 0.3, swoosh: 0.35, throwDmg: 12, throwKnock: 0.3, throwRadius: 0.7, throwSpin: 24, throwCd: 6,
+const AXE = { cliffSlope: 1.5, throwRange: 7, throwSpeed: 15, throwBack: 18, throwEase: 0.3, swoosh: 0.35, throwDmg: 12, throwKnock: 0.3, throwRadius: 0.7, throwSpin: 24, throwCd: 6,
   rendTime: 0.4, rendRadius: 1.8, rendDmg: 10, rendKnock: 0.3, bleedTime: 4, bleedTick: 0.5, bleedDmg: 3, rendCd: 8, treeMult: 2 };
 const HAMMER = { smashReach: 2.6, smashCone: 70, smashDmg: 14, smashKnock: 0.3, stunTime: 1.5, smashCd: 8,
   chargeSpeed: 11, chargeTime: 0.55, chargeDmg: 12, impactDmg: 18, impactKnock: 1, chargeCd: 9, rockMult: 2 };
@@ -11817,6 +11822,20 @@ const axeSpin = (() => {
   g.tiers = lie.children.filter(c => c !== smear); g.smear = smear;
   return g;
 })();
+// what stops a thrown axe: walls, fences and shut doors, and anything built or standing on a whole tile
+// (houses, wells, stations, crates, obelisks, the great willow); not trees, rocks or bushes
+function axeBlocked(a, x0, z0) {
+  const c0 = Math.floor(x0), r0 = Math.floor(z0), c1 = Math.floor(a.x), r1 = Math.floor(a.z);
+  axeBlocked.why = 'wall';
+  if (c1 !== c0 && arrowWall(c0, r0, c1 > c0 ? 1 : 3, a.y)) return true;
+  if (r1 !== r0 && arrowWall(c1, r0, r1 > r0 ? 2 : 0, a.y)) return true;
+  if (c1 < 0 || r1 < 0 || c1 >= N || r1 >= N) return true;
+  const i = T(c1, r1), o = OB[i], d = OBJ[o];
+  axeBlocked.why = d.name || 'object ' + o;
+  if (!d.tile || o === O.VENT || o === O.VENTX) return false;
+  const up = a.y - LV[i] * STEP;
+  return up >= -0.1 && up <= 4;
+}
 function castAxeThrow() {
   if (mode !== 'play' || !H.alive || H.cdQ > 0 || axeThrow || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
   const a = Math.atan2(aim.x, aim.z);
@@ -11848,8 +11867,12 @@ function updateAxeThrow(dt) {
       const x0 = ax.x, z0 = ax.z, st = go / steps;
       ax.x += ax.dx * st; ax.z += ax.dz * st; ax.dist += st;
       strike();
-      const blocked = arrowBlocked(ax, x0, z0) || ax.y < surfH(ax.x, ax.z);
-      if (blocked) { ax.x = x0; ax.z = z0; sfx.thunk(); }
+      // it skims the ground (up ramps, out over drops) and only a cliff face or something built stops it:
+      // trees, rocks and the like it chops through on its way
+      const g0 = surfH(x0, z0), g1 = surfH(ax.x, ax.z), cliff = st > 0 && (g1 - g0) / st > AXE.cliffSlope;
+      if (!cliff) ax.y = Math.max(ax.y, g1 + 0.45);
+      const blocked = cliff || axeBlocked(ax, x0, z0);
+      if (blocked) { ax.why = cliff ? 'cliff' : axeBlocked.why; ax.x = x0; ax.z = z0; sfx.thunk(); }
       if (blocked) { ax.out = false; ax.hit = new Set(); break; }
     }
     if (ax.out && u >= 1) { ax.out = false; ax.hit = new Set(); }
@@ -11867,7 +11890,7 @@ function updateAxeThrow(dt) {
     }
   }
   if (!axeThrow) { axeSpin.visible = false; return; }
-  ax.y += (H.y + 0.62 - ax.y) * Math.min(1, dt * 6);
+  ax.y += ((ax.out ? surfH(ax.x, ax.z) : H.y) + 0.62 - ax.y) * Math.min(1, dt * 6);
   ax.spin += dt * AXE.throwSpin;
   // a swoosh each turn
   if (ax.spin >= (ax.rev + 1) * Math.PI * 2) { ax.rev = Math.floor(ax.spin / (Math.PI * 2)); sfx.swoosh(); }
@@ -16039,7 +16062,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 319, crashSeen = new Map();
+const GAME_VERSION = 320, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16339,7 +16362,7 @@ window.GAME = {
   weaponCast: k => k === 'q' || k === 'e' ? useAbility(k) : startSwing(),
   cdReset: () => { H.cdQ = H.cdE = 0; },
   foeStates: () => foes.map(f => ({ kind: f.kind, hp: f.hp, x: +f.x.toFixed(2), z: +f.z.toFixed(2), stun: +(f.stunT || 0).toFixed(2), bleed: !!f.bleed, carried: !!f.carried })),
-  axeOut: () => axeThrow && { out: axeThrow.out, dist: +axeThrow.dist.toFixed(2), x: +axeThrow.x.toFixed(2), z: +axeThrow.z.toFixed(2) },
+  axeOut: () => axeThrow && { why: axeThrow.why, y: +axeThrow.y.toFixed(2), out: axeThrow.out, dist: +axeThrow.dist.toFixed(2), x: +axeThrow.x.toFixed(2), z: +axeThrow.z.toFixed(2) },
   heroState: () => ({ x: +H.x.toFixed(2), z: +H.z.toFixed(2), swing: +H.swing.toFixed(2), combo: H.combo, strike: H.strike, whirl: +H.whirl.toFixed(2), lunge: +H.lunge.toFixed(2), kind: H.lungeKind, weapon: GEAR.weapon }),
   harpoon: () => harpoon ? { out: harpoon.out, dist: +harpoon.dist.toFixed(2), foe: !!harpoon.foe } : null,
   treeNear: () => { const c0 = Math.floor(H.x), r0 = Math.floor(H.z); for (let d = 1; d < 40; d++) for (let r = r0 - d; r <= r0 + d; r++) for (let c = c0 - d; c <= c0 + d; c++) { const i = T(c, r), o = OB[i]; if (OBJ[o].tree && OBJ[o].hp) { const [x, z] = objPos(c, r, o); return [x, z, c, r]; } } return null; },
