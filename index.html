@@ -4275,7 +4275,7 @@ function updateTrample(dt) {
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
 const GRASS = { on: 1, density: 16, range: 30, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
-  variation: 0.1, soft: 0.81, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
+  variation: 0.1, soft: 0.81, flowerShape: 1, flowerCup: 0.25, flowerHeart: 0.5, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard; 8 and 9 a
 // field's wheat, its rows east-west or north-south (see Wheat below)
@@ -4338,6 +4338,7 @@ const GRASS_U = {
   cMeadow: { value: C(GRASS.meadowColor) }, cForest: { value: C(GRASS.forestColor) }, cSwamp: { value: C(GRASS.swampColor) }, cReed: { value: C(GRASS.reedColor) },
   wheat: { value: { x: 0.7, y: 0.12, z: 1, w: 0 } },  // wheat's height, how tall cut wheat stands (share), how thick it grows
   cWheatY: { value: C('#6aa32f') }, cWheatR: { value: C('#d8b450') }, cWheatE: { value: C('#e8c068') },   // young, ripe, its ears
+  bloom: { value: { x: 1, y: 0.25, z: 0.5, w: 0 } },  // flowers' shape (0 a pyramid head, 1 flat with 8 petals), petals' cup, golden heart
 };
 const fl = k => `vec3f(${FLOWER[k].r.toFixed(3)}, ${FLOWER[k].g.toFixed(3)}, ${FLOWER[k].b.toFixed(3)})`;
 const grassMat = new GFX.ShaderMaterial({ uniforms: GRASS_U, side: GFX.DoubleSide, lit: true,
@@ -4477,7 +4478,14 @@ fn grassColor(kind: u32) -> vec3f {
       c = vec3f(0.353, 0.227, 0.133); lit = vec2f(0.85, 1.05);
     }
     let k = select(f, f - 4u, f >= 4u);
-    if (j == 2u) { p = ctr + select(vec3f(0.0, top, 0.0), vec3f(0.0, -bot, 0.0), f >= 4u); col = c * select(lit.y, lit.x, f >= 4u); }
+    if (variant == 1u && U.bloom.x > 0.5) {
+      // flat: eight petals round a golden heart, each a wedge out from the middle (gaps between them), cupped up a
+      // little at the rim
+      let a = f32(f) * 0.7854 + gRand(h, 11u) + select(select(-0.33, 0.33, j == 2u), 0.0, j == 0u);
+      let r = select(rad * 1.3, 0.0, j == 0u);
+      p = ctr + vec3f(cos(a) * r, select(rad * 1.3 * U.bloom.y, 0.006 * U.look.z, j == 0u), sin(a) * r);
+      col = select(c * lit.y, mix(c * lit.x, vec3f(0.95, 0.72, 0.2), U.bloom.z), j == 0u);
+    } else if (j == 2u) { p = ctr + select(vec3f(0.0, top, 0.0), vec3f(0.0, -bot, 0.0), f >= 4u); col = c * select(lit.y, lit.x, f >= 4u); }
     else {
       let e = select(k + j, k + 1u - j, f >= 4u);
       let a = f32(e) * 1.5708 + gRand(h, 11u);
@@ -4541,6 +4549,7 @@ function updateGrass() {
   Object.assign(u.tuft.value, { x: Math.min(g.density, 16), y: g.height, z: g.width, w: g.lean });
   Object.assign(u.look.value, { x: g.variation, y: g.soft, z: g.flowerSize, w: g.reedHeight });
   Object.assign(u.share.value, { x: g.grass, y: g.flowers, z: g.reeds, w: g.flowerHeight });
+  Object.assign(u.bloom.value, { x: g.flowerShape, y: g.flowerCup, z: g.flowerHeart });
   u.cMeadow.value.set(g.meadowColor); u.cForest.value.set(g.forestColor); u.cSwamp.value.set(g.swampColor); u.cReed.value.set(g.reedColor);
   Object.assign(u.wheat.value, { x: WHEAT.height, y: WHEAT.stub, z: WHEAT.density });
   u.cWheatY.value.set(WHEAT.youngColor); u.cWheatR.value.set(WHEAT.ripeColor); u.cWheatE.value.set(WHEAT.earColor);
@@ -13792,7 +13801,7 @@ let bowUp = 0;
 // is raised high behind the head and brought down with a step and a lean. The whirlwind spins crouched with both
 // arms out; the lunge drives into a deep front knee with the back leg straight and the free arm thrown back.
 // Each part scales by its number here (0 takes it out).
-const SWORD_POSE = { windup: 0.25, twist: 0.45, elbow: 0.9, wrist: 0.6, crouch: 0.22, lean: 0.25, offArm: 1, whirlCrouch: 0.3, lungeDepth: 1 };
+const SWORD_POSE = { windup: 0.25, twist: 0.97, elbow: 1.26, wrist: 1.29, crouch: 0.47, lean: 0.16, offArm: 1.4, whirlCrouch: 0.6, lungeDepth: 1.21 };
 // how far the hips sink for the legs' pose (radians at the hip and knee, 0 straight down): the lower of the two
 // feet stays on the ground (thigh 0.14, knee to sole 0.22)
 const legDrop = (a0, k0, a1, k1) => 0.36 - Math.max(0.14 * Math.cos(a0) + 0.22 * Math.cos(a0 + k0), 0.14 * Math.cos(a1) + 0.22 * Math.cos(a1 + k1));
@@ -14935,6 +14944,9 @@ const TUNING = [
     [GRASS, 'lean', 'How far the blades lean out', 0, 3, 0.05],
     [GRASS, 'flowerSize', 'Flower blossom size', 0.3, 3, 0.05],
     [GRASS, 'flowerHeight', 'Flower height', 0.3, 3, 0.05],
+    [GRASS, 'flowerShape', 'Flower shape (0 pyramid head, 1 flat with 8 petals)', 0, 1, 1],
+    [GRASS, 'flowerCup', 'Flat flowers: petals cupped up', 0, 1, 0.01],
+    [GRASS, 'flowerHeart', 'Flat flowers: golden heart', 0, 1, 0.01],
     [GRASS, 'reedHeight', 'Reed height (tiles)', 0.2, 1.2, 0.01],
     [GRASS, 'variation', 'How much each tuft\'s shade varies', 0, 0.5, 0.01],
     [GRASS, 'soft', 'Lit like the ground (0: each blade by its own sides)', 0, 1, 0.01],
@@ -15463,7 +15475,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 290, crashSeen = new Map();
+const GAME_VERSION = 291, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
