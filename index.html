@@ -12335,7 +12335,7 @@ function castLunge() {
 // Axes strike trees for `treeMult` times their damage, hammers rocks and ore for `rockMult`. Knock-backs in tiles.
 const AXE = { cliffSlope: 1.5, throwRange: 7, throwSpeed: 15, throwBack: 18, throwEase: 0.3, swoosh: 0.35, throwDmg: 12, throwKnock: 0.3, throwRadius: 0.7, throwSpin: 24, throwCd: 6,
   buzzTime: 1.0, buzzTick: 0.25, buzzRadius: 1.75, buzzDmg: 9, buzzKnock: 0.45, buzzSpin: 22, buzzCd: 8, treeMult: 2 };
-const HAMMER = { smashRadius: 5.2, waveSpeed: 12, landAt: 0.6, smashDmg: 14, smashKnock: 0.3, stunTime: 1.5, smashCd: 8,
+const HAMMER = { smashRadius: 5.2, waveSpeed: 12, landAt: 0.6, leapReach: 3, smashDmg: 14, smashKnock: 0.3, stunTime: 1.5, smashCd: 8,
   chargeSpeed: 11, chargeTime: 0.55, chargeDmg: 12, impactDmg: 18, impactKnock: 1, chargeCd: 9, rockMult: 2 };
 // what a weapon's blow does to a tree or rock, against its plain damage
 function toolMult(od) {
@@ -12461,7 +12461,25 @@ function castStunSmash() {
   H.punch = false; H.strike = 'smash';
   H.swing = 0; H.combo = 3; H.hitDone = false; H.comboT = 0;
   H.face = Math.atan2(aim.x, aim.z); H.cdQ = HAMMER.smashCd;
+  // (v350, Jordan: the leap carries you toward the cursor, up to leapReach tiles)
+  const [tx, tz] = leapTarget();
+  H.leap = { x0: H.x, z0: H.z, tx, tz };
+  if (Math.hypot(tx - H.x, tz - H.z) > 0.2) H.face = Math.atan2(tx - H.x, tz - H.z);
   sfx.swing();
+}
+// where the ground smash's leap lands: the cursor (or the aim, on a pad), no further than leapReach
+function leapTarget() {
+  const g = !TOUCH.on && !PAD.on ? pickGround(false) : null;
+  let dx = g ? g.x - H.x : aim.x * HAMMER.leapReach, dz = g ? g.z - H.z : aim.z * HAMMER.leapReach;
+  const l = Math.hypot(dx, dz);
+  if (l > HAMMER.leapReach) { dx *= HAMMER.leapReach / l; dz *= HAMMER.leapReach / l; }
+  return [clamp(H.x + dx, 1, N - 1), clamp(H.z + dz, 1, N - 1)];
+}
+// the leap's way across the ground over the move: off the ground after the crouch, down where it lands
+function leapStep() {
+  const lp = H.leap, len = swingTime(), u = Math.min(1, H.swing / len), L = HAMMER.landAt;
+  const k = smooth(0.14, L, u), wx = lp.x0 + (lp.tx - lp.x0) * k, wz = lp.z0 + (lp.tz - lp.z0) * k;
+  if (Math.hypot(wx - H.x, wz - H.z) > 1e-4) moveEntity(H, wx - H.x, wz - H.z, 0.26, false);
 }
 // the ground smash lands: a shockwave sets out from where you came down (updateWave)
 let smashWave = null;
@@ -12944,7 +12962,7 @@ function aimSpec(nm) {
   if (nm === 'lunge') return { shape: 0, len: LUNGE.speed * LUNGE.time + LUNGE.reach, boxW: A.lungeWidth, taper: A.lungeTaper };
   if (nm === 'flurry') return { shape: 1, len: SPEAR.flurryReach, cone: SPEAR.flurryCone };
   if (nm === 'boomerang') return { shape: 0, len: AXE.throwRange, boxW: A.boomerangWidth };
-  if (nm === 'stunsmash') return { shape: 2, radius: HAMMER.smashRadius, at: [H.x, H.z] };
+  if (nm === 'stunsmash') return { shape: 2, radius: HAMMER.smashRadius, at: leapTarget() };
   if (nm === 'charge') return { shape: 0, len: HAMMER.chargeSpeed * HAMMER.chargeTime + 0.75, boxW: A.chargeWidth, taper: A.chargeTaper };
   return { shape: 0, len: SPEAR.harpoonRange, boxW: A.harpoonWidth };
 }
@@ -14558,6 +14576,7 @@ function update(dt) {
     if (H.spear) updateSpear(dt);
     if (H.swing >= 0) {
       H.swing += dt;
+      if (H.strike === 'smash' && H.combo === 3 && H.leap) leapStep(); else H.leap = null;
       const len = swingTime();
       if (!H.hitDone && H.swing > len * (H.strike !== 'smash' || H.punch ? 0.4 : H.combo === 3 ? HAMMER.landAt : HAMMER_POSE.hitAt)) {
         H.hitDone = true;
@@ -14863,7 +14882,7 @@ const legDrop = (a0, k0, a1, k1) => 0.36 - Math.max(0.14 * Math.cos(a0) + 0.22 *
 // both hands like a battering ram. HAMMER_POSE is T > Hammer moves.
 const HAMMER_POSE = { restX: -0.15, restY: 0.17, restZ: 0.13, restYaw: -2.85, restPitch: 0.66,
   gripY: 0.1, gripZ: 0.14, windup: 0.42, strikeEnd: 0.68, hitAt: 0.58, sweepBack: 2.3, sweepThrough: 1.92,
-  twist: 0.85, hips: 0.35, crouch: 0.41, step: 0.54, lean: 0.25, upTilt: 0.45, jump: 2, ramPitch: -0.6 };   // (Jordan's tuning, v349)
+  twist: 0.85, hips: 0.35, crouch: 0.41, step: 0.54, lean: 0.25, upTilt: 0.45, jump: 2, ramPitch: 0.2 };   // (Jordan's tuning, v349-v350)
 const nrm3 = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -16585,6 +16604,7 @@ const TUNING = [
     [HAMMER, 'smashRadius', 'Ground smash: shockwave radius (tiles)', 1, 12, 0.1],
     [HAMMER, 'waveSpeed', 'Ground smash: shockwave speed (tiles a second)', 2, 40, 0.5],
     [HAMMER, 'landAt', 'Ground smash: lands at this share of the move', 0.4, 0.8, 0.01],
+    [HAMMER, 'leapReach', 'Ground smash: leaps toward the cursor up to (tiles)', 0, 8, 0.1],
     [HAMMER, 'smashDmg', 'Ground smash: damage', 0, 50, 1],
     [HAMMER, 'smashKnock', 'Ground smash: knock-back (tiles)', 0, 2, 0.05],
     [HAMMER, 'stunTime', 'Ground smash: stun lasts (seconds)', 0, 6, 0.1],
@@ -16900,7 +16920,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 349, crashSeen = new Map();
+const GAME_VERSION = 350, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
