@@ -13685,6 +13685,12 @@ const spearDrive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 
 const flurryAt = n => ((n * 0.618034 + 0.31) % 1) * 2 - 1;
 // how far the bow's raised (0..1): up over 0.12 s for a shot, kept up while the attack's held, lowered after
 let bowUp = 0;
+// The bow with the joints (T > Bow moves): the shoulders turned on round past the hips, the drawing arm bent at the
+// elbow (worked out from where the string is, the elbow out behind along the arrow and raised by elbowUp), the
+// feet apart and the knees soft. On the loose the hand flies back (follow), the bow arm dips (recoil) and the
+// string shivers. The volley lays the bow over flat (cant) and crouches; the rain leans back.
+const BOW_POSE = { shoulders: 0.45, elbowUp: 0.3, stance: 0.12, knees: 0.15, follow: 0.08, recoil: 0.12, string: 0.03, cant: 1.2, volleyCrouch: 0.25, rainLean: 0.25 };
+let bowFollow = 0;
 // The sword's blows with the joints (T > Sword moves): each sweep winds up (the first `windup` of its time: the arm
 // drawn back further, the elbow cocked, the wrist laid back and the shoulders turned away), then cuts through,
 // the shoulders turning after it, the wrist snapping over and the knees dipping, and eases back. The third blow
@@ -13721,10 +13727,10 @@ function animateHero(dt) {
   hero.body.rotation.z = on ? -sd * WALK.lean : 0;
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
-  let jab = 0, pull = 0, thrust = 0, twist = 0, bend = 0, stance = 0;
+  let jab = 0, pull = 0, thrust = 0, twist = 0, bend = 0, stance = 0, shoulder = 0, legOpen = 0, bowArmZ = -0.08;
   // what an attack adds to the legs (hip and knee, each leg), the chest's lean and turn, the elbows and wrists
   // (null: left to the walk)
-  const legAdd = [0, 0], kneeAdd = [0, 0], wrist = [[0, 0], [0, 0]];
+  const legAdd = [0, 0], kneeAdd = [0, 0], wrist = [[0, 0, 0], [0, 0, 0]];
   let chestX = 0, chestY = null, elbowL = null, elbowR = null;
   if (H.spear) {
     // the spear held low and drawn back, the arm down by your side and the shaft level: a poke drives it out
@@ -13747,20 +13753,53 @@ function animateHero(dt) {
   } else if (bowUp > 0) {
     // the bow arm out toward the aim (up into the sky for the rain), the other drawing the string back to the chin;
     // held up between shots while the attack is held, and lowered after
-    const b = H.bow, rel = b ? b.len * (b.kind === 'shot' ? 0.6 : 0.5) : 1, u = b ? smooth(0, 1, Math.min(1, b.t / rel)) : 0;
-    const raise = smooth(0, 1, bowUp), lift = b && b.kind === 'rain' ? 0.95 : 0;
-    const out = -(Math.PI / 2 + lift) * raise;
-    // stood side-on (the body turned BOW.turn degrees to the right) with the head and both arms turned back onto
-    // the aim, so the bow's held out across the body
-    stance = BOW.turn * Math.PI / 180 * raise;
-    const yl = -0.08 * raise + stance;
+    const b = H.bow, P = BOW_POSE, rel = b ? b.len * (b.kind === 'shot' ? 0.6 : 0.5) : 1, tu = b ? Math.min(1, b.t / rel) : 0;
+    const raise = smooth(0, 1, bowUp), rain = b && b.kind === 'rain', volley = b && b.kind === 'volley', lift = rain ? 0.95 : 0;
+    // after the loose: the drawing hand flies on back past the ear and the bow arm kicks, the string shivering
+    const ft = b && b.fired ? b.t - rel : -1;
+    if (b) bowFollow = ft < 0 ? 0 : smooth(0, 0.05, ft) * (1 - 0.6 * smooth(0.08, Math.max(0.1, b.len - rel), ft));
+    else bowFollow = Math.max(0, bowFollow - dt * 4);
+    const kick = ft < 0 ? 0 : smooth(0, 0.04, ft) * (1 - smooth(0.04, 0.25, ft));
+    const out = -(Math.PI / 2 + lift) * raise + P.recoil * kick * raise;
+    // stood side-on (the body turned BOW.turn degrees to the right, the shoulders on round further) with the head
+    // and both arms turned back onto the aim, so the bow's held out across the body
+    stance = BOW.turn * Math.PI / 180 * raise; shoulder = P.shoulders * raise; chestY = -shoulder;
+    const yl = -0.08 * raise + stance + shoulder;
     hero.armL.rotation.set(out, yl, 0.08);
-    pull = !b || b.fired ? 0 : BOW.draw * u;
-    // the drawing hand on the string: the right arm aimed from its shoulder at where the string's drawn to (out
-    // along the bow arm, then back toward you by the nock's offset and the pull), in the body's frame
-    const so = Math.sin(out), k = 0.25 - (0.12 + pull);
-    const vx = 0.35 - so * Math.sin(yl) * k, vy = -Math.cos(out) * k, vz = -so * Math.cos(yl) * k, vl = Math.hypot(vx, vy, vz) || 1;
-    ax += (-Math.acos(clamp(-vy / vl, -1, 1)) - ax) * raise; ay = Math.atan2(vx, vz) * raise;
+    // the volley shot with the bow laid over flat, a hint of a cant otherwise
+    wrist[0][2] = -(volley ? P.cant : 0.12) * smooth(0, 0.3, tu) * raise;
+    // the drawing hand on the string: from its shoulder (in the chest's frame) the string's out along the bow arm,
+    // then back toward you by the nock's offset and the pull. The arm can't reach it braced, so the hand grabs it
+    // where it can (pmin, the arm straight) and draws it back from there to the anchor, the elbow bending and
+    // rising out behind along the arrow.
+    const so = Math.sin(out), dx = -so * Math.sin(yl), dy = -Math.cos(out), dz = -so * Math.cos(yl), cd = 0.35 * dx;
+    const REACH = 0.25, kMax = -cd + Math.sqrt(Math.max(0, cd * cd - 0.35 * 0.35 + REACH * REACH)), pmin = clamp(0.13 - kMax, 0, BOW.draw);
+    const grab = smooth(0, 0.25, tu), draw = smooth(0.25, 1, tu);
+    pull = !b || b.fired ? 0 : pmin * grab + (BOW.draw - pmin) * draw;
+    const k = 0.13 - (b && b.fired ? BOW.draw : pull), fo = P.follow * bowFollow;
+    const tx = 0.35 + dx * k - dx * fo, ty = dy * k - dy * fo + 0.4 * fo, tz = dz * k - dz * fo;
+    // two bones (shoulder to elbow 0.1, elbow to the fingers 0.15): the elbow pushed out back along the arrow and up
+    const A = 0.1, B = 0.15, tl = Math.hypot(tx, ty, tz) || 1, d = clamp(tl, 0.06, A + B - 1e-4);
+    const vx = tx / tl, vy = ty / tl, vz = tz / tl;
+    let px = -dx, py = -dy + P.elbowUp, pz = -dz;
+    const pv = px * vx + py * vy + pz * vz; px -= pv * vx; py -= pv * vy; pz -= pv * vz;
+    const pl = Math.hypot(px, py, pz) || 1; px /= pl; py /= pl; pz /= pl;
+    const al = Math.acos(clamp((A * A + d * d - B * B) / (2 * A * d), -1, 1)), bend = Math.PI - Math.acos(clamp((A * A + B * B - d * d) / (2 * A * B), -1, 1));
+    const ca = Math.cos(al), sa = Math.sin(al);
+    // the upper arm (its -y), the side its forearm folds to (+z) and their cross, read back as YXZ angles
+    const Yx = -(ca * vx + sa * px), Yy = -(ca * vy + sa * py), Yz = -(ca * vz + sa * pz);
+    const Zx = sa * vx - ca * px, Zy = sa * vy - ca * py, Zz = sa * vz - ca * pz;
+    const Xy = Yz * Zx - Yx * Zz;
+    const ix = Math.asin(clamp(-Zy, -1, 1)), iy = Math.atan2(Zx, Zz), iz = Math.atan2(Xy, Yy);
+    ax += (ix - ax) * raise; ay = iy * raise; bowArmZ = -0.08 + (iz + 0.08) * raise;
+    elbowR = -bend * raise; elbowL = 0;
+    // a firm stance: the feet apart, the knees soft; the volley crouched and leaning in, the rain leaning back
+    legOpen = P.stance * raise;
+    const kn = (P.knees + (volley ? P.volleyCrouch : 0)) * raise;
+    for (const j of [0, 1]) { legAdd[j] -= kn * 0.5; kneeAdd[j] += kn; }
+    chestX = (volley ? 0.12 : rain ? -P.rainLean : 0) * raise * smooth(0, 0.4, tu);
+    if (rain) { legAdd[1] += P.rainLean * 0.6 * raise; kneeAdd[1] += P.rainLean * raise; }
+    if (b && b.fired) pull = -P.string * Math.exp(-ft * 14) * Math.sin(ft * 70);
   } else if (H.swing >= 0 && H.punch) {
     // a straight jab from the shoulder, the other fist up on guard
     jab = Math.sin(Math.min(1, H.swing / PUNCH.time) * Math.PI);
@@ -13826,8 +13865,8 @@ function animateHero(dt) {
     hero.armL.rotation.set(0.9 * k, 0, 0.08 + 0.3 * k); elbowL = -0.3 * k;
   } else if (H.lunge >= 0) { ax = -1.55; ay = 0; sx = Math.PI / 2; }
   else if (mode === 'build') { ax = -0.3; }
-  hero.armR.rotation.set(ax, ay, -0.08);
-  hero.head.rotation.y = stance;
+  hero.armR.rotation.set(ax, ay, bowArmZ);
+  hero.head.rotation.y = stance + shoulder;
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
   hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
@@ -13850,9 +13889,11 @@ function animateHero(dt) {
   hero.legL.rotation.x += legAdd[0]; hero.legR.rotation.x += legAdd[1];
   hero.knees[0].rotation.x += kneeAdd[0]; hero.knees[1].rotation.x += kneeAdd[1];
   if (legAdd[0] || legAdd[1]) hero.body.position.y -= legDrop(legAdd[0], kneeAdd[0], legAdd[1], kneeAdd[1]);
+  // (feet set apart: each leg out to the side, the hips down as much)
+  if (legOpen) { hero.legL.rotation.z += legOpen; hero.legR.rotation.z -= legOpen; hero.body.position.y -= 0.36 * (1 - Math.cos(legOpen)); }
   hero.chest.rotation.x = chestX;
   if (chestY !== null) hero.chest.rotation.y = chestY;
-  for (const k of [0, 1]) hero.wrists[k].rotation.set(wrist[k][0], 0, wrist[k][1]);
+  for (const k of [0, 1]) hero.wrists[k].rotation.set(wrist[k][0], wrist[k][2], wrist[k][1]);
   if (elbowL !== null) hero.elbows[0].rotation.x = elbowL;
   if (elbowR !== null) hero.elbows[1].rotation.x = elbowR;
   hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? (H.lungeKind === 'charge' ? 0.25 : 0.25 * (1 - SWORD_POSE.lungeDepth * 0.6)) : 0;
@@ -14743,6 +14784,18 @@ const TUNING = [
     [SWORD_POSE, 'whirlCrouch', 'Whirlwind: crouch', 0, 0.8, 0.01],
     [SWORD_POSE, 'lungeDepth', 'Lunge: depth of the front knee', 0, 1.5, 0.01],
   ]],
+  ['Bow moves', [
+    [BOW_POSE, 'shoulders', 'Shoulders turned on past the hips (radians)', 0, 1.2, 0.01],
+    [BOW_POSE, 'elbowUp', 'Drawing elbow raised', -1, 1.5, 0.01],
+    [BOW_POSE, 'stance', 'Feet apart', 0, 0.4, 0.01],
+    [BOW_POSE, 'knees', 'Knees soft', 0, 0.8, 0.01],
+    [BOW_POSE, 'follow', 'Loose: hand flying back (tiles)', 0, 0.2, 0.005],
+    [BOW_POSE, 'recoil', 'Loose: bow arm kick', 0, 0.6, 0.01],
+    [BOW_POSE, 'string', 'Loose: string shiver', 0, 0.1, 0.002],
+    [BOW_POSE, 'cant', 'Volley: bow laid over', 0, 1.6, 0.01],
+    [BOW_POSE, 'volleyCrouch', 'Volley: crouch', 0, 0.8, 0.01],
+    [BOW_POSE, 'rainLean', 'Rain: lean back', 0, 0.8, 0.01],
+  ]],
   ['Cloud shadows', [
     [CLOUDS, 'strength', 'How much a cloud dims the sun (0 none)', 0, 1, 0.01],
     [CLOUDS, 'cover', 'Cloud cover', 0, 1, 0.01],
@@ -15357,7 +15410,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 297, crashSeen = new Map();
+const GAME_VERSION = 298, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15641,7 +15694,7 @@ window.GAME = {
   treeNear: () => { const c0 = Math.floor(H.x), r0 = Math.floor(H.z); for (let d = 1; d < 40; d++) for (let r = r0 - d; r <= r0 + d; r++) for (let c = c0 - d; c <= c0 + d; c++) { const i = T(c, r), o = OB[i]; if (OBJ[o].tree && OBJ[o].hp) { const [x, z] = objPos(c, r, o); return [x, z, c, r]; } } return null; },
   ghosts: () => ghostSpears.filter(g => g.g.visible).length + " shown, spear in hand " + hero.spearShaft.visible + ", chain " + chainLinks.count,
   tierShown: () => ["sword", "bow", "spear"].map(k => k + ":" + (k === "spear" ? hero.spearShaft : hero[k]).children.filter(c => c.userData.gear && c.userData.gear.startsWith("tier_") && c.visible).map(c => c.userData.gear).join(",") + (hero[k].visible ? "" : "(hidden)")).join(" "),
-  bowPose: t => { if (H.bow && t !== undefined) { H.bow.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; heroRoot.updateMatrixWorld(); const g = new GFX.Vector3(0, 0, 0).applyMatrix4(hero.bow.matrixWorld), a = new GFX.Vector3(0, 0, 0).applyMatrix4(hero.nock.matrixWorld), b = new GFX.Vector3(0, -0.47, 0).applyMatrix4(hero.nock.matrixWorld), f = [Math.sin(H.face), Math.cos(H.face)], rel = v => [+((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2), +((v.x - H.x) * f[1] - (v.z - H.z) * f[0]).toFixed(2), +(v.y - H.y).toFixed(2)]; const dx = b.x - a.x, dz = b.z - a.z; const hand = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld); return { grip: rel(g), string: rel(a), hand: rel(hand), arrowYaw: +(angDiff(Math.atan2(dx, dz), H.face) * 180 / Math.PI).toFixed(1), arrowPitch: +(Math.atan2(b.y - a.y, Math.hypot(dx, dz)) * 180 / Math.PI).toFixed(1), body: +(hero.body.rotation.y * 180 / Math.PI).toFixed(1) }; },
+  bowPose: t => { if (H.bow && t !== undefined) { H.bow.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; heroRoot.updateMatrixWorld(); const g = new GFX.Vector3(0, 0, 0).applyMatrix4(hero.bow.matrixWorld), a = new GFX.Vector3(0, 0, 0).applyMatrix4(hero.nock.matrixWorld), b = new GFX.Vector3(0, -0.47, 0).applyMatrix4(hero.nock.matrixWorld), f = [Math.sin(H.face), Math.cos(H.face)], rel = v => [+((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2), +((v.x - H.x) * f[1] - (v.z - H.z) * f[0]).toFixed(2), +(v.y - H.y).toFixed(2)]; const dx = b.x - a.x, dz = b.z - a.z; const hand = new GFX.Vector3(0, -0.05, 0).applyMatrix4(hero.wrists[1].matrixWorld); return { grip: rel(g), string: rel(a), hand: rel(hand), arrowYaw: +(angDiff(Math.atan2(dx, dz), H.face) * 180 / Math.PI).toFixed(1), arrowPitch: +(Math.atan2(b.y - a.y, Math.hypot(dx, dz)) * 180 / Math.PI).toFixed(1), body: +(hero.body.rotation.y * 180 / Math.PI).toFixed(1), elbow: +hero.elbows[1].rotation.x.toFixed(2), gap: +Math.hypot(a.x - hand.x, a.y - hand.y, a.z - hand.z).toFixed(3) }; },
   spearPose: t => { if (H.spear && t !== undefined) { H.spear.t = t; for (let k = 0; k < 30; k++) animateHero(0.05); } heroRoot.updateMatrixWorld(); const p = new GFX.Vector3(0, -0.25, 0).applyMatrix4(hero.armR.matrixWorld), q = new GFX.Vector3(0, 0, SPEAR_TIP).applyMatrix4(hero.spearShaft.matrixWorld), c = new GFX.Vector3(0, 0, -SPEAR_BUTT).applyMatrix4(hero.spearShaft.matrixWorld); const f = [Math.sin(H.face), Math.cos(H.face)], ah = v => +((v.x - H.x) * f[0] + (v.z - H.z) * f[1]).toFixed(2); return `t ${H.spear ? H.spear.t.toFixed(2) : "-"} hand ${ah(p)} y ${(p.y - H.y).toFixed(2)} tip ${ah(q)} y ${(q.y - H.y).toFixed(2)} butt ${ah(c)} y ${(c.y - H.y).toFixed(2)} bend ${hero.body.rotation.x.toFixed(2)}`; },
   foeSlow: () => foes.map(f => +(f.slowT || 0).toFixed(2)),
   rainAt: (x, z) => { forcedPick = { x, y: 0, z, wall: null }; castRain(); forcedPick = null; },
