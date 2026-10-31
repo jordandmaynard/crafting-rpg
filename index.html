@@ -523,8 +523,15 @@ body.mapOpen #miniWrap.minimap { display: none; }
 #craft .cw-close:focus-visible { --cwTint: brightness(1.102); outline: 2px solid #f6d48b; outline-offset: 3px; }
 #craft .cw-rule-left { position: absolute; left: 110px; top: 140px; width: 330px; height: 14px; pointer-events: none; mask-image: linear-gradient(to right, #000 0 28%, transparent 28% 73%, #000 73% 100%); -webkit-mask-image: linear-gradient(to right, #000 0 28%, transparent 28% 73%, #000 73% 100%); }
 #craft .cw-recipe-heading { position: absolute; left: 204px; top: 127px; width: 144px; height: 35px; text-align: center; font: 600 26px/35px Spectral, serif; }
-#craft .cw-divider { position: absolute; left: 454px; top: 120px; width: 14px; height: 442px; pointer-events: none; }
-#craft .cw-recipes { position: absolute; left: 110px; top: 169px; width: 330px; height: 310px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #a16b36 #ccab76; display: flex; flex-direction: column; gap: 5px; cursor: auto; }
+/* the centre divider is the recipe list's scroll bar (Jordan): its line the track, its diamond the thumb, dragged or
+   clicked along the line; with nothing to scroll the diamond rests in the middle as the divider's own */
+#craft .cw-scroll { position: absolute; left: 444px; top: 120px; width: 34px; height: 442px; cursor: pointer; touch-action: none; }
+#craft .cw-scroll.idle { cursor: auto; }
+#craft .cw-track { position: absolute; left: 10px; top: 0; width: 14px; height: 442px; pointer-events: none; }
+#craft .cw-thumb { position: absolute; left: 10px; top: 210.5px; width: 14px; height: 21px; pointer-events: none; transition: filter 0.1s; }
+#craft .cw-scroll:not(.idle):hover .cw-thumb, #craft .cw-scroll.grab .cw-thumb { filter: brightness(1.25) drop-shadow(0 0 3px #fff3c8); }
+#craft .cw-recipes::-webkit-scrollbar { display: none; }
+#craft .cw-recipes { position: absolute; left: 110px; top: 169px; width: 330px; height: 310px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; display: flex; flex-direction: column; gap: 5px; cursor: auto; }
 #craft .cw-recipe { position: relative; isolation: isolate; flex: none; width: 330px; height: 100px; border: 0; padding: 0; box-shadow: none; background: none; color: #2e190e; font: 600 22px/25px Spectral, serif; text-align: left; text-transform: none; letter-spacing: 0; cursor: pointer; }
 #craft .cw-recipe::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--cwSkin, url("ui/crafting/row-recipe.webp")) center / 100% 100% no-repeat; filter: var(--cwTint, none); pointer-events: none; }
 #craft .cw-recipe[data-poor="true"] { --cwTint: saturate(0.6) brightness(0.942) contrast(0.95); }
@@ -674,7 +681,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
   <button class="cw-close" id="craftClose" type="button" aria-label="Close crafting" title="Close (F or Esc)">&times;</button>
   <img class="cw-rule-left" src="ui/crafting/divider-h.webp" alt="" draggable="false">
   <h2 class="cw-recipe-heading">Recipes</h2>
-  <img class="cw-divider" src="ui/crafting/divider-v.webp" alt="" draggable="false">
+  <div class="cw-scroll" id="craftScroll" aria-hidden="true"><img class="cw-track" src="ui/crafting/divider-track.webp" alt="" draggable="false"><img class="cw-thumb" id="craftThumb" src="ui/crafting/divider-thumb.webp" alt="" draggable="false"></div>
   <div class="cw-recipes" id="craftList" role="group" aria-label="Recipes"></div>
   <h2 class="cw-item-title" id="craftItem"></h2>
   <img class="cw-rule-right" src="ui/crafting/divider-h.webp" alt="" draggable="false">
@@ -10678,7 +10685,7 @@ function toggleInv(open = !invOpen || !invPack) {
 // Windows drag from anywhere on them that isn't something to press (squares, buttons, the crafting list), and where
 // you leave each is kept. One the skin anchors to a corner is placed by its left and top once it's been dragged (its
 // scale then taken about that corner). The minimap stays put.
-const DRAG_SKIP = '.cell, button, input, select, textarea, a, .invAct, #trash, .cw-recipes, .cw-materials, .map-aperture';
+const DRAG_SKIP = '.cell, button, input, select, textarea, a, .invAct, #trash, .cw-recipes, .cw-materials, .cw-scroll, .map-aperture';
 function dragWindow(el, key, scaled) {
   let pos = null, grab = null;
   try { pos = JSON.parse(localStorage.getItem(key)); } catch (e) { pos = null; }
@@ -10916,7 +10923,7 @@ function toggleCraft(table) {
   if (craftAt) {
     if (mode !== 'play') setMode('play');
     craftFocus = 0; craftNote = null; craftBuilt = null; renderCraft(); craftDrag.place();
-    $('craftList').scrollTop = 0;
+    $('craftList').scrollTop = 0; craftThumb();
     // (the pack no longer opens with it: the counts come from the plot's stores; on the controller the D-pad is the list's)
     if (PAD.on && invOpen) toggleInv(false);
   }
@@ -10931,6 +10938,29 @@ $('craftList').addEventListener('keydown', e => {
   const k = e.key === 'Home' ? 0 : e.key === 'End' ? recipes().length - 1 : craftFocus + step;
   pickRecipe(k, true); $('craftList').children[craftFocus]?.focus({ preventScroll: true });
 });
+// the divider as scroll bar: the diamond's centre runs from 46.5 to 393.5 down the 442px line (its ornaments kept clear)
+const CRAFT_THUMB = [46.5, 393.5];
+function craftThumb() {
+  const list = $('craftList'), room = list.scrollHeight - list.clientHeight, sc = $('craftScroll');
+  sc.classList.toggle('idle', room <= 1);
+  const f = room > 1 ? list.scrollTop / room : 0.5;
+  $('craftThumb').style.top = (CRAFT_THUMB[0] + f * (CRAFT_THUMB[1] - CRAFT_THUMB[0]) - 10.5) + 'px';
+}
+$('craftList').addEventListener('scroll', craftThumb, { passive: true });
+{
+  const sc = $('craftScroll');
+  let grab = false;
+  const to = e => {
+    const list = $('craftList'), room = list.scrollHeight - list.clientHeight, r = sc.getBoundingClientRect();
+    const y = (e.clientY - r.top) / r.height * 442;
+    list.scrollTop = clamp((y - CRAFT_THUMB[0]) / (CRAFT_THUMB[1] - CRAFT_THUMB[0]), 0, 1) * room;
+  };
+  sc.addEventListener('pointerdown', e => { if (e.button || sc.classList.contains('idle')) return; grab = true; sc.classList.add('grab'); sc.setPointerCapture(e.pointerId); to(e); e.preventDefault(); e.stopPropagation(); });
+  sc.addEventListener('pointermove', e => { if (grab) to(e); });
+  const drop = () => { grab = false; sc.classList.remove('grab'); };
+  sc.addEventListener('pointerup', drop); sc.addEventListener('pointercancel', drop);
+  sc.addEventListener('wheel', e => { $('craftList').scrollTop += e.deltaY; e.preventDefault(); }, { passive: false });
+}
 $('craftGo').addEventListener('keydown', e => { if (e.repeat && (e.key === 'Enter' || e.key === ' ')) e.preventDefault(); });
 $('craftGo').addEventListener('click', e => { audioOn(); craft(craftFocus); if (e.detail) e.currentTarget.blur(); });
 
@@ -16649,7 +16679,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 342, crashSeen = new Map();
+const GAME_VERSION = 343, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
