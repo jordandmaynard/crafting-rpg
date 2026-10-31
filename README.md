@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v363:** painted icons for every weapon in every tier (Jordan's painterly-weapons-all-tiers-256px pack: sword/bow/spear/axe/hammer x wood..auralith; wood ones unchanged), icons/paint/{weapon}_{tier}-64/128/256.webp, all in the ICON paintImg loop.
+
 **v362:** phone GPU investigation (Jordan: v361 cut timed GPU to ~10 ms but GPU done stayed ~44 ms, so the hidden cost is elsewhere, likely the browser compositing/rastering the HTML HUD on the same GPU). With Show frame rate on and the HUD hidden, the SHOW UI button shows the fps, to measure the HUD's cost. Phones redraw the minimap 20 times a second (miniDrawT); the clock plate text is written only when it changes; long profiler row names wrap.
 
 **v361:** phone GPU round 2 (Jordan: v360 took him 25 -> 38 fps, GPU done 42 ms). Phones: no water refraction or caustics (WATER.refraction 0, so no mid-frame snapshot and the world is one render pass), outlineRT.colorFormat 'rgba8unorm' (renderer honours a target's colorFormat; snapshots match), SHADOWS.ground 0 (ground meshes, ~350k triangles, left out of the shadow map; T > Shadows). Fixed the refraction-off bug: the water's no-bend textures were a copy of outlineRT that the aim decal's next snapshot destroyed; now a 1x1 noBendRT copy (depth cleared to far), rebound whenever there's no bending. GAME.casters() lists shadow casters.
