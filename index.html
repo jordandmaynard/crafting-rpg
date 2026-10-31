@@ -9639,7 +9639,21 @@ for (const [n, set] of Object.entries(PNG_ICONS)) for (const [k, src] of Object.
 // sized for a pack square)
 // (PAINT_REV goes up when a painting is replaced under the same name, so browsers don't keep showing the old one)
 const PAINT_REV = 281;
-const paintImg = (k, sizes) => `<img class="paint" src="icons/paint/${k}-64.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-64.webp?v=${PAINT_REV} 64w, icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`;
+// Each painting is fetched and decoded as the game loads (an off-page image with the same srcset and sizes, so the
+// browser picks the same file), so a weapon's icons show at once the first time you switch to it. The images are
+// kept so they stay decoded.
+const paintKept = new Map();
+function preloadPaint(k, sizes) {
+  const key = k + '|' + sizes;
+  if (paintKept.has(key)) return;
+  const im = new Image();
+  im.sizes = sizes;
+  im.srcset = [64, 128, 256].map(n => `icons/paint/${k}-${n}.webp?v=${PAINT_REV} ${n}w`).join(', ');
+  im.src = `icons/paint/${k}-64.webp?v=${PAINT_REV}`;
+  if (im.decode) im.decode().catch(() => {});
+  paintKept.set(key, im);
+}
+const paintImg = (k, sizes) => (preloadPaint(k, sizes), `<img class="paint" src="icons/paint/${k}-64.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-64.webp?v=${PAINT_REV} 64w, icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`);
 for (const k of ['dash', 'bag', 'hammer', 'map']) BAR_ICON[k] = paintImg(k, 'max(26px, calc(4.9vh - 14px))');
 // (the weapons' abilities: each strike under its bar key, sword slash, bow shoot, spear thrust)
 for (const [k, f] of [['sword', 'slash'], ['whirl', 'whirl'], ['lunge', 'lunge'], ['bow', 'shoot'], ['volley', 'volley'], ['rain', 'rain'],
@@ -12305,21 +12319,35 @@ function dragSpots() {
   }
   return out;
 }
-// which of them will actually go up: in reach, allowed, and paid for in turn
+// which of them will actually go up: in reach, allowed, and paid for in turn. One that needs something a piece
+// queued before it (on the same plot, or earlier in this drag) is still waiting for queues behind it, so each
+// material's line keeps its order; one needing only other things can go straight up.
 function settle(spots) {
-  const have = {};
+  const have = {}, waiting = queueWaits();
   for (const s of spots) {
-    const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE;
+    const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE, pl = spotPlot(s);
     for (const r in cost) if (!(r in have)) have[r] = haveCount(r);
-    const afford = Object.entries(cost).every(([r, n]) => n <= have[r]), queued = buildQueue.has(spotKey(s));
+    const behind = queueable(s.kind) && Object.keys(cost).some(r => waiting.get(pl)?.has(r));
+    const afford = !behind && Object.entries(cost).every(([r, n]) => n <= have[r]), queued = buildQueue.has(spotKey(s));
     s.go = s.ok && !far && afford;
     s.queue = s.ok && !far && !afford && queueable(s.kind) && !queued;
     if (s.ok && far) s.why = 'Too far away to build.';
     else if (s.ok && !afford && queued) s.why = 'That is queued already.';
     else if (s.ok && !afford) s.why = 'Not enough materials: ' + costText(s.kind) + '.';
     if (s.go) for (const [r, n] of Object.entries(cost)) have[r] -= n;
+    if (s.queue) waitFor(waiting, pl, s.kind);
   }
   return spots;
+}
+// the materials each plot's queue is waiting on: plot -> Set of item ids (everything a queued piece costs)
+function waitFor(waiting, pl, kind) {
+  if (!waiting.has(pl)) waiting.set(pl, new Set());
+  for (const r in COST[kind]) waiting.get(pl).add(r);
+}
+function queueWaits() {
+  const waiting = new Map();
+  for (const q of buildQueue.values()) waitFor(waiting, q.plot, q.kind);
+  return waiting;
 }
 function updateGhost() {
   if (mode !== 'build' || !H.alive || buildKind === 'remove') { showGhosts([]); ghostSpot = null; drag = null; showPlotHover(0); return; }
@@ -12424,8 +12452,9 @@ function spend(id, n) {
 // ---------- The build queue ----------
 // Floors, walls, fences, doors and gates you can't pay for when you lay them (from the pack and everything stored
 // on the plot) are queued instead: drawn as white see-through previews, they go up one at a time (every
-// BUILD_QUEUE.every seconds), strictly in the order they were laid, as the crates, chests and stations on their
-// plot come to hold what the next one costs, which is taken from there. Removing one (REMOVE) takes it off the
+// BUILD_QUEUE.every seconds) as the crates, chests and stations on their plot come to hold what they cost, which is
+// taken from there. Order is kept for each material: a piece waits behind any piece laid before it that needs
+// something it needs too, but not behind one that needs only other things. Removing one (REMOVE) takes it off the
 // queue.
 const BUILD_QUEUE = { every: 0.35 };
 const buildQueue = new Map();   // spotKey -> { kind, c, r, w, x, y, z, ry, plot, mesh }
@@ -12455,6 +12484,7 @@ let queueT = 0;
 function runBuildQueue(dt) {
   if (!buildQueue.size || (queueT -= dt) > 0) return;
   queueT = BUILD_QUEUE.every;
+  const waiting = new Map();   // (plot -> what the pieces still waiting before this one need)
   for (const [key, q] of buildQueue) {
     const s = isFloor(q.kind) ? floorSpot(q.c, q.r, q.kind) : edgeSpot(q.c, q.r, q.w, q.kind);
     if (!s.ok) {
@@ -12462,9 +12492,10 @@ function runBuildQueue(dt) {
       if (isFloor(q.kind) ? FL[T(q.c, q.r)] : (q.w ? WW : WN)[T(q.c, q.r)]) unqueue(key);
       continue;
     }
-    // (the next in line waits for its materials, and everything after it waits too)
-    const sts = plotStores(q.plot), cost = Object.entries(COST[q.kind]);
-    if (!cost.every(([id, n]) => storedCount(sts, id) >= n)) return;
+    // (one that can't be paid for yet, or needs something an earlier one is waiting on, waits, and holds up
+    // everything after it that needs any of the same)
+    const sts = plotStores(q.plot), cost = Object.entries(COST[q.kind]), w = waiting.get(q.plot);
+    if (cost.some(([id]) => w && w.has(id)) || !cost.every(([id, n]) => storedCount(sts, id) >= n)) { waitFor(waiting, q.plot, q.kind); continue; }
     for (const [id, n] of cost) takeStored(sts, id, n);
     s.paid = true;
     placeSpot(s);
@@ -14894,7 +14925,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 281, crashSeen = new Map();
+const GAME_VERSION = 282, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
