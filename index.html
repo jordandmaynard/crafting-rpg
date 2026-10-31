@@ -3992,7 +3992,7 @@ function* groundSteps(cx, cz, ch) {
   }
   groundTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
   groundTex.needsUpdate = true;
-  ch.ground = bufGround.mesh(groundPrintMat);
+  ch.ground = bufGround.mesh(groundShapeMat);
   if (ch.ground) ch.ground.layers.set(5);   // drawn in a pass of its own (see renderWorld)
   yield;
   buildBog(c0, r0, grid, GW, ch);
@@ -4699,7 +4699,7 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
   const d = driftTex.image.data, N2 = N * 2;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), b = BI[i], kind = b === SNOW ? 1 : b === DESERT ? 2 : 0;
-    // (a ramp on this tile or one beside it: the ground's light is smoothed round here, see groundPrintMat)
+    // (a ramp on this tile or one beside it: the ground's light is smoothed round here, see groundShapeMat)
     let nearRamp = false;
     for (let dr = -1; dr <= 1 && !nearRamp; dr++) for (let dc = -1; dc <= 1; dc++) {
       const cc = c + dc, rr = r + dr;
@@ -4973,123 +4973,26 @@ function updateDrift(dt) {
   Object.assign(u.dV.value, { x: drift.view[0], y: drift.view[1], z: drift.view[2], w: 1 });
 }
 
-// ---------- Footprints (T > Footprints) ----------
-// You and the foes that walk (wolves' paws, boars' hooves, the scorpions' and spiders' many feet, slimes' smears)
-// leave prints in sand and snow, dents that shade as dents (the ground's light comes off their sloping sides) and,
-// in snow, go blue at the bottom. They last PRINTS.life seconds, fading. They're kept as a list in the world, and
-// drawn (soft ovals, the deepest wins where they overlap) into a map round you, PR_TILES across at PR_TPT texels a
-// tile, that the ground's shader reads; it's drawn anew as prints are made, as they fade, and when you've walked
-// far enough from its middle.
-const PRINTS = { on: 1, life: 180, depth: 0.035, shade: 0.3, size: 1 };
-const PR_TILES = 32, PR_TPT = 16, PR_W = PR_TILES * PR_TPT, PR_MAX = 1500;
-const prCanvas = document.createElement('canvas'); prCanvas.width = prCanvas.height = PR_W;
-const prCtx = prCanvas.getContext('2d', { willReadFrequently: true });
-const prTex = new GFX.DataTexture(new Uint8Array(PR_W * PR_W * 4), PR_W, PR_W);
-const prints = [];
-let prCorner = null, prDirty = true, prDrawn = 0;
-// each kind of foot: its prints' half-width and half-length (tiles), how deep, and how far apart the feet fall
-const PRINT_FEET = {
-  boot: { rs: 0.06, rf: 0.085, d: 1, gap: 0.075 }, paw: { rs: 0.05, rf: 0.055, d: 0.9, gap: 0.06 },
-  hoof: { rs: 0.035, rf: 0.05, d: 1, gap: 0.06 }, dots: { rs: 0.09, rf: 0.04, d: 0.6, gap: 0.1 }, smear: { rs: 0.14, rf: 0.16, d: 0.45, gap: 0 },
-};
-const FOE_FEET = { wolf: 'paw', frostwolf: 'paw', hellhound: 'paw', boar: 'hoof', scorpion: 'dots', spider: 'dots', slime: 'smear', goblin: 'boot', zombie: 'boot', skeleton: 'boot' };
-// sand or snow, open to the sky, flat enough to take a print
-function printable(x, z) {
-  const c = Math.floor(x), r = Math.floor(z);
-  if (c < 0 || r < 0 || c >= N || r >= N) return 0;
-  const i = T(c, r), b = BI[i];
-  if ((b !== DESERT && b !== SNOW) || !LV[i] || WT[i] || PATH[i] || FL[i] || BR[i] || CY[i] || OBJ[OB[i]].tile) return 0;
-  // (deep snow and sand take a trench instead)
-  if (DRIFT.on > 0.5 && driftCov(x, z) > 0.2) return 0;
-  return b === SNOW ? 2 : 1;
-}
-// a foot comes down at (x, z), facing a (radians, as H.face), on side (+1 left, -1 right)
-function footDown(x, z, a, feet, side, scale = 1) {
-  if (PRINTS.on < 0.5) return;
-  const f = PRINT_FEET[feet], sx = Math.cos(a), sz = -Math.sin(a);
-  x += sx * f.gap * side * scale; z += sz * f.gap * side * scale;
-  const ground = printable(x, z);
-  if (!ground) return;
-  prints.push({ x, z, a, feet, scale, snow: ground === 2, t: time });
-  if (prints.length > PR_MAX) prints.splice(0, prints.length - PR_MAX);
-  prDirty = true;
-}
-function drawPrints() {
-  const P = PRINTS, g = prCtx;
-  g.globalCompositeOperation = 'source-over';
-  g.fillStyle = '#000'; g.fillRect(0, 0, PR_W, PR_W);
-  g.globalCompositeOperation = 'lighten';
-  const [cx0, cz0] = prCorner;
-  for (const p of prints) {
-    const age = (time - p.t) / Math.max(P.life, 1);
-    if (age >= 1) continue;
-    const px = (p.x - cx0) * PR_TPT, pz = (p.z - cz0) * PR_TPT, f = PRINT_FEET[p.feet], s = P.size * p.scale * PR_TPT;
-    if (px < -8 || pz < -8 || px > PR_W + 8 || pz > PR_W + 8) continue;
-    // deep at first, fading through its last half
-    const v = Math.round(255 * f.d * Math.min(1, 2 - 2 * age)), gch = p.snow ? v : 0;
-    const gr = g.createRadialGradient(0, 0, 0, 0, 0, 1);
-    gr.addColorStop(0, `rgb(${v},${gch},0)`); gr.addColorStop(0.6, `rgb(${v * 0.8 | 0},${gch * 0.8 | 0},0)`); gr.addColorStop(1, 'rgb(0,0,0)');
-    g.save();
-    g.translate(px, pz); g.rotate(-p.a); g.scale(Math.max(f.rs * s, 0.75), Math.max(f.rf * s, 0.75));
-    g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
-    g.restore();
-  }
-  // (the old ones gone for good)
-  while (prints.length && time - prints[0].t > P.life) prints.shift();
-  prTex.image.data.set(g.getImageData(0, 0, PR_W, PR_W).data);
-  prTex.needsUpdate = true;
-}
-// the hero's feet (a print at each step of the walk), the foes' (one each stride), and the map redrawn as needed
-function updatePrints() {
-  const U = PRINT_U, on = PRINTS.on > 0.5;
+// the ground's uniforms that follow the tuning each frame
+function updateGroundU() {
+  const U = GROUND_U;
   Object.assign(U.gsV.value, { x: GROUND_SHAPE.on, y: GROUND_SHAPE.wobble, z: GROUND_SHAPE.size, w: GROUND_SHAPE.blend });
   Object.assign(U.rmp.value, { x: GROUND_SHAPE.rampSmooth, y: GROUND_SHAPE.rampSpan });
-  U.prV.value.w = on && prints.length ? 1 : 0;
-  if (!on) return;
-  if (H.alive && H.moving && H.dash < 0 && !H.flip) {
-    const k = Math.floor(H.walkPhase / Math.PI);
-    if (H.prStep !== undefined && k !== H.prStep) footDown(H.x, H.z, H.face, 'boot', k % 2 ? 1 : -1);
-    H.prStep = k;
-  }
-  for (const f of foes) {
-    const feet = FOE_FEET[f.kind];
-    if (!feet || f.hp <= 0 || Math.abs(f.x - H.x) > PR_TILES || Math.abs(f.z - H.z) > PR_TILES) continue;
-    const was = f.prWas || [f.x, f.z], dx = f.x - was[0], dz = f.z - was[1], l = Math.hypot(dx, dz), stride = 0.25 + f.def.rad;
-    if (!f.prWas || l > 3) { f.prWas = [f.x, f.z]; continue; }
-    if (l < stride) continue;
-    f.prWas = [f.x, f.z]; f.prSide = -(f.prSide || 1);
-    footDown(f.x, f.z, Math.atan2(dx, dz), feet, f.prSide, f.def.rad / 0.28);
-  }
-  if (!prints.length) return;
-  // a fresh middle when you've walked a quarter of the way to its edge
-  if (!prCorner || Math.abs(H.x - (prCorner[0] + PR_TILES / 2)) > PR_TILES / 4 || Math.abs(H.z - (prCorner[1] + PR_TILES / 2)) > PR_TILES / 4) {
-    prCorner = [Math.floor(H.x) - PR_TILES / 2, Math.floor(H.z) - PR_TILES / 2]; prDirty = true;
-  }
-  if (prDirty || time - prDrawn > 2) {
-    prDirty = false; prDrawn = time;
-    drawPrints();
-    Object.assign(U.prV.value, { x: prCorner[0], y: prCorner[1], z: PR_TILES });
-  }
-  Object.assign(U.prE.value, { x: 1 / PR_W, y: PRINTS.depth, z: PRINTS.shade });
 }
-// the ground: lit as the other flat-shaded things are, with the prints pressed into sand and snow
-const PRINT_U = {
-  tPrints: { value: prTex },
-  prV: { value: { x: 0, y: 0, z: PR_TILES, w: 0 } },   // the map's corner (tiles), width (tiles), on
-  prE: { value: { x: 1 / PR_W, y: 0.035, z: 0.3, w: 0 } },   // a texel (of the map), dent depth (tiles), darkening
+// the ground: lit as the other flat-shaded things are, its patches of colour rounded and its light smoothed round ramps
+const GROUND_U = {
   tGround: { value: groundTex },
   gsV: { value: { x: 1, y: 1.1, z: 1.2, w: 1 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
   tDrift: { value: driftTex },
   rmp: { value: { x: 1, y: 0.3, z: 0, w: 0 } },     // smooth light round ramps (0-1), how far round each point it looks (tiles)
 };
-const groundPrintMat = new GFX.ShaderMaterial({ uniforms: PRINT_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
+const groundShapeMat = new GFX.ShaderMaterial({ uniforms: GROUND_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = O.model * vec4f(v.position, 1.0);
   return VOut(F.viewProj * w, w.xyz, v.color, w.xyz - F.camPos.xyz);
 }
-fn printAt(uv: vec2f) -> vec2f { return textureSampleLevel(tPrints, tPrintsS, uv, 0.0).rg; }
 fn gsHash(p: vec2i) -> f32 {
   var h = u32(p.x) * 374761393u + u32(p.y) * 668265263u;
   h = (h ^ (h >> 13u)) * 1274126177u;
@@ -5165,23 +5068,6 @@ fn gsJoin(a: u32, b: u32) -> bool {
           if (gsJoin(a0, u32(round(t.a * 255.0)))) { sum += t.rgb * 2.0 * wt; wsum += wt; }
         }
         if (wsum > 1e-4) { albedo = sum / wsum; }
-      }
-    }
-  }
-  if (U.prV.w > 0.5 && N.y > 0.7) {
-    let uv = (i.world.xz - U.prV.xy) / U.prV.z;
-    if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) {
-      let s = printAt(uv);
-      if (s.x > 0.004) {
-        // the dent's floor slopes, so it takes the light as a dent does: its depth's slope tilts the normal
-        let e = U.prE.x;
-        let tiles = e * U.prV.z;
-        let gx = (printAt(uv + vec2f(e, 0.0)).x - printAt(uv - vec2f(e, 0.0)).x) / (2.0 * tiles);
-        let gz = (printAt(uv + vec2f(0.0, e)).x - printAt(uv - vec2f(0.0, e)).x) / (2.0 * tiles);
-        N = normalize(N + vec3f(gx, 0.0, gz) * U.prE.y);
-        let snow = clamp(s.y / max(s.x, 0.01), 0.0, 1.0);
-        albedo = albedo * (1.0 - s.x * U.prE.z);
-        albedo = mix(albedo, albedo * vec3f(0.72, 0.82, 1.0), s.x * snow * 0.8);
       }
     }
   }
@@ -14989,13 +14875,6 @@ const TUNING = [
     [DRIFT, 'fine', 'Smooth normals worked out at each pixel (1, hides the triangles; 0 per vertex)', 0, 1, 1],
     [DRIFT, 'span', 'Smooth normals: how far round each point they look (tiles; wider is smoother)', 0.05, 1, 0.01],
   ]],
-  ['Footprints', [
-    [PRINTS, 'on', 'Footprints in sand and snow (1 on, 0 off)', 0, 1, 1],
-    [PRINTS, 'life', 'Seconds they last', 5, 600, 5],
-    [PRINTS, 'depth', 'How deep they look (shading)', 0, 0.2, 0.005],
-    [PRINTS, 'shade', 'How much darker they are', 0, 1, 0.01],
-    [PRINTS, 'size', 'Size', 0.3, 3, 0.05],
-  ]],
   ['Waterfall spray', [
     [FALL_SPRAY, 'amount', 'Amount (0 off)', 0, 3, 0.05],
     [FALL_SPRAY, 'size', 'Puff size', 0.2, 3, 0.05],
@@ -15441,7 +15320,7 @@ function frameBody(now) {
   updateDrift(dt);
   updateCuts(dt);
   updateWheat(dt);
-  updatePrints();
+  updateGroundU();
   remakeOres(dt);
   updateHearths(dt);
   updateStations(dt);
@@ -15473,7 +15352,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 295, crashSeen = new Map();
+const GAME_VERSION = 296, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15536,7 +15415,7 @@ window.GAME = {
   },
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundPrintMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(LIFT.length).fill(0), ob = {};
@@ -15605,7 +15484,6 @@ window.GAME = {
   cuts: () => ({ queue: cutQueue.length, log: cutLog.length, on: cuts.on, bits: debris.filter(d => d.fall).length }),
   grassAt: (c, r) => { const d = grassTex.image.data, o = T(c, r) * 4; return { mask: d[o] & 15, kind: d[o] >> 4, y: (d[o + 1] * 256 + d[o + 2]) / 1024 - 16 }; },
   plants: () => { let n = 0; for (const ch of chunks.values()) if (ch.plant) n += ch.plant.geometry.attributes.position.array.length / 3; return { verts: n, trample: trample.on, view: [...trample.view] }; },
-  prints: () => ({ n: prints.length, list: prints.slice(-6).map(p => ({ feet: p.feet, snow: p.snow, x: +p.x.toFixed(2), z: +p.z.toFixed(2) })), corner: prCorner, on: PRINT_U.prV.value.w }),
   ghPoint: (x, z) => { groundHazeSite(Math.round(camTarget.x), Math.round(camTarget.z)); const c0 = Math.round(camTarget.x) - GH_TILES / 2, r0 = Math.round(camTarget.z) - GH_TILES / 2, k = (Math.floor((z - r0) * GH_TPT) * GH_N + Math.floor((x - c0) * GH_TPT)) * 4; return { y: ghSite[k], share: ghSite[k + 2] }; },
   bands: () => { const n = new Array(BAND_N + 1).fill(0), ore = {}; for (let i = 0; i < N * N; i++) { if (LV[i]) n[BAND[i]]++; const m = OBJ[OB[i]] && OBJ[OB[i]].give; if (m && /Ore$/.test(m)) { ore[m] = ore[m] || {}; ore[m][BAND[i]] = (ore[m][BAND[i]] || 0) + 1; } } return { edges: bandEdges.map(e => Math.round(e)), land: n.slice(1), ore }; },
   foeLevels: () => foes.map(f => f.kind + ':' + f.level + '@' + bandAt(f.x, f.z)),
