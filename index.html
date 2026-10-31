@@ -13786,6 +13786,16 @@ const spearDrive = v => v < 0.28 ? 1 - Math.pow(1 - v / 0.28, 3) : v < 0.45 ? 1 
 const flurryAt = n => ((n * 0.618034 + 0.31) % 1) * 2 - 1;
 // how far the bow's raised (0..1): up over 0.12 s for a shot, kept up while the attack's held, lowered after
 let bowUp = 0;
+// The sword's blows with the joints (T > Sword moves): each sweep winds up (the first `windup` of its time: the arm
+// drawn back further, the elbow cocked, the wrist laid back and the shoulders turned away), then cuts through,
+// the shoulders turning after it, the wrist snapping over and the knees dipping, and eases back. The third blow
+// is raised high behind the head and brought down with a step and a lean. The whirlwind spins crouched with both
+// arms out; the lunge drives into a deep front knee with the back leg straight and the free arm thrown back.
+// Each part scales by its number here (0 takes it out).
+const SWORD_POSE = { windup: 0.25, twist: 0.45, elbow: 0.9, wrist: 0.6, crouch: 0.22, lean: 0.25, offArm: 1, whirlCrouch: 0.3, lungeDepth: 1 };
+// how far the hips sink for the legs' pose (radians at the hip and knee, 0 straight down): the lower of the two
+// feet stays on the ground (thigh 0.14, knee to sole 0.22)
+const legDrop = (a0, k0, a1, k1) => 0.36 - Math.max(0.14 * Math.cos(a0) + 0.22 * Math.cos(a0 + k0), 0.14 * Math.cos(a1) + 0.22 * Math.cos(a1 + k1));
 function animateHero(dt) {
   const bowHeld = mode === 'play' && H.alive && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
   bowUp = H.bow || bowHeld ? Math.min(1, bowUp + dt / 0.12) : Math.max(0, bowUp - dt / 0.2);
@@ -13793,7 +13803,8 @@ function animateHero(dt) {
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
   // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
   // the leg on the side you're going.
-  const on = H.moving && H.dash < 0, walk = on ? Math.sin(H.walkPhase) : 0;
+  // (no stepping in the lunge, which holds its own stance)
+  const on = H.moving && H.dash < 0 && !(H.lunge >= 0 && H.lungeKind !== 'charge'), walk = on ? Math.sin(H.walkPhase) : 0;
   const f = H.stepF, sd = H.stepS, side = sd * sd, stride = f >= 0 ? WALK.stride : WALK.backStride;
   const open = on ? Math.abs(Math.sin(H.walkPhase)) * WALK.sideOpen * side : 0, lean = on ? Math.sin(H.walkPhase) * 0.3 * WALK.sideOpen * side * Math.sign(sd) : 0;
   hero.legL.rotation.set(walk * stride * f, 0, open + lean);
@@ -13804,7 +13815,7 @@ function animateHero(dt) {
   hero.knees[1].rotation.x = WALK.knee * lift * Math.max(0, cw);
   hero.elbows[0].rotation.x = hero.elbows[1].rotation.x = 0;
   hero.chest.rotation.y = 0;
-  hero.body.position.y = H.moving ? Math.abs(Math.cos(H.walkPhase)) * WALK.bob * (1 - 0.4 * side) : Math.sin(time * 2) * 0.006;
+  hero.body.position.y = on ? Math.abs(Math.cos(H.walkPhase)) * WALK.bob * (1 - 0.4 * side) : Math.sin(time * 2) * 0.006;
   // breathing sinks the body a little: the legs (hung from it) rise as much, so the feet stay on the ground
   hero.legL.position.y = hero.legR.position.y = 0.36 - Math.min(0, hero.body.position.y);
   // a lean into a sidestep (and, below, back when walking backward)
@@ -13812,6 +13823,10 @@ function animateHero(dt) {
   hero.armL.rotation.set(-walk * WALK.arms * f, 0, 0.08 + 0.18 * side);
   let ax = walk * WALK.arms * f, ay = 0, sx = 0;
   let jab = 0, pull = 0, thrust = 0, twist = 0, bend = 0, stance = 0;
+  // what an attack adds to the legs (hip and knee, each leg), the chest's lean and turn, the elbows and wrists
+  // (null: left to the walk)
+  const legAdd = [0, 0], kneeAdd = [0, 0], wrist = [[0, 0], [0, 0]];
+  let chestX = 0, chestY = null, elbowL = null, elbowR = null;
   if (H.spear) {
     // the spear held low and drawn back, the arm down by your side and the shaft level: a poke drives it out
     // hard (the arm swinging forward a little, the shoulder turned into it) and draws it back slower; the flurry
@@ -13866,14 +13881,51 @@ function animateHero(dt) {
     else { const u = smooth(0, 1, Math.min(1, H.swing / (len * 0.55))); ax = H.swing < len * 0.2 ? -1.2 - 1.8 * (H.swing / (len * 0.2)) : -3.0 + u * 2.45; }
     sx = Math.PI / 2;
   } else if (H.swing >= 0) {
-    const len = swingTime(), u = smooth(0, 1, Math.min(1, H.swing / (len * 0.62)));
-    if (H.combo === 2) { ax = -2.9 + u * 2.3; sx = Math.PI / 2 * 0.2; }
-    else {
-      const from = H.combo ? 1.4 : -1.5, to = -from * 0.9;
-      ax = -1.45; ay = from + (to - from) * u; sx = Math.PI / 2;
+    const P = SWORD_POSE, len = swingTime(), u = Math.min(1, H.swing / len);
+    // wind: how far into the wind-up (back to 0 as the blow lands), cut: through the blow, back: easing out after
+    const W = H.combo === 2 ? Math.max(0.05, P.windup * 1.2) : Math.max(0.05, P.windup), S = H.combo === 2 ? 0.58 : 0.55;
+    const cut = smooth(W, S, u), back = smooth(S, 1, u), wind = u < W ? smooth(0, 1, u / W) : 1 - cut, on2 = 1 - back;
+    const crouch = P.crouch * (u < W ? 0.4 * wind : 0.4 + 0.6 * cut) * on2;
+    if (H.combo === 2) {
+      // raised high behind the head, then brought down hard with a step onto the left foot and a lean into it
+      ax = u < W ? -1.45 - 1.65 * smooth(0, 1, u / W) : -3.1 + 2.4 * cut; sx = Math.PI / 2 * 0.2;
+      elbowR = -P.elbow * 1.3 * wind;
+      wrist[1][0] = P.wrist * (wind - 0.5 * cut * on2);
+      chestX = P.lean * (-0.6 * wind + 1.4 * cut * on2);
+      chestY = P.twist * (-0.5 * wind + 0.3 * cut * on2);
+      legAdd[0] -= crouch * 1.6; kneeAdd[0] += crouch * 2.2;
+      legAdd[1] += crouch * 0.4; kneeAdd[1] += crouch * 0.8;
+    } else {
+      // the sweeps: from one side to the other (the first right to left, the second back), drawn back further first
+      const from = H.combo ? 1.4 : -1.5, to = -from * 0.9, dir = Math.sign(to - from), start = from * (1 + 0.15 * P.windup / 0.25);
+      ax = -1.45 - 0.3 * wind; ay = u < W ? from + (start - from) * smooth(0, 1, u / W) : start + (to - start) * cut; sx = Math.PI / 2;
+      elbowR = -0.1 - P.elbow * wind;
+      wrist[1][1] = dir * P.wrist * (-wind + 0.6 * cut * on2);
+      chestX = P.lean * cut * on2 * 0.6;
+      chestY = P.twist * (Math.sign(from) * wind + Math.sign(to) * 0.8 * cut * on2);
+      for (const k of [0, 1]) { legAdd[k] -= crouch; kneeAdd[k] += crouch * 2; }
     }
-  } else if (H.whirl >= 0) { ax = -1.5; ay = -1.4; sx = Math.PI / 2; }
-  else if (H.lunge >= 0) { ax = -1.55; ay = 0; sx = Math.PI / 2; }
+    // the free arm thrown out the other way for balance
+    const o = P.offArm * (H.combo === 2 ? cut * on2 : Math.max(wind, cut * on2));
+    hero.armL.rotation.set(-0.25 - 0.35 * o, 0, 0.08 + 0.5 * o);
+    elbowL = -0.7 * o;
+  } else if (H.whirl >= 0) {
+    // crouched, both arms out wide, the blade trailing the spin
+    const k = smooth(0, 0.08, H.whirl), P = SWORD_POSE;
+    ax = -1.5; ay = -1.4; sx = Math.PI / 2;
+    hero.armL.rotation.set(-1.5 * k, 1.4 * k, 0.08); elbowL = -0.2 * k; elbowR = -0.15 * k;
+    wrist[1][1] = -P.wrist * 0.5 * k;
+    chestX = 0.1 * k * P.lean / 0.25;
+    for (const j of [0, 1]) { legAdd[j] -= P.whirlCrouch * k; kneeAdd[j] += P.whirlCrouch * 2 * k; }
+  } else if (H.lunge >= 0 && H.lungeKind !== 'charge') {
+    // into a deep front knee, the back leg straight behind, the sword driven out and the free arm flung back
+    const k = smooth(0, 0.08, H.lunge) * (1 - smooth(0.3, 0.42, H.lunge)) * SWORD_POSE.lungeDepth;
+    ax = -1.55; ay = 0; sx = Math.PI / 2;
+    elbowR = 0;
+    legAdd[0] = -0.8 * k; kneeAdd[0] = 0.9 * k; legAdd[1] = 0.45 * k; kneeAdd[1] = 0.1 * k;
+    chestX = 0.3 * k;
+    hero.armL.rotation.set(0.9 * k, 0, 0.08 + 0.3 * k); elbowL = -0.3 * k;
+  } else if (H.lunge >= 0) { ax = -1.55; ay = 0; sx = Math.PI / 2; }
   else if (mode === 'build') { ax = -0.3; }
   hero.armR.rotation.set(ax, ay, -0.08);
   hero.head.rotation.y = stance;
@@ -13889,21 +13941,30 @@ function animateHero(dt) {
   hero.spear.rotation.x = -Math.PI / 2 + (Math.PI / 2 - ax - bend) * spearHeld;
   hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
-  hero.body.rotation.y = stance ? -stance : H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * 0.25 : 0;
+  hero.body.rotation.y = stance ? -stance : H.spear ? twist : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * (H.strike === 'slash' ? 0.12 : 0.25) : 0;
   hero.body.rotation.x = bend || (on && f < 0 ? f * WALK.lean * 0.85 : 0);
   // a bend at the waist: the body tips forward about the hips (it hangs from the feet, so it's shifted back to keep
   // them there) and the legs are turned back to stand straight under them
   hero.body.position.z = -0.36 * Math.sin(bend); hero.body.position.y += 0.36 * (1 - Math.cos(bend));
   hero.legL.rotation.x -= bend; hero.legR.rotation.x -= bend;
-  hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? 0.25 : 0;
+  // an attack's stance: its hips and knees added over the walk, the body sunk to keep a foot on the ground
+  hero.legL.rotation.x += legAdd[0]; hero.legR.rotation.x += legAdd[1];
+  hero.knees[0].rotation.x += kneeAdd[0]; hero.knees[1].rotation.x += kneeAdd[1];
+  if (legAdd[0] || legAdd[1]) hero.body.position.y -= legDrop(legAdd[0], kneeAdd[0], legAdd[1], kneeAdd[1]);
+  hero.chest.rotation.x = chestX;
+  if (chestY !== null) hero.chest.rotation.y = chestY;
+  for (const k of [0, 1]) hero.wrists[k].rotation.set(wrist[k][0], 0, wrist[k][1]);
+  if (elbowL !== null) hero.elbows[0].rotation.x = elbowL;
+  if (elbowR !== null) hero.elbows[1].rotation.x = elbowR;
+  hero.g.rotation.x = H.lunge >= 0 && H.lunge < 0.3 ? (H.lungeKind === 'charge' ? 0.25 : 0.25 * (1 - SWORD_POSE.lungeDepth * 0.6)) : 0;
   hero.g.position.set(0, 0, 0);
   // walking, the arms bend at the elbow as they swing (more as each comes forward) and the shoulders turn against
   // the hips; only while the arms are just swinging (the right one free, or carrying its weapon at rest)
   if (on && !H.spear && bowUp === 0 && !(H.swing >= 0 && H.punch)) {
     const bendAt = a => -WALK.elbow * (0.5 + 0.5 * clamp(-a.rotation.x / Math.max(0.01, WALK.arms), 0, 1));
-    hero.elbows[0].rotation.x = bendAt(hero.armL);
+    if (elbowL === null) hero.elbows[0].rotation.x = bendAt(hero.armL);
     if (H.swing < 0 && H.whirl < 0 && H.lunge < 0 && mode !== 'build') hero.elbows[1].rotation.x = bendAt(hero.armR);
-    hero.chest.rotation.y = -walk * WALK.twist * f;
+    if (chestY === null) hero.chest.rotation.y = -walk * WALK.twist * f;
   }
   if (H.dash >= 0) {
     // the tumble: tucked, rolling forward over once about the middle of the body, low to the ground
@@ -13928,7 +13989,7 @@ function animateHero(dt) {
   // the feet kept near level with the ground against the swing of the leg above (not when tucked)
   const tucked = H.dash >= 0 || H.flip;
   [[hero.legL, 0], [hero.legR, 1]].forEach(([leg, k]) => {
-    hero.ankles[k].rotation.x = tucked ? 0 : -(hero.body.rotation.x + leg.rotation.x + hero.knees[k].rotation.x) * WALK.foot;
+    hero.ankles[k].rotation.x = tucked ? 0 : -(hero.body.rotation.x + leg.rotation.x + hero.knees[k].rotation.x) * WALK.foot - (legAdd[k] + kneeAdd[k]) * (1 - WALK.foot);
   });
 }
 
@@ -14772,6 +14833,17 @@ const TUNING = [
     [WALK, 'twist', 'Shoulders turning against the hips', 0, 0.5, 0.01],
     [WALK, 'tuck', 'Knees folded in the tumble and the flip', 0, 2.6, 0.01],
   ]],
+  ['Sword moves', [
+    [SWORD_POSE, 'windup', 'Wind-up (share of each blow)', 0, 0.45, 0.01],
+    [SWORD_POSE, 'twist', 'Shoulders turning into the blow', 0, 1, 0.01],
+    [SWORD_POSE, 'elbow', 'Elbow cocked in the wind-up', 0, 2, 0.01],
+    [SWORD_POSE, 'wrist', 'Wrist laid back, then snapped over', 0, 1.5, 0.01],
+    [SWORD_POSE, 'crouch', 'Knees dipping into the blow', 0, 0.8, 0.01],
+    [SWORD_POSE, 'lean', 'Leaning into the blow', 0, 0.8, 0.01],
+    [SWORD_POSE, 'offArm', 'Free arm thrown out', 0, 1.5, 0.01],
+    [SWORD_POSE, 'whirlCrouch', 'Whirlwind: crouch', 0, 0.8, 0.01],
+    [SWORD_POSE, 'lungeDepth', 'Lunge: depth of the front knee', 0, 1.5, 0.01],
+  ]],
   ['Cloud shadows', [
     [CLOUDS, 'strength', 'How much a cloud dims the sun (0 none)', 0, 1, 0.01],
     [CLOUDS, 'cover', 'Cloud cover', 0, 1, 0.01],
@@ -15391,7 +15463,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 289, crashSeen = new Map();
+const GAME_VERSION = 290, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15569,7 +15641,7 @@ window.GAME = {
   shadowInfo: () => ({ cast: sun.castShadow, amt: CLOUD_U.shadowAmt.value, fog: [Math.round(scene.fog.near), Math.round(scene.fog.far), scene.fog.color.getHexString()], meshesCasting: (() => { let n = 0; scene.traverse(o => { if (o.castShadow) n++; }); return n; })() }),
   heroFace: () => Math.atan2(Math.sin(H.face), Math.cos(H.face)),
   gait: () => [H.stepF, H.stepS, hero.legL.rotation.x, hero.legL.rotation.z],
-  joints: () => ({ knees: hero.knees.map(k => +k.rotation.x.toFixed(2)), ankles: hero.ankles.map(k => +k.rotation.x.toFixed(2)), elbows: hero.elbows.map(k => +k.rotation.x.toFixed(2)), chest: +hero.chest.rotation.y.toFixed(2), legs: [+hero.legL.rotation.x.toFixed(2), +hero.legR.rotation.x.toFixed(2)], parts: hero.parts.length }),
+  joints: () => ({ knees: hero.knees.map(k => +k.rotation.x.toFixed(2)), ankles: hero.ankles.map(k => +k.rotation.x.toFixed(2)), elbows: hero.elbows.map(k => +k.rotation.x.toFixed(2)), chest: +hero.chest.rotation.y.toFixed(2), lean: +hero.chest.rotation.x.toFixed(2), wristR: [+hero.wrists[1].rotation.x.toFixed(2), +hero.wrists[1].rotation.z.toFixed(2)], bodyY: +hero.body.position.y.toFixed(3), arm: [+hero.armR.rotation.x.toFixed(2), +hero.armR.rotation.y.toFixed(2)], legs: [+hero.legL.rotation.x.toFixed(2), +hero.legR.rotation.x.toFixed(2)], parts: hero.parts.length }),
   hp: v => { H.hp = v; renderHp(); },
   respawn: () => { respawn(); return [H.x, H.z]; },
   togglePlots, miniZoom: z => { miniZoom = z; },
