@@ -13334,7 +13334,13 @@ function flyItem(st, o, id) {
   const el = document.createElement('div');
   el.className = 'flyIcon'; el.innerHTML = ICON[ITEMS[id].icon];
   $('flyLayer').appendChild(el);
-  flights.push({ el, a: [ax, surfaceY(ax, az) + 1.1, az], b: [bx, (o.bodyTop || by + 0.6) + 0.15, bz], t: 0, box: o });
+  flights.push({ el, a: [ax, surfaceY(ax, az) + 1.1, az], b: [bx, (o.bodyTop || by + 0.6) + 0.15, bz], t: 0, box: o, from: T(st.c, st.r) });
+}
+// is tile i under a roof that's drawn now (a room's, or a porch's over it)? Items flying inside a building
+// aren't shown while its roof hides them
+function roofDrawnAt(i) {
+  const j = roomOf.has(i) ? i : roofOver.get(i), b = j == null ? null : bldOf(j);
+  return !!(b && b.mesh && b.mesh.visible);
 }
 function updateFlights(dt) {
   if (!flights.length) return;
@@ -13343,9 +13349,10 @@ function updateFlights(dt) {
     const f = flights[k];
     f.t += dt / FLY.time;
     if (f.t >= 1 || !stations.has(T(f.box.c, f.box.r))) { f.el.remove(); flights.splice(k, 1); f.box.pulse = 1; continue; }
+    f.roofed = roofDrawnAt(T(f.box.c, f.box.r)) || roofDrawnAt(f.from);
     const u = f.t * f.t * (3 - 2 * f.t), lift = Math.sin(Math.PI * f.t) * FLY.arc;
     flyV.set(f.a[0] + (f.b[0] - f.a[0]) * u, f.a[1] + (f.b[1] - f.a[1]) * u + lift, f.a[2] + (f.b[2] - f.a[2]) * u).project(camera);
-    f.el.style.display = flyV.z > 1 ? 'none' : '';
+    f.el.style.display = flyV.z > 1 || f.roofed ? 'none' : '';
     f.el.style.transform = `translate(${rect.left + (flyV.x + 1) / 2 * rect.width}px, ${rect.top + (1 - flyV.y) / 2 * rect.height}px) translate(-50%, -50%) scale(${1 - 0.3 * u})`;
     f.el.style.opacity = (0.6 * Math.min(1, f.t * 6, (1 - f.t) * 5)).toFixed(3);
   }
@@ -16062,7 +16069,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 320, crashSeen = new Map();
+const GAME_VERSION = 321, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -16381,7 +16388,7 @@ window.GAME = {
   refineAll: () => refineAll(), stashAll: () => stashAll(), homePlot: () => homePlot(), haveCount: id => haveCount(id),
   queueKeys: () => [...buildQueue.keys()],
   hot: () => HOT.slice(), hotSel: () => hotSel, setHot: (n, id) => setHot(n, id), useHot: n => useHot(n), hotShown: () => [...document.querySelectorAll('#hotbar .hslot')].map(e => e.className),
-  flights: () => flights.length, bodies: () => [...stations.values()].filter(s => s.body).map(s => [s.kind, s.pulse || 0, s.body.scale.x]),
+  flights: () => flights.length, flightsRoofed: () => flights.map(f => !!f.roofed), bodies: () => [...stations.values()].filter(s => s.body).map(s => [s.kind, s.pulse || 0, s.body.scale.x]),
   dressed: tag => { let n = 0; heroRoot.traverse(o => { if (o.userData.gear === tag && o.visible) n++; }); return n; },
   nearTableKind: () => { const t = nearTable(); return t ? [t.kind, !!t.built] : null; },
   tables: () => TABLES.map(t => [t.c, t.r, t.built ? 'built' : towns[t.town].name, t.kind]),
