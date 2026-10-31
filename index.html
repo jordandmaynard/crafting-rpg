@@ -15102,7 +15102,7 @@ function updateCamera(dt) {
 const mapCv = document.createElement('canvas'); mapCv.width = mapCv.height = N;
 const mapCtx = mapCv.getContext('2d');
 const fogCv = document.createElement('canvas'); fogCv.width = fogCv.height = N / 8;
-const fogCtx = fogCv.getContext('2d', { willReadFrequently: true });
+const fogCtx = fogCv.getContext('2d');   // (kept on the GPU; anything that asks what's been seen reads fogSeen)
 const MAP_RGB = PAL.map(p => [p.a.r * 255, p.a.g * 255, p.a.b * 255]);
 MAP_RGB[GRAVE] = [96, 94, 106];
 function tileRGB(i) {
@@ -15152,11 +15152,17 @@ function revealFog() {
   const r0 = Math.max(0, Math.floor(hz - FOG_OUT)), r1 = Math.min(FOG_N - 1, Math.ceil(hz + FOG_OUT));
   const w = c1 - c0 + 1, h = r1 - r0 + 1;
   if (w <= 0 || h <= 0) return;
-  const img = fogCtx.createImageData(w, h), d = img.data;
+  let grew = false;
   for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
     const i = r * FOG_N + c, t = clamp((FOG_OUT - Math.hypot(c + 0.5 - hx, r + 0.5 - hz)) / (FOG_OUT - FOG_IN), 0, 1);
     const v = Math.round(t * t * (3 - 2 * t) * 255);
-    if (v > fogSeen[i]) fogSeen[i] = v;
+    if (v > fogSeen[i]) { fogSeen[i] = v; grew = true; }
+  }
+  // (standing still uncovers nothing new, so the canvas is left alone)
+  if (!grew) return;
+  const img = fogCtx.createImageData(w, h), d = img.data;
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const i = r * FOG_N + c;
     const k = ((r - r0) * w + c - c0) * 4;
     d[k] = 11; d[k + 1] = 9; d[k + 2] = 18; d[k + 3] = 255 - fogSeen[i];
   }
@@ -15278,7 +15284,7 @@ function toggleReveal() {
 }
 // Fast travel: click a town you've seen on the big map, then the button under it takes you to its well
 let travelTo = null;
-const townSeen = t => mapReveal || fogCtx.getImageData(Math.floor(t.c / 8), Math.floor(t.r / 8), 1, 1).data[3] < 128;
+const townSeen = t => mapReveal || fogSeen[clamp(Math.floor(t.r / 8), 0, FOG_N - 1) * FOG_N + clamp(Math.floor(t.c / 8), 0, FOG_N - 1)] > 127;
 function pickTravel(t) {
   travelTo = t;
   const b = $('travelBtn');
@@ -15378,7 +15384,6 @@ $('bigmap').addEventListener('pointerleave', () => { if (bigHover) { bigHover = 
 // the world is paper too (markers count a place seen once its fog is under half). Over that the markers
 // and names, only where you've been, each layer only while its bookmark is lit, and your arrow.
 const TILE_M = 1.6;   // metres a tile, for the scale (the hero stands about 1.1 tiles tall)
-let mapSeen = null;   // the fog's alpha a cell, as of the last draw
 function drawBigMap() {
   const big = $('bigmap'), k = Math.max(1, Math.min(3, uiScale() * (devicePixelRatio || 1)));
   const W = Math.round(MAP_W * k), Hh = Math.round(MAP_H * k);
@@ -15392,8 +15397,7 @@ function drawBigMap() {
   if (plotsOnMap()) ctx.drawImage(plotCv, 0, 0);
   if (plotsOnMap() && bigHover) { const pl = plots[bigHover]; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); }
   // the unexplored, faded out softly to the paper as the fog was (and the minimap's is)
-  const F = N / 8, fog = fogCtx.getImageData(0, 0, F, F).data;
-  mapSeen = fog;
+  const F = FOG_N, fog = fogSeen;
   if (!mapReveal && !showBands) {
     ctx.globalCompositeOperation = 'destination-out';
     ctx.imageSmoothingEnabled = true;
@@ -15404,7 +15408,7 @@ function drawBigMap() {
   if (showBands) ctx.drawImage(bandCanvas(), 0, 0);
   // markers stay their own size at any zoom (in the opening's pixels from here)
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  const seen = (x, z) => mapReveal || showBands || fog[(clamp(Math.floor(z / 8), 0, F - 1) * F + clamp(Math.floor(x / 8), 0, F - 1)) * 4 + 3] < 128;
+  const seen = (x, z) => mapReveal || showBands || fog[clamp(Math.floor(z / 8), 0, F - 1) * F + clamp(Math.floor(x / 8), 0, F - 1)] > 127;
   if (MAP_SHOW.towns) for (const t of towns) { if (!seen(t.c, t.r)) continue; const [x, z] = worldToBig(t.c, t.r); ctx.fillStyle = '#000'; ctx.fillRect(x - 5, z - 5, 10, 10); ctx.fillStyle = '#f2c14e'; ctx.fillRect(x - 4, z - 4, 8, 8); }
   if (travelTo) { const [x, z] = worldToBig(travelTo.c, travelTo.r); ctx.strokeStyle = '#000'; ctx.lineWidth = 5; ctx.strokeRect(x - 10, z - 10, 20, 20); ctx.strokeStyle = '#f2c14e'; ctx.lineWidth = 2.5; ctx.strokeRect(x - 10, z - 10, 20, 20); }
   if (MAP_SHOW.markers) {
@@ -15442,7 +15446,7 @@ const LABEL_PX = 16;
 function drawMapLabels(ctx, k, W, Hh) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const u = Math.max(0.5, Math.round(k * 2) / 2), at = (x, z) => { const [bx, bz] = worldToBig(x, z); return [bx * k, bz * k]; };
-  const seen = (x, z) => mapReveal || !mapSeen || mapSeen[(clamp(Math.floor(z / 8), 0, N / 8 - 1) * (N / 8) + clamp(Math.floor(x / 8), 0, N / 8 - 1)) * 4 + 3] < 128;
+  const seen = (x, z) => mapReveal || fogSeen[clamp(Math.floor(z / 8), 0, FOG_N - 1) * FOG_N + clamp(Math.floor(x / 8), 0, FOG_N - 1)] > 127;
   ctx.font = `${LABEL_PX * u}px "Press Start 2P", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const lh = (LABEL_PX + 4) * u;
   const label = (t, x, y, ink) => {
@@ -16481,7 +16485,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 334, crashSeen = new Map();
+const GAME_VERSION = 335, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
