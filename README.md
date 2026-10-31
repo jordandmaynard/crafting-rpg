@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v357:** crafting window text spacing (Jordan): the "Owned / Needed" caption sits below the materials panel's top border and corner notch (panel padding 12px top, list 88px), and the status line starts at left 140 (16px) so it clears the bottom-left corner bracket.
+
 **v356:** stack counts everywhere have a 1px black stroke (--nStroke) so they read over icons (Jordan). Fixed a crash: walking away from a station while the mouse was over one of its squares (showInfo read the closed station; Jordan saw it on v346).
 
 ## Life in the air
