@@ -238,6 +238,15 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v340:** the character view on the folio is a studio shot: lit only by its own lights (renderer lightsOverride.plain turns off fog, cloud shade, probe light, haze and the eye for that pass), and seen from the way the game camera looks, so the hero faces the same way as on screen (DOLL_VIEW.turn now 0).
 
+## The crafting window (v341)
+
+Jordan's Wanderer's Kit crafting pack (art/deliveries/wanderers-kit-crafting-v1.zip, handoff and layout in docs/ui-reskin/crafting-v1/) replaces the old recipe rows. The weapon, armor and alchemy tables share one 960x640 window and change only its painted frame (ui/crafting/frame-weapon|armor|alchemy.webp, 2x exports, never sliced). Recipe cards run down the left and scroll. On the right are the picked recipe's picture, its materials (owned / needed, four rows that scroll for more, short counts underlined in red) and one Craft button that makes one item each press. A status line at the bottom left shows the item's stats, what's missing, or the result of the last craft.
+
+- The window is scaled by --ui like the other kit windows. It opens to the right of the pack (left 100vw - 978*ui) so both show at once, and it drags from anywhere except the lists and buttons (localStorage emberwild.craftPos2).
+- craftFocus is the picked card for the mouse, keyboard (Up/Down/Home/End in the list) and pad (D-pad picks, A crafts). The list is built once per table (buildCraftList); renderCraft refreshes the picked card, the poor flags, the materials and the status line.
+- Recipes, costs and outputs are unchanged (RECIPES), and weapons still go straight onto a free hotbar square.
+- The kit's art was converted to WebP (frames lossy q92 at 1920x1280, about 370 KB each; cards, buttons and panels q94; small pieces lossless): 1.7 MB in all, preloaded by skinKept. Spectral comes from Google Fonts as before.
+
 **v330:** the unexplored fades out softly to the parchment, as the old fog did, and the minimap's fog is the same parchment now. The compass rose and scale sit straight on the map, haloed in paper so they read over the land, with no paper box behind them. A bookmark that's off slides in behind the frame so only its glyph peeks out; switched on, it slides out with its name and the glyph to the right of it.
 
 **Hide UI** (v313): the HIDE UI button under OPTIONS at the top right, or **H**, hides the whole HUD (health and level, minimap, place plate, time strip, the top-right buttons, the bars, hotbar, experience bar, prompts, toasts, the target bar, health bars over foes and floating numbers) for a clear view. Windows you open (pack, crafting, map) still show, and touch controls stay. H again, or the faint SHOW UI button that appears when you point at the top right corner, brings it back.
