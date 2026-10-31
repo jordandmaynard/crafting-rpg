@@ -236,6 +236,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v339:** Jordan's HUD bars defaults: both rows at 0.85 size with 4px gaps.
 
+**v340:** the character view on the folio is a studio shot: lit only by its own lights (renderer lightsOverride.plain turns off fog, cloud shade, probe light, haze and the eye for that pass), and seen from the way the game camera looks, so the hero faces the same way as on screen (DOLL_VIEW.turn now 0).
+
 **v330:** the unexplored fades out softly to the parchment, as the old fog did, and the minimap's fog is the same parchment now. The compass rose and scale sit straight on the map, haloed in paper so they read over the land, with no paper box behind them. A bookmark that's off slides in behind the frame so only its glyph peeks out; switched on, it slides out with its name and the glyph to the right of it.
 
 **Hide UI** (v313): the HIDE UI button under OPTIONS at the top right, or **H**, hides the whole HUD (health and level, minimap, place plate, time strip, the top-right buttons, the bars, hotbar, experience bar, prompts, toasts, the target bar, health bars over foes and floating numbers) for a clear view. Windows you open (pack, crafting, map) still show, and touch controls stay. H again, or the faint SHOW UI button that appears when you point at the top right corner, brings it back.

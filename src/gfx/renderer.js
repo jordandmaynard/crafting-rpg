@@ -393,7 +393,9 @@ class Renderer {
     d[o + 64] = cw[12]; d[o + 65] = cw[13]; d[o + 66] = cw[14]; d[o + 67] = camera.isOrthographicCamera ? 1 : 0;
     const dir = this._v.set(-cw[8], -cw[9], -cw[10]).normalize();
     d[o + 68] = dir.x; d[o + 69] = dir.y; d[o + 70] = dir.z; d[o + 71] = (performance.now() - this._time0) / 1000;
-    const fog = scene.fog;
+    // (lightsOverride.plain: a studio shot, the character view, lit by its own lights only: no fog, cloud shade,
+    // probe light or haze from wherever the scene's camera happens to be)
+    const plain = !!L.plain, fog = plain ? null : scene.fog;
     if (fog) { d[o + 72] = fog.color.r; d[o + 73] = fog.color.g; d[o + 74] = fog.color.b; d[o + 75] = 1; d[o + 76] = fog.near; d[o + 77] = fog.far; }
     else d[o + 75] = 0;
     const h = L.hemi;
@@ -408,7 +410,7 @@ class Renderer {
       d[o + 92] = sun.color.r * sun.intensity; d[o + 93] = sun.color.g * sun.intensity; d[o + 94] = sun.color.b * sun.intensity; d[o + 95] = shadowOn ? 1 : 0;
       d[o + 96] = sun.shadow.bias; d[o + 97] = sun.shadow.normalBias; d[o + 98] = sun.shadow.radius; d[o + 99] = 1 / this.shadowSize;
     } else { d[o + 91] = 0; d[o + 95] = 0; }
-    const C = this.clouds;
+    const C = plain ? null : this.clouds;
     if (C) {
       d[o + 100] = C.cloudOff.value.x; d[o + 101] = C.cloudOff.value.y; d[o + 102] = C.cloudScale.value; d[o + 103] = C.tCloud.value ? C.cloudAmt.value : 0;
       d[o + 104] = C.cloudCover.value; d[o + 105] = C.cloudSoft.value; d[o + 106] = C.shadowAmt ? C.shadowAmt.value : 1;
@@ -420,11 +422,11 @@ class Renderer {
       d[q] = e[12]; d[q + 1] = e[13]; d[q + 2] = e[14]; d[q + 3] = p.distance;
       d[q + 4] = p.color.r * p.intensity; d[q + 5] = p.color.g * p.intensity; d[q + 6] = p.color.b * p.intensity; d[q + 7] = p.decay;
     }
-    const g = this.gi ? this.gi.uniforms() : null, go = o + 112 + MAX_POINTS * 8;
+    const g = this.gi && !plain ? this.gi.uniforms() : null, go = o + 112 + MAX_POINTS * 8;
     for (let i = 0; i < 12; i++) d[go + i] = g ? g[i] : 0;
-    const hz = this.haze && this.haze.view() ? this.haze.uniforms() : null;
+    const hz = !plain && this.haze && this.haze.view() ? this.haze.uniforms() : null;
     for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
-    d[go + 20] = this.eye && this.eye.on ? 1 : 0; d[go + 21] = this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;
+    d[go + 20] = this.eye && this.eye.on && !plain ? 1 : 0;   // (and no eye: the studio shot is the same by day and night) d[go + 21] = this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;
     const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
     for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
     return slot * FRAME_BYTES;
