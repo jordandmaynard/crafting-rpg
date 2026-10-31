@@ -7633,16 +7633,21 @@ function cliffRocks(c, r, i) {
   if (!water) for (let k = 0; k < 4; k++) if (m & 16 << k && hs(c, r, 144 + k) < 0.25) slopeRock(c + (CX[k] ? 0.84 : 0.16), r + (CZ[k] ? 0.84 : 0.16), hs(c, r, 140 + k), b);
 }
 // a plank bridge, a tile at a time: boards across two stringers, a rail each side, and over a river,
-// piles down to the bed (over a canyon it hangs from rope rails instead)
+// piles down to the bed (over a canyon it hangs from rope rails instead). Two bridges side by side (running the
+// same way at the same height) make one wide one: no rails between them, and the boards meet.
 function bridgeDeck(c, r, i) {
   const y = LV[i] * STEP, ew = BR[i] === 1, canyon = CY[i];
   // a: along the bridge, w: across it, both 0-1 over the tile
   const put = (geo, col, a, w, py, along, across, h) =>
     part(geo, col, ew ? c + a : c + w, py, ew ? r + w : r + a, { sx: ew ? along : across, sy: h, sz: ew ? across : along });
-  for (let b = 0; b < 4; b++) put(G.box, shade(CC(b % 2 ? '#8a5a32' : '#7a4e2c'), 0.88 + hs(c, r, 40 + b) * 0.24), (b + 0.5) / 4, 0.5, y - 0.035, 0.235, 0.94, 0.07);
+  // (a bridge alongside, on the w = 0 side and the w = 1 side)
+  const beside = n => BR[n] === BR[i] && LV[n] === LV[i], lo = beside(ew ? i - N : i - 1), hi = beside(ew ? i + N : i + 1);
+  const w0 = lo ? 0 : 0.03, w1 = hi ? 1 : 0.97;
+  for (let b = 0; b < 4; b++) put(G.box, shade(CC(b % 2 ? '#8a5a32' : '#7a4e2c'), 0.88 + hs(c, r, 40 + b) * 0.24), (b + 0.5) / 4, (w0 + w1) / 2, y - 0.035, 0.235, w1 - w0, 0.07);
   for (const w of [0.14, 0.86]) put(G.box, '#5a3a20', 0.5, w, y - 0.13, 1.0, 0.1, 0.13);
   const rail = canyon ? '#c8b07a' : '#6a4428';
-  for (const w of [0.04, 0.96]) {
+  for (const w of [lo ? -1 : 0.04, hi ? -1 : 0.96]) {
+    if (w < 0) continue;
     put(G.box, '#5a3a20', 0.08, w, y + 0.22, 0.08, 0.08, 0.5);
     put(G.box, rail, 0.5, w, y + 0.44, 1.0, canyon ? 0.035 : 0.06, canyon ? 0.035 : 0.06);
     if (canyon) put(G.box, rail, 0.5, w, y + 0.2, 1.0, 0.03, 0.03);
@@ -8824,13 +8829,16 @@ function makeHuman() {
   look(spearShaft, 'spear');
   spear.rotation.x = -Math.PI / 2;
   // the axe and the hammer, in the right hand like the sword (each on an inner pivot, so the axe can leave the hand
-  // when it's thrown)
+  // when it's thrown), each rolled a quarter turn about its haft so the blade, or the hammer's face, points down
+  // at rest and leads the blow when swung
   const axe = pivot(armR, 0, -0.25, 0.02), axeHead = pivot(axe, 0, 0, 0);
   wear('axe', axe);
   look(axeHead, 'axe');
-  const hammer = pivot(armR, 0, -0.25, 0.02);
+  axeHead.rotation.z = -Math.PI / 2;
+  const hammer = pivot(armR, 0, -0.25, 0.02), hammerHead = pivot(hammer, 0, 0, 0);
   wear('hammer', hammer);
-  look(hammer, 'hammer');
+  look(hammerHead, 'hammer');
+  hammerHead.rotation.z = -Math.PI / 2;
   g.scale.setScalar(1.12);
   return { g, parts, body, legL, legR, armL, armR, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer };
 }
@@ -10526,6 +10534,7 @@ function beep(freq, dur, { type = 'square', vol = 0.06, slide = 0, at = 0 } = {}
 }
 const sfx = {
   swing: () => beep(520, 0.07, { type: 'triangle', slide: -380, vol: 0.04 }),
+  swoosh: () => beep(760, 0.08, { type: 'triangle', slide: -520, vol: 0.018 }),
   bow: () => { beep(260, 0.05, { type: 'triangle', slide: 420, vol: 0.05 }); beep(900, 0.04, { type: 'sine', slide: -500, vol: 0.02, at: 0.02 }); },
   thunk: () => beep(150, 0.04, { type: 'square', vol: 0.03, slide: -50 }),
   punch: () => beep(160, 0.05, { type: 'square', vol: 0.05, slide: -60 }),
@@ -10901,13 +10910,14 @@ let packFullT = -9, tooHardT = -9;
 // a weapon material's place in TIERS (wood 0 .. iron 3); bare fists are -1
 const tierRank = t => t ? METAL_TIERS.indexOf(t) : -1;
 function packFull() { if (time - packFullT > 3) { packFullT = time; toast('Your pack is full.'); sfx.nope(); } }
-// the trees and rocks within reach of the hero (on their level), for the whirl and the lunge
-function propsNear(reach, fn) {
-  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
-  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+// the trees and rocks within reach of the hero (or of another spot, at height y), on their level, for the whirl,
+// the lunge and the axe's and hammer's abilities
+function propsNear(reach, fn, x = H.x, z = H.z, y = H.y) {
+  const c0 = Math.floor(x), r0 = Math.floor(z), n = Math.max(2, Math.ceil(reach + 1));
+  for (let dr = -n; dr <= n; dr++) for (let dc = -n; dc <= n; dc++) {
     const c = c0 + dc, r = r0 + dr, i = T(c, r), o = OB[i];
-    if (!OBJ[o].hp || Math.abs(LV[i] * STEP - H.y) > 0.6) continue;
-    const [ox, oz] = objPos(c, r, o), dx = ox - H.x, dz = oz - H.z, d = Math.hypot(dx, dz) || 1e-4;
+    if (!OBJ[o].hp || Math.abs(LV[i] * STEP - y) > 0.6) continue;
+    const [ox, oz] = objPos(c, r, o), dx = ox - x, dz = oz - z, d = Math.hypot(dx, dz) || 1e-4;
     if (d <= reach + OBJ[o].solid) fn(i, c, r, dx / d, dz / d);
   }
 }
@@ -11469,16 +11479,17 @@ function castLunge() {
 }
 // ---------- The axe and the hammer ----------
 // The axe chops on the diagonal (SWINGS.chop). Q throws it: it flies out flat and spinning the way you aim,
-// `throwRange` tiles (or till it meets a wall or cliff), and comes back to your hand, striking each foe it passes
-// once going out and once coming back. E is rend: one quick spin round (`rendTime` seconds), striking every foe
-// within `rendRadius` and leaving it bleeding, `bleedDmg` every `bleedTick` seconds for `bleedTime`.
+// `throwRange` tiles (or till it meets a wall or cliff), slowing to a stop at the far end, then speeds up again
+// (over `throwEase` seconds) on its way back to your hand, striking each foe, tree and rock it passes once going
+// out and once coming back. E is rend: one quick spin round (`rendTime` seconds), striking every foe
+// (and tree and rock) within `rendRadius` and leaving it bleeding, `bleedDmg` every `bleedTick` seconds for `bleedTime`.
 // The hammer swings heavy (SWINGS.smash), its third blow an uppercut that knocks foes away. Q is the stun smash:
-// it's brought down on the ground, striking every foe in a cone `smashCone` degrees across and `smashReach`
+// it's brought down on the ground, striking every foe (and tree and rock) in a cone `smashCone` degrees across and `smashReach`
 // long and stunning it for `stunTime` seconds. E is the charge: you run `chargeSpeed` tiles a second for
 // `chargeTime` seconds with the hammer out in front; a foe you meet is struck and carried along before you, and
 // if you or a foe you carry runs into anything solid (a wall, a tree, a rock, a cliff), they're all struck again.
 // Axes strike trees for `treeMult` times their damage, hammers rocks and ore for `rockMult`. Knock-backs in tiles.
-const AXE = { throwRange: 7, throwSpeed: 15, throwBack: 18, throwDmg: 12, throwKnock: 0.3, throwRadius: 0.7, throwSpin: 22, throwCd: 6,
+const AXE = { throwRange: 7, throwSpeed: 15, throwBack: 18, throwEase: 0.3, swoosh: 0.35, throwDmg: 12, throwKnock: 0.3, throwRadius: 0.7, throwSpin: 24, throwCd: 6,
   rendTime: 0.4, rendRadius: 1.8, rendDmg: 10, rendKnock: 0.3, bleedTime: 4, bleedTick: 0.5, bleedDmg: 3, rendCd: 8, treeMult: 2 };
 const HAMMER = { smashReach: 2.6, smashCone: 70, smashDmg: 14, smashKnock: 0.3, stunTime: 1.5, smashCd: 8,
   chargeSpeed: 11, chargeTime: 0.55, chargeDmg: 12, impactDmg: 18, impactKnock: 1, chargeCd: 9, rockMult: 2 };
@@ -11491,16 +11502,21 @@ function toolMult(od) {
 let axeThrow = null;
 const axeSpin = (() => {
   const g = new GFX.Group(), lie = new GFX.Group();
-  // (laid flat and turned about the middle of its haft)
-  lie.rotation.x = -Math.PI / 2; lie.position.set(0, 0, 0); g.add(lie);
+  // (laid flat, haft and blade level, and turned about the middle of its haft)
+  g.add(lie);
   for (const t of WEAPON_TIERS) {
     const tg = new GFX.Group(); lie.add(tg);
     for (const [w, h, d, x, y, z, m, rx = 0, rz = 0] of WEAPON_LOOK.axe[t]) {
       const b = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), WM[m]); b.position.set(x, y, z - 0.25); b.rotation.set(rx, 0, rz); b.castShadow = true; tg.add(b);
     }
   }
+  // the swoosh: a pale smear of the blade's sweep, trailing it round (the blade's edge is at -0.93 radians round
+  // the ring from +x, and the spin carries it the way the ring's angles go)
+  const smear = new GFX.Mesh(new GFX.RingGeometry(0.1, 0.34, 20, 1, -0.93 - Math.PI * 0.9, Math.PI * 0.9).rotateX(-Math.PI / 2),
+    new GFX.MeshBasicMaterial({ color: '#fff4d8', transparent: true, opacity: AXE.swoosh, depthWrite: false, blending: GFX.AdditiveBlending, side: GFX.DoubleSide }));
+  smear.renderOrder = 3; lie.add(smear);
   g.visible = false; scene.add(g);
-  g.tiers = lie.children;
+  g.tiers = lie.children.filter(c => c !== smear); g.smear = smear;
   return g;
 })();
 function castAxeThrow() {
@@ -11508,7 +11524,7 @@ function castAxeThrow() {
   const a = Math.atan2(aim.x, aim.z);
   H.face = a; H.swing = -1; H.cdQ = AXE.throwCd;
   axeThrow = { x: H.x + Math.sin(a) * 0.4, y: H.y + 0.62, z: H.z + Math.cos(a) * 0.4, dx: Math.sin(a), dz: Math.cos(a), dist: 0, out: true,
-    hit: new Set(), spin: 0, tier: weapon().tier, t: 0 };
+    hit: new Set(), spin: 0, tier: weapon().tier, t: 0, back: 0, rev: 0 };
   axeSpin.tiers.forEach((c, k) => { c.visible = WEAPON_TIERS[k] === axeThrow.tier; });
   sfx.whirl();
 }
@@ -11523,20 +11539,29 @@ function updateAxeThrow(dt) {
       if (ax.hit.has(f) || Math.abs(f.y + 0.4 - ax.y) > 1.2 || Math.hypot(f.x - ax.x, f.z - ax.z) > AXE.throwRadius + f.def.rad) continue;
       ax.hit.add(f); hurtFoe(f, wdmg(AXE.throwDmg), ax.x, ax.z, AXE.throwKnock * 8);
     }
+    propsNear(AXE.throwRadius * 0.6, (i, c, r, dx, dz) => { if (!ax.hit.has(i)) { ax.hit.add(i); strikeProp(i, c, r, dx, dz, AXE.throwDmg); } }, ax.x, ax.z, ax.y - 0.62);
   };
-  // (in short steps, so it can't skip past a foe or through a wall)
-  const speed = ax.out ? AXE.throwSpeed : AXE.throwBack, steps = Math.max(1, Math.ceil(speed * dt / 0.2)), h = dt / steps;
-  for (let k = 0; k < steps && axeThrow; k++) {
-    if (ax.out) {
-      const x0 = ax.x, z0 = ax.z;
-      ax.x += ax.dx * speed * h; ax.z += ax.dz * speed * h; ax.dist += speed * h;
+  // (in short steps, so it can't skip past a foe or through a wall). Out, it eases to a stop at full reach (its
+  // distance out goes as 1 - (1 - u)², starting at throwSpeed); back, it speeds up from a standstill to throwBack.
+  if (ax.out) {
+    const tOut = 2 * AXE.throwRange / AXE.throwSpeed, u = Math.min(1, ax.t / tOut), want = AXE.throwRange * (1 - (1 - u) * (1 - u));
+    const go = Math.max(0, want - ax.dist), steps = Math.max(1, Math.ceil(go / 0.2));
+    for (let k = 0; k < steps; k++) {
+      const x0 = ax.x, z0 = ax.z, st = go / steps;
+      ax.x += ax.dx * st; ax.z += ax.dz * st; ax.dist += st;
       strike();
       const blocked = arrowBlocked(ax, x0, z0) || ax.y < surfH(ax.x, ax.z);
       if (blocked) { ax.x = x0; ax.z = z0; sfx.thunk(); }
-      if (blocked || ax.dist >= AXE.throwRange) { ax.out = false; ax.hit = new Set(); }
-    } else {
-      // back in a line to your hand, wherever you've gone (through anything in the way)
-      const hx = H.x, hz = H.z, dx = hx - ax.x, dz = hz - ax.z, l = Math.hypot(dx, dz);
+      if (blocked) { ax.out = false; ax.hit = new Set(); break; }
+    }
+    if (ax.out && u >= 1) { ax.out = false; ax.hit = new Set(); }
+  } else {
+    // back in a line to your hand, wherever you've gone (through anything in the way)
+    ax.back += dt;
+    const speed = AXE.throwBack * (AXE.throwEase > 0 ? Math.max(0.08, smooth(0, 1, ax.back / AXE.throwEase)) : 1);
+    const steps = Math.max(1, Math.ceil(speed * dt / 0.2)), h = dt / steps;
+    for (let k = 0; k < steps; k++) {
+      const dx = H.x - ax.x, dz = H.z - ax.z, l = Math.hypot(dx, dz);
       if (l < 0.45) { axeThrow = null; sfx.equip(); break; }
       const st = Math.min(l, speed * h);
       ax.x += dx / l * st; ax.z += dz / l * st;
@@ -11546,7 +11571,11 @@ function updateAxeThrow(dt) {
   if (!axeThrow) { axeSpin.visible = false; return; }
   ax.y += (H.y + 0.62 - ax.y) * Math.min(1, dt * 6);
   ax.spin += dt * AXE.throwSpin;
+  // a swoosh each turn
+  if (ax.spin >= (ax.rev + 1) * Math.PI * 2) { ax.rev = Math.floor(ax.spin / (Math.PI * 2)); sfx.swoosh(); }
   axeSpin.position.set(ax.x, ax.y, ax.z); axeSpin.rotation.set(0, ax.spin, 0);
+  axeSpin.smear.material.opacity = AXE.swoosh;
+  axeSpin.smear.visible = AXE.swoosh > 0;
   cutGrass(ax.x, ax.z, 0.45, 0, 1);
 }
 function castRend() {
@@ -11583,6 +11612,7 @@ function smashHit() {
     const a = H.face + (k / 4 - 0.5) * 2 * ha * 0.8, d = 0.8 + (k % 2) * 0.9;
     puff(H.x + Math.sin(a) * d, H.y, H.z + Math.cos(a) * d, '#b8ac90', 4, 0.6);
   }
+  propsNear(HAMMER.smashReach, (i, c, r, dx, dz) => { if (Math.abs(angDiff(Math.atan2(dx, dz), H.face)) <= ha + 0.25) strikeProp(i, c, r, dx, dz, HAMMER.smashDmg); });
   cutArc(HAMMER.smashReach, 2 * ha, H.face);
   ringT = 0; sfx.fell();
 }
@@ -14962,8 +14992,10 @@ const TUNING = [
   ]],
   ['Axe', [
     [AXE, 'throwRange', 'Throw: how far it flies out (tiles)', 2, 15, 0.5],
-    [AXE, 'throwSpeed', 'Throw: speed out (tiles a second)', 4, 40, 1],
+    [AXE, 'throwSpeed', 'Throw: speed out, at the start (tiles a second)', 4, 40, 1],
     [AXE, 'throwBack', 'Throw: speed back (tiles a second)', 4, 40, 1],
+    [AXE, 'throwEase', 'Throw: speeding up on the way back (seconds)', 0, 1.5, 0.05],
+    [AXE, 'swoosh', 'Throw: swoosh brightness', 0, 1, 0.05],
     [AXE, 'throwDmg', 'Throw: damage each way', 0, 40, 1],
     [AXE, 'throwKnock', 'Throw: knock-back (tiles)', 0, 2, 0.05],
     [AXE, 'throwRadius', 'Throw: how near it must pass a foe (tiles)', 0.2, 2, 0.05],
@@ -15273,7 +15305,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 285, crashSeen = new Map();
+const GAME_VERSION = 286, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -15325,6 +15357,7 @@ window.GAME = {
     const [i, c, r] = best, t0 = performance.now(); strikeProp(i, c, r, 1, 0, 0.01); const ms = performance.now() - t0;
     return { ms, i };
   },
+  propHp: (c, r) => { const i = T(c, r), d = detached.get(i); return d ? d.hp : OBJ[OB[i]].hp ? 'whole' : 'gone'; },
   chopState: i => { const d = detached.get(i), ch = d && chunks.get(Math.floor(d.r / CH) * NC + Math.floor(d.c / CH)); return d && { shown: d.g.visible, redo: !!(ch && ch.redo) }; },
   // what one frame's scene walks cost on the CPU (ms each, averaged over n)
   cpuProbe: (n = 20) => {
@@ -15453,6 +15486,7 @@ window.GAME = {
   hp: v => { H.hp = v; renderHp(); },
   respawn: () => { respawn(); return [H.x, H.z]; },
   togglePlots, miniZoom: z => { miniZoom = z; },
+  bridgeJoins: () => { let n = 0; for (let i = N; i < N * N - N; i++) if (BR[i] && BR[i] === BR[i + (BR[i] === 1 ? N : 1)] && LV[i] === LV[i + (BR[i] === 1 ? N : 1)]) n++; return n; },
   bridges: () => bridges.map(b => ({ c: b.from % N, r: Math.floor(b.from / N), d: b.d, span: b.span, canyon: !!CY[b.from + DI[b.d]] })),
   findFlat: (c, r, w, h) => {
     // nearest spot where a w × h block of flat, clear, same-level land fits, outside town
