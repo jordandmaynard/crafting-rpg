@@ -27,7 +27,7 @@
 
 import { MAX_POINTS } from './shaders.js';
 
-const PARAM_BYTES = 256;
+const PARAM_BYTES = 384;
 const OUT_FORMAT = 'rgba16float';
 const NOISE = 32;   // the wisps' value-noise lattice: a repeating 3D texture of random values this many a side
 
@@ -44,6 +44,8 @@ struct HP {
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
                         // how much of the sky's (for shafts with more contrast); mosaic pixels a ray, each way (block)
+  rose: array<vec4f, 5>,  // stained-glass roses the sun shines through (the game's U.roses): per rose [glass middle,
+                          // radius], [outward normal xz, tint, on]; then [blur at the glass, blur a tile, beams, glow]
 }
 @group(2) @binding(0) var<uniform> H: HP;
 `;
@@ -118,6 +120,33 @@ ${COMMON}
 @group(2) @binding(5) var noiseSamp: sampler;
 @group(2) @binding(6) var hazeF: texture_storage_2d<${OUT_FORMAT}, write>;
 @group(2) @binding(7) var hazeR: texture_storage_2d<rg32float, write>;
+@group(2) @binding(8) var roseTex: texture_2d<f32>;
+@group(2) @binding(9) var roseSamp: sampler;
+// the sun's light at p, coloured by a rose window's glass it came through (1 where it came through none): the beams.
+// One look into the design, spread by how far the light has come since the glass
+fn roseHaze(p: vec3f) -> vec3f {
+  var m = vec3f(1.0);
+  if (H.rose[4].z <= 0.0) { return m; }
+  let L = F.sunDir.xyz;
+  for (var j = 0; j < 2; j++) {
+    let a = H.rose[j * 2]; let b = H.rose[j * 2 + 1];
+    if (b.w < 0.5) { continue; }
+    let nn = vec3f(b.x, 0.0, b.y);
+    let dn = dot(L, nn);
+    if (dn < 0.02) { continue; }
+    let t = dot(a.xyz - p, nn) / dn;
+    if (t < 0.0 || t > 60.0) { continue; }
+    let d = p + L * t - a.xyz;
+    let u = dot(d, vec3f(-nn.z, 0.0, nn.x));
+    let R = a.w * (1.0 + H.rose[4].x + H.rose[4].y * t);
+    if (length(vec2f(u, d.y)) > R) { continue; }
+    let tx = textureSampleLevel(roseTex, roseSamp, vec2f(0.5 + u / (2.0 * a.w), 0.5 - d.y / (2.0 * a.w)), 0.0);
+    let mx = max(tx.r, max(tx.g, tx.b));
+    let col = mix(vec3f(0.18), tx.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
+    m *= mix(vec3f(1.0), col, tx.a * b.z * H.rose[4].z);
+  }
+  return m;
+}
 ${DEPTH_T}
 // smooth value noise in one lookup: the lattice is the texture, and reading it at the smoothstepped place inside
 // the cell makes the hardware's trilinear blend the smooth one (8 lattice values without 8 hashes)
@@ -326,7 +355,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       }
       sky = mix(ambA, ambB, kf - f32(ki));
     }
-    if (any(sunC > vec3f(0.0))) { sunL = sunC * cloudShade(p.xz); }
+    if (any(sunC > vec3f(0.0))) { sunL = sunC * cloudShade(p.xz) * roseHaze(p); }
     if (lamps != 0u) {
       for (var j = 0; j < ${MAX_POINTS}; j++) {
         if (((lamps >> u32(j)) & 1u) == 0u) { continue; }
@@ -434,6 +463,8 @@ export class LitHaze {
       { binding: 5, visibility: C, sampler: { type: 'filtering' } },
       { binding: 6, visibility: C, storageTexture: { access: 'write-only', format: OUT_FORMAT } },
       { binding: 7, visibility: C, storageTexture: { access: 'write-only', format: 'rg32float' } },
+      { binding: 8, visibility: C, texture: { sampleType: 'float' } },
+      { binding: 9, visibility: C, sampler: { type: 'filtering' } },
     ] });
     this.bglUp = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: C, buffer: { type: 'uniform' } },
@@ -455,6 +486,9 @@ export class LitHaze {
     }
     device.queue.writeTexture({ texture: this.noise }, lattice, { bytesPerRow: NOISE, rowsPerImage: NOISE }, [NOISE, NOISE, NOISE]);
     this.noiseView = this.noise.createView({ dimension: '3d' });
+    this.roseSamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+    this.roseNone = device.createTexture({ label: 'haze no rose', size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    this.roseNoneView = this.roseNone.createView();
     this.noiseSamp = device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat', magFilter: 'linear', minFilter: 'linear' });
     const empty = device.createBindGroupLayout({ entries: [] });
     this.emptyBG = device.createBindGroup({ layout: empty, entries: [] });
@@ -530,6 +564,7 @@ export class LitHaze {
     d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
     d.set([f.lavaHeight, f.shafts, f.shadeSky, B], 60);
+    if (f.rose) d.set(f.rose.subarray(0, 20), 64);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {
@@ -537,14 +572,16 @@ export class LitHaze {
       this.glowBG = this.device.createBindGroup({ layout: this.bglGlow, entries: [
         { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.groundColour }, { binding: 2, resource: this.glowView }] });
     }
-    const mk = this.key + ':' + this.glowSize + ':' + f.depth.id;
+    const rose = f.roseTex || { view: this.roseNoneView, id: 'none' };
+    const mk = this.key + ':' + this.glowSize + ':' + f.depth.id + ':' + rose.id;
     if (this._marchKey !== mk) {
       this._marchKey = mk;
       this.marchBG = this.device.createBindGroup({ layout: this.bglMarch, entries: [
         { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.depth.view },
         { binding: 2, resource: this.glowView }, { binding: 3, resource: this.nearView },
         { binding: 4, resource: this.noiseView }, { binding: 5, resource: this.noiseSamp },
-        { binding: 6, resource: this.farView }, { binding: 7, resource: this.rangeView }] });
+        { binding: 6, resource: this.farView }, { binding: 7, resource: this.rangeView },
+        { binding: 8, resource: rose.view }, { binding: 9, resource: this.roseSamp }] });
       this.upBG = this.device.createBindGroup({ layout: this.bglUp, entries: [
         { binding: 0, resource: { buffer: this.params } }, { binding: 1, resource: f.depth.view },
         { binding: 2, resource: this.nearView }, { binding: 3, resource: this.farView },

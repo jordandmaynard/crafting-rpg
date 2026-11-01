@@ -340,7 +340,7 @@ body.building:not(.touch) { --barLift: calc(150px * var(--ui)); }
 
 /* the minimap in its casing, top right; the dev buttons in a row to its left */
 .hud.tr { right: calc(347px * var(--ui)); top: calc(18px * var(--ui)); flex-direction: row; align-items: flex-start; }
-#miniWrap.minimap { right: calc(20px * var(--ui)); top: calc(18px * var(--ui)); width: 315px; height: 378px; transform: scale(var(--ui)); transform-origin: top right; isolation: isolate; filter: drop-shadow(0 5px 5px #140c0799); }
+#miniWrap.minimap { right: calc(var(--miniR, 20) * 1px * var(--ui)); top: calc(var(--miniT, 18) * 1px * var(--ui)); width: 315px; height: 378px; transform: scale(var(--ui)); transform-origin: top right; isolation: isolate; filter: drop-shadow(0 5px 5px #140c0799); }
 /* (the minimap and watch case B, v349: the map case over the watch's bezel, cut from one master at y 300) */
 #miniWrap #mini { position: absolute; left: 24px; top: 33px; width: 266px; height: 193px; border-radius: 8px; z-index: 1; image-rendering: pixelated; cursor: pointer; }
 .minimap-frame { position: absolute; left: 0; top: 0; width: 315px; height: 300px; z-index: 3; pointer-events: none; -webkit-user-drag: none; }
@@ -348,7 +348,7 @@ body.building:not(.touch) { --barLift: calc(150px * var(--ui)); }
 .watch-index { position: absolute; left: 149px; top: 299px; width: 16px; height: 30px; z-index: 6; pointer-events: none; -webkit-user-drag: none; }
 #miniWrap .place { position: absolute; left: 48px; top: 241px; width: 219px; height: 25px; font: 600 20px/25px var(--wk); letter-spacing: 0.02em; text-align: center; color: #302012; z-index: 4; white-space: nowrap; overflow: hidden; }
 #miniWrap .time { position: absolute; left: 48px; top: 266px; width: 219px; height: 19px; font: 400 15px/19px var(--wk); letter-spacing: 0.04em; text-align: center; color: #5a3b20; z-index: 4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#miniWrap .compass { position: absolute; left: 248px; top: 1px; width: 68px; height: 68px; padding: 0; border: 0; border-radius: 50%; background: none; isolation: isolate; z-index: 5; color: #f7e4b9; cursor: pointer; }
+#miniWrap .compass { position: absolute; left: calc(248px + var(--compX, 0px)); top: calc(1px + var(--compY, 0px)); width: 68px; height: 68px; padding: 0; border: 0; border-radius: 50%; background: none; isolation: isolate; z-index: 5; color: #f7e4b9; cursor: pointer; }
 #miniWrap .compass::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: url("ui/minimap/compass-face.webp") center / 100% 100% no-repeat; filter: var(--compTint, none); pointer-events: none; }
 #miniWrap .compass:hover { --compTint: brightness(1.12) saturate(1.05); }
 #miniWrap .compass.on { --compTint: sepia(.2) saturate(1.3) brightness(1.12); }
@@ -3143,13 +3143,118 @@ function cathRoof(ca) {
       part(G.cone4, '#b8923a', ...at(0, ridge + 3.6, Bs), { sx: 0.08, sy: 0.3, sz: 0.08 });
       const m = bufTmp.mesh(roofMat);
       for (const kid of [nave.mesh(slateSteep), aisle.mesh(slateMat)]) if (kid) { kid.matrixAutoUpdate = false; m.add(kid); }
+      // (v434: hidden while you're inside, it still shades the inside: a stand-in that only casts, always there, so
+      // the light comes in only through the windows and the rose, and the rose's beams show in the dim air)
+      const caster = new GFX.Mesh(m.geometry, castOnlyMat); caster.castShadow = true; caster.matrixAutoUpdate = false;
+      for (const kid of m.children) { const k2 = new GFX.Mesh(kid.geometry, castOnlyMat); k2.castShadow = true; k2.matrixAutoUpdate = false; caster.add(k2); }
+      m.userData.caster = caster;
       return m;
     } finally { OUT = save; }
   };
 }
 const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Set();
 // (v433) the rose window: its centre this far up its story's wall, the hole through the wall round it
-const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, tint: 0.85 };
+// (v434) out: where the glass stands across the wall (the inside face, so the hole's own lip takes none of its light);
+// blur: how much the light spreads (glass radii a tile it travels) and blur0 at the glass; haze: the beams' colour in
+// the lit haze; glow: how brightly the glass shines from inside; style: ROSE_STYLES. T > Stained glass.
+const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, tint: 0.85, out: -0.24, blur: 0.05, blur0: 0.02, haze: 1, glow: 0.6, style: 1 };
+// (v434, Jordan: stained glass styles after V Rising's and Albion Online's, in our blocky style) The rose's design,
+// painted once into a 256 x 256 texture that its glass shows (windowMat), its light on the floor takes its colours
+// from (buildMat roseTint) and the lit haze's beams too. rgb the glass, alpha 1 inside the rose. Dark glass and the
+// lead between the pieces let little light through, so a figure in dark glass falls on the floor as a silhouette.
+// ROSE.style: 0 the fan of panes, 1 a crowned king with his sword, 2 a robed saint in a burst of flame.
+const ROSE_STYLES = ['Fan of panes', 'Crowned king', 'Radiant saint'];
+const ROSE_TEX_S = 256;
+const roseTex = new GFX.DataTexture(new Uint8Array(ROSE_TEX_S * ROSE_TEX_S * 4), ROSE_TEX_S, ROSE_TEX_S);
+function paintRose(style) {
+  const S = ROSE_TEX_S, C = S / 2, R = S / 2 - 3, cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d', { willReadFrequently: true }), LEAD = '#16121a';
+  let seed = 7 + style * 101;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const poly = (pts, fill, lw = 3) => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(C + x * R, C + y * R) : g.moveTo(C + x * R, C + y * R)); g.closePath(); g.fillStyle = fill; g.fill(); if (lw) { g.lineWidth = lw; g.strokeStyle = LEAD; g.stroke(); } };
+  const wedge = (r0, r1, a0, a1, fill, lw = 3) => { g.beginPath(); g.arc(C, C, r1 * R, a0, a1); g.arc(C, C, r0 * R, a1, a0, true); g.closePath(); g.fillStyle = fill; g.fill(); if (lw) { g.lineWidth = lw; g.strokeStyle = LEAD; g.stroke(); } };
+  const ring = (r, lw) => { g.beginPath(); g.arc(C, C, r * R, 0, Math.PI * 2); g.lineWidth = lw; g.strokeStyle = LEAD; g.stroke(); };
+  g.save(); g.beginPath(); g.arc(C, C, R, 0, Math.PI * 2); g.clip();
+  g.fillStyle = LEAD; g.fillRect(0, 0, S, S);
+  // a background of irregular panes (a Voronoi of seeds), shaded from a palette, lead between them
+  const panes = (r0, r1, cols, n) => {
+    const pts = [];
+    for (let k = 0; k < n; k++) { const a = rnd() * Math.PI * 2, d = Math.sqrt(r0 * r0 + rnd() * (r1 * r1 - r0 * r0)); pts.push([C + Math.cos(a) * d * R, C + Math.sin(a) * d * R, cols[Math.floor(rnd() * cols.length)]]); }
+    const img = g.getImageData(0, 0, S, S), D = img.data;
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+      const rr = Math.hypot(x - C, y - C) / R;
+      if (rr < r0 || rr > r1) continue;
+      let b1 = 1e9, b2 = 1e9, bi = 0;
+      for (let k = 0; k < n; k++) { const dd = (x - pts[k][0]) ** 2 + (y - pts[k][1]) ** 2; if (dd < b1) { b2 = b1; b1 = dd; bi = k; } else if (dd < b2) b2 = dd; }
+      const lead = Math.sqrt(b2) - Math.sqrt(b1) < 2.2;
+      const col = lead ? [22, 18, 26] : hexRGB(pts[bi][2]), o = (y * S + x) * 4;
+      D[o] = col[0]; D[o + 1] = col[1]; D[o + 2] = col[2]; D[o + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+  };
+  const border = (r0, cols, n, lw = 3) => { for (let k = 0; k < n; k++) wedge(r0, 1.02, k / n * Math.PI * 2, (k + 1) / n * Math.PI * 2, cols[k % cols.length], lw); ring(r0, 4); };
+  if (style === 0) {
+    const P = ['#b02a34', '#2a52b0', '#d8a032', '#2f8a4a', '#7a3aa0'];
+    for (let w = 0; w < 16; w++) {
+      const a0 = w / 16 * Math.PI * 2, a1 = (w + 1) / 16 * Math.PI * 2;
+      wedge(0.5, 1.02, a0, a1, P[w % 2 ? 1 : (w / 2) % 2 ? 0 : 2]);
+      wedge(0.12, 0.5, a0, a1, P[w % 2 ? 3 : 4]);
+    }
+    ring(0.5, 5); g.fillStyle = '#c8b48a'; g.beginPath(); g.arc(C, C, 0.13 * R, 0, Math.PI * 2); g.fill(); ring(0.13, 4);
+    for (let w = 0; w < 8; w++) { const a = w / 8 * Math.PI * 2; g.beginPath(); g.moveTo(C + Math.cos(a) * 0.13 * R, C + Math.sin(a) * 0.13 * R); g.lineTo(C + Math.cos(a) * R, C + Math.sin(a) * R); g.lineWidth = 6; g.strokeStyle = LEAD; g.stroke(); }
+  } else if (style === 1) {
+    // the king: blue panes behind, a gold halo, a red robe and purple mantle, a square head, a gold crown, the
+    // sword held point up before him; a border of red and gold
+    panes(0, 0.8, ['#1f4fa8', '#2a63c0', '#173d8a', '#2a7fa8', '#3a5ccc'], 46);
+    border(0.8, ['#b52a2a', '#d9a630', '#b52a2a', '#2a8a5a'], 16);
+    g.fillStyle = '#f0c040'; g.beginPath(); g.arc(C, C - 0.3 * R, 0.25 * R, 0, Math.PI * 2); g.fill(); ring2(g, C, C - 0.3 * R, 0.25 * R, LEAD);
+    poly([[-0.34, 0.02], [0.34, 0.02], [0.46, 0.8], [-0.46, 0.8]], '#7a2a8a');
+    poly([[-0.22, 0.02], [0.22, 0.02], [0.3, 0.8], [-0.3, 0.8]], '#c42a2e');
+    poly([[-0.24, 0.0], [0.24, 0.0], [0.2, 0.1], [-0.2, 0.1]], '#e8e0d0');
+    poly([[-0.13, -0.42], [0.13, -0.42], [0.13, -0.16], [-0.13, -0.16]], '#eab48a');
+    poly([[-0.13, -0.22], [0.13, -0.22], [0.1, -0.04], [-0.1, -0.04]], '#8a5a2a');
+    poly([[-0.15, -0.42], [-0.15, -0.58], [-0.08, -0.48], [0, -0.6], [0.08, -0.48], [0.15, -0.58], [0.15, -0.42]], '#f2c22a');
+    // eyes, and the sword held point up at his side, his hand on its grip
+    poly([[-0.075, -0.33], [-0.035, -0.33], [-0.035, -0.29], [-0.075, -0.29]], '#2a1a14', 0);
+    poly([[0.035, -0.33], [0.075, -0.33], [0.075, -0.29], [0.035, -0.29]], '#2a1a14', 0);
+    const sx = 0.36;
+    poly([[sx - 0.035, -0.5], [sx + 0.035, -0.5], [sx + 0.035, 0.2], [sx - 0.035, 0.2]], '#cfeeff');
+    poly([[sx - 0.035, -0.5], [sx, -0.58], [sx + 0.035, -0.5]], '#cfeeff');
+    poly([[sx - 0.13, 0.2], [sx + 0.13, 0.2], [sx + 0.13, 0.27], [sx - 0.13, 0.27]], '#f2c22a');
+    poly([[sx - 0.03, 0.27], [sx + 0.03, 0.27], [sx + 0.03, 0.42], [sx - 0.03, 0.42]], '#6a3a1a');
+    poly([[sx - 0.055, 0.42], [sx + 0.055, 0.42], [sx + 0.055, 0.48], [sx - 0.055, 0.48]], '#f2c22a');
+    poly([[sx - 0.08, 0.29], [sx + 0.06, 0.29], [sx + 0.06, 0.39], [sx - 0.08, 0.39]], '#eab48a');
+    poly([[0.22, 0.12], [sx - 0.06, 0.24], [sx - 0.08, 0.33], [0.24, 0.24]], '#c42a2e');
+    // and a gold orb in his other hand
+    g.fillStyle = '#f2c22a'; g.beginPath(); g.arc(C - 0.28 * R, C + 0.26 * R, 0.07 * R, 0, Math.PI * 2); g.fill(); ring2(g, C - 0.28 * R, C + 0.26 * R, 0.07 * R, LEAD);
+    poly([[-0.3, 0.14], [-0.26, 0.14], [-0.26, 0.19], [-0.3, 0.19]], '#f2c22a', 2);
+  } else {
+    // the saint: a burst of flame-coloured rays, a dark robed figure arms out before it, gold scrolls under its
+    // feet; a border of blue and crimson
+    for (let w = 0; w < 28; w++) wedge(0, 0.82, w / 28 * Math.PI * 2, (w + 1) / 28 * Math.PI * 2, ['#ff8a1a', '#ffc040', '#e0401a', '#ffb02a'][w % 4]);
+    g.fillStyle = '#fff0a0'; g.beginPath(); g.arc(C, C - 0.3 * R, 0.17 * R, 0, Math.PI * 2); g.fill(); ring2(g, C, C - 0.3 * R, 0.17 * R, LEAD);
+    border(0.82, ['#1f3fa0', '#a8202a'], 20);
+    const dark = '#2a1a2e';
+    poly([[-0.1, -0.4], [0.1, -0.4], [0.1, -0.2], [-0.1, -0.2]], dark);
+    poly([[-0.14, -0.2], [0.14, -0.2], [0.62, -0.08], [0.6, 0.02], [0.2, -0.02], [0.3, 0.62], [-0.3, 0.62], [-0.2, -0.02], [-0.6, 0.02], [-0.62, -0.08]], dark);
+    for (const sg of [-1, 1]) {
+      poly([[sg * 0.06, 0.62], [sg * 0.5, 0.6], [sg * 0.56, 0.7], [sg * 0.44, 0.76], [sg * 0.4, 0.68], [sg * 0.14, 0.72]], '#e8b830');
+      poly([[sg * 0.5, 0.52], [sg * 0.6, 0.48], [sg * 0.64, 0.58], [sg * 0.56, 0.6]], '#e8b830');
+    }
+    poly([[-0.08, 0.66], [0.08, 0.66], [0.04, 0.8], [-0.04, 0.8]], '#e8b830');
+  }
+  g.restore();
+  const D = g.getImageData(0, 0, S, S).data, out = roseTex.image.data;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const o = (y * S + x) * 4, inside = Math.hypot(x + 0.5 - C, y + 0.5 - C) <= R;
+    out[o] = D[o]; out[o + 1] = D[o + 1]; out[o + 2] = D[o + 2]; out[o + 3] = inside ? 255 : 0;
+  }
+  roseTex.needsUpdate = true;
+}
+function ring2(g, x, y, r, col) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.lineWidth = 3; g.strokeStyle = col; g.stroke(); }
+function hexRGB(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+paintRose(ROSE.style);
 function placeCathedral(t, n, house, cands, piece) {
   const own = n + 1, inTown = (c, r) => TN[T(c, r)] === own;
   // (v427, Jordan: always fronting one of the four avenues, never a lane or the ring: the street tile in front is on
@@ -3379,26 +3484,20 @@ function cathUpper(ca) {
       const tx = -DR[q.e], tz = DC[q.e], pt = (u, v, out) => { const [x, z] = at(out); return [x + tx * u, ry + v, z + tz * u]; };
       // (v432, Jordan: nearly the whole tile: the stone backing to 0.5, its moulded rim proud of the wall, the glass
       // to 0.44, all standing out past the wall's face so the rim shows)
-      // (v433: through the wall now, roseWall's hole behind it: a moulded rim on both faces, a reveal lining the hole)
-      const R0 = 0.22, R1 = ROSE.glass, GO = 0.235;
+      // (v433: through the wall now, roseWall's hole behind it: a moulded rim on both faces, a reveal lining the hole;
+      // v434: the glass on the inside face, one disc in a marker colour that windowMat paints with ROSE's design
+      // (roseTex), its lead and tracery painted in it too)
       const ring = (n, rad, out, sOut, sRad, sTan, col) => {
         for (let w = 0; w < n; w++) { const a = (w + 0.5) / n * Math.PI * 2, [x, y2, z] = pt(Math.cos(a) * rad, Math.sin(a) * rad, out); part(G.box, col, x, y2, z, ax ? { sx: sOut, sy: sRad, sz: sTan, rx: -a + Math.PI / 2 } : { sx: sTan, sy: sRad, sz: sOut, rz: a + Math.PI / 2 }); }
       };
       ring(20, 0.48, 0.22, 0.1, 0.08, 0.16, shade(band, 1.12));
-      ring(20, 0.48, -0.22, 0.1, 0.08, 0.16, shade(band, 1.06));
+      ring(20, 0.49, ROSE.out + 0.05, 0.08, 0.1, 0.17, shade(band, 1.06));
       ring(28, ROSE.hole + 0.015, 0, 0.36, 0.03, 0.11, shade(band, 0.92));
-      const PANES = ['#b02a34', '#2a52b0', '#d8a032', '#2f8a4a', '#7a3aa0'], n = 16, gb = GLASSB || OUT;
-      for (let w = 0; w < n; w++) {
-        const a0 = w / n * Math.PI * 2, a1 = (w + 1) / n * Math.PI * 2, cA = Math.cos(a0), sA = Math.sin(a0), cB = Math.cos(a1), sB = Math.sin(a1);
-        const outer = CC(PANES[w % 2 ? 1 : (w / 2) % 2 ? 0 : 2]), inner = CC(PANES[w % 2 ? 3 : 4]);
-        tri(pt(cA * R0, sA * R0, GO), pt(cA * R1, sA * R1, GO), pt(cB * R1, sB * R1, GO), outer, outer, outer, gb);
-        tri(pt(cA * R0, sA * R0, GO), pt(cB * R1, sB * R1, GO), pt(cB * R0, sB * R0, GO), outer, outer, outer, gb);
-        tri(pt(0, 0, GO), pt(cA * R0, sA * R0, GO), pt(cB * R0, sB * R0, GO), inner, inner, inner, gb);
+      const mark = CC('#ff00ff'), gb = GLASSB || OUT, R1 = ROSE.glass + 0.03;
+      for (let w = 0; w < 32; w++) {
+        const a0 = w / 32 * Math.PI * 2, a1 = (w + 1) / 32 * Math.PI * 2;
+        tri(pt(0, 0, ROSE.out), pt(Math.cos(a0) * R1, Math.sin(a0) * R1, ROSE.out), pt(Math.cos(a1) * R1, Math.sin(a1) * R1, ROSE.out), mark, mark, mark, gb);
       }
-      // the tracery: eight spokes, a ring between the panes' two rings, a boss
-      for (let w = 0; w < 4; w++) { const [x, z] = at(GO + 0.02), a = w * Math.PI / 4; part(G.box, '#3a3640', x, ry, z, ax ? { sx: 0.04, sy: 0.04, sz: R1 * 2, rx: a } : { sx: R1 * 2, sy: 0.04, sz: 0.04, rz: a }); }
-      for (let w = 0; w < 12; w++) { const a = (w + 0.5) / 12 * Math.PI * 2, [x, y2, z] = pt(Math.cos(a) * R0, Math.sin(a) * R0, GO + 0.02); part(G.box, '#3a3640', x, y2, z, ax ? { sx: 0.04, sy: 0.04, sz: 0.125, rx: -a + Math.PI / 2 } : { sx: 0.125, sy: 0.04, sz: 0.04, rz: a + Math.PI / 2 }); }
-      disc(GO + 0.03, 0.07, 0.06, shade(stone, 1.1));
       cutTag(OUT, n0, q.key + 1, 1); if (GLASSB) cutTag(GLASSB, g0, q.key + 1, 1);
     }
   } finally { emitSurf = save; SURF = 0; }
@@ -5607,7 +5706,8 @@ function updateHaze() {
     top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
     sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky * lightFade, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wispsOn > 0.5 ? HAZE.wisps : 0, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
-    tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10] });
+    tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10],
+    rose: DETAIL_U.roses.value, roseTex: renderer.textureView(roseTex) });
 }
 let giVersion = 0;
 // A chunk's block of the height field is worked out when it's first wanted, and again after its meshes change,
@@ -6505,38 +6605,53 @@ function makeChipTex() {
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
-const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(16) } };
+const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(20) }, tRose: { value: roseTex } };
 // (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
 // shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
 // sun is followed back to the nearest two roses' glass, and where it passes through one, the sunlight there (the
 // shadow map's say, so whatever stands in the way still shades it) takes the colour of the pane it came through,
 // spokes and tracery ring dark. U.roses: per rose [glass centre xyz, glass radius], [outward normal xz, tint, on]
 const ROSE_WGSL = /* wgsl */ `
+// the light through the rose's design at (u, v) on its glass (metres from its middle), as a tint: the glass's colour
+// at full strength, dark glass and lead letting little through; w: how much of it is the rose (0 outside)
+fn roseLight(u: f32, v: f32, R: f32) -> vec4f {
+  let uv = vec2f(0.5 + u / (2.0 * R), 0.5 - v / (2.0 * R));
+  let t = textureSampleLevel(tRose, tRoseS, uv, 0.0);
+  let mx = max(t.r, max(t.g, t.b));
+  let col = mix(vec3f(0.18), t.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
+  return vec4f(col * t.a, t.a);
+}
+// the rose (U.roses[2j], [2j + 1]) a point's sunlight comes through: its tint, and how much (0 none). blurR: the light's
+// spread at the glass (metres), the taps a ring round the middle
+fn roseAt(w: vec3f, j: i32, taps: i32) -> vec4f {
+  let a = U.roses[j * 2]; let b = U.roses[j * 2 + 1]; let g = U.roses[4];
+  if (b.w < 0.5) { return vec4f(0.0); }
+  let L = F.sunDir.xyz;
+  let nn = vec3f(b.x, 0.0, b.y);
+  let dn = dot(L, nn);
+  if (dn < 0.02) { return vec4f(0.0); }
+  let t = dot(a.xyz - w, nn) / dn;
+  if (t < 0.02 || t > 60.0) { return vec4f(0.0); }
+  let d = w + L * t - a.xyz;
+  let u = dot(d, vec3f(-nn.z, 0.0, nn.x)); let v = d.y;
+  let br = a.w * (g.x + g.y * t);
+  if (length(vec2f(u, v)) > a.w + br) { return vec4f(0.0); }
+  var sum = roseLight(u, v, a.w);
+  for (var k = 0; k < taps; k++) {
+    let ang = f32(k) * 6.2831853 / f32(taps);
+    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, a.w);
+    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, a.w);
+  }
+  sum /= f32(1 + taps * 2);
+  return vec4f(sum.rgb / max(sum.w, 1e-3), sum.w);
+}
 fn roseTint(w: vec3f, n: vec3f) -> vec3f {
   var m = vec3f(1.0);
   if (F.sunDir.w < 0.5) { return m; }
-  let L = F.sunDir.xyz;
   for (var j = 0; j < 2; j++) {
-    let a = U.roses[j * 2]; let b = U.roses[j * 2 + 1];
-    if (b.w < 0.5) { continue; }
-    let nn = vec3f(b.x, 0.0, b.y);
-    let dn = dot(L, nn);
-    if (dn < 0.02) { continue; }
-    let t = dot(a.xyz - w, nn) / dn;
-    if (t < 0.05 || t > 60.0) { continue; }
-    let d = w + L * t - a.xyz;
-    let u = dot(d, vec3f(-nn.z, 0.0, nn.x)); let v = d.y;
-    let rr = length(vec2f(u, v));
-    if (rr > a.w) { continue; }
-    var ang = atan2(v, u); if (ang < 0.0) { ang += 6.2831853; }
-    let k = i32(floor(ang / 6.2831853 * 16.0)) % 16;
-    var col = vec3f(0.3);
-    if (rr < 0.22) { col = select(vec3f(0.72, 0.36, 1.0), vec3f(0.36, 0.95, 0.42), (k & 1) == 1); }
-    else { col = select(select(vec3f(1.0, 0.78, 0.26), vec3f(1.0, 0.26, 0.24), ((k >> 1) & 1) == 1), vec3f(0.3, 0.48, 1.0), (k & 1) == 1); }
-    col *= 1.35;
-    let fs = fract(ang / 0.7853982 + 0.5) - 0.5;
-    if (abs(fs) * 0.7853982 * rr < 0.022 || abs(rr - 0.22) < 0.02 || rr > a.w - 0.025) { col = vec3f(0.3); }
-    m *= mix(vec3f(1.0), col, b.z * sunShadow(w, n));
+    let r = roseAt(w, j, 6);
+    if (r.w <= 0.0) { continue; }
+    m *= mix(vec3f(1.0), r.rgb, r.w * U.roses[j * 2 + 1].z * sunShadow(w, n));
   }
   return m;
 }
@@ -6544,12 +6659,13 @@ fn roseTint(w: vec3f, n: vec3f) -> vec3f {
 // the nearest two roses within reach of the hero, every frame
 function updateRoses() {
   const a = DETAIL_U.roses.value; a.fill(0);
+  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow;
   const near = [];
   for (const ca of cathedrals) { const q = ca.rose; if (!q) continue; const d = Math.hypot(q.x - H.x, q.z - H.z); if (d < 48) near.push([d, ca]); }
   near.sort((x, y) => x[0] - y[0]);
   for (let j = 0; j < Math.min(2, near.length); j++) {
     const ca = near[j][1], q = ca.rose, nx = DC[q.e], nz = DR[q.e], o = j * 8;
-    a[o] = q.x + nx * 0.235; a[o + 1] = ca.y + WALL_H + ROSE.y; a[o + 2] = q.z + nz * 0.235; a[o + 3] = ROSE.glass;
+    a[o] = q.x + nx * ROSE.out; a[o + 1] = ca.y + WALL_H + ROSE.y; a[o + 2] = q.z + nz * ROSE.out; a[o + 3] = ROSE.glass;
     a[o + 4] = nx; a[o + 5] = nz; a[o + 6] = ROSE.tint; a[o + 7] = 1;
   }
 }
@@ -10900,12 +11016,26 @@ const GLASS = '#8fbccc';
 // room), and it mirrors the sky more at a grazing look (sheen). The panes cast no shadow, so the sun falls through
 // onto the floor (and the lit haze makes a shaft of it). T > Windows.
 const GLASS_FX = { transfer: 1, glow: 2.5, sheen: 0.6, sky: 1.2, rough: 0.15 };
-const GLASS_U = { fx: { value: { x: 0.6, y: 0.15, z: 2.5, w: 1 } }, sky: { value: 1.2 }, cuts: CUT_U.cuts, cutN: CUT_U.cutN };
+const GLASS_U = { fx: { value: { x: 0.6, y: 0.15, z: 2.5, w: 1 } }, sky: { value: 1.2 }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: DETAIL_U.roses, tRose: DETAIL_U.tRose };
 function updateGlassU() { const u = GLASS_U.fx.value; u.x = GLASS_FX.sheen; u.y = GLASS_FX.rough; u.z = GLASS_FX.glow; u.w = GLASS_FX.transfer; GLASS_U.sky.value = GLASS_FX.sky; }
 const windowMat = new GFX.ShaderMaterial({ uniforms: GLASS_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   attributes: { ct: 'vec2f' },
   code: CUT_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+// (v434) a rose window's glass (drawn in the marker colour): its design, from whichever of the nearest roses it's on
+fn roseGlass(w: vec3f) -> vec4f {
+  for (var j = 0; j < 2; j++) {
+    let a = U.roses[j * 2]; let b = U.roses[j * 2 + 1];
+    if (b.w < 0.5) { continue; }
+    let nn = vec3f(b.x, 0.0, b.y);
+    let d = w - a.xyz;
+    if (abs(dot(d, nn)) > 0.06 || length(d) > a.w + 0.1) { continue; }
+    let u = dot(d, vec3f(-nn.z, 0.0, nn.x));
+    let t = textureSampleLevel(tRose, tRoseS, vec2f(0.5 + u / (2.0 * a.w), 0.5 - d.y / (2.0 * a.w)), 0.0);
+    return vec4f(select(vec3f(0.09, 0.07, 0.1), t.rgb, t.a > 0.5), 1.0);
+  }
+  return vec4f(0.0);
+}
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
   let p = select(F.viewProj * vec4f(w, 1.0), vec4f(0.0, 0.0, -2.0, 1.0), cutHide(v.ct));
@@ -10916,7 +11046,15 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   // (transfer: lit as the face toward the sun or moon is, on both faces)
   let Ns = select(-N0, N0, dot(N0, F.sunDir.xyz) >= 0.0);
   let N = select(N0, Ns, U.fx.w > 0.5);
-  var c = shadeLit(i.color, vec3f(0.0), 0.0, U.fx.y, i.world, N, O.emissive.w > 0.5);
+  var base = i.color;
+  var glow = vec3f(0.0);
+  if (i.color.r > 0.98 && i.color.g < 0.02 && i.color.b > 0.98) {
+    let rg = roseGlass(i.world);
+    base = select(vec3f(0.55, 0.3, 0.45), rg.rgb, rg.w > 0.5);
+    // stained glass shines with the daylight behind it
+    glow = base * (F.hemiSky.rgb + F.sunColor.rgb * F.sunDir.w * 0.5) * U.roses[4].w;
+  }
+  var c = shadeLit(base, glow, 0.0, U.fx.y, i.world, N, O.emissive.w > 0.5);
   // the lamps and fires near it shine through it, from whichever side
   let np = i32(F.cloud2.w);
   var lamp = vec3f(0.0);
@@ -10928,7 +11066,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
     if (p.pos.w > 0.0 && p.color.w > 0.0) { att = pow(sat(1.0 - dist / p.pos.w), p.color.w); }
     lamp += abs(dot(N0, d / max(dist, 1e-5))) * p.color.rgb * att;
   }
-  c += lamp * i.color * U.fx.z;
+  c += lamp * base * U.fx.z;
   // the sky mirrored in it, more the more glancing the look (Schlick)
   let nv = abs(dot(N0, toEye(i.world)));
   let fr = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
@@ -11575,7 +11713,7 @@ function findRoom(c0, r0, k = 0) {
 const regroup = new Set();
 function dropBuilding(b) {
   if (!b) return;
-  if (b.mesh) { scene.remove(b.mesh); b.mesh.geometry.dispose(); }
+  if (b.mesh) { scene.remove(b.mesh); b.mesh.geometry.dispose(); if (b.mesh.userData.caster) scene.remove(b.mesh.userData.caster); }
   buildings.delete(b.id);
   giTouch(b.tiles);
   for (const id of b.rooms) { regroup.add(id); const rm = rooms.get(id); if (rm) rm.bld = 0; }
@@ -11620,7 +11758,7 @@ function settleBuildings() {
     buildings.set(b.id, b);
     const own = list.find(rm => rm.roof);
     b.mesh = own ? own.roof(b) : roofMesh(b);
-    if (b.mesh) { scene.add(b.mesh); b.mesh.visible = mode !== 'build' && b.k <= shownStory; }   // (none when a floor over it covers the whole building)
+    if (b.mesh) { scene.add(b.mesh); b.mesh.visible = mode !== 'build' && b.k <= shownStory; if (b.mesh.userData.caster) scene.add(b.mesh.userData.caster); }   // (none when a floor over it covers the whole building)
     giTouch(b.tiles);
   }
   regroup.clear();
@@ -12783,12 +12921,14 @@ heroRoot.traverse(o => o.layers.set(1));
 // screen's own UI scale; the gap is in the kit's 1080p pixels. They go to CSS as --hotS / --hotGap / --barS / --barGap.
 // (v429) Heights and lifts in 1080p px too: the belt's height and bottom, and how far up the centre piece, the hotbar
 // and the action + mode buttons sit from where the kit puts them (--beltH / --beltY / --bcY / --hotY / --barY).
-const HUD_BARS = { hotScale: 0.85, hotGap: 4, barScale: 0.85, barGap: 4, beltH: 97, beltY: 16, centerY: -5, hotY: -20, barY: -20 };
+const HUD_BARS = { hotScale: 0.85, hotGap: 4, barScale: 0.85, barGap: 4, beltH: 97, beltY: 16, centerY: -5, hotY: -20, barY: -20, miniRight: 20, miniTop: 18, compassX: 0, compassY: 0 };
 function applyHudBars() {
   const st = document.documentElement.style;
   st.setProperty('--hotS', HUD_BARS.hotScale); st.setProperty('--hotGap', HUD_BARS.hotGap + 'px');
   st.setProperty('--barS', HUD_BARS.barScale); st.setProperty('--barGap', HUD_BARS.barGap + 'px');
   st.setProperty('--beltH', HUD_BARS.beltH); st.setProperty('--beltY', HUD_BARS.beltY);
+  st.setProperty('--miniR', HUD_BARS.miniRight); st.setProperty('--miniT', HUD_BARS.miniTop);
+  st.setProperty('--compX', HUD_BARS.compassX + 'px'); st.setProperty('--compY', HUD_BARS.compassY + 'px');
   st.setProperty('--bcY', HUD_BARS.centerY + 'px'); st.setProperty('--hotY', HUD_BARS.hotY + 'px'); st.setProperty('--barY', HUD_BARS.barY + 'px');
   try { layoutBelt(); } catch (err) { /* (before the HUD is up) */ }
 }
@@ -20398,6 +20538,10 @@ const TUNING = [
     [HUD_BARS, 'centerY', 'Centre piece: up / down (1080p px)', -80, 120, 1, applyHudBars],
     [HUD_BARS, 'hotY', 'Hotbar: up / down (1080p px)', -80, 120, 1, applyHudBars],
     [HUD_BARS, 'barY', 'Action + mode buttons: up / down (1080p px)', -80, 120, 1, applyHudBars],
+    [HUD_BARS, 'miniRight', 'Minimap: in from the right edge (1080p px)', -40, 120, 1, applyHudBars],
+    [HUD_BARS, 'miniTop', 'Minimap: down from the top edge (1080p px)', -40, 120, 1, applyHudBars],
+    [HUD_BARS, 'compassX', 'Compass: left / right on the minimap (kit px)', -80, 80, 1, applyHudBars],
+    [HUD_BARS, 'compassY', 'Compass: up / down on the minimap (kit px)', -80, 80, 1, applyHudBars],
   ]],
   ['Character view', [
     [DOLL_VIEW, 'fov', 'Lens (degrees)', 10, 60, 1],
@@ -20973,6 +21117,14 @@ const TUNING = [
     [GLASS_FX, 'sky', 'Brightness of the mirrored sky', 0, 3, 0.01],
     [GLASS_FX, 'rough', 'Roughness (the sun\'s glint)', 0.05, 1, 0.01],
   ]],
+  ['Stained glass', [
+    [ROSE, 'style', 'Rose window design (0 fan of panes, 1 crowned king, 2 radiant saint)', 0, 2, 1, v => paintRose(Math.round(v))],
+    [ROSE, 'tint', 'How strongly its light takes the glass\'s colours', 0, 1, 0.01],
+    [ROSE, 'blur', 'How much its light spreads on the way down (a tile)', 0, 0.3, 0.005],
+    [ROSE, 'blur0', 'Its light\'s softness at the glass', 0, 0.2, 0.005],
+    [ROSE, 'haze', 'Coloured beams in the lit haze', 0, 1, 0.01],
+    [ROSE, 'glow', 'The glass shining with the daylight behind it', 0, 3, 0.01],
+  ]],
   ['Stations', [
     [REFINE, 'time', 'Seconds to refine one (saw table, grinder, smelter, tanning rack)', 0.2, 30, 0.1],
     [STATION_LOOK, 'size', 'Size (walls round its 2 x 2 tiles need it under about 1.6)', 0.5, 2.2, 0.01],
@@ -21264,7 +21416,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 433, crashSeen = new Map();
+const GAME_VERSION = 434, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21343,6 +21495,7 @@ window.GAME = {
   },
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
+  roseImage: st => { paintRose(st); const d = Array.from(roseTex.image.data); paintRose(ROSE.style); return d; },
   compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
