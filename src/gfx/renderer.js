@@ -552,11 +552,14 @@ class Renderer {
     pass.setBindGroup(0, this.frameBGShadow, [slot * FRAME_BYTES]);
     let last = null;
     for (const mesh of casters) {
-      const mat = mesh.material, inst = !!mesh.isInstancedMesh, pipe = this._shadowPipeline(mat.side, inst);
+      const mat = mesh.material, inst = !!mesh.isInstancedMesh, own = !inst && !!mat.shadowCode;
+      const pipe = own ? this._shadowPipelineMat(mat) : this._shadowPipeline(mat.side, inst);
+      if (!pipe) continue;
       if (pipe !== last) { pass.setPipeline(pipe); last = pipe; }
       const [bg, off] = this._writeObj(mesh, mat);
       pass.setBindGroup(1, bg, [off]);
-      const slot = this._bindGeometry(pass, mesh.geometry, null, false, true);
+      if (own) pass.setBindGroup(2, this._materialBindGroup(mat));
+      const slot = own ? this._bindGeometry(pass, mesh.geometry, mat, !!mat.vertexColors) : this._bindGeometry(pass, mesh.geometry, null, false, true);
       if (!slot) continue;
       if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
       this._draw(pass, mesh.geometry, inst ? mesh.count : 1);
@@ -765,6 +768,29 @@ class Renderer {
     this._pipelines.set(key, p);
     return p;
   }
+  // a ShaderMaterial with shadowCode (its own vertex function vs, returning the clip position) is drawn into the
+  // shadow map with that, its uniforms and every attribute bound as for the material itself (buildMat: the walls
+  // the cutaway lowers cast a lowered shadow)
+  _shadowPipelineMat(mat) {
+    const cull = mat.side === M.DoubleSide ? 'none' : mat.side === M.BackSide ? 'back' : 'front', key = 'shadowM|' + mat.id + '|' + cull;
+    let p = this._pipelines.get(key);
+    if (p !== undefined) return p;
+    const info = this._materialInfo(mat);
+    const buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }];
+    if (mat.vertexColors) buffers.push({ arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x3' }] });
+    let loc = 2;
+    for (const name in mat.attributes) { const [f, s] = ATTR_FORMAT[mat.attributes[name]]; buffers.push({ arrayStride: s, attributes: [{ shaderLocation: loc++, offset: 0, format: f }] }); }
+    try {
+      p = this.device.createRenderPipeline({
+        layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrameShadow, this.bglObj, info.bgl] }),
+        vertex: { module: this._module(builtinCode('shadow', false, false).replace(/struct VIn[\s\S]*$/, '') + info.head + mat.shadowCode), entryPoint: 'vs', buffers },
+        primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
+        depthStencil: { format: SHADOW_FORMAT, depthCompare: 'less-equal', depthWriteEnabled: true },
+      });
+    } catch (err) { console.error('shadow pipeline', err); p = null; }
+    this._pipelines.set(key, p);
+    return p;
+  }
   _shadowPipeline(side, inst = false) {
     const cull = side === M.DoubleSide ? 'none' : side === M.BackSide ? 'back' : 'front', key = 'shadow|' + cull + '|' + inst;
     let p = this._pipelines.get(key);
@@ -788,9 +814,11 @@ class Renderer {
     let slots = 0;
     const kinds = names.map(n => {
       const v = mat.uniforms[n].value;
-      const t = typeof v === 'number' || typeof v === 'boolean' ? 'f32' : v.isColor || v.isVector3 ? 'vec3f' : v.elements ? 'mat4x4f' : v.w !== undefined ? 'vec4f' : 'vec2f';
+      // (a Float32Array is an array of vec4f, its length a multiple of 4)
+      const arr = v instanceof Float32Array;
+      const t = arr ? `array<vec4f, ${v.length >> 2}>` : typeof v === 'number' || typeof v === 'boolean' ? 'f32' : v.isColor || v.isVector3 ? 'vec3f' : v.elements ? 'mat4x4f' : v.w !== undefined ? 'vec4f' : 'vec2f';
       fields.push(`  @align(16) ${n}: ${t},`);
-      const at = slots; slots += t === 'mat4x4f' ? 4 : 1;
+      const at = slots; slots += arr ? v.length >> 2 : t === 'mat4x4f' ? 4 : 1;
       return { n, t, at };
     });
     const texNames = Object.keys(mat.textures).concat(Object.keys(mat.uniforms).filter(isTex)), S = GPUShaderStage, entries = [], decl = [];
@@ -812,9 +840,10 @@ class Renderer {
     if (mat.vertexColors) vin.push('  @location(1) color: vec3f,');
     let loc = 2;
     for (const n in mat.attributes) vin.push(`  @location(${loc++}) ${n}: ${mat.attributes[n]},`);
-    const code = PRELUDE + decl.join('\n') + `\nstruct VIn {\n${vin.join('\n')}\n}\n` + mat.code;
+    const head = decl.join('\n') + `\nstruct VIn {\n${vin.join('\n')}\n}\n`;
+    const code = PRELUDE + head + mat.code;
     const bgl = this.device.createBindGroupLayout({ entries });
-    info = { code, kinds, slots, texBind, bgl, layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrame, this.bglObj, bgl] }),
+    info = { code, head, kinds, slots, texBind, bgl, layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrame, this.bglObj, bgl] }),
       buf: names.length ? this.device.createBuffer({ size: Math.max(16, slots * 16), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : null,
       data: new Float32Array(Math.max(4, slots * 4)), frame: -1, bg: null, bgKey: '' };
     this._mats.set(mat, info);
@@ -827,7 +856,8 @@ class Renderer {
       const d = info.data;
       for (const { n, t, at } of info.kinds) {
         const v = mat.uniforms[n].value, o = at * 4;
-        if (t === 'f32') d[o] = +v;
+        if (v instanceof Float32Array) d.set(v, o);
+        else if (t === 'f32') d[o] = +v;
         else if (t === 'vec2f') { d[o] = v.x; d[o + 1] = v.y; }
         else if (t === 'vec3f') { if (v.isColor) { d[o] = v.r; d[o + 1] = v.g; d[o + 2] = v.b; } else { d[o] = v.x; d[o + 1] = v.y; d[o + 2] = v.z; } }
         else if (t === 'vec4f') { d[o] = v.x; d[o + 1] = v.y; d[o + 2] = v.z; d[o + 3] = v.w; }

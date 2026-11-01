@@ -5428,7 +5428,7 @@ function shadowy(obj) {
 }
 // Growable vertex buffers: every chunk writes its triangles here, then copies them into a mesh.
 class Buf {
-  constructor() { this.p = new Float32Array(1 << 16); this.c = new Float32Array(1 << 16); this.n = 0; }
+  constructor() { this.p = new Float32Array(1 << 16); this.c = new Float32Array(1 << 16); this.n = 0; this.cr = []; }
   need(k) {
     if (this.n + k <= this.p.length) return;
     let s = this.p.length; while (s < this.n + k) s *= 2;
@@ -5473,10 +5473,38 @@ class BuildBuf extends Buf {
       g.setAttribute('dl', new GFX.BufferAttribute(this.dl.slice(0, v * 4), 4));
       g.setAttribute('dh', new GFX.BufferAttribute(this.dh.slice(0, v * 3), 3));
       g.setAttribute('dq', new GFX.BufferAttribute(this.dq.slice(0, v * 4), 4));
+      g.setAttribute('ct', cutAttr(this, v));
     }
     return m;
   }
 }
+// (v425) Walls the cutaway can lower are drawn twice, whole and as the waist-high stub, each vertex tagged
+// ct = (its edge key + 1, 1 whole / -1 stub; 0 = not a cutaway wall): buildMat and windowMat drop whichever of the
+// two isn't wanted by the keys in CUT_U, so going indoors changes a uniform and redraws nothing (it used to rebuild
+// the chunk's pieces: a 20-30 ms spike). cr: [first vertex, end vertex, key + 1, mode] runs, read once by mesh()
+function cutTag(b, n0, key1, mode) { if (b && b.cr && b.n > n0) b.cr.push(n0 / 3, b.n / 3, key1, mode); }
+function cutAttr(b, v) {
+  const a = new Float32Array(v * 2), r = b.cr;
+  for (let q = 0; q < r.length; q += 4) for (let x = r[q], e = Math.min(r[q + 1], v); x < e; x++) { a[x * 2] = r[q + 2]; a[x * 2 + 1] = r[q + 3]; }
+  r.length = 0;
+  return new GFX.BufferAttribute(a, 2);
+}
+const CUT_MAX = 128;
+const CUT_U = { cuts: { value: new Float32Array(CUT_MAX) }, cutN: { value: 0 } };
+// (WGSL: is this vertex dropped? the keys cut now in U.cuts, U.cutN of them)
+const CUT_WGSL = /* wgsl */ `
+fn cutHide(ct: vec2f) -> bool {
+  if (ct.x < 0.5) { return false; }
+  let key = ct.x - 1.0;
+  let n = i32(U.cutN);
+  var on = false;
+  for (var j = 0; j < ${CUT_MAX}; j++) {
+    if (j >= n) { break; }
+    if (U.cuts[j >> 2u][j & 3] == key) { on = true; break; }
+  }
+  return select(!on, on, ct.y > 0.0);
+}
+`;
 // what the pieces drawn now are made of (buildMat): 0 plain, 1 stone, 2 wood, 3 plaster, 4 smooth (marble: bevels only)
 const SURF_STONE = 1, SURF_WOOD = 2, SURF_PLASTER = 3, SURF_SMOOTH = 4, SURF_SLATE = 5;   // (5: a bare triangle laid with the slate roofs' map)
 let SURF = 0, emitSurf = null;   // (emitSurf: while set, it picks SURF for each part from its colour)
@@ -6062,16 +6090,23 @@ function makeChipTex() {
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
-const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() } };
+const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN };
 function updateDetailU() { const d = DETAIL_U.d.value; d.x = DETAIL.strength; d.y = DETAIL.bevel; }
 const buildMat = new GFX.ShaderMaterial({ uniforms: DETAIL_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
-  attributes: { dl: 'vec4f', dh: 'vec3f', dq: 'vec4f' },
-  code: /* wgsl */ `
+  attributes: { dl: 'vec4f', dh: 'vec3f', dq: 'vec4f', ct: 'vec2f' },
+  // (the shadow map drops the same walls: see cutTag)
+  shadowCode: CUT_WGSL + /* wgsl */ `
+@vertex fn vs(v: VIn) -> @builtin(position) vec4f {
+  if (cutHide(v.ct)) { return vec4f(0.0, 0.0, -2.0, 1.0); }
+  return F.viewProj * (O.model * vec4f(v.position, 1.0));
+}`,
+  code: CUT_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f,
   @location(3) dl: vec4f, @location(4) dh: vec3f, @location(5) dq: vec4f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
-  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, v.dl, v.dh, v.dq);
+  let p = select(F.viewProj * vec4f(w, 1.0), vec4f(0.0, 0.0, -2.0, 1.0), cutHide(v.ct));
+  return VOut(p, w, v.color, w - F.camPos.xyz, v.dl, v.dh, v.dq);
 }
 fn qrot(q: vec4f, v: vec3f) -> vec3f { let t = 2.0 * cross(q.xyz, v); return v + q.w * t + cross(q.xyz, t); }
 fn pick(m: vec3f, k: i32) -> f32 { return select(select(m.z, m.y, k == 1), m.x, k == 0); }
@@ -10207,20 +10242,33 @@ function wallPiece(c, r, w, type) {
   // (marble all smooth; fences, gates and log walls wood; dry stone stone; iron none; the rest by each part's colour)
   const fixed = type === 11 || type === 12 ? SURF_SMOOTH : type === 3 || type === 5 || type === 7 ? SURF_WOOD : type === 6 ? SURF_STONE : type === 8 || type === 9 ? 0 : -1;
   emitSurf = fixed < 0 ? wallSurf : null; SURF = Math.max(0, fixed);
-  try { wallPieceRaw(c, r, w, type); } finally { emitSurf = save; SURF = 0; }
+  // (v425: built into the chunk's pieces, a wall the cutaway can lower is drawn whole and as its stub, see cutTag;
+  // doors, fences, gates, dry stone and railings are never lowered)
+  const lowers = OUT === bufBuild && !(type === 2 || type === 10 || type === 11 || (type >= 5 && type <= 9));
+  try {
+    if (!lowers) wallPieceRaw(c, r, w, type, false);
+    else {
+      const key1 = edgeKey(c, r, w) + PCUT + 1, n0 = OUT.n, g0 = GLASSB ? GLASSB.n : 0;
+      wallPieceRaw(c, r, w, type, false);
+      cutTag(OUT, n0, key1, 1); if (GLASSB) cutTag(GLASSB, g0, key1, 1);
+      const n1 = OUT.n;
+      wallPieceRaw(c, r, w, type, true);
+      cutTag(OUT, n1, key1, -1);
+    }
+  } finally { emitSurf = save; SURF = 0; }
 }
 // warm and dark is timber, warm and pale is plaster, the greys are stone
 function wallSurf(k) {
   if (k.r > k.b * 1.2) return Math.max(k.r, k.g) >= 0.5 ? SURF_PLASTER : SURF_WOOD;
   return SURF_STONE;
 }
-function wallPieceRaw(c, r, w, type) {
+function wallPieceRaw(c, r, w, type, cut) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1);
   const y = Math.max(LV[i], LV[j]) * STEP + PDY;
   const ry = w ? Math.PI / 2 : 0;
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
-  const door = type === 2 || type === 10 || type === 11, cut = !door && cutEdges.has(edgeKey(c, r, w) + PCUT);
+  const door = type === 2 || type === 10 || type === 11;
   if (type === 12) {
     // marble: a plain slab on a moulded foot, a vein or two through it, a band along its top, and a pilaster
     // at each end (all one shade, so where two walls meet theirs make one)
@@ -10389,14 +10437,16 @@ const GLASS = '#8fbccc';
 // room), and it mirrors the sky more at a grazing look (sheen). The panes cast no shadow, so the sun falls through
 // onto the floor (and the lit haze makes a shaft of it). T > Windows.
 const GLASS_FX = { transfer: 1, glow: 2.5, sheen: 0.6, sky: 1.2, rough: 0.15 };
-const GLASS_U = { fx: { value: { x: 0.6, y: 0.15, z: 2.5, w: 1 } }, sky: { value: 1.2 } };
+const GLASS_U = { fx: { value: { x: 0.6, y: 0.15, z: 2.5, w: 1 } }, sky: { value: 1.2 }, cuts: CUT_U.cuts, cutN: CUT_U.cutN };
 function updateGlassU() { const u = GLASS_U.fx.value; u.x = GLASS_FX.sheen; u.y = GLASS_FX.rough; u.z = GLASS_FX.glow; u.w = GLASS_FX.transfer; GLASS_U.sky.value = GLASS_FX.sky; }
 const windowMat = new GFX.ShaderMaterial({ uniforms: GLASS_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
-  code: /* wgsl */ `
+  attributes: { ct: 'vec2f' },
+  code: CUT_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
-  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+  let p = select(F.viewProj * vec4f(w, 1.0), vec4f(0.0, 0.0, -2.0, 1.0), cutHide(v.ct));
+  return VOut(p, w, v.color, w - F.camPos.xyz);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let N0 = flatNormal(i.eye);
@@ -10424,8 +10474,9 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }`,
 });
 function glassMesh(b) {
-  const m = b.mesh(windowMat);
-  if (m) { m.castShadow = false; m.receiveShadow = true; }
+  const v = b.n / 3, m = b.mesh(windowMat);
+  if (m) { m.castShadow = false; m.receiveShadow = true; m.geometry.setAttribute('ct', cutAttr(b, v)); }
+  else b.cr.length = 0;
   return m;
 }
 // The walls as GI sees them (v377). GI's height field is half a tile a texel and takes a whole texel under anything,
@@ -10675,7 +10726,7 @@ function buildPieces(cx, cz, ch, only = null) {
   if (!DETAIL_U.tSlate) { DETAIL_U.tSlate = SLATE_U.tSlate; DETAIL_U.sl = SLATE_U.s; DETAIL_U.slope = SLATE_U.slope; }
   ch.build = null; ch.buildGI = null; ch.glass = null;
   if (!buildCount[cz * NC + cx]) return;
-  OUT = bufBuild; bufBuild.n = 0; GLASSB = bufGlass; bufGlass.n = 0; bufGIProxy.n = 0;
+  OUT = bufBuild; bufBuild.n = 0; GLASSB = bufGlass; bufGlass.n = 0; bufGIProxy.n = 0; bufBuild.cr.length = 0; bufGlass.cr.length = 0;
   const giCuts = [];
   try {
   const c0 = cx * CH, r0 = cz * CH;
@@ -10688,7 +10739,10 @@ function buildPieces(cx, cz, ch, only = null) {
     if (WN[i]) wallGI(c, r, 0, WN[i], giCuts);
     if (WW[i]) wallGI(c, r, 1, WW[i], giCuts);
     const pl = pillars.get(i);
-    if (pl) for (const q of pl) if (q.col) marbleColumn(q.x, q.y, q.z, cutEdges.has(q.key)); else if (q.kind === 'post') cabinPost(q);
+    if (pl) for (const q of pl) if (q.col) {
+      const n0 = bufBuild.n; marbleColumn(q.x, q.y, q.z, false); cutTag(bufBuild, n0, q.key + 1, 1);
+      const n1 = bufBuild.n; marbleColumn(q.x, q.y, q.z, true); cutTag(bufBuild, n1, q.key + 1, -1);
+    } else if (q.kind === 'post') cabinPost(q);
     const m = mausAt.get(i);
     if (m && m.anchor === i) mausExtras(m);
     const cb = cabinAt.get(i);
@@ -10704,7 +10758,7 @@ function buildPieces(cx, cz, ch, only = null) {
   for (let k = 1; k <= STORY_MAX; k++) {
     if (!storyUsed(k) || (only && !only.has(k))) continue;
     const U = UP[k];
-    bufBuild.n = 0; bufGlass.n = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
+    bufBuild.n = 0; bufGlass.n = 0; bufBuild.cr.length = 0; bufGlass.cr.length = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
     try {
       for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
         const i = T(c, r), f = U.FL.get(i);
@@ -11219,14 +11273,12 @@ function updateCutaway(inside) {
   const mau = inside && rooms.has(inside) ? mausAt.get(T(...rooms.get(inside).tiles[0])) : null;
   if (mau) for (const q of mau.cols) if ((q.x - H.x) * sy + (q.z - H.z) * cy > 0.3) wantCut.add(q.key);
   if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
-  const touched = new Map();   // (chunk -> the stories whose cut changed)
-  const mark = e => { const t = (e % (2 * SNN)) >> 1, c = t % N, key = Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH), k = Math.floor(e / (2 * SNN));
-    if (!touched.has(key)) touched.set(key, new Set()); touched.get(key).add(k); };
-  for (const k of cutEdges) if (!wantCut.has(k)) mark(k);
-  for (const k of wantCut) if (!cutEdges.has(k)) mark(k);
   cutEdges.clear();
   for (const k of wantCut) cutEdges.add(k);
-  touched.forEach((ks, key) => { const ch = chunks.get(key); if (ch) setPieces(ch, ks); });
+  // (v425: the shaders drop the cut walls and show their stubs; nothing is built again)
+  const a = CUT_U.cuts.value; let n = 0;
+  for (const k of cutEdges) { if (n >= CUT_MAX) break; a[n++] = k; }
+  CUT_U.cutN.value = n;
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
 function refreshRooms(c, r, w, k = 0) {
@@ -20609,7 +20661,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 424, crashSeen = new Map();
+const GAME_VERSION = 425, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21004,6 +21056,7 @@ window.GAME = {
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
   cutCount: () => cutEdges.size,
+  pipeKeys: () => [...renderer._pipelines.entries()].map(([k, v]) => k.slice(0, 40) + (v ? '' : ' NULL')).filter(k => /shadow/.test(k)),
   light: h => (h !== undefined && (SKY.timeOfDay = h, advanceClock(0), updateSky()), { hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
   // draw a frame and give it back as a PNG data URL
   screenshot: async () => {

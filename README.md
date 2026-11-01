@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v425:** No more spike stepping into a house. Walls that the cutaway lowers are now drawn once as the whole wall and once as the waist-high stub, and the shaders (and the shadow map) pick which to show from a short list of cut walls, so going indoors only changes that list and rebuilds nothing. The renderer gained array uniforms and a per-material shadow vertex shader (shadowCode).
+
 **v424:** the spike walking into a two-story house, and Port names. The cutaway drew the whole chunk again (every story, synchronously) whenever it cut a wall or stood one back up, and a town chunk had grown to ~135k triangles, mostly stone arch windows at 4,400 triangles each. Now: the arch slices only what meets its curve (about 2,000), `setPieces(ch, only)` redraws just the stories whose cut changed, and build meshes skip vertex normals (buildMat works its normal out per pixel). Town names: "Port" is given after the docks are laid, only to towns with a dock, any size, `PORT_SHARE` 0.45 of them and never all. Hooks GAME.timePieces(), GAME.wallCost().
 
 **v423:** Jordan's tuning baked (lead diamonds 0.27 x 0.50; bay depth 0.21, timber window 0.56 to 1.59; braces on every plain timber wall, 0.40 of them pairs; shutters open 175 degrees). The bay windows' sides are plastered timber wall instead of glass.
