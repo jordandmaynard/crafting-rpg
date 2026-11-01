@@ -6094,7 +6094,9 @@ fn axis(k: i32) -> vec3f { return select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0,
       uv = vec2f(dot(rel, Tu), dot(rel, Tv));
     }
     // each piece its own patch of the map
-    let off = fract(sin(vec2f(dot(centre, vec3f(12.9898, 78.233, 37.719)), dot(centre, vec3f(39.346, 11.135, 83.155)))) * 43758.5453);
+    // (the centre rounded first: hashed raw, its pixel-to-pixel float wobble made every pixel a different spot)
+    let cq = floor(centre * 20.0 + 0.5) * 0.013;
+    let off = fract(sin(vec2f(dot(cq, vec3f(12.9898, 78.233, 37.719)), dot(cq, vec3f(39.346, 11.135, 83.155)))) * 43758.5453);
     let bw = select(select(select(0.01, 0.0, kind == 3), 0.016, kind == 2), 0.032, kind == 1);
     let chip = textureSampleLevel(tChip, tChipS, uv * 2.5 + off, 0.0).a;
     // bevels, chipped: their width wobbles along the edge (strength: how far they bend, 2.77 = v415's look)
@@ -10844,7 +10846,7 @@ function makeSlateTex() {
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
-const SLATE_U = { s: { value: { x: 1, y: 0.16, z: 0.22, w: 0.5 } }, tSlate: { value: makeSlateTex() } };
+const SLATE_U = { s: { value: { x: 1, y: 0.16, z: 0.22, w: 0.5 } }, slope: { value: ROOF_SLOPE }, tSlate: { value: makeSlateTex() } };
 function updateSlateU() { const v = SLATE_U.s.value; v.x = SLATE.bump; v.y = SLATE.row * SLATE_TEX.rows; v.z = SLATE.width * SLATE_TEX.across; v.w = SLATE.shade; }
 const slateMat = new GFX.ShaderMaterial({ uniforms: SLATE_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -10859,11 +10861,18 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   let hz = vec3f(up.x, 0.0, up.z);
   // (only on the sloped faces: not the fascias, not a flat top)
   let on = select(0.0, 1.0, abs(N0.y) > 0.35 && dot(hz, hz) > 1e-3);
-  let t = normalize(cross(vec3f(0.0, 1.0, 0.0), up) + vec3f(1e-5, 0.0, 0.0));
-  let dn = cross(up, t);
-  let down = select(dn, -dn, dn.y > 0.0);
+  // (v420) every roof face slopes straight along x or along z (the roofs are Chebyshev hips), so the frame is snapped
+  // to those axes and the texture read from the world's x and z alone, as the cobbles are. Projecting the world
+  // position onto a frame worked out from the pixel's own normal multiplied that normal's tiny pixel-to-pixel
+  // wobble by the world's coordinates (hundreds of tiles), and the slates came out grainy.
+  let ax = abs(up.x) > abs(up.z);
+  let sg = select(select(-1.0, 1.0, up.z > 0.0), select(-1.0, 1.0, up.x > 0.0), ax);
+  let t = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), ax);
+  let down = normalize(select(vec3f(0.0, -U.slope, sg), vec3f(sg, -U.slope, 0.0), ax));
+  let along = select(i.world.x, i.world.z, ax);
+  let across = select(i.world.z, i.world.x, ax) * sg * sqrt(1.0 + U.slope * U.slope);
   // (texture x along the eaves, y down the slope)
-  let tx = textureSample(tSlate, tSlateS, vec2f(dot(i.world, t) / U.s.z, dot(i.world, down) / U.s.y));
+  let tx = textureSample(tSlate, tSlateS, vec2f(along / U.s.z, across / U.s.y));
   let m = (tx.xy * 2.0 - 1.0) * U.s.x * on;
   var N = normalize(up * (tx.z * 2.0 - 1.0 + (1.0 - on)) + t * m.x + down * m.y);
   N = select(N, -N, N0.y < 0.0);
@@ -20509,7 +20518,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 419, crashSeen = new Map();
+const GAME_VERSION = 420, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
