@@ -116,6 +116,10 @@ export function design(seed) {
   d.shawl = body === 'fem' && d.head.item !== 'hood' && r() < 0.2 ? { color: cloth().color } : null;
   d.neckerchief = body === 'masc' && d.head.item !== 'hood' && r() < 0.18 ? { color: cloth().color } : null;
   d.eyes = pick(r, [['#1e1814', 6], ['#2a3a5a', 2], ['#3a4a2a', 2], ['#4a3020', 2]]);
+  // (v5, rolled last so every earlier seed keeps its look) the bust's size, lift and sag, each 0..1. Sag comes from age
+  // (Jordan): young 0-0.25, adult 0.25-0.6, old 0.6-1, with a little spread inside each.
+  const SAG = { young: [0, 0.25], adult: [0.25, 0.6], old: [0.6, 1] }[age];
+  if (body === 'fem') d.bust = { size: r(), lift: r(), sag: SAG[0] + r() * (SAG[1] - SAG[0]) };
   return d;
 }
 // a design in words, for the viewer's readout
@@ -129,6 +133,7 @@ export function describe(d) {
     ['Legs', d.legs.item === 'dress' ? 'the dress\'s skirt' : `${nice(d.legs.item)}, ${d.legs.dye}`, d.legs.color],
     ['Feet', `${nice(d.feet.item)}`, d.feet.color],
   ];
+  if (d.bust) rows.splice(1, 0, ['Bust', `size ${d.bust.size.toFixed(2)}, lift ${d.bust.lift.toFixed(2)}, sag ${d.bust.sag.toFixed(2)}`]);
   const extra = [d.apron && 'apron', d.shawl && 'shawl', d.neckerchief && 'neckerchief', d.belt && (d.belt.sash ? 'sash' : 'belt')].filter(Boolean);
   if (extra.length) rows.push(['Extras', extra.join(', ')]);
   return rows;
@@ -208,6 +213,15 @@ export function makeFolkKit(GFX) {
     const TOR = { y0: 0.41, y1: 0.67, w0: B.wa - 0.005, d0: B.dep - 0.012, w1: B.sh, d1: B.dep };
     const at = (P, y) => { const u = clampU((y - P.y0) / (P.y1 - P.y0)); return [lerp(P.w0, P.w1, u), lerp(P.d0, P.d1, u)]; };
     const torsoAt = y => at(TOR, y), hipAt = y => at(HIP, y);
+    // the bust's profile, bottom to top: [height, front z, width] (see the chest, below)
+    let BUST = null;
+    if (fem) {
+      const b = d.bust || { size: 0.5, lift: 0.5, sag: 0.3 }, F = y => torsoAt(y)[1] / 2;
+      const yApex = 0.545 + b.lift * 0.035 - b.sag * 0.025, out = 0.022 + b.size * 0.028;
+      const yMid = yApex - 0.022 - b.sag * 0.018 - b.size * 0.008, yLow = yMid - 0.02 - b.sag * 0.01;
+      BUST = [[yLow, F(yLow) - 0.002, B.sh - 0.07], [yMid, F(yMid) + out * (0.62 - b.sag * 0.15), B.sh - 0.05],
+        [yApex, F(yApex) + out, B.sh - 0.035 + b.size * 0.01], [0.64, F(0.64) - 0.004, B.sh - 0.035]];
+    }
     if (fem) taper(body, HIP.y0, HIP.y1, [HIP.w0, HIP.d0], [HIP.w1, HIP.d1], hipC);
     else box(body, B.hip, 0.09, B.dep + 0.01, 0, 0.36, 0, hipC);
     // skirts and the tunic's tails hang in a left and a right half, each swinging with its leg a little (so the
@@ -238,11 +252,16 @@ export function makeFolkKit(GFX) {
     const torsoC = T.item === 'vest' || T.item === 'bodice' ? T.under.color : T.color;
     // upper chest across the shoulders, the lower narrower at the waist
     if (fem) {
-      // (v4) one tapered block from the waist up to the shoulders, and the bust a wedge on its front: sloping out and
-      // down from the chest to an undercut, flat underside
+      // (v4) one tapered block from the waist up to the shoulders
       taper(chest, TOR.y0 - CH, TOR.y1 - CH, [TOR.w0, TOR.d0], [TOR.w1, TOR.d1], torsoC);
-      const f0 = torsoAt(0.505)[1] / 2, f1 = torsoAt(0.625)[1] / 2;
-      taper(chest, 0.505 - CH, 0.625 - CH, [B.sh - 0.035, 0.07, 0, f0 + 0.03], [B.sh - 0.03, 0.02, 0, f1 - 0.006], torsoC);
+      // (v5, Jordan: the v4 wedge was too sharp and low) the bust in profile: a long slope out from high on the chest
+      // to the fullest point, then two facets turning back under it to the ribs. Size pushes the fullest point out,
+      // lift raises it, sag lowers it and drops the underside further below it.
+      for (let i = 0; i < BUST.length - 1; i++) {
+        const [ya, za, wa] = BUST[i], [yb, zb, wb] = BUST[i + 1], back = y => torsoAt(y)[1] / 2 - 0.03;
+        const da = za - back(ya), db = zb - back(yb);
+        taper(chest, ya - CH, yb - CH, [wa, da, 0, za - da / 2], [wb, db, 0, zb - db / 2], torsoC);
+      }
     } else {
       box(chest, B.sh, 0.16, B.dep, 0, 0.59 - CH, 0, torsoC);
       box(chest, B.wa, 0.16, B.dep - 0.006, 0, 0.45 - CH, 0, torsoC);
@@ -261,8 +280,8 @@ export function makeFolkKit(GFX) {
       // a laced bodice from the bust to the waist over a blouse
       if (fem) {
         // (v4) following the torso's taper, up to just under the bust
-        const [w0, d0] = torsoAt(0.4), [w1, d1] = torsoAt(0.53);
-        taper(chest, 0.4 - CH, 0.53 - CH, [w0 + 0.014, d0 + 0.012], [w1 + 0.014, d1 + 0.012], T.color);
+        const yt = BUST[0][0] + 0.004, [w0, d0] = torsoAt(0.4), [w1, d1] = torsoAt(yt);
+        taper(chest, 0.4 - CH, yt - CH, [w0 + 0.014, d0 + 0.012], [w1 + 0.014, d1 + 0.012], T.color);
       } else {
         box(chest, B.wa + 0.012, 0.2, B.dep + 0.008, 0, 0.47 - CH, 0, T.color);
         box(chest, B.sh - 0.04, 0.05, B.dep + 0.004, 0, 0.555 - CH, 0, T.color);
@@ -276,7 +295,11 @@ export function makeFolkKit(GFX) {
       box(chest, 0.03, 0.07, 0.006, 0, 0.625 - CH, frontAt(0.625) + 0.003, shade(T.color, -0.3));
     }
     // the bust's front at a height (feminine), for what lies over it
-    const bustFront = y => lerp(torsoAt(0.505)[1] / 2 + 0.065, torsoAt(0.625)[1] / 2 + 0.004, clampU((y - 0.505) / 0.12));
+    const bustFront = y => {
+      if (y <= BUST[0][0]) return BUST[0][1];
+      for (let i = 0; i < BUST.length - 1; i++) if (y <= BUST[i + 1][0]) return lerp(BUST[i][1], BUST[i + 1][1], (y - BUST[i][0]) / (BUST[i + 1][0] - BUST[i][0]));
+      return BUST[BUST.length - 1][1];
+    };
     // the skirt's front at a height, for the sash and apron over it
     const skirtFront = y => skirtP ? skirtAt(y, skirtP)[1] / 2 + 0.004 : 0;
     if (d.belt) {
@@ -301,9 +324,12 @@ export function makeFolkKit(GFX) {
       box(body, aw + 0.03, 0.02, Math.max(ad + 0.03, skirted ? 2 * skirtFront(0.44) + 0.01 : 0), 0, 0.44, 0, shade(d.apron.color, -0.15));
       if (d.apron.bib) {
         if (fem) {
-          // over the bust: flat below it, then up its slope
-          taper(chest, 0.45 - CH, 0.505 - CH, [B.wa - 0.06, 0.012, 0, frontAt(0.45) + 0.008], [B.wa - 0.06, 0.012, 0, frontAt(0.505) + 0.008], d.apron.color);
-          taper(chest, 0.505 - CH, 0.6 - CH, [B.wa - 0.06, 0.012, 0, bustFront(0.505) + 0.008], [B.wa - 0.07, 0.012, 0, bustFront(0.6) + 0.008], d.apron.color);
+          // over the bust: flat below it, then over each facet of it up to the bib's top
+          const y0 = BUST[0][0], pts = [[0.45, frontAt(0.45)], [y0, bustFront(y0)], ...BUST.slice(1).filter(q => q[0] < 0.6).map(q => [q[0], q[1]]), [0.6, bustFront(0.6)]];
+          for (let i = 0; i < pts.length - 1; i++) {
+            const [ya, za] = pts[i], [yb, zb] = pts[i + 1];
+            if (yb - ya > 0.002) taper(chest, ya - CH, yb - CH, [B.wa - 0.065, 0.012, 0, za + 0.008], [B.wa - 0.065, 0.012, 0, zb + 0.008], d.apron.color);
+          }
         } else box(chest, B.wa - 0.07, 0.16, 0.012, 0, 0.53 - CH, B.dep / 2 + 0.008, d.apron.color);
       }
     }
