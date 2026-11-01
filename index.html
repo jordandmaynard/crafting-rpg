@@ -1107,7 +1107,12 @@ function makeRegionName(w, rand, used, fallback) {
   return fallback;
 }
 const towns = [];
-const TOWN_R = 10;
+const TOWN_R = 10;   // a hamlet's radius
+// Town sizes (v407): 0 hamlet (the old town: a cross of streets, four houses), 1 medium, 2 large (at the heart of every
+// continent). R its radius; plaza its half width; ring a square street that far out (0 none); houses how many to try for
+const TOWN_TIER = [{ R: TOWN_R, plaza: 2, ring: 0, houses: 4 }, { R: 15, plaza: 2, ring: 0, houses: 8 }, { R: 21, plaza: 3, ring: 10, houses: 16 }];
+const TOWN_MEDIUM = 3;   // medium towns a world, at most
+const TSTREET = new Uint8Array(N * N);   // a medium or large town's streets (1) and plaza (2), laid out in placeTowns
 const DEEP_IN = 10;   // tiles of ordinary forest, give or take, ringing a deep forest
 const WASTE_AT = 0.46;   // how blasted the land must be to be the wastes
 const craters = [];   // { c, r, R, lava } where the wastes were struck
@@ -2532,7 +2537,7 @@ function carveCanyons() {
       const i = T(c0 + dc, r0 + dr);
       if (!LV[i] || TN[i] || BI[i] === TOWN) return false;
     }
-    return towns.every(t => Math.hypot(t.c - x, t.r - z) > TOWN_R + 22);
+    return towns.every(t => Math.hypot(t.c - x, t.r - z) > t.R + 22);
   };
   for (let k = 0; k < 900 && waterStats.canyons < 7; k++) {
     let x = 30 + rand() * (N - 60), z = 30 + rand() * (N - 60), a = rand() * Math.PI * 2;
@@ -2775,6 +2780,7 @@ function showPlotHover(id) {
 // one in each quarter, set beside a street with its door facing it.
 const ROOF_COLORS = ['#9a4434', '#3e5c8c', '#6a4a86', '#7a5634', '#3e6a4a'];
 function raiseHouses(t, n) {
+  if (t.tier) { raiseTownHouses(t, n); townTables(t, n); return; }
   t.houses = [];
   // how far down each street (N, E, S, W) the last door on it sits
   t.doorArm = [2, 2, 2, 2];
@@ -2804,12 +2810,15 @@ function raiseHouses(t, n) {
       }
     }
   });
-  // the first house is the tannery and the second the smithy (or the tannery too, in a town of one house): each
-  // table stands on the free floor tile farthest from the door, along the house
+  townTables(t, n);
+}
+// the first house is the tannery and the second the smithy (or the tannery too, in a town of one house): each
+// table stands on the free floor tile farthest from the door, along the house
+function townTables(t, n) {
   const table = (house, o, kind) => {
     const [ic, ir] = house.inside;
     let best = null, bd = -1;
-    for (const [c, r] of house.tiles) { const d = Math.hypot(c - ic, r - ir); if (OB[T(c, r)] !== O.TANTABLE && d > bd) { bd = d; best = [c, r]; } }
+    for (const [c, r] of house.tiles) { const d = Math.hypot(c - ic, r - ir); if (OB[T(c, r)] !== O.TANTABLE && !stairAt.has(T(c, r)) && d > bd) { bd = d; best = [c, r]; } }
     if (!best) return;
     const cs = house.tiles.map(p => p[0]), rs = house.tiles.map(p => p[1]);
     const wide = Math.max(...cs) - Math.min(...cs) >= Math.max(...rs) - Math.min(...rs);
@@ -2825,6 +2834,91 @@ function raiseHouses(t, n) {
     smithy.smithy = true; t.smithy = smithy;
   }
 }
+// Houses of the medium and large towns (v407), from the same tileset as the player's: each fronts a street (or
+// the plaza) with its door on it, a tile of yard round it clear of the next. Styles: stone (stone walls, stone
+// windows, flagstones), timber (timber walls and windows, planks), and two stories (wooden stairs inside up to a
+// plank floor walled in timber with timber windows, on stone or on timber); some upper floors have a balcony over
+// the street, planks railed with fence, a door out onto it.
+const TOWN_STYLE = [null, [['timber2', 0.35], ['stone1', 0.55], ['timber1', 1]], [['stone2', 0.5], ['timber2', 0.78], ['stone1', 1]]];
+const BALCONY = new Set();   // tiles of town balconies (an upper floor that isn't a roof over anyone: storyView ignores it)
+function raiseTownHouses(t, n) {
+  const TT = TOWN_TIER[t.tier], big = t.tier === 2, R = t.R, own = n + 1;
+  t.houses = []; t.doorArm = [R, R, R, R];
+  const house = new Set();
+  const inTown = (c, r) => TN[T(c, r)] === own;
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  // where a house can stand: a street or plaza tile with yard beside it, the house running away from it
+  const cands = [];
+  for (let r = t.r - R; r <= t.r + R; r++) for (let c = t.c - R; c <= t.c + R; c++) {
+    const i = T(c, r);
+    if (!inTown(c, r) || !TSTREET[i]) continue;
+    for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (TN[j] === own && !TSTREET[j]) cands.push([c, r, d, hs(c, r, 310 + d)]); }
+  }
+  cands.sort((a, b) => a[3] - b[3]);
+  const sizes = big ? [[7, 6], [6, 6], [7, 5], [6, 5], [5, 5]] : [[6, 5], [5, 5], [6, 4], [5, 4], [4, 4]];
+  for (const [c0, r0, d] of cands) {
+    if (t.houses.length >= TT.houses) break;
+    const p = (d + 1) & 3, back = (d + 2) & 3;
+    const at = (a, b) => [c0 + DC[p] * a + DC[d] * b, r0 + DR[p] * a + DR[d] * b];
+    let fit = null;
+    for (const [w, dep] of sizes) {
+      const o0 = -Math.floor((w - 1 - Math.floor(hs(c0, r0, 320 + d) * 2)) / 2), a1 = o0 + w - 1;
+      let ok = true;
+      for (let a = o0 - 1; a <= a1 + 1 && ok; a++) for (let b = 0; b <= dep + 1 && ok; b++) {
+        const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep;
+        if (inside ? !inTown(c, r) || TSTREET[i] || house.has(i) : (b > 0 && (!inTown(c, r) || house.has(i)))) ok = false;
+      }
+      if (ok) { fit = { w, dep, o0, a1 }; break; }
+    }
+    if (!fit) continue;
+    const { w, dep, o0, a1 } = fit, roll = hs(c0, r0, 330 + d);
+    const style = TOWN_STYLE[t.tier].find(([, v]) => roll < v)[0], stone = style.startsWith('stone'), two = style.endsWith('2');
+    const tiles = [], set = new Set();
+    for (let a = o0; a <= a1; a++) for (let b = 1; b <= dep; b++) { const [c, r] = at(a, b); tiles.push([c, r]); set.add(T(c, r)); house.add(T(c, r)); }
+    // the stair (two stories): up the inner end of the house from its back wall toward the front
+    let st = null;
+    if (two) {
+      const [fc, fr] = at(a1, dep), [c1, r1] = at(a1, dep - 1), [lc, lr] = at(a1, dep - 2), t0 = T(fc, fr), t1 = T(c1, r1);
+      st = { c: fc, r: fr, d: back, k: 0, kind: 'woodstairs', t0, t1, land: T(lc, lr), y0: storyY(0, t0), key: t0 };
+      stairs.set(t0, st); stairAt.set(t0, st); stairAt.set(t1, st); piece(fc, fr);
+    }
+    // a wall's place along its run: windows at every other place, not at the corners, never where the door is
+    const slot = (idx, len) => idx > 0 && idx < len - 1 && idx % 2 === 1;
+    const sideOf = (a, b, e) => e === back || e === d ? [a - o0, w] : [b - 1, dep];
+    const doorAt = at(0, 1), U = UP[1];
+    for (const [c, r] of tiles) {
+      const i = T(c, r);
+      FL[i] = stone ? 2 : 1; OB[i] = 0; piece(c, r);
+      if (two && i !== st.t0 && i !== st.t1) { U.FL.set(i, 1); piece(c, r); }
+    }
+    const a2b = new Map(); for (let a = o0; a <= a1; a++) for (let b = 1; b <= dep; b++) a2b.set(T(...at(a, b)), [a, b]);
+    let door = null;
+    for (const [c, r] of tiles) for (let e = 0; e < 4; e++) {
+      if (set.has(T(c + DC[e], r + DR[e]))) continue;
+      const [a, b] = a2b.get(T(c, r)), [idx, len] = sideOf(a, b, e), [ec, er, ew] = edgeOf(c, r, e);
+      const isDoor = c === doorAt[0] && r === doorAt[1] && e === back;
+      (ew ? WW : WN)[T(ec, er)] = isDoor ? 2 : slot(idx, len) ? (stone ? 14 : 13) : (stone ? 4 : 1);
+      piece(ec, er);
+      if (isDoor) door = [ec, er, ew];
+      if (two) { (ew ? U.WW : U.WN).set(T(ec, er), slot(idx, len) ? 13 : 1); piece(ec, er); }
+    }
+    // a balcony: three planks out over the street in front, railed, a door out to it from the middle
+    const up = two ? { doors: [] } : null;
+    if (two && big && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
+      const bal = [-1, 0, 1].map(a => at(a, 0)), free = bal.every(([c, r]) => !U.FL.has(T(c, r)) && !BALCONY.has(T(c, r)));
+      if (free) {
+        for (const [c, r] of bal) { const i = T(c, r); U.FL.set(i, 1); BALCONY.add(i); piece(c, r); }
+        bal.forEach(([c, r], j) => {
+          for (const e of [back, ...(j === 0 ? [(p + 2) & 3] : j === 2 ? [p] : [])]) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), 5); piece(ec, er); }
+        });
+        const [ec, er, ew] = edgeOf(...at(0, 1), back);
+        (ew ? U.WW : U.WN).set(T(ec, er), 2);
+        up.doors.push([ec, er, ew]);
+      }
+    }
+    t.houses.push({ tiles, door, inside: at(0, 1), color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up });
+  }
+}
 const TABLES = [];
 // Every town is fenced round wherever its edge can be walked across (in wood, or in dry stone), with a gate
 // where each street runs out into a road. A town no road reaches still gets a gate at a street's end.
@@ -2833,7 +2927,7 @@ function fenceTowns() {
   towns.forEach((t, k) => {
     const kind = hs(t.c, t.r, 97) > 0.5 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [];
     t.gates = [];
-    for (let r = t.r - TOWN_R - 2; r <= t.r + TOWN_R + 2; r++) for (let c = t.c - TOWN_R - 2; c <= t.c + TOWN_R + 2; c++) {
+    for (let r = t.r - t.R - 2; r <= t.r + t.R + 2; r++) for (let c = t.c - t.R - 2; c <= t.c + t.R + 2; c++) {
       const i = T(c, r);
       if (BI[i] !== TOWN || TN[i] !== k + 1) continue;
       for (let d = 0; d < 4; d++) {
@@ -3356,7 +3450,10 @@ function placeCabins() {
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 function finishTowns() {
   for (const t of towns) {
-    for (const hse of t.houses) { makeDoor(...hse.door); makeRoom(hse.tiles, hse.color); }
+    for (const hse of t.houses) {
+      makeDoor(...hse.door); makeRoom(hse.tiles, hse.color);
+      if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.tiles, hse.color, null, 1); }
+    }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
   }
   buildGrottoFalls();
@@ -3667,10 +3764,10 @@ function placeDocksAll() {
   // coastal towns: the shore nearest the town outside it, its road all the way in to the nearest street tile
   // (then the gates, the end of each street out of town, then the middle)
   towns.forEach((t, n) => {
-    const site = dockSite(t.c, t.r, TOWN_R + DOCKS.townReach, LV[T(t.c, t.r)]);
+    const site = dockSite(t.c, t.r, t.R + DOCKS.townReach, LV[T(t.c, t.r)]);
     if (!site) return;
     const sc = site.s % N, sr = (site.s - sc) / N, by = [];
-    for (let r = t.r - TOWN_R - 2; r <= t.r + TOWN_R + 2; r++) for (let c = t.c - TOWN_R - 2; c <= t.c + TOWN_R + 2; c++) {
+    for (let r = t.r - t.R - 2; r <= t.r + t.R + 2; r++) for (let c = t.c - t.R - 2; c <= t.c + t.R + 2; c++) {
       const i = T(c, r);
       if (TN[i] === n + 1 && PATH[i]) by.push([Math.hypot(c - sc, r - sr), i]);
     }
@@ -3827,8 +3924,8 @@ function placeGraveyards(rand) {
   const k = land / G.per;
   graveyards.length = 0;
   const canGrave = i => LV[i] && WT[i] < 2 && !TN[i] && BI[i] !== SNOW && BI[i] !== WASTES && BI[i] !== TOWN;
-  const nearTown = (c, r) => Math.min(...towns.map(t => Math.hypot(t.c - c, t.r - r)));
-  const clearOf = (c, r, R) => graveyards.every(g => Math.hypot(g.c - c, g.r - r) > g.R + R + G.gap * 0.5) && nearTown(c, r) > TOWN_R + R + 4;
+  const nearTown = (c, r) => Math.min(...towns.map(t => Math.hypot(t.c - c, t.r - r) - t.R));   // (from its edge)
+  const clearOf = (c, r, R) => graveyards.every(g => Math.hypot(g.c - c, g.r - r) > g.R + R + G.gap * 0.5) && nearTown(c, r) > R + 4;
   const stamp = (c, r, R, kind) => {
     const gi = graveyards.length, sc = Math.max(9, R * 0.5);   // (the edge's wobble scales with the yard)
     graveyards.push({ c, r, R, kind });
@@ -3846,7 +3943,7 @@ function placeGraveyards(rand) {
   for (const t of towns) {
     const R = pick(G.town), land0 = LANDID[T(t.c, t.r)];
     for (let tries = 0; tries < 40; tries++) {
-      const a = rand() * Math.PI * 2, d = TOWN_R + R + pick(G.townOff), c = Math.round(t.c + Math.cos(a) * d), r = Math.round(t.r + Math.sin(a) * d), i = T(c, r);
+      const a = rand() * Math.PI * 2, d = t.R + R + pick(G.townOff), c = Math.round(t.c + Math.cos(a) * d), r = Math.round(t.r + Math.sin(a) * d), i = T(c, r);
       if (c < 20 || r < 20 || c >= N - 20 || r >= N - 20 || !canGrave(i) || LANDID[i] !== land0 || Math.abs(LV[i] - t.L) > 1 || roomy(c, r, R) < G.room) continue;
       if (!graveyards.every(g => Math.hypot(g.c - c, g.r - r) > g.R + R + 6)) continue;
       stamp(c, r, R, 'town'); break;
@@ -3875,86 +3972,98 @@ function placeGraveyards(rand) {
 const TOWN_LAND = 12000;   // tiles a landmass needs for a town of its own
 function placeTowns(rand) {
   let want = 7;
-  const ok = (c, r) => {
+  const ok = (c, r, R = TOWN_R) => {
     const L = LV[T(c, r)], b = BI[T(c, r)];
     if (L < 1 || L > 4 || b === SNOW || b === SWAMP || b === GRAVE || b === DEEP || b === WASTES) return false;
     let good = 0, all = 0;
-    for (let dr = -TOWN_R; dr <= TOWN_R; dr += 2) for (let dc = -TOWN_R; dc <= TOWN_R; dc += 2) {
-      if (dc * dc + dr * dr > TOWN_R * TOWN_R) continue;
+    for (let dr = -R; dr <= R; dr += 2) for (let dc = -R; dc <= R; dc += 2) {
+      if (dc * dc + dr * dr > R * R) continue;
       all++;
       const l = LV[T(c + dc, r + dr)];
       if (l && Math.abs(l - L) <= 1) good++;
     }
     if (good < all * 0.88) return false;
     // nowhere a lake or river would be paved over
-    const R3 = TOWN_R + 11;
+    const R3 = R + 11;
     for (let dr = -R3; dr <= R3; dr += 2) for (let dc = -R3; dc <= R3; dc += 2) if (WT[T(c + dc, r + dr)] >= 2) return false;
     return true;
   };
   // the first town sits nearest the heart of the biggest landmass (the home continent); the others only on
-  // landmasses of TOWN_LAND tiles or more, never the small islands
+  // landmasses of TOWN_LAND tiles or more, never the small islands. The town at a continent's heart is a large one
+  // where the ground has room (v407), else a hamlet
   labelLands();
   const home = landmasses[0] || { id: 0, c: N / 2, r: N / 2 };
-  let best = null, bd = 1e9;
-  for (const R of [160, 320, N]) {
-    for (let k = 0; k < 3000; k++) {
-      const c = clamp(home.c + Math.floor((rand() * 2 - 1) * R), 40, N - 41), r = clamp(home.r + Math.floor((rand() * 2 - 1) * R), 40, N - 41);
-      const d = Math.hypot(c - home.c, r - home.r);
-      if (d < bd && LANDID[T(c, r)] === home.id && ok(c, r)) { best = [c, r]; bd = d; }
+  const heart = (m, Rs, tries, apart) => {
+    for (const tier of [2, 0]) {
+      let got = null, gd = 1e9;
+      for (const R of Rs) {
+        for (let k = 0; k < tries; k++) {
+          const c = clamp(m.c + Math.floor((rand() * 2 - 1) * R), 40, N - 41), r = clamp(m.r + Math.floor((rand() * 2 - 1) * R), 40, N - 41), d = Math.hypot(c - m.c, r - m.r);
+          if (d < gd && LANDID[T(c, r)] === m.id && apart(c, r) && ok(c, r, TOWN_TIER[tier].R)) { got = [c, r, tier]; gd = d; }
+        }
+        if (got) return got;
+      }
     }
-    if (best) break;
-  }
-  if (!best) best = [home.c, home.r];
-  const list = [best];
+    return null;
+  };
+  const list = [heart(home, [160, 320, N], 3000, () => true) || [home.c, home.r, 0]];
   // (v387) then one at the heart of every other landmass of TOWN_LAND tiles or more, so each continent has a town
   for (const m of landmasses) {
     if (m.id === home.id || m.n < TOWN_LAND) continue;
-    let got = null, gd = 1e9;
-    for (const R of [120, 260, N]) {
-      for (let k = 0; k < 2500; k++) {
-        const c = clamp(m.c + Math.floor((rand() * 2 - 1) * R), 40, N - 41), r = clamp(m.r + Math.floor((rand() * 2 - 1) * R), 40, N - 41), d = Math.hypot(c - m.c, r - m.r);
-        if (d < gd && LANDID[T(c, r)] === m.id && !list.some(([a, b]) => Math.hypot(a - c, b - r) < 170) && ok(c, r)) { got = [c, r]; gd = d; }
-      }
-      if (got) break;
-    }
+    const got = heart(m, [120, 260, N], 2500, (c, r) => !list.some(([a, b]) => Math.hypot(a - c, b - r) < 170));
     if (got) list.push(got);
   }
+  // the rest: medium towns while there are fewer than TOWN_MEDIUM (where one fits), then hamlets
+  let medium = 0;
+  const tierAt = (c, r) => { if (medium < TOWN_MEDIUM && ok(c, r, TOWN_TIER[1].R)) { medium++; return 1; } return 0; };
   // (v400) and at least one town on every continent's coast, for its dock: its edge a few tiles from the sea
-  const coastal = (c, r) => {
-    for (let a = 0; a < 40; a++) for (const d of [TOWN_R + 3, TOWN_R + 7, TOWN_R + 11]) {
+  const coastal = (c, r, R) => {
+    for (let a = 0; a < 40; a++) for (const d of [R + 3, R + 7, R + 11]) {
       const cc = Math.round(c + Math.cos(a / 40 * Math.PI * 2) * d), rr = Math.round(r + Math.sin(a / 40 * Math.PI * 2) * d);
       if (cc >= 0 && rr >= 0 && cc < N && rr < N && !LANDID[T(cc, rr)]) return true;
     }
     return false;
   };
   for (const m of landmasses) {
-    if (m.n < TOWN_LAND || list.some(([c, r]) => LANDID[T(c, r)] === m.id && coastal(c, r))) continue;
+    if (m.n < TOWN_LAND || list.some(([c, r, tier]) => LANDID[T(c, r)] === m.id && coastal(c, r, TOWN_TIER[tier].R))) continue;
     for (const apart of [170, 120]) {
       let got = null;
       for (let k = 0; k < 5000 && !got; k++) {
         const c = clamp(m.x0 + Math.floor(rand() * (m.x1 - m.x0 + 1)), 40, N - 41), r = clamp(m.z0 + Math.floor(rand() * (m.z1 - m.z0 + 1)), 40, N - 41);
-        if (LANDID[T(c, r)] === m.id && !list.some(([a, b]) => Math.hypot(a - c, b - r) < apart) && coastal(c, r) && ok(c, r)) got = [c, r];
+        if (LANDID[T(c, r)] === m.id && !list.some(([a, b]) => Math.hypot(a - c, b - r) < apart) && coastal(c, r, TOWN_R) && ok(c, r)) got = [c, r];
       }
-      if (got) { list.push(got); break; }
+      if (got) { list.push([...got, tierAt(...got)]); break; }
     }
   }
   want = Math.max(want, list.length + 3);
   for (let k = 0; k < 8000 && list.length < want; k++) {
     const c = 90 + Math.floor(rand() * (N - 180)), r = 90 + Math.floor(rand() * (N - 180)), m = landmasses[LANDID[T(c, r)] - 1];
     if (!m || m.n < TOWN_LAND || list.some(([a, b]) => Math.hypot(a - c, b - r) < 170)) continue;
-    if (ok(c, r)) list.push([c, r]);
+    if (ok(c, r)) list.push([c, r, tierAt(c, r)]);
   }
-  list.forEach(([c, r], k) => {
-    const L = clamp(LV[T(c, r)], 1, 4);
-    towns.push({ c, r, L, name: TOWN_NAMES[k % TOWN_NAMES.length], lamps: [] });
-    const R2 = TOWN_R + 8;
+  TSTREET.fill(0);
+  list.forEach(([c, r, tier], k) => {
+    const L = clamp(LV[T(c, r)], 1, 4), TT = TOWN_TIER[tier], R = TT.R;
+    towns.push({ c, r, L, tier, R, name: TOWN_NAMES[k % TOWN_NAMES.length], lamps: [] });
+    const R2 = R + 8;
     for (let dr = -R2; dr <= R2; dr++) for (let dc = -R2; dc <= R2; dc++) {
       const cc = c + dc, rr = r + dr, i = T(cc, rr);
-      const dist = Math.hypot(dc, dr) + (hs(cc, rr, 21) - 0.5) * 1.2 - TOWN_R;
+      const dist = Math.hypot(dc, dr) + (hs(cc, rr, 21) - 0.5) * 1.2 - R;
       if (dist <= 0) { LV[i] = L; SH[i] = 0; BI[i] = TOWN; TN[i] = k + 1; }
       else if (LV[i]) { const m = Math.ceil(dist / TERRACE); LV[i] = clamp(LV[i], Math.max(1, L - m), L + m); }
       else continue;   // (the sea round a coastal town stays sea)
       WT[i] = WT[i] >= 2 ? 0 : WT[i]; WL[i] = 0; GL[i] = 0;
+    }
+    // a medium or large town's streets, laid now (PATH) so the roads join them: a square plaza in the middle, a
+    // street out from it each way to the edge, and in a large town a square ring street round the middle
+    if (!tier) return;
+    for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+      const i = T(c + dc, r + dr);
+      if (TN[i] !== k + 1) continue;
+      const P = TT.plaza, ring = TT.ring;
+      if (Math.abs(dc) <= P && Math.abs(dr) <= P) TSTREET[i] = 2;
+      else if (!dc || !dr || (ring && Math.max(Math.abs(dc), Math.abs(dr)) === ring)) TSTREET[i] = 1;
+      if (TSTREET[i]) PATH[i] = 1;
     }
   });
 }
@@ -4182,6 +4291,7 @@ function townCell(c, r) {
   const t = towns[TN[T(c, r)] - 1];
   if (!t) return null;
   const dx = c - t.c, dz = r - t.r;
+  if (t.tier) { const v = TSTREET[T(c, r)]; return v === 2 ? 'plaza' : v ? 'street' : 'yard'; }
   if (Math.abs(dx) <= 2 && Math.abs(dz) <= 2) return 'plaza';
   if (dx === 0 || dz === 0) {
     // until the roads are laid every street runs to the edge
@@ -4294,12 +4404,13 @@ function placeScenery(c, r) {
     case TOWN: {
       const t = towns[TN[i] - 1], dx = c - t.c, dz = r - t.r, cell = townCell(c, r);
       if (dx === 0 && dz === 0) { OB[i] = O.WELL; return; }
-      if (Math.abs(dx) === 3 && Math.abs(dz) === 3) { OB[i] = O.LAMP; t.lamps.push([c + 0.5, r + 0.5]); return; }
+      const ring = TOWN_TIER[t.tier].ring, lp = TOWN_TIER[t.tier].plaza + 1;
+      if ((Math.abs(dx) === lp && Math.abs(dz) === lp) || (ring && Math.abs(dx) === ring + 1 && Math.abs(dz) === ring + 1)) { OB[i] = O.LAMP; t.lamps.push([c + 0.5, r + 0.5]); return; }
       if (cell !== 'yard' || PATH[i]) return;
       const d = Math.hypot(dx, dz);
       // keep the step outside each door clear
       for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2) return;
-      if (d >= TOWN_R - 2 && k2 > 0.7) OB[i] = O.OAK;
+      if (d >= t.R - 2 && k2 > 0.7) OB[i] = O.OAK;
       else if (k2 < 0.05) OB[i] = O.BUSH;
       return;
     }
@@ -11011,7 +11122,7 @@ function storyView() {
   if (mode === 'build') return buildStory;
   const i = T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1));
   const s = seenStory();
-  for (let k = s + 1; k <= STORY_MAX; k++) if (UP[k].FL.has(i)) return s;
+  for (let k = s + 1; k <= STORY_MAX; k++) if (UP[k].FL.has(i) && !BALCONY.has(i)) return s;
   if (roomOf.has(s * SNN + i)) return s;
   return STORY_MAX;
 }
@@ -15387,6 +15498,7 @@ function removeUp(k) {
   if (st) target = { kind: st.kind, c: st.c, r: st.r, st };
   if (!target && U.FL.has(i)) target = { kind: FLOOR_KIND[U.FL.get(i)], c, r };
   if (!target) { sfx.nope(); return; }
+  if (BI[i] === TOWN || ('w' in target && BI[T(target.c, target.r)] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
   const mx = 'w' in target ? (target.w ? target.c : target.c + 0.5) : c + 0.5, mz = 'w' in target ? (target.w ? target.r + 0.5 : target.r) : r + 0.5;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   if (isFloor(target.kind) && stairAt.has(k * SNN + i)) { sfx.nope(); toast('Stairs stand on this floor: take them down first.'); return; }
@@ -16172,6 +16284,7 @@ function removePiece() {
     if (!target && stationTile.has(i)) { const st = stationTile.get(i); target = { kind: st.kind, c: st.c, r: st.r }; }
     if (!target && stairAt.has(i)) {
       const st = stairAt.get(i);
+      if (BI[i] === TOWN) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
       if (Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
       if (H.stair === st) { sfx.nope(); toast('Step off the stairs first.'); return; }
       removeStair(st); pay(st.kind, -1); flushDirty(); sfx.remove();
@@ -19475,7 +19588,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 406, crashSeen = new Map();
+const GAME_VERSION = 407, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
