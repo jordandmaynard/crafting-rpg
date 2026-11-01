@@ -4692,6 +4692,30 @@ if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 const GRASS_KIND = { [MEADOW]: 1, [FOREST]: 2, [TOWN]: 3, [SWAMP]: 4, [DEEP]: 6, [GRAVE]: 7 };
 const grassTex = new GFX.DataTexture(new Uint8Array(N * N * 4), N, N);
 grassTex.regions = [];
+// Build mode clears the grass off the plot you're standing on (v376, Jordan), so the ground and the grid read plainly:
+// the tiles' quarter masks are put aside in grassHidden and zeroed, and put back when you leave build mode or the plot
+// (a chunk rebuilt meanwhile hides them again as it writes them)
+let grassHid = 0;
+const grassHidden = new Map();
+function hideGrass(d, i) { grassHidden.set(i, d[i * 4]); d[i * 4] &= 0xf0; }
+function updateGrassHide() {
+  const want = mode === 'build' ? homePlot() : 0;
+  if (want === grassHid) return;
+  const d = grassTex.image.data;
+  if (grassHid) {
+    const pl = plots[grassHid];
+    for (const [i, v] of grassHidden) d[i * 4] = v;
+    grassHidden.clear();
+    grassTex.regions.push([pl.x0, pl.z0, pl.x1 - pl.x0 + 1, pl.z1 - pl.z0 + 1]);
+  }
+  grassHid = want;
+  if (want) {
+    const pl = plots[want];
+    for (let r = pl.z0; r <= pl.z1; r++) for (let c = pl.x0; c <= pl.x1; c++) if (PLOT[T(c, r)] === want) hideGrass(d, T(c, r));
+    grassTex.regions.push([pl.x0, pl.z0, pl.x1 - pl.x0 + 1, pl.z1 - pl.z0 + 1]);
+  }
+  grassTex.needsUpdate = true;
+}
 function grassChunk(cx, cz) {
   const c0 = cx * CH, r0 = cz * CH, W = CH * 2 + 3, ph = new Float32Array(W * W), d = grassTex.image.data;
   // the ground's half-grid points, from one before the chunk's first half-cell to one past its last
@@ -4732,6 +4756,7 @@ function grassChunk(cx, cz) {
     // (a: the tile's ramp shape, SH, so the shader can lift each tuft to the slope; 0 flat. Wheat's how grown it is)
     const e = clamp(Math.round((y + 16) * 1024), 0, 65535), o = i * 4;
     d[o] = kind ? mask | kind << 4 : 0; d[o + 1] = e >> 8; d[o + 2] = e & 255; d[o + 3] = kind >= 8 ? Math.round(wheatGrown(i) * 255) : kind && kind !== 5 ? SH[i] : 0;
+    if (grassHid && PLOT[i] === grassHid) hideGrass(d, i);
   }
   grassTex.regions.push([c0, r0, CH, CH]);
   grassTex.needsUpdate = true;
@@ -11904,13 +11929,15 @@ const gridMat = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true,
 const gridBuf = new Buf();
 let gridMesh = null, gridKey = '';
 function updateStoryGrid() {
-  const k = mode === 'build' ? buildStory : 0;
-  const hc = Math.floor(H.x), hr = Math.floor(H.z), key = k ? k + ':' + hc + ':' + hr + ':' + ownsPlot() : '';
+  const k = mode === 'build' ? buildStory : -1;
+  const hc = Math.floor(H.x), hr = Math.floor(H.z), onPlot = claimedAt(T(clamp(hc, 0, N - 1), clamp(hr, 0, N - 1)));
+  // (the ground story's grid only on a claimed plot, v376: off one, build mode shows the plots to claim)
+  const on = k > 0 || (k === 0 && onPlot), key = on ? k + ':' + hc + ':' + hr + ':' + ownsPlot() : '';
   if (key === gridKey) return;
   gridKey = key;
   if (gridMesh) { scene.remove(gridMesh); gridMesh.geometry.dispose(); gridMesh = null; }
-  if (!k) return;
-  const R = STORY_GRID.radius, onPlot = claimedAt(T(clamp(hc, 0, N - 1), clamp(hr, 0, N - 1)));
+  if (!on) return;
+  const R = STORY_GRID.radius;
   const inGrid = (c, r) => c >= 1 && r >= 1 && c < N - 1 && r < N - 1 && Math.hypot(c + 0.5 - H.x, r + 0.5 - H.z) <= (onPlot ? R : 8) && (!onPlot || claimedAt(T(c, r)));
   const save = OUT; OUT = gridBuf; gridBuf.n = 0;
   const W = CC('#ffffff'), lw = STORY_GRID.line / 2;
@@ -15513,7 +15540,7 @@ function update(dt) {
 
   updateGhost();
   updatePlotWalls();
-  updateStoryGrid();
+  updateStoryGrid(); updateGrassHide();
   updateSky();
   updateLamps();
 
@@ -17846,7 +17873,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 375, crashSeen = new Map();
+const GAME_VERSION = 376, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
