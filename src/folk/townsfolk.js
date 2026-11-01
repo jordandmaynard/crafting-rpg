@@ -258,7 +258,13 @@ export function makeFolkKit(GFX) {
     for (const s of [1, -1]) {
       box(head, 0.035, 0.035, 0.01, s * 0.045, 0.11, 0.092, d.eyes);
       // brows in the hair's colour; lashes swept out on the feminine face
-      if (fem) box(head, 0.048, 0.012, 0.012, s * 0.05, 0.133, 0.094, '#1e1612', 0, s * 0.18);
+      // (v2, Jordan: tilted lashes read as angry brows) the feminine face: a flat lash line on the eye's top edge with a
+      // small flick up at the outer corner, and a soft level brow higher up
+      if (fem) {
+        box(head, 0.042, 0.01, 0.012, s * 0.046, 0.131, 0.094, '#1e1612');
+        box(head, 0.01, 0.012, 0.012, s * 0.07, 0.137, 0.094, '#1e1612');
+        box(head, 0.042, 0.01, 0.01, s * 0.046, 0.158, 0.093, shade(d.hair, -0.1));
+      }
       else box(head, 0.05, 0.014, 0.012, s * 0.045, 0.142, 0.094, shade(d.hair, -0.15));
     }
     if (fem) box(head, 0.04, 0.012, 0.008, 0, 0.05, 0.092, shade(skin, -0.28));
