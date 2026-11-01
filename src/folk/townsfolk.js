@@ -265,19 +265,20 @@ export function makeFolkKit(GFX) {
 
   function build(d) {
     const g = new GFX.Group(), parts = [];
-    // (v3: each box a hair bigger than the one before, cycling every 17, in a step that's no round number so it never
-    // lands back on the hand-set sizes: two boxes whose faces would lie in one plane never do, so pieces that meet
-    // flush don't z-fight. At most 6 mm. Check with the scratchpad's t_zfight.mjs, which scans seeds 1-3000.)
+    // (v3: each box a hair bigger than the one before, cycling every 7 (v8; it was 17, whose 6 mm swing could shrink a
+    // trim below what it covers), in a step that's no round number so it never lands back on the hand-set sizes: two
+    // boxes whose faces would lie in one plane never do, so pieces that meet flush don't z-fight. v8: anything laid
+    // over another piece stands at least 2 mm proud of it by hand, since faces under ~1 mm apart still fought.)
     let nBox = 0;
     const box = (parent, w, h, dd, x, y, z, c, rx = 0, rz = 0, ry = 0) => {
-      const e = 0.00037 * (nBox++ % 17);
+      const e = 0.00037 * (nBox++ % 7);
       const m = new GFX.Mesh(new GFX.BoxGeometry(w + e, h + e, dd + e), mat(c)); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); parts.push(m); return m;
     };
     // (v4, Jordan: angled shapes for the feminine build) a tapered block: its bottom face at y0 (width wb, depth db,
     // centred on xb, zb) and its top at y1 (wt, dt, at xt, zt), straight sides between: a box whose top is a different
     // size, or set off, from its bottom. The renderer shades each face flat from its own slope.
     const taper = (parent, y0, y1, [wb, db, xb = 0, zb = 0], [wt, dt, xt = 0, zt = 0], c) => {
-      const e = 0.00037 * (nBox++ % 17), geo = new GFX.BoxGeometry(1, 1, 1);
+      const e = 0.00037 * (nBox++ % 7), geo = new GFX.BoxGeometry(1, 1, 1);
       geo._transform(v => {
         const top = v.y > 0, w = (top ? wt : wb) + e, dd = (top ? dt : db) + e;
         v.set(v.x * w + (top ? xt : xb), top ? y1 + e / 2 : y0 - e / 2, v.z * dd + (top ? zt : zb));
@@ -288,7 +289,7 @@ export function makeFolkKit(GFX) {
     // them and a cap at each end. One mesh, so the rings' joins are true edges: tapers stacked as separate pieces
     // overlapped at every join and drew doubled lines there.
     const loft = (parent, rings, c) => {
-      const e = 0.00037 * (nBox++ % 17), pos = [];
+      const e = 0.00037 * (nBox++ % 7), pos = [];
       const C = rings.map(([y, w, dd, x = 0, z = 0]) => [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) => [x + sx * (w + e) / 2, y, z + sz * (dd + e) / 2]));
       const tri = (a, b, cc) => pos.push(...a, ...b, ...cc);
       for (let i = 0; i < C.length - 1; i++) for (let j = 0; j < 4; j++) {
@@ -332,7 +333,7 @@ export function makeFolkKit(GFX) {
       } else if (F.item === 'shoes') {
         box(foot, B.leg - 0.006, 0.09, B.leg + 0.004, 0, 0.03, 0, shinC);              // the ankle, in stocking or trouser
         box(foot, B.leg + 0.006, 0.06, 0.15, 0, -0.03, 0.018, F.color);
-        box(foot, B.leg + 0.008, 0.015, 0.155, 0, -0.053, 0.018, F.sole);
+        box(foot, B.leg + 0.012, 0.015, 0.158, 0, -0.056, 0.018, F.sole);
       } else {
         // cloth foot wraps, bound with two darker bands
         box(foot, B.leg, 0.11, 0.14, 0, -0.005, 0.015, F.color);
@@ -434,9 +435,9 @@ export function makeFolkKit(GFX) {
       // a sleeveless vest, open down the front over the shirt, with two buttons each side
       for (const s of [1, -1]) {
         // (v3: a hair taller than the shirt under it, so their tops never share a plane)
-        box(chest, B.sh / 2 - 0.02, 0.17, B.dep + 0.012, s * (B.sh / 4 + 0.01), 0.593 - CH, 0, T.color);
-        box(chest, B.wa / 2 - 0.02, 0.17, B.dep + 0.006, s * (B.wa / 4 + 0.01), 0.45 - CH, 0, T.color);
-        for (const y of [0.5, 0.58]) box(chest, 0.018, 0.018, 0.008, s * 0.035, y - CH, B.dep / 2 + 0.009, T.trim);
+        box(chest, B.sh / 2 - 0.016, 0.17, B.dep + 0.012, s * (B.sh / 4 + 0.012), 0.593 - CH, 0, T.color);
+        box(chest, B.wa / 2 - 0.016, 0.17, B.dep + 0.006, s * (B.wa / 4 + 0.012), 0.45 - CH, 0, T.color);
+        for (const y of [0.5, 0.58]) box(chest, 0.018, 0.018, 0.008, s * 0.035, y - CH, B.dep / 2 + 0.007, T.trim);
       }
     } else if (T.item === 'bodice') {
       // a laced bodice from the bust to the waist over a blouse
@@ -448,7 +449,7 @@ export function makeFolkKit(GFX) {
         box(chest, B.wa + 0.012, 0.2, B.dep + 0.008, 0, 0.47 - CH, 0, T.color);
         box(chest, B.sh - 0.04, 0.05, B.dep + 0.004, 0, 0.555 - CH, 0, T.color);
       }
-      for (const y of [0.42, 0.47, 0.51]) for (const s of [1, -1]) box(chest, 0.05, 0.008, 0.006, 0, y - CH, frontAt(y) + 0.011, T.trim, 0, s * 0.6);
+      if (!(d.apron && d.apron.bib)) for (const y of [0.455, 0.49, 0.52]) for (const s of [1, -1]) box(chest, 0.05, 0.008, 0.006, 0, y - CH, frontAt(y) + 0.0095, T.trim, 0, s * 0.6);
     } else if (T.item === 'dress') {
       // a square neckline in the trim
       box(chest, 0.11, 0.02, 0.006, 0, 0.645 - CH, frontAt(0.645) + 0.003, T.trim);
@@ -469,7 +470,7 @@ export function makeFolkKit(GFX) {
       // a fitted doublet: a band of the trim down the front with buttons, its skirt cut short (above)
       box(chest, 0.04, 0.26, 0.006, 0, 0.54 - CH, frontAt(0.54) + 0.004, T.trim);
       for (const y of [0.46, 0.51, 0.56, 0.61]) box(chest, 0.018, 0.018, 0.008, 0, y - CH, frontAt(y) + 0.009, '#c8a048');
-      box(chest, B.sh + 0.012, 0.03, B.dep + 0.012, 0, 0.655 - CH, 0, T.trim);
+      box(chest, B.sh + 0.012, 0.034, B.dep + 0.012, 0, 0.656 - CH, 0, T.trim);
     } else if (T.item === 'robe') {
       // a plain round collar in a darker fold
       box(chest, B.sh - 0.06, 0.025, B.dep + 0.012, 0, 0.66 - CH, 0, shade(T.color, -0.18));
@@ -483,7 +484,7 @@ export function makeFolkKit(GFX) {
     if (d.belt) {
       const bw = fem ? hipAt(0.4)[0] + 0.012 : B.wa + 0.022, bd = fem ? hipAt(0.4)[1] + 0.02 : B.dep + 0.016;
       box(body, bw, d.belt.sash ? 0.05 : 0.04, bd, 0, 0.42, 0, d.belt.color);
-      if (d.belt.sash || d.belt.cord) box(body, d.belt.cord ? 0.02 : 0.04, d.belt.cord ? 0.18 : 0.12, 0.012, B.wa / 4, d.belt.cord ? 0.33 : 0.36, Math.max(bd / 2, skirtFront(0.36)) + 0.008, d.belt.color, skirtP ? -0.08 : 0);
+      if (d.belt.sash || d.belt.cord) box(body, d.belt.cord ? 0.02 : 0.04, d.belt.cord ? 0.18 : 0.12, 0.012, B.wa / 4, d.belt.cord ? 0.325 : 0.355, Math.max(bd / 2, skirtFront(0.36)) + 0.008, d.belt.color, skirtP ? -0.08 : 0);
       else if (d.belt.buckle) box(body, 0.04, 0.045, 0.012, 0, 0.42, bd / 2 + 0.006, '#c8a048');
     }
     // the apron: a panel that swings with the leg ahead, and maybe a bib on the chest; a smith's is long, leather and
@@ -492,7 +493,7 @@ export function makeFolkKit(GFX) {
       const A = d.apron, bottom = skirted ? hem + (A.heavy ? 0.03 : 0.06) : A.heavy ? 0.13 : 0.2;
       hangPanel(1, 0, B.hip - (A.heavy ? 0.05 : 0.08), B.hip - (A.heavy ? 0.03 : 0.04), bottom, A.color, A.heavy ? 0.016 : 0.012);
       const [aw, ad] = fem ? torsoAt(0.44) : [B.wa, B.dep];
-      box(body, aw + 0.03, 0.02, Math.max(ad + 0.03, skirtP ? 2 * skirtFront(0.44) + 0.01 : 0), 0, 0.44, 0, shade(A.color, -0.15));
+      box(body, aw + 0.04, 0.02, Math.max(ad + 0.05, skirtP ? 2 * skirtFront(0.44) + 0.016 : 0), 0, 0.44, 0, shade(A.color, -0.15));
       if (A.bib) {
         chestPanel(0, B.wa - (A.heavy ? 0.05 : 0.065), 0.44, A.heavy ? 0.64 : 0.6, A.color, A.heavy ? 0.014 : 0.008);
         if (A.heavy) for (const sx of [1, -1]) box(chest, 0.018, 0.04, B.dep + 0.02, sx * 0.06, 0.66 - CH, 0, shade(A.color, -0.2));
@@ -502,7 +503,7 @@ export function makeFolkKit(GFX) {
     box(chest, 0.1, 0.06, 0.09, 0, 0.69 - CH, 0, skin);
     if (d.shawl) {
       box(chest, B.sh + 0.05, 0.06, B.dep + 0.05, 0, 0.66 - CH, 0, d.shawl.color);
-      box(chest, 0.1, 0.1, 0.012, 0, 0.62 - CH, (fem ? bustFront(0.6) : B.dep / 2) + 0.01, d.shawl.color, 0, Math.PI / 4);
+      box(chest, 0.1, 0.1, 0.012, 0, 0.62 - CH, (fem ? bustFront(0.6) : B.dep / 2) + 0.007, d.shawl.color, 0, Math.PI / 4);
     }
     if (d.neckerchief) {
       box(chest, 0.14, 0.04, 0.12, 0, 0.67 - CH, 0.005, d.neckerchief.color);
@@ -510,8 +511,8 @@ export function makeFolkKit(GFX) {
     }
     // a chain of office hung in a V from the shoulders, with a medallion
     if (d.chain) {
-      for (const sx of [1, -1]) box(chest, 0.014, 0.12, 0.012, sx * 0.045, 0.615 - CH, chestFront(0.615) + 0.014, d.chain, 0, sx * 0.7);
-      box(chest, 0.04, 0.04, 0.012, 0, 0.565 - CH, chestFront(0.565) + 0.016, d.chain, 0, Math.PI / 4);
+      for (const sx of [1, -1]) box(chest, 0.014, 0.12, 0.012, sx * 0.045, 0.615 - CH, chestFront(0.615) + 0.02, d.chain, 0, sx * 0.7);
+      box(chest, 0.04, 0.04, 0.012, 0, 0.565 - CH, chestFront(0.565) + 0.023, d.chain, 0, Math.PI / 4);
     }
     // a stole: two bands of colour down the front from the neck to below the knee
     if (d.stole) for (const sx of [1, -1]) {
@@ -522,22 +523,22 @@ export function makeFolkKit(GFX) {
     if (d.cloak) {
       const back = y => (fem ? torsoAt(y)[1] : B.dep) / 2 + 0.02;
       taper(chest, 0.42 - CH, 0.67 - CH, [B.sh + 0.03, 0.016, 0, -back(0.42)], [B.sh + 0.05, 0.016, 0, -back(0.67)], d.cloak);
-      box(chest, B.sh + 0.06, 0.03, B.dep + 0.05, 0, 0.665 - CH, 0, shade(d.cloak, -0.15));
-      for (const sx of [1, -1]) box(chest, 0.03, 0.03, 0.012, sx * 0.08, 0.64 - CH, chestFront(0.64) + 0.014, '#c8a048');
+      box(chest, B.sh + 0.06, 0.03, B.dep + 0.084, 0, 0.665 - CH, 0, shade(d.cloak, -0.15));
+      for (const sx of [1, -1]) box(chest, 0.03, 0.03, 0.012, sx * 0.075, 0.64 - CH, chestFront(0.64) + 0.025, '#c8a048');
       hangPanel(-1, 0, B.sh + 0.03, B.sh + 0.1, skirted ? hem + 0.02 : 0.14, d.cloak, 0.03);
     }
     // a satchel on the back, its strap over the left shoulder
     if (d.satchel) {
       box(chest, 0.022, 0.27, 0.01, 0.075, 0.53 - CH, -(frontAt(0.53) + 0.006), d.satchel);
-      box(chest, 0.022, 0.012, B.dep + 0.014, 0.075, 0.665 - CH, 0, d.satchel);
+      box(chest, 0.022, 0.012, B.dep + 0.02, 0.075, 0.672 - CH, 0, d.satchel);
       box(chest, 0.12, 0.1, 0.05, 0.075, 0.38 - CH, -(frontAt(0.45) + 0.03), d.satchel);
-      box(chest, 0.124, 0.04, 0.054, 0.075, 0.415 - CH, -(frontAt(0.45) + 0.03), shade(d.satchel, -0.25));
+      box(chest, 0.128, 0.04, 0.058, 0.075, 0.415 - CH, -(frontAt(0.45) + 0.03), shade(d.satchel, -0.25));
     }
     // a sword at the left hip, hilt forward
     if (d.sword) {
       const sw = pivot(body, (fem ? hipAt(0.36)[0] : B.hip) / 2 + 0.02, 0.38, 0.02); sw.rotation.x = 0.45;
       box(sw, 0.035, 0.36, 0.05, 0, -0.17, 0, '#3a2a1e');
-      box(sw, 0.036, 0.03, 0.052, 0, -0.34, 0, '#c8a048');
+      box(sw, 0.042, 0.03, 0.058, 0, -0.34, 0, '#c8a048');
       box(sw, 0.03, 0.02, 0.12, 0, 0.02, 0, '#c8a048');
       box(sw, 0.026, 0.09, 0.026, 0, 0.07, 0, '#4e3220');
     }
@@ -566,7 +567,7 @@ export function makeFolkKit(GFX) {
       for (const s of [1, -1]) box(head, 0.025, 0.1, 0.11, s * 0.088, 0.06, 0.03, bc);
       box(head, 0.08, 0.02, 0.012, 0, 0.068, 0.096, bc);
     } else if (d.beard === 'moustache') box(head, 0.09, 0.022, 0.014, 0, 0.065, 0.095, bc);
-    else if (d.beard === 'stubble') box(head, 0.176, 0.06, 0.03, 0, 0.035, 0.078, shade(skin, -0.18));
+    else if (d.beard === 'stubble') box(head, 0.176, 0.058, 0.03, 0, 0.036, 0.078, shade(skin, -0.18));
     // hair, then whatever's on the head over it
     const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif';
     const hc = d.hair, hs = d.hairStyle;
@@ -602,25 +603,25 @@ export function makeFolkKit(GFX) {
       box(head, 0.225, 0.22, 0.05, 0, 0.1, -0.095, H.color);
       for (const s of [1, -1]) box(head, 0.03, 0.2, 0.2, s * 0.11, 0.11, -0.005, H.color);
       box(head, 0.07, 0.06, 0.07, 0, 0.21, -0.12, shade(H.color, -0.1), 0.5);
-      box(chest, B.sh + 0.05, 0.07, B.dep + 0.04, 0, 0.665 - CH, -0.008, H.color);
+      box(chest, B.sh + 0.05, 0.07, B.dep + 0.062, 0, 0.665 - CH, -0.008, H.color);
       box(chest, B.sh - 0.02, 0.05, B.dep + 0.03, 0, 0.62 - CH, -0.005, shade(H.color, -0.15));
     } else if (hat === 'cap') {
       // a soft cloth cap with a short peak
       box(head, 0.212, 0.055, 0.206, 0, 0.225, -0.008, H.color);
-      box(head, 0.18, 0.06, 0.18, 0, 0.255, -0.02, shade(H.color, 0.06));
+      box(head, 0.18, 0.06, 0.18, 0, 0.255, -0.014, shade(H.color, 0.06));
       box(head, 0.17, 0.014, 0.06, 0, 0.2, 0.11, shade(H.color, -0.3));
     } else if (hat === 'strawHat') {
       box(head, 0.36, 0.018, 0.36, 0, 0.205, 0, H.color);
-      box(head, 0.36, 0.006, 0.36, 0, 0.196, 0, STRAW_DARK);
+      box(head, 0.352, 0.006, 0.352, 0, 0.196, 0, STRAW_DARK);
       box(head, 0.19, 0.09, 0.19, 0, 0.255, 0, H.color);
       box(head, 0.196, 0.026, 0.196, 0, 0.226, 0, H.band);
     } else if (hat === 'kerchief') {
       // a headscarf tied at the back of the neck, its ends hanging
       box(head, 0.21, 0.045, 0.205, 0, 0.215, -0.006, H.color);
       box(head, 0.21, 0.11, 0.045, 0, 0.16, -0.088, H.color);
-      box(head, 0.06, 0.05, 0.04, 0, 0.1, -0.115, shade(H.color, -0.15), 0, Math.PI / 4);
+      box(head, 0.06, 0.05, 0.04, 0, 0.1, -0.119, shade(H.color, -0.15), 0, Math.PI / 4);
       for (const s of [1, -1]) box(head, 0.03, 0.08, 0.012, s * 0.02, 0.05, -0.12, H.color, 0, s * 0.25);
-      for (const s of [1, -1]) box(head, 0.025, 0.06, 0.16, s * 0.102, 0.17, -0.02, H.color);
+      for (const s of [1, -1]) box(head, 0.03, 0.06, 0.16, s * 0.102, 0.17, -0.02, H.color);
     } else if (hat === 'coif') {
       // a close linen cap over the ears, tied under the chin
       box(head, 0.21, 0.05, 0.205, 0, 0.215, -0.006, H.color);
@@ -649,7 +650,7 @@ export function makeFolkKit(GFX) {
       for (const a of [0, 2.1, -2.1]) {
         const sx = Math.sin(a), sz = Math.cos(a);
         box(head, 0.22, 0.07, 0.014, sx * 0.12, 0.24, sz * 0.12, H.color, 0, 0, a);
-        box(head, 0.22, 0.012, 0.018, sx * 0.12, 0.275, sz * 0.12, H.trim || '#c8a048', 0, 0, a);
+        box(head, 0.226, 0.012, 0.022, sx * 0.12, 0.275, sz * 0.12, H.trim || '#c8a048', 0, 0, a);
       }
     } else if (hat === 'kettleHat') {
       // an iron kettle hat: a round-ish crown and a wide sloped brim
@@ -660,8 +661,9 @@ export function makeFolkKit(GFX) {
       // a bishop's mitre: tall, narrowing to a point front and back, gold bands, lappets down the back
       taper(head, 0.2, 0.44, [0.2, 0.17], [0.05, 0.11], H.color);
       box(head, 0.205, 0.035, 0.176, 0, 0.215, 0, H.trim || '#c8a048');
-      for (const sz of [1, -1]) taper(head, 0.23, 0.42, [0.035, 0.006, 0, sz * 0.086], [0.02, 0.006, 0, sz * 0.056], H.trim || '#c8a048');
-      for (const sx of [1, -1]) box(head, 0.03, 0.18, 0.008, sx * 0.05, 0.1, -0.1, H.trim || '#c8a048');
+      // (bands and lappets stand clear of the mitre's faces and of the hair at the back: flush they z-fought)
+      for (const sz of [1, -1]) taper(head, 0.23, 0.42, [0.035, 0.006, 0, sz * 0.089], [0.02, 0.006, 0, sz * 0.059], H.trim || '#c8a048');
+      for (const sx of [1, -1]) box(head, 0.03, 0.18, 0.008, sx * 0.05, 0.1, -0.114, H.trim || '#c8a048');
     } else if (hat === 'skullcap') {
       box(head, 0.14, 0.03, 0.13, 0, 0.255, -0.02, H.color);
     }
@@ -686,13 +688,13 @@ export function makeFolkKit(GFX) {
       if (d.gloves) { box(hand, B.arm - 0.002, 0.07, 0.076, 0, -0.033, 0, d.gloves); box(fore, B.arm + 0.012, 0.05, B.arm + 0.02, 0, -0.081, 0, shade(d.gloves, 0.1)); }
     }
     // ---- props (shown by the poses that use them) ----
-    // a broom, held across the body, its pivot in front of the belly so a sweep swings the brush side to side
-    const broom = pivot(chest, 0, 0.47 - CH, 0.17), broomTilt = pivot(broom, 0, 0, 0);
-    broomTilt.rotation.x = -0.62;
-    box(broomTilt, 0.026, 0.95, 0.026, 0, -0.15, 0, '#8a6440');
-    box(broomTilt, 0.07, 0.035, 0.05, 0, -0.6, 0, '#5a3a22');
-    box(broomTilt, 0.16, 0.14, 0.05, 0, -0.68, 0, STRAW);
-    box(broomTilt, 0.17, 0.02, 0.055, 0, -0.64, 0, STRAW_DARK);
+    // a broom for the sweep, hung from the body: the pose lays its handle through both hands each frame (local -y
+    // runs down the handle to the brush, whose bottom is at y -0.75)
+    const broom = pivot(body, 0, 0, 0); broom.rotation.order = 'YXZ';
+    box(broom, 0.026, 0.95, 0.026, 0, -0.15, 0, '#8a6440');
+    box(broom, 0.07, 0.035, 0.05, 0, -0.6, 0, '#5a3a22');
+    box(broom, 0.16, 0.14, 0.05, 0, -0.68, 0, STRAW);
+    box(broom, 0.17, 0.02, 0.055, 0, -0.64, 0, STRAW_DARK);
     // a crate carried in both arms
     const crate = pivot(chest, 0, 0.47 - CH, 0.21);
     box(crate, 0.3, 0.22, 0.24, 0, 0, 0, '#9a6a3e');
@@ -707,7 +709,7 @@ export function makeFolkKit(GFX) {
       box(tool, 0.16, 0.09, 0.12, 0, -0.14, 0.03, WICKER);
       box(tool, 0.166, 0.02, 0.126, 0, -0.1, 0.03, shade(WICKER, -0.25));
       for (const sx of [1, -1]) box(tool, 0.012, 0.1, 0.012, sx * 0.07, -0.05, 0.03, shade(WICKER, -0.2));
-      box(tool, 0.152, 0.012, 0.012, 0, 0.0, 0.03, shade(WICKER, -0.2));
+      box(tool, 0.152, 0.012, 0.02, 0, 0.0, 0.03, shade(WICKER, -0.2));
       fill();
     };
     const P = d.prop;
@@ -737,23 +739,24 @@ export function makeFolkKit(GFX) {
       box(tool, 0.025, 0.08, 0.025, 0, -0.03, 0, DARK);
       taper(tool, -0.18, -0.07, [0.1, 0.1], [0.045, 0.045], GOLD);
     } else if (P === 'book' || P === 'ledger') {
-      box(tool, 0.045, 0.17, 0.13, 0.0, -0.06, 0.03, P === 'ledger' ? '#3a2a22' : '#5a1e22');
-      box(tool, 0.035, 0.16, 0.12, 0.004, -0.06, 0.03, '#ece2c8');
-      if (P === 'book') box(tool, 0.047, 0.03, 0.03, 0, -0.06, 0.03, GOLD);
+      box(tool, 0.045, 0.17, 0.13, 0.0, -0.06, 0.036, P === 'ledger' ? '#3a2a22' : '#5a1e22');
+      box(tool, 0.033, 0.16, 0.12, 0.003, -0.06, 0.036, '#ece2c8');
+      if (P === 'book') box(tool, 0.052, 0.03, 0.03, 0, -0.06, 0.036, GOLD);
     } else if (P === 'scroll') {
       box(tool, 0.045, 0.045, 0.24, 0, -0.03, 0.04, '#e8dcb8');
       for (const sz of [1, -1]) box(tool, 0.05, 0.05, 0.02, 0, -0.03, 0.04 + sz * 0.125, DARK);
     } else if (P === 'mug') {
-      box(tool, 0.06, 0.08, 0.06, 0, -0.04, 0.03, '#8e949e');
-      box(tool, 0.064, 0.015, 0.064, 0, 0.0, 0.03, '#f0e8d0');
+      // (held by the rim: the froth sits under the fingers, not inside them, where it z-fought the hand)
+      box(tool, 0.06, 0.08, 0.06, 0, -0.07, 0.03, '#8e949e');
+      box(tool, 0.068, 0.014, 0.068, 0, -0.03, 0.03, '#f0e8d0');
     } else if (P === 'purse') {
-      box(tool, 0.07, 0.08, 0.05, 0, -0.08, 0.01, '#6a2a3a');
+      box(tool, 0.076, 0.08, 0.05, 0, -0.08, 0.01, '#6a2a3a');
       box(tool, 0.05, 0.015, 0.035, 0, -0.035, 0.01, GOLD);
     } else if (P === 'ingot') {
       box(tool, 0.05, 0.04, 0.14, 0, -0.03, 0.03, '#7a7e88');
     } else if (P === 'pane') {
       box(tool, 0.012, 0.2, 0.24, -0.01, -0.06, 0.04, '#a8d0dc');
-      box(tool, 0.016, 0.21, 0.016, -0.01, -0.06, 0.16, DARK);
+      box(tool, 0.02, 0.21, 0.02, -0.01, -0.06, 0.16, DARK);
     } else if (P === 'whip') {
       box(tool, 0.025, 0.2, 0.025, 0, -0.06, 0.02, DARK);
       box(tool, 0.008, 0.008, 0.3, 0, 0.04, -0.1, '#3a2a1e', 0.6);
@@ -789,6 +792,38 @@ function legSwing(ph) {
   const u = ((ph % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), sn = Math.sin(u);
   const w = u > 1.5 * Math.PI ? u - 2 * Math.PI : u;
   return w <= Math.PI / 2 ? w / (Math.PI / 2) : sn;
+}
+// ---- two-handed grips (the sweep's broom) ----
+// shoulder to elbow, and elbow to the middle of the grip (forearm 0.1 plus the hand's centre 0.033)
+const ARM_A = 0.1, ARM_B = 0.133;
+const rotX = (p, a) => [p[0], p[1] * Math.cos(a) - p[2] * Math.sin(a), p[1] * Math.sin(a) + p[2] * Math.cos(a)];
+const rotY = (p, a) => [p[0] * Math.cos(a) + p[2] * Math.sin(a), p[1], -p[0] * Math.sin(a) + p[2] * Math.cos(a)];
+const rotZ = (p, a) => [p[0] * Math.cos(a) - p[1] * Math.sin(a), p[0] * Math.sin(a) + p[1] * Math.cos(a), p[2]];
+// turn an arm (order YXZ, y left at 0) and its elbow so the hand's grip comes to a point in the chest's frame, as near
+// as the arm reaches; returns where the grip ends up
+function reach(arm, elbow, target) {
+  const S = arm.position, v = [target[0] - S.x, target[1] - S.y, target[2] - S.z];
+  const d = Math.min(Math.max(Math.hypot(...v), ARM_B - ARM_A + 0.01), ARM_A + ARM_B - 0.002);
+  const el = -Math.acos(Math.max(-1, Math.min(1, (d * d - ARM_A * ARM_A - ARM_B * ARM_B) / (2 * ARM_A * ARM_B))));
+  const py = -ARM_A - ARM_B * Math.cos(el), pz = -ARM_B * Math.sin(el);
+  const az = Math.asin(Math.max(-1, Math.min(1, v[0] / -py)));
+  const ax = Math.atan2(v[2], v[1]) - Math.atan2(pz, py * Math.cos(az));
+  arm.rotation.set(ax, 0, az); elbow.rotation.x = el;
+  const p = rotX(rotZ([0, py, pz], az), ax);
+  return [p[0] + S.x, p[1] + S.y, p[2] + S.z];
+}
+// lay the broom (a child of the body) along the line from the top grip through the low one, brush on the ground
+function holdBroom(f, top, low, bodyY) {
+  const c = f.chest, toBody = p => { const q = rotX(rotY(rotZ(p, c.rotation.z), c.rotation.y), c.rotation.x); return [q[0] + c.position.x, q[1] + c.position.y, q[2] + c.position.z]; };
+  const T = toBody(top), L = toBody(low);
+  let dir = [L[0] - T[0], L[1] - T[1], L[2] - T[2]];
+  const n = Math.hypot(...dir) || 1; dir = dir.map(v => v / n);
+  if (dir[1] > -0.3) dir[1] = -0.3;                    // (never flatter than that, so the brush finds the ground)
+  const m = Math.hypot(...dir); dir = dir.map(v => v / m);
+  const run = (L[1] + bodyY) / -dir[1];                // from the low hand down to the ground, along the handle
+  const k = run - 0.75;
+  f.broom.position.set(L[0] + dir[0] * k, L[1] + dir[1] * k, L[2] + dir[2] * k);
+  f.broom.rotation.set(Math.acos(Math.max(-1, Math.min(1, -dir[1]))), Math.atan2(-dir[0], -dir[2]), 0);
 }
 export function pose(f, anim, t) {
   const W = FOLK_WALK, z3 = o => o.rotation.set(0, 0, 0);
@@ -845,12 +880,14 @@ export function pose(f, anim, t) {
     f.elbows[0].rotation.x = f.elbows[1].rotation.x = -0.55;
     f.chest.rotation.x = -0.07; f.chest.rotation.y *= 0.3; f.head.rotation.y *= 0.3;
   } else if (anim === 'sweep') {
-    // the broom swung side to side with the shoulders, the right hand high on the handle and the left low
+    // (v8, Jordan: held in both hands) the right hand high on the handle near the chest, the left low and ahead; both
+    // hands are reached to their marks, then the broom is laid through where they actually got to, its brush on the
+    // ground. The hands drift side to side with the shoulders' twist, so the brush swings wider than they do.
     const s = Math.sin(t * 2.4);
-    f.broom.rotation.z = s * 0.35;
     f.chest.rotation.y = s * 0.18; f.chest.rotation.x = 0.1;
-    f.armR.rotation.set(-0.55, 0, 0.12); f.elbows[1].rotation.x = -0.95;
-    f.armL.rotation.set(-0.8, 0, -0.18); f.elbows[0].rotation.x = -0.45;
+    const top = reach(f.armR, f.elbows[1], [0.0 + 0.02 * s, 0.2, 0.12]);
+    const low = reach(f.armL, f.elbows[0], [0.06 + 0.035 * s, 0.1, 0.18]);
+    holdBroom(f, top, low, bodyY);
     f.head.rotation.x = 0.2; f.head.rotation.y = s * 0.1;
     f.legL.rotation.x = -0.12; f.legR.rotation.x = 0.1; f.knees[0].rotation.x = 0.12; f.knees[1].rotation.x = 0.16;
   }
