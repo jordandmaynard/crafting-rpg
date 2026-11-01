@@ -10801,14 +10801,51 @@ const buildings = new Map(); // id -> { id, rooms, tiles, set, color, mesh, roof
 let roomSeq = 1, bldSeq = 1;
 const bldOf = i => { const rm = rooms.get(roomOf.get(i)); return rm ? buildings.get(rm.bld) : null; };
 const roofMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
-// Slate (v417, Jordan: an overlapping slate roof as a normal map for timber houses). Worked out on the roof's own
-// plane from the world position: rows SLATE.row apart down the slope, slates SLATE.width wide, every other row half a
-// slate over. Each slate lies a little flatter than the roof (it rests on the one below), its lower edge rolls over,
-// the top of each row sits in the shade of the row above's lip, there's a dark gap between neighbours, and each
-// slate is a touch lighter or darker and turned a hair. T > Slate roofs.
-const SLATE = { bump: 1, row: 0.16, width: 0.22, shade: 1, tint: 0.1 };
-const SLATE_U = { s: { value: { x: 1, y: 0.16, z: 0.22, w: 1 } }, tint: { value: 0.1 } };
-function updateSlateU() { const v = SLATE_U.s.value; v.x = SLATE.bump; v.y = SLATE.row; v.z = SLATE.width; v.w = SLATE.shade; SLATE_U.tint.value = SLATE.tint; }
+// Slate (v417, Jordan: an overlapping slate roof as a normal map for timber houses; v418: clean, like the
+// cobblestones). A tileable height field of slates (SLATE_TEX.across wide, SLATE_TEX.rows down, every other row half
+// a slate over), blurred soft and kept as a normal (rgb) and the height (a), as makeCobbleTex does. Laid on the roof's
+// own plane from the world position: each slate rises toward its lower edge (resting on the row below), rounds over
+// at that edge and at its sides, and the gaps sit low and a little darker. T > Slate roofs.
+const SLATE = { bump: 1, row: 0.16, width: 0.22, shade: 0.5 };
+const SLATE_TEX = { across: 4, rows: 4 };
+function makeSlateTex() {
+  const S = 256, nA = SLATE_TEX.across, nR = SLATE_TEX.rows, cw = S / nA, rh = S / nR, h = new Float32Array(S * S);
+  let seed = 23;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const jit = []; for (let k = 0; k < nA * nR; k++) jit.push(rnd());
+  for (let y = 0; y < S; y++) {
+    const row = Math.floor(y / rh), f = (y - row * rh) / rh;   // (f 0 at a row's top, 1 at its lower edge)
+    for (let x = 0; x < S; x++) {
+      const xx = (x + (row % 2) * cw / 2) % S, cell = Math.floor(xx / cw), fu = (xx - cell * cw) / cw;
+      const side = Math.min(fu, 1 - fu) * cw;                   // (pixels to the nearest gap)
+      const j = jit[row * nA + cell];
+      let v = 0.25 + 0.65 * f;                                  // (rising toward its lower edge)
+      v *= 1 - Math.pow(Math.max(0, (f - 0.86) / 0.14), 2) * 0.55;   // (that edge rounded over)
+      v *= Math.min(1, side / 3.5);                              // (the sides, and a gap 2 or 3 pixels wide)
+      v += (j - 0.5) * 0.06;
+      h[y * S + x] = Math.max(0, v);
+    }
+  }
+  // soften: two passes of a 3 x 3 blur (wrapped)
+  for (let pass = 0; pass < 2; pass++) {
+    const src = h.slice();
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+      let t = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) t += src[((y + dy + S) % S) * S + ((x + dx + S) % S)];
+      h[y * S + x] = t / 9;
+    }
+  }
+  const out = new Uint8Array(S * S * 4), at = (x, y) => h[((y + S) % S) * S + ((x + S) % S)];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const nx = -(at(x + 1, y) - at(x - 1, y)) * 2.4, ny = -(at(x, y + 1) - at(x, y - 1)) * 2.4, l = Math.hypot(nx, ny, 1), o = (y * S + x) * 4;
+    out[o] = Math.round((nx / l * 0.5 + 0.5) * 255); out[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255); out[o + 2] = Math.round((1 / l * 0.5 + 0.5) * 255);
+    out[o + 3] = Math.round(Math.min(1, at(x, y)) * 255);
+  }
+  const t = new GFX.DataTexture(out, S, S);
+  t.wrapS = t.wrapT = GFX.RepeatWrapping;
+  return t;
+}
+const SLATE_U = { s: { value: { x: 1, y: 0.16, z: 0.22, w: 0.5 } }, tSlate: { value: makeSlateTex() } };
+function updateSlateU() { const v = SLATE_U.s.value; v.x = SLATE.bump; v.y = SLATE.row * SLATE_TEX.rows; v.z = SLATE.width * SLATE_TEX.across; v.w = SLATE.shade; }
 const slateMat = new GFX.ShaderMaterial({ uniforms: SLATE_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
@@ -10816,33 +10853,21 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
   return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
 }
-fn h21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let N0 = flatNormal(i.eye);
   let up = select(N0, -N0, N0.y < 0.0);
   let hz = vec3f(up.x, 0.0, up.z);
   // (only on the sloped faces: not the fascias, not a flat top)
-  let on = select(0.0, 1.0, abs(N0.y) > 0.35 && dot(hz, hz) > 1e-3) * select(0.0, 1.0, U.s.x > 0.0);
+  let on = select(0.0, 1.0, abs(N0.y) > 0.35 && dot(hz, hz) > 1e-3);
   let t = normalize(cross(vec3f(0.0, 1.0, 0.0), up) + vec3f(1e-5, 0.0, 0.0));
   let dn = cross(up, t);
   let down = select(dn, -dn, dn.y > 0.0);
-  let rv = dot(i.world, down) / U.s.y;
-  let row = floor(rv);
-  let uu = dot(i.world, t) / U.s.z + row * 0.5;
-  let aaV = fwidth(rv); let aaU = fwidth(uu);
-  let f = rv - row; let cell = floor(uu); let fu = uu - cell;
-  let rnd = h21(vec2f(cell, row)); let rnd2 = h21(vec2f(row + 31.0, cell));
-  // flatter than the roof, twisted a little, the lower lip rolled over, the gaps between slates
-  var bend = -down * 0.22 + t * ((rnd2 - 0.5) * 0.14);
-  bend += down * sat((f - 0.88) / 0.12) * 0.9;
-  let gap = min(fu, 1.0 - fu);
-  let gw = max(0.05, aaU);
-  bend += t * select(-1.0, 1.0, fu < 0.5) * sat(1.0 - gap / gw) * 0.5;
-  var N = normalize(up + bend * U.s.x * on);
+  // (texture x along the eaves, y down the slope)
+  let tx = textureSample(tSlate, tSlateS, vec2f(dot(i.world, t) / U.s.z, dot(i.world, down) / U.s.y));
+  let m = (tx.xy * 2.0 - 1.0) * U.s.x * on;
+  var N = normalize(up * (tx.z * 2.0 - 1.0 + (1.0 - on)) + t * m.x + down * m.y);
   N = select(N, -N, N0.y < 0.0);
-  let lip = mix(1.0 - 0.35 * U.s.w, 1.0, smoothstep(0.0, max(0.18, aaV * 1.5), f));
-  let gs = mix(1.0 - 0.4 * U.s.w, 1.0, smoothstep(gw * 0.4, gw, gap));
-  let k = mix(1.0, lip * gs * (1.0 + (rnd - 0.5) * 2.0 * U.tint), on);
+  let k = mix(1.0, mix(1.0 - 0.45 * U.s.w, 1.0, tx.a), on);
   let c = shadeLit(i.color * k, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
@@ -20219,8 +20244,7 @@ const TUNING = [
     [SLATE, 'bump', 'Slate relief on timber houses\' roofs (0 off)', 0, 3, 0.01],
     [SLATE, 'row', 'Row height (tiles)', 0.06, 0.4, 0.01],
     [SLATE, 'width', 'Slate width (tiles)', 0.08, 0.6, 0.01],
-    [SLATE, 'shade', 'Shade under the lips and in the gaps', 0, 2, 0.01],
-    [SLATE, 'tint', 'Slate to slate tint', 0, 0.4, 0.01],
+    [SLATE, 'shade', 'Gaps and the tops of rows darker', 0, 2, 0.01],
   ]],
   ['Bevels', [
     [DETAIL, 'strength', 'Chipped bevels on walls, floors and stairs: how far they bend (0 off)', 0, 5, 0.01],
@@ -20485,7 +20509,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 417, crashSeen = new Map();
+const GAME_VERSION = 418, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
