@@ -167,6 +167,24 @@ export function makeFolkKit(GFX) {
       });
       const m = new GFX.Mesh(geo, mat(c)); parent.add(m); parts.push(m); return m;
     };
+    // (v6) a solid lofted through rings, bottom to top: each ring [y, width, depth, x, z], straight sides between
+    // them and a cap at each end. One mesh, so the rings' joins are true edges: tapers stacked as separate pieces
+    // overlapped at every join and drew doubled lines there.
+    const loft = (parent, rings, c) => {
+      const e = 0.00037 * (nBox++ % 17), pos = [];
+      const C = rings.map(([y, w, dd, x = 0, z = 0]) => [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) => [x + sx * (w + e) / 2, y, z + sz * (dd + e) / 2]));
+      const tri = (a, b, cc) => pos.push(...a, ...b, ...cc);
+      for (let i = 0; i < C.length - 1; i++) for (let j = 0; j < 4; j++) {
+        const k = (j + 1) % 4, L = C[i], U = C[i + 1];
+        tri(L[j], U[k], L[k]); tri(L[j], U[j], U[k]);
+      }
+      const b = C[0], t = C[C.length - 1];
+      tri(b[0], b[1], b[2]); tri(b[0], b[2], b[3]);
+      tri(t[0], t[2], t[1]); tri(t[0], t[3], t[2]);
+      const geo = new GFX.BufferGeometry();
+      geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+      const m = new GFX.Mesh(geo, mat(c)); parent.add(m); parts.push(m); return m;
+    };
     const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
     const fem = d.body === 'fem', T = d.torso, L = d.legs, skin = d.skin;
     // the build: shoulders, waist and hips across, the chest's depth, a limb's thickness
@@ -257,11 +275,9 @@ export function makeFolkKit(GFX) {
       // (v5, Jordan: the v4 wedge was too sharp and low) the bust in profile: a long slope out from high on the chest
       // to the fullest point, then two facets turning back under it to the ribs. Size pushes the fullest point out,
       // lift raises it, sag lowers it and drops the underside further below it.
-      for (let i = 0; i < BUST.length - 1; i++) {
-        const [ya, za, wa] = BUST[i], [yb, zb, wb] = BUST[i + 1], back = y => torsoAt(y)[1] / 2 - 0.03;
-        const da = za - back(ya), db = zb - back(yb);
-        taper(chest, ya - CH, yb - CH, [wa, da, 0, za - da / 2], [wb, db, 0, zb - db / 2], torsoC);
-      }
+      // (v6: one lofted solid, its back sunk in the chest)
+      const back = y => torsoAt(y)[1] / 2 - 0.03;
+      loft(chest, BUST.map(([y, z, w]) => [y - CH, w, z - back(y), 0, (z + back(y)) / 2]), torsoC);
     } else {
       box(chest, B.sh, 0.16, B.dep, 0, 0.59 - CH, 0, torsoC);
       box(chest, B.wa, 0.16, B.dep - 0.006, 0, 0.45 - CH, 0, torsoC);
@@ -326,10 +342,7 @@ export function makeFolkKit(GFX) {
         if (fem) {
           // over the bust: flat below it, then over each facet of it up to the bib's top
           const y0 = BUST[0][0], pts = [[0.45, frontAt(0.45)], [y0, bustFront(y0)], ...BUST.slice(1).filter(q => q[0] < 0.6).map(q => [q[0], q[1]]), [0.6, bustFront(0.6)]];
-          for (let i = 0; i < pts.length - 1; i++) {
-            const [ya, za] = pts[i], [yb, zb] = pts[i + 1];
-            if (yb - ya > 0.002) taper(chest, ya - CH, yb - CH, [B.wa - 0.065, 0.012, 0, za + 0.008], [B.wa - 0.065, 0.012, 0, zb + 0.008], d.apron.color);
-          }
+          loft(chest, pts.filter((q, i) => i === 0 || q[0] - pts[i - 1][0] > 0.002).map(([y, z]) => [y - CH, B.wa - 0.065, 0.012, 0, z + 0.008]), d.apron.color);
         } else box(chest, B.wa - 0.07, 0.16, 0.012, 0, 0.53 - CH, B.dep / 2 + 0.008, d.apron.color);
       }
     }
