@@ -889,6 +889,7 @@ const GL = new Int8Array(N * N);    // the ground's level under water, a canyon 
 const WL = new Uint8Array(N * N);   // water surface level: the water stands a little under that level's ground
 const CY = new Uint8Array(N * N);   // 1 = canyon: a deep, dry gorge
 const BR = new Uint8Array(N * N);   // bridge deck at LV over water or a canyon: 1 runs east-west, 2 north-south
+const DOCK = new Uint8Array(N * N); // a dock's deck (BR too, so it stands over the water like a bridge; v400)
 const FX = new Int8Array(N * N), FZ = new Int8Array(N * N);   // river flow direction, x127
 
 const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
@@ -920,7 +921,9 @@ const BIOMES = [
   { name: 'THE ELDERWOOD', foes: ['spider', 'spider', 'mantrap'] },
   { name: 'THE BLASTED WASTES', foes: ['hellhound', 'hellhound', 'firespirit'] },
 ];
-const TOWN_NAMES = ['EMBERBROOK', 'ASHFORD', 'BRAMBLEGATE', 'THORNWICK', 'MILLHAVEN', 'OAKENREST', 'STONEMERE', 'WILLOWDEEP'];
+const TOWN_NAMES = ['EMBERBROOK', 'ASHFORD', 'BRAMBLEGATE', 'THORNWICK', 'MILLHAVEN', 'OAKENREST', 'STONEMERE', 'WILLOWDEEP',
+  'GULLHAVEN', 'HARROWFORD', 'LINDENHOLM', 'REDWATER', 'FAIRHOLT', 'COLDHARBOR', 'BRIARWICK', 'DUNMERE', 'HOLLYFORD', 'MARROWBY',
+  'PEBBLEHAVEN', 'SWALLOWMERE', 'TIDEWATER', 'FERNWICK', 'COPPERGATE', 'HEATHERBY'];   // (more since v400: more towns, none twice)
 // Region names: every world names its land afresh. The biomes fall into regions (each patch of one biome, the
 // biggest split into parts of about REGION_SPLIT tiles, crumbs under REGION_MIN folded into whatever region is
 // nearest), and each region gets a name from its biome's words in one of three patterns: a compound and a noun
@@ -1977,7 +1980,9 @@ function namePOIs() {
       g = REG[T(cc, rr)];
     }
     const R = regions[g], base = !R ? 'WILD' : R.root || R.adj || BIOMES[R.biome].name.toUpperCase().replace(/^THE /, '');
-    p.name = base + ' ' + word; p.found = false; p.reg = g;
+    // (a dock: for its town, or else for the water it stands in)
+    const f = word === 'DOCK' && !p.town ? features[FEAT[p.water]] : null;
+    p.name = (word === 'DOCK' && p.town ? p.town.name : f && (f.root || f.adj) || base) + ' ' + word; p.found = false; p.reg = g;
     poiAll.push({ p, kind: word, ink });
     if (!same.has(p.name)) same.set(p.name, []);
     same.get(p.name).push(p);
@@ -2053,7 +2058,7 @@ function nameFeatures(rand, used) {
       const k = kind === 'lake' && n >= SEA_AT ? 'sea' : kind;
       if (n < FEATURE_MIN[k]) continue;
       const id = features.length;
-      features.push({ kind: k, name: makeRegionName(FEATURE_WORDS[k], rand, used, k.toUpperCase()), n: 0, spots: [], found: false });
+      features.push({ kind: k, name: makeRegionName(FEATURE_WORDS[k], rand, used, k.toUpperCase()), root: nameParts.root, adj: nameParts.adj, n: 0, spots: [], found: false });
       for (let h = 0; h < n; h++) FEAT[q[h]] = id;
     }
   }
@@ -2171,7 +2176,7 @@ function nameSeas(rand, used) {
     const k = kd === 2 ? 'strait' : kd === 3 ? (n < SN.inletMax && enSum / n >= SN.inlet ? 'inlet' : n > SN.bayMax ? 'sea' : 'bay') : edge && n >= SN.oceanAt ? 'ocean' : n < SN.shallowMax && dSum / n < SN.shallow ? 'shallows' : 'sea';
     if (n < (k === 'sea' ? SN.seaMin : FEATURE_MIN[k])) continue;
     const id = features.length;
-    features.push({ kind: k, name: makeRegionName(FEATURE_WORDS[k], rand, used, k.toUpperCase()), n: 0, spots: [], found: false });
+    features.push({ kind: k, name: makeRegionName(FEATURE_WORDS[k], rand, used, k.toUpperCase()), root: nameParts.root, adj: nameParts.adj, n: 0, spots: [], found: false });
     for (let h = 0; h < n; h++) FEAT[q[h]] = id;
   }
   // (the crumbs: into the named water beside them)
@@ -3533,9 +3538,87 @@ async function layRoads(rand, progress) {
     }
     t.arm = arm;
   });
+  placeDocks();
   // roads run dry through the bog
   for (let i = 0; i < N * N; i++) if (PATH[i] && WT[i] === 1) WT[i] = 0;
   computeRim();
+}
+// Docks (v400, ready for boats): a plank deck about 6 x 3 standing out over the sea or a lake on piles, at the
+// shore's level (BR tiles, so the water runs under it as under a bridge). A coastal town gets one just outside a
+// gate; a waystone or a road's end within DOCKS.near of the shore gets one too, a road laid to it. Named for the
+// town, or else for the water: Ternhold Dock.
+const docks = [];   // { c, r (its middle tile), base (the shore tile it stands out from), d, tiles, town, water }
+const DOCKS = { len: 6, wide: 3, townReach: 14, near: 10, apart: 30 };
+function dockFits(s, d, L) {
+  const c0 = s % N, r0 = (s - c0) / N, pc = -DR[d], pr = DC[d], half = (DOCKS.wide - 1) / 2;
+  const water = (c, r) => {
+    if (c < 2 || r < 2 || c >= N - 2 || r >= N - 2) return false;
+    const t = T(c, r);
+    return !LV[t] && WL[t] > 0 && WL[t] <= L && !LAVA[t] && !CY[t] && WT[t] !== 3 && !BR[t];
+  };
+  // the deck and a tile of open water round its sides and end
+  for (let a = 1; a <= DOCKS.len + 1; a++) for (let w = -half - 1; w <= half + 1; w++) {
+    if (a === 1 && Math.abs(w) > half) continue;
+    if (!water(c0 + DC[d] * a + pc * w, r0 + DR[d] * a + pr * w)) return false;
+  }
+  return true;
+}
+// the shore tile nearest (nc, nr), within maxD, that a dock fits off
+function dockSite(nc, nr, maxD) {
+  let best = null, bd = 1e9;
+  for (let r = nr - maxD; r <= nr + maxD; r++) for (let c = nc - maxD; c <= nc + maxD; c++) {
+    if (c < 10 || r < 10 || c >= N - 10 || r >= N - 10) continue;
+    const dist = Math.hypot(c - nc, r - nr);
+    if (dist > maxD || dist >= bd) continue;
+    const s = T(c, r), L = LV[s];
+    if (!L || BI[s] === TOWN || TN[s] || BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) continue;
+    if (docks.some(k => Math.hypot(k.c - c, k.r - r) < DOCKS.apart)) continue;
+    for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) { best = { s, d, L }; bd = dist; break; }
+  }
+  return best;
+}
+function layDock(site, goal, town) {
+  if (!roadRoute(site.s, goal, 0, 200000)) return null;
+  const { s, d, L } = site, c0 = s % N, r0 = (s - c0) / N, pc = -DR[d], pr = DC[d], half = (DOCKS.wide - 1) / 2, tiles = [];
+  for (let a = 1; a <= DOCKS.len; a++) for (let w = -half; w <= half; w++) {
+    const t = T(c0 + DC[d] * a + pc * w, r0 + DR[d] * a + pr * w);
+    LV[t] = L; SH[t] = 0; BR[t] = d & 1 ? 1 : 2; DOCK[t] = 1; tiles.push(t);
+  }
+  const m = Math.ceil(DOCKS.len / 2), k = { c: c0 + DC[d] * m, r: r0 + DR[d] * m, base: s, d, tiles, town: town || null,
+    water: T(c0 + DC[d] * (DOCKS.len + 1), r0 + DR[d] * (DOCKS.len + 1)) };
+  docks.push(k);
+  return k;
+}
+function placeDocks() {
+  docks.length = 0; DOCK.fill(0);
+  // coastal towns: the shore nearest the town outside it, a road to the gate nearest that (the end of each street
+  // out of town)
+  towns.forEach((t, n) => {
+    const site = dockSite(t.c, t.r, TOWN_R + DOCKS.townReach);
+    if (!site) return;
+    const gates = [];
+    for (let d = 0; d < 4; d++) {
+      let c = t.c, r = t.r;
+      while (TN[T(c + DC[d], r + DR[d])] === n + 1) { c += DC[d]; r += DR[d]; }
+      c += DC[d]; r += DR[d];
+      gates.push([Math.hypot(site.s % N - c, Math.floor(site.s / N) - r), T(c, r)]);
+    }
+    // (the nearest gate a road gets to, else the town's middle)
+    gates.sort((a, b) => a[0] - b[0]);
+    for (const g of [...gates.map(g => g[1]), T(t.c, t.r)]) if (layDock(site, g, t)) break;
+  });
+  // waystones by the shore, then the ends of roads (a road tile with one road beside it) by the shore
+  for (const w of waystones) { const site = dockSite(w.c, w.r, DOCKS.near); if (site) layDock(site, T(w.c, w.r)); }
+  for (let i = N; i < N * N - N; i++) {
+    if (!PATH[i] || BR[i] || BI[i] === TOWN || TN[i]) continue;
+    let nb = 0;
+    for (let d = 0; d < 4; d++) if (PATH[i + DI[d]]) nb++;
+    if (nb > 1) continue;
+    const c = i % N, r = (i - c) / N;
+    if (docks.some(k => Math.hypot(k.c - c, k.r - r) < DOCKS.apart)) continue;
+    const site = dockSite(c, r, DOCKS.near);
+    if (site) layDock(site, i);
+  }
 }
 
 // where higher ground's slope spills half a tile into a lower tile
@@ -3757,6 +3840,25 @@ function placeTowns(rand) {
       if (got) break;
     }
     if (got) list.push(got);
+  }
+  // (v400) and at least one town on every continent's coast, for its dock: its edge a few tiles from the sea
+  const coastal = (c, r) => {
+    for (let a = 0; a < 40; a++) for (const d of [TOWN_R + 3, TOWN_R + 7, TOWN_R + 11]) {
+      const cc = Math.round(c + Math.cos(a / 40 * Math.PI * 2) * d), rr = Math.round(r + Math.sin(a / 40 * Math.PI * 2) * d);
+      if (cc >= 0 && rr >= 0 && cc < N && rr < N && !LANDID[T(cc, rr)]) return true;
+    }
+    return false;
+  };
+  for (const m of landmasses) {
+    if (m.n < TOWN_LAND || list.some(([c, r]) => LANDID[T(c, r)] === m.id && coastal(c, r))) continue;
+    for (const apart of [170, 120]) {
+      let got = null;
+      for (let k = 0; k < 5000 && !got; k++) {
+        const c = clamp(m.x0 + Math.floor(rand() * (m.x1 - m.x0 + 1)), 40, N - 41), r = clamp(m.z0 + Math.floor(rand() * (m.z1 - m.z0 + 1)), 40, N - 41);
+        if (LANDID[T(c, r)] === m.id && !list.some(([a, b]) => Math.hypot(a - c, b - r) < apart) && coastal(c, r) && ok(c, r)) got = [c, r];
+      }
+      if (got) { list.push(got); break; }
+    }
   }
   want = Math.max(want, list.length + 3);
   for (let k = 0; k < 8000 && list.length < want; k++) {
@@ -8996,6 +9098,22 @@ function bridgeDeck(c, r, i) {
     if (h > 0.05) for (const w of [0.14, 0.86]) put(G.cyl6, '#4a3020', 0.5, w, bed + h / 2, 0.13, 0.13, h);
   }
 }
+// a dock's deck, a tile at a time (v400): the plank floor at the shore's level over the water, and piles from the
+// bed up past the boards round its edge (at every corner of it, and every other tile along its sides)
+function dockDeck(c, r, i) {
+  plankFloor(c, r);
+  const y = LV[i] * STEP, isD = (x, z) => x >= 0 && z >= 0 && x < N && z < N && DOCK[T(x, z)] > 0;
+  part(G.box, '#4a3020', c + 0.5, y - 0.07, r + 0.5, { sx: 1, sy: 0.08, sz: 0.12 });   // (the joists under it)
+  part(G.box, '#4a3020', c + 0.5, y - 0.07, r + 0.5, { sx: 0.12, sy: 0.08, sz: 1 });
+  for (const [X, Z] of [[c, r], [c + 1, r], [c, r + 1], [c + 1, r + 1]]) {
+    const n = isD(X - 1, Z - 1) + isD(X, Z - 1) + isD(X - 1, Z) + isD(X, Z);
+    if (n === 4) continue;
+    const own = isD(X, Z) ? T(X, Z) : isD(X - 1, Z) ? T(X - 1, Z) : isD(X, Z - 1) ? T(X, Z - 1) : T(X - 1, Z - 1);
+    if (own !== i || (n === 2 && (X + Z) % 2)) continue;
+    const px = X + (c + 0.5 - X) * 0.16, pz = Z + (r + 0.5 - Z) * 0.16, bed = GL[i] * STEP, top = y + 0.32;
+    part(G.cyl6, shade(CC('#4a3020'), 0.9 + hs(X, Z, 77) * 0.2), px, (bed + top) / 2, pz, { sx: 0.15, sy: top - bed, sz: 0.15 });
+  }
+}
 // A hearth: a round stone firepit under a stone hood on four short pillars, and a chimney stack that
 // rises clear of any roof built over it (the fire itself is animated apart, see the fires). Against a wall
 // it is built into it as a fireplace instead (see shapeHearth).
@@ -9090,7 +9208,7 @@ function objRows(cx, cz, ra, rb) {
   for (let r = r0 + ra; r < r0 + rb; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
     if (o && !detached.has(i)) drawObject(o, c, r);
-    if (BR[i]) bridgeDeck(c, r, i);
+    if (BR[i]) (DOCK[i] ? dockDeck : bridgeDeck)(c, r, i);
     else if (RIM[i] & 255) cliffRocks(c, r, i);
     if (FIELD[i]) furrows(c, r, i);
   }
@@ -17849,7 +17967,7 @@ $('bigmap').addEventListener('pointerleave', () => { if (bigHover) { bigHover = 
 // the points of interest the Markers bookmark shows: [list, mark, colour]
 // (and the word each is named with, after its region: v397)
 const POI_MARKS = () => [[waystones, 'diamond', '#8de8dc', 'WAYSTONE'], [farms, 'square', '#b6dc5a', 'FARM'], [cabins, 'house', '#b9824e', 'CABIN'], [grottos, 'diamond', '#d59cff', 'GROTTO'],
-  [statues, 'tri', '#e2b36e', 'OBELISK'], [mausoleums, 'house', '#f1eee4', 'MAUSOLEUM'], [willows, 'circle', '#86c86e', 'WILLOW']];
+  [statues, 'tri', '#e2b36e', 'OBELISK'], [mausoleums, 'house', '#f1eee4', 'MAUSOLEUM'], [willows, 'circle', '#86c86e', 'WILLOW'], [docks, 'rect', '#a8703e', 'DOCK']];
 const TILE_M = 1.6;   // metres a tile, for the scale (the hero stands about 1.1 tiles tall)
 function drawBigMap() {
   const big = $('bigmap'), k = Math.max(1, Math.min(3, uiScale() * (devicePixelRatio || 1)));
@@ -17891,6 +18009,7 @@ function drawBigMap() {
       else if (sh === 'tri') { ctx.moveTo(x, z - 8); ctx.lineTo(x + 5.5, z + 5); ctx.lineTo(x - 5.5, z + 5); }
       else if (sh === 'house') { ctx.moveTo(x, z - 7); ctx.lineTo(x + 6, z - 1); ctx.lineTo(x + 6, z + 6); ctx.lineTo(x - 6, z + 6); ctx.lineTo(x - 6, z - 1); }
       else if (sh === 'circle') ctx.arc(x, z, 5.5, 0, Math.PI * 2);
+      else if (sh === 'rect') ctx.rect(x - 7.5, z - 4, 15, 8);
       else ctx.rect(x - 5, z - 5, 10, 10);
       ctx.closePath(); ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.stroke(); ctx.fillStyle = ink; ctx.fill();
     }
@@ -19125,7 +19244,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 399, crashSeen = new Map();
+const GAME_VERSION = 400, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -19317,7 +19436,7 @@ window.GAME = {
   regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   graveyards: () => graveyards.map(g => ({ ...g })),
-  mapLabelMiss: () => mapLabelMiss, pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
+  mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
