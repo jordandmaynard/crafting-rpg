@@ -4696,7 +4696,7 @@ function grassChunk(cx, cz) {
     let kind = 0, mask = 0, y = 0;
     if (WT[i] === 1 && LV[i] && !BR[i]) { if (!GROT[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; } }
     else if (FIELD[i]) { if (LV[i] && !SH[i]) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
-    else if (GRASS_KIND[b] && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || townCell(c, r) === 'yard')) {
+    else if (GRASS_KIND[b] && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || townCell(c, r) === 'yard')) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
         // a quarter grows grass if it's smooth ground (flat or a ramp's slope: see smoothQ), clear of a solid
@@ -8193,13 +8193,13 @@ const WALL_H = 2;   // (a level at 2x tile height: a floor on top of walls would
 // (the crafting tables: as the towns', for your own base)
 const COST = { armortable: { planks: 8, leather: 2 }, weapontable: { planks: 8, stoneBlock: 6 }, alchemytable: { planks: 8, copperIngot: 4, glassPane: 4 }, floor: { planks: 2 }, stonefloor: { stoneBlock: 2 }, wall: { planks: 2, stoneBlock: 2 }, door: { planks: 5 }, logwall: { wood: 4 }, stonewall: { stoneBlock: 4 }, hearth: { wood: 2, stone: 4 },
   fence: { wood: 1 }, stonefence: { stoneBlock: 2 }, gate: { planks: 3 }, ironfence: { ironIngot: 2 }, irongate: { ironIngot: 3 }, irondoor: { ironIngot: 6 },
-  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 8 }, chest: { ironIngot: 12 } };
+  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 8 }, chest: { ironIngot: 12 }, woodstairs: { planks: 6 }, stonestairs: { stoneBlock: 6 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
 // what's on a tile's floor: 1 planks, 2 flagstones, 3 a mausoleum's marble
 const FLOOR_KIND = [null, 'floor', 'stonefloor', 'marblefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
 // the build menu's groups, each opening its own row of kinds
-const BUILD_CATS = { floors: ['floor', 'stonefloor'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'],
+const BUILD_CATS = { floors: ['floor', 'stonefloor', 'woodstairs', 'stonestairs'], walls: ['wall', 'logwall', 'stonewall', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'],
   stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable', 'alchemytable', 'crate', 'chest'] };
 const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
 const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence' || k === 'ironfence';
@@ -8221,10 +8221,42 @@ function wallOn(c, r, d) {
   return (w ? WW : WN)[T(ec, er)];
 }
 // the walls and doors that close in rooms: fences and gates don't
-function roomWall(c, r, d) { const v = wallOn(c, r, d); return isFenceVal(v) ? 0 : v; }
+function roomWall(c, r, d, k = 0) { const v = k ? upWallOn(c, r, d, k) : wallOn(c, r, d); return isFenceVal(v) ? 0 : v; }
 const buildCount = new Uint16Array(NC * NC);
+// ---------- Stories (v369, Jordan) ----------
+// The ground floor is story 0 (the FL, WN and WW arrays). Above it are up to STORY_MAX more, each kept sparsely: maps
+// from a tile to what's built there, so only built tiles cost anything. Story k stands k * WALL_H over its tile's
+// ground. Stairs (1 x 2 tiles, wooden or stone) climb one story, rising toward side d from their foot tile; their top
+// lands on the tile beyond. An upper floor must join another floor on its story (over ground of the same level) or
+// the landing at the top of a stair. A floor over a room takes that part of its roof away (roofMesh: covered).
+const STORY_MAX = 3, SNN = N * N;
+const UP = [null];
+for (let k = 1; k <= STORY_MAX; k++) UP.push({ FL: new Map(), WN: new Map(), WW: new Map() });
+const stairs = new Map();    // k * SNN + foot tile -> { c, r, d, k, kind, t0, t1, land, y0, key }
+const stairAt = new Map();   // k * SNN + either of its tiles -> that stair
+const STAIR_VAL = { woodstairs: 1, stonestairs: 2 };
+const isStair = k => k in STAIR_VAL;
+const storyY = (k, i) => LV[i] * STEP + k * WALL_H;
+const dKey = (c, r, w, k = 0) => edgeKey(c, r, w) + k * 2 * SNN;   // (a door's or a cut wall's key, story and all)
+const storyUsed = k => !k || UP[k].FL.size || UP[k].WN.size || UP[k].WW.size || [...stairs.values()].some(st => st.k === k);
+const STORY_NAME = ['GROUND FLOOR', 'SECOND FLOOR', 'THIRD FLOOR', 'FOURTH FLOOR'];
+function upWallOn(c, r, d, k) {
+  if (!k) return wallOn(c, r, d);
+  const [ec, er, w] = edgeOf(c, r, d);
+  if (ec < 0 || er < 0 || ec >= N || er >= N) return 0;
+  return UP[k][w ? 'WW' : 'WN'].get(T(ec, er)) || 0;
+}
+// no roof over a room's tile on story k with a floor over it on the next, or a stair in it going up
+const covered = (k, i) => (k < STORY_MAX && UP[k + 1].FL.has(i)) || stairAt.has(k * SNN + i);
+// can you pass the side d of (c, r) on story k: no wall there, or a door standing open
+function wallOpen(c, r, d, k) {
+  const w = upWallOn(c, r, d, k);
+  return !w || (isDoorVal(w) && openDoors.has(dKey(...edgeOf(c, r, d), k)));
+}
+// (PDY lifts the pieces being drawn to their story; PCUT is that story's offset in cutEdges' keys)
+let PDY = 0, PCUT = 0;
 function plankFloor(c, r) {
-  const y = LV[T(c, r)] * STEP;
+  const y = LV[T(c, r)] * STEP + PDY;
   // four boards over a dark bed that shows in the seams between them
   part(G.box, '#3e2c1e', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
   for (let k = 0; k < 4; k++) {
@@ -8234,7 +8266,7 @@ function plankFloor(c, r) {
 }
 // flagstones: four slabs a tile, offset row to row, over a dark mortar bed
 function stoneFloor(c, r) {
-  const y = LV[T(c, r)] * STEP;
+  const y = LV[T(c, r)] * STEP + PDY;
   part(G.box, '#3e3a44', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
   for (let j = 0; j < 2; j++) {
     const off = (r * 2 + j) % 2 ? 0.25 : 0;
@@ -8354,11 +8386,11 @@ const CUT_H = 0.55;
 // Log walls: a palisade of sharpened upright logs. Stone walls: coursed blocks with a crenellated top.
 function wallPiece(c, r, w, type) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1);
-  const y = Math.max(LV[i], LV[j]) * STEP;
+  const y = Math.max(LV[i], LV[j]) * STEP + PDY;
   const ry = w ? Math.PI / 2 : 0;
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
-  const door = type === 2 || type === 10 || type === 11, cut = !door && cutEdges.has(edgeKey(c, r, w));
+  const door = type === 2 || type === 10 || type === 11, cut = !door && cutEdges.has(edgeKey(c, r, w) + PCUT);
   if (type === 12) {
     // marble: a plain slab on a moulded foot, a vein or two through it, a band along its top, and a pilaster
     // at each end (all one shade, so where two walls meet theirs make one)
@@ -8513,8 +8545,80 @@ function buildPieces(cx, cz, ch) {
     if (m && m.anchor === i) mausExtras(m);
     const cb = cabinAt.get(i);
     if (cb) cabinExtras(cb);
+    const st = stairs.get(i);
+    if (st) drawStair(st);
   }
   ch.build = bufBuild.mesh(groundMat);
+  // the stories above, a mesh each, so the ones over you can be hidden (storyView)
+  for (let k = 1; k <= STORY_MAX; k++) {
+    if (!storyUsed(k)) continue;
+    const U = UP[k];
+    bufBuild.n = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
+    try {
+      for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+        const i = T(c, r), f = U.FL.get(i);
+        if (f) {
+          // (its underside: joists, seen from below and at its open edges)
+          part(G.box, f === 2 ? '#4a4650' : '#3a2a1c', c + 0.5, LV[i] * STEP + PDY - 0.07, r + 0.5, { sx: 1, sy: 0.14, sz: 1 });
+          if (f === 2) stoneFloor(c, r); else plankFloor(c, r);
+        }
+        const wn = U.WN.get(i), ww = U.WW.get(i);
+        if (wn) wallPiece(c, r, 0, wn);
+        if (ww) wallPiece(c, r, 1, ww);
+        const st = stairs.get(k * SNN + i);
+        if (st) drawStair(st);
+      }
+    } finally { PDY = 0; PCUT = 0; }
+    ch['up' + k] = bufBuild.mesh(groundMat);
+  }
+}
+// a chunk's pieces built again, every story's mesh swapped in
+function setPieces(ch) {
+  const tmp = {};
+  buildPieces(ch.cx, ch.cz, tmp);
+  swapMesh(ch, 'build', tmp.build);
+  for (let k = 1; k <= STORY_MAX; k++) if (tmp['up' + k] || ch['up' + k]) swapMesh(ch, 'up' + k, tmp['up' + k] || null);
+}
+// Stairs: eight steps up one story over two tiles. Wooden ones are treads and risers on two stringers with a handrail
+// each side; stone ones are solid steps with a low parapet each side.
+function drawStair(st) {
+  const { c, r, d, kind } = st, dx = DC[d], dz = DR[d], px = -dz, pz = dx, y0 = st.y0;
+  const bx = c + 0.5 - dx * 0.5, bz = r + 0.5 - dz * 0.5;   // (the middle of the foot's back edge)
+  const P = (along, across, y, sa, sc, sy, col) => part(G.box, col, bx + dx * along + px * across, y, bz + dz * along + pz * across, dx ? { sx: sa, sy, sz: sc } : { sx: sc, sy, sz: sa });
+  const a = Math.atan2(WALL_H, 2), len = Math.hypot(2, WALL_H);
+  // a board along the whole flight, climbing with it
+  const tilt = (across, y, h, th, col) => part(G.box, col, bx + dx + px * across, y, bz + dz + pz * across, dx ? { sx: len, sy: h, sz: th, rz: dx > 0 ? a : -a } : { sx: th, sy: h, sz: len, rx: dz > 0 ? -a : a });
+  const n = 8, run = 2 / n, rise = WALL_H / n, k0 = c * 9 + r * 5;
+  if (kind === 'stonestairs') {
+    for (let s = 0; s < n; s++) {
+      const h = (s + 1) * rise, col = shade(CC('#8c8894'), 0.84 + hs(k0 + s, r, 92) * 0.26);
+      P((s + 0.5) * run, 0, y0 + h / 2, run, 0.9, h, col);
+      P((s + 0.5) * run + 0.01, 0, y0 + h + 0.015, run + 0.02, 0.92, 0.03, shade(col, 1.08));
+    }
+    for (const side of [-0.48, 0.48]) tilt(side, y0 + WALL_H / 2 + 0.16, 0.36, 0.1, '#6e6a76');
+  } else {
+    for (let s = 0; s < n; s++) {
+      const col = shade(CC(s % 2 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(k0 + s, r, 90) * 0.14);
+      P((s + 0.5) * run + 0.01, 0, y0 + (s + 1) * rise - 0.03, run + 0.04, 0.84, 0.06, col);
+      P(s * run + 0.02, 0, y0 + s * rise + rise / 2, 0.03, 0.8, rise, '#4a3422');
+    }
+    for (const side of [-0.45, 0.45]) {
+      tilt(side, y0 + WALL_H / 2 - 0.1, 0.26, 0.07, '#5a3e26');
+      tilt(side, y0 + WALL_H / 2 + 0.82, 0.06, 0.06, '#6a4a2c');
+      P(0.06, side, y0 + 0.46, 0.07, 0.07, 0.92, '#5a3e26');
+      P(1.94, side, y0 + 1.94 * WALL_H / 2 + 0.42, 0.07, 0.07, 0.84, '#5a3e26');
+    }
+  }
+}
+// the ghost of a stair: one drawn at the origin rising toward +z (turned by the spot's ry)
+const stairGhostBuf = new Buf(), stairGhostGeo = {};
+function stairGhost(kind) {
+  if (!stairGhostGeo[kind]) {
+    partAll = stairGhostBuf; stairGhostBuf.n = 0;
+    try { drawStair({ c: -0.5, r: -1, d: 2, kind, y0: 0 }); } finally { partAll = null; }
+    stairGhostGeo[kind] = stairGhostBuf.mesh(ghostMat).geometry;
+  }
+  return stairGhostGeo[kind];
 }
 
 // door leaves swing on their own meshes
@@ -8530,9 +8634,9 @@ const ironBar = new GFX.BoxGeometry(0.03, FENCE_H - 0.12, 0.03), ironTip = new G
 const studGeo = new GFX.BoxGeometry(0.045, 0.045, 0.11);
 // kind: 'door', 'gate', 'irondoor', 'irongate' or 'tombdoor' (flip: hung at the far end, the other half of a pair)
 const bronzeMat = flatMat({ color: '#4f8a76', roughness: 0.5, metalness: 0.4 }), bronzeDkMat = flatMat({ color: '#2e5a4c', roughness: 0.6, metalness: 0.3 });
-function makeDoor(c, r, w, kind = 'door', flip = false) {
+function makeDoor(c, r, w, kind = 'door', flip = false, k = 0) {
   const gate = kind === 'gate' || kind === 'irongate';
-  const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP;
+  const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP + k * WALL_H;
   const pivot = new GFX.Group(), at0 = flip ? 0.92 : 0.08;
   pivot.position.set(w ? c : c + at0, y, w ? r + at0 : r);
   pivot.rotation.y = w ? -Math.PI / 2 : 0;
@@ -8584,8 +8688,8 @@ function makeDoor(c, r, w, kind = 'door', flip = false) {
   }
   pivot.add(leaf);
   scene.add(shadowy(pivot));
-  const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip };
-  doors.set(edgeKey(c, r, w), d);
+  const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k };
+  doors.set(dKey(c, r, w, k), d);
   return d;
 }
 
@@ -8601,16 +8705,20 @@ const buildings = new Map(); // id -> { id, rooms, tiles, set, color, mesh, roof
 let roomSeq = 1, bldSeq = 1;
 const bldOf = i => { const rm = rooms.get(roomOf.get(i)); return rm ? buildings.get(rm.bld) : null; };
 const roofMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
-function findRoom(c0, r0) {
+// (on an upper story every tile of a room needs a floor, or the stair coming up from below)
+const roomFloor = (k, i) => !k || UP[k].FL.has(i) || stairAt.has((k - 1) * SNN + i);
+function findRoom(c0, r0, k = 0) {
+  if (!roomFloor(k, T(c0, r0))) return null;
   const seen = new Set([T(c0, r0)]), q = [[c0, r0]];
   for (let h = 0; h < q.length; h++) {
     const [c, r] = q[h];
     for (let d = 0; d < 4; d++) {
-      if (roomWall(c, r, d)) continue;
+      if (roomWall(c, r, d, k)) continue;
       const nc = c + DC[d], nr = r + DR[d];
       if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) return null;
       const n = T(nc, nr);
       if (seen.has(n)) continue;
+      if (!roomFloor(k, n)) return null;
       seen.add(n); q.push([nc, nr]);
       if (q.length > MAX_ROOM) return null;
     }
@@ -8630,16 +8738,17 @@ function dropRoom(id) {
   const rm = rooms.get(id);
   if (!rm) return;
   dropBuilding(buildings.get(rm.bld));
-  rm.tiles.forEach(([c, r]) => roomOf.delete(T(c, r)));
+  rm.tiles.forEach(([c, r]) => roomOf.delete(rm.k * SNN + T(c, r)));
   rooms.delete(id);
   regroup.delete(id);
 }
 // (roof: a builder of its own roof, in place of the hipped one, for a building this room is in)
-function makeRoom(tiles, color = '#9a4434', roof = null) {
+// (k: the story it's on; roomOf's keys are k * SNN + tile)
+function makeRoom(tiles, color = '#9a4434', roof = null, k = 0) {
   const id = roomSeq++, set = new Set(tiles.map(([c, r]) => T(c, r)));
-  const rm = { id, tiles, set, color, bld: 0, roof };
+  const rm = { id, tiles, set, color, bld: 0, roof, k };
   rooms.set(id, rm);
-  tiles.forEach(([c, r]) => roomOf.set(T(c, r), id));
+  tiles.forEach(([c, r]) => roomOf.set(k * SNN + T(c, r), id));
   regroup.add(id);
   return rm;
 }
@@ -8652,20 +8761,20 @@ function settleBuildings() {
     while (q.length) {
       const rm = rooms.get(q.pop());
       for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
-        if (!roomWall(c, r, d)) continue;
-        const other = roomOf.get(T(c + DC[d], r + DR[d]));
+        if (!roomWall(c, r, d, rm.k)) continue;
+        const other = roomOf.get(rm.k * SNN + T(c + DC[d], r + DR[d]));
         if (other && !ids.has(other)) { ids.add(other); q.push(other); }
       }
     }
     // a room already in a building joins this one: that building is taken down and roofed again whole
     for (const id of ids) { const b = buildings.get(rooms.get(id).bld); if (b) dropBuilding(b); }
     const list = [...ids].map(id => rooms.get(id)), tiles = list.flatMap(rm => rm.tiles);
-    const b = { id: bldSeq++, rooms: ids, tiles, set: new Set(tiles.map(([c, r]) => T(c, r))), color: list[0].color, mesh: null, roofY: null };
+    const b = { id: bldSeq++, rooms: ids, tiles, set: new Set(tiles.map(([c, r]) => T(c, r))), color: list[0].color, mesh: null, roofY: null, k: list[0].k || 0 };
     for (const rm of list) rm.bld = b.id;
     buildings.set(b.id, b);
     const own = list.find(rm => rm.roof);
     b.mesh = own ? own.roof(b) : roofMesh(b);
-    scene.add(b.mesh);
+    if (b.mesh) scene.add(b.mesh);   // (none when a floor over it covers the whole building)
     giTouch(b.tiles);
   }
   regroup.clear();
@@ -8675,13 +8784,17 @@ function roofMesh(rm, o = {}) {   // rm: a building
   let top = 0;
   const outside = [];
   const oseen = new Set();
-  for (const [c, r] of rm.tiles) {
-    top = Math.max(top, LV[T(c, r)]);
-    for (let d = 0; d < 4; d++) { const n = T(c + DC[d], r + DR[d]); if (!rm.set.has(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + DC[d], r + DR[d]]); } }
+  // (v369: the tiles with a floor over them on the next story, or a stair going up, get no roof: it slopes down to
+  // meet that floor's edge, the V Rising way, and is gone altogether once the floor covers the whole building)
+  const k = rm.k || 0, cov = new Set();
+  for (const [c, r] of rm.tiles) { top = Math.max(top, LV[T(c, r)]); if (covered(k, T(c, r))) cov.add(T(c, r)); }
+  const open = cov.size ? rm.tiles.filter(([c, r]) => !cov.has(T(c, r))) : rm.tiles, out = n => !rm.set.has(n) || cov.has(n);
+  for (const [c, r] of open) {
+    for (let d = 0; d < 4; d++) { const n = T(c + DC[d], r + DR[d]); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + DC[d], r + DR[d]]); } }
     // diagonal neighbours count too, so inner corners pinch the roof down to the walls
-    for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (!rm.set.has(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
+    for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
-  const base = top * STEP + WALL_H - 0.02;
+  const base = top * STEP + k * WALL_H + WALL_H - 0.02;
   // Chebyshev distance from a point to the nearest outside tile: 45° hips everywhere
   const f = (x, z) => {
     let m = 1e9;
@@ -8698,7 +8811,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
   const Y = (x, z) => base + Math.min(2.6, f(x, z)) * ROOF_SLOPE;
   rm.roofY = Y;
   const colAt = h => { const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
-  for (const [c, r] of rm.tiles) {
+  for (const [c, r] of open) {
     const pts = [];
     for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) { const x = c + i / 2, z = r + j / 2; pts.push([x, Y(x, z), z]); }
     for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
@@ -8785,24 +8898,25 @@ function buildingWalls(inside) {
   const key = inside + ':' + roomSeq;
   if (key === bldKey) return bldWalls;
   bldKey = key; bldWalls = [];
-  const seenRooms = new Set([inside]), q = [inside], found = [];
+  const k = (rooms.get(inside) || {}).k || 0, seenRooms = new Set([inside]), q = [inside], found = [];
   while (q.length) {
     const rm = rooms.get(q.pop());
     if (!rm) continue;
     for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
-      if (!roomWall(c, r, d)) continue;
+      if (!roomWall(c, r, d, k)) continue;
       found.push([c, r, d]);
-      const other = roomOf.get(T(c + DC[d], r + DR[d]));
+      const other = roomOf.get(k * SNN + T(c + DC[d], r + DR[d]));
       if (other && !seenRooms.has(other)) { seenRooms.add(other); q.push(other); }
     }
   }
   // each wall once, with the way out of the building across it (none for a wall between two of its rooms)
-  const inB = (c, r) => seenRooms.has(roomOf.get(T(c, r))), byEdge = new Map();
+  // (keyed with its story, as cutEdges and wallPiece's PCUT have them)
+  const inB = (c, r) => seenRooms.has(roomOf.get(k * SNN + T(c, r))), byEdge = new Map();
   for (const [c, r, d] of found) {
-    const [ec, er, w] = edgeOf(c, r, d), key = edgeKey(ec, er, w);
+    const [ec, er, w] = edgeOf(c, r, d), key = dKey(ec, er, w, k);
     if (byEdge.has(key)) continue;
     const outer = !inB(c + DC[d], r + DR[d]);
-    byEdge.set(key, [ec, er, w, roomWall(c, r, d), outer ? DC[d] : 0, outer ? DR[d] : 0]);
+    byEdge.set(key, [ec, er, w, roomWall(c, r, d, k), outer ? DC[d] : 0, outer ? DR[d] : 0, key]);
   }
   bldWalls = [...byEdge.values()];
   return bldWalls;
@@ -8810,36 +8924,51 @@ function buildingWalls(inside) {
 function updateCutaway(inside) {
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
   wantCut.clear();
-  if (inside && rooms.has(inside)) for (const [ec, er, w, v, ox, oz] of buildingWalls(inside)) {
+  if (inside && rooms.has(inside)) for (const [ec, er, w, v, ox, oz, key] of buildingWalls(inside)) {
     if (v === 2) continue;
     const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
     // toward the camera is lower on the screen; the wall's plane must lie between you and the camera
     const lower = (mx - H.x) * sy + (mz - H.z) * cy > 1e-3, between = (w ? (ec - H.x) * sy : (er - H.z) * cy) > 1e-3;
     // an outer wall whose outside faces the camera shows only its back to you
     const backOn = ox * sy + oz * cy > 1e-3;
-    if ((lower && between) || backOn) wantCut.add(edgeKey(ec, er, w));
+    if ((lower && between) || backOn) wantCut.add(key);
   }
   // in a mausoleum, its columns come down too where they stand lower on the screen than you
   const mau = inside && rooms.has(inside) ? mausAt.get(T(...rooms.get(inside).tiles[0])) : null;
   if (mau) for (const q of mau.cols) if ((q.x - H.x) * sy + (q.z - H.z) * cy > 0.3) wantCut.add(q.key);
   if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
   const touched = new Set();
-  const mark = e => { const t = e >> 1, c = t % N; touched.add(Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH)); };
+  const mark = e => { const t = (e % (2 * SNN)) >> 1, c = t % N; touched.add(Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH)); };
   for (const k of cutEdges) if (!wantCut.has(k)) mark(k);
   for (const k of wantCut) if (!cutEdges.has(k)) mark(k);
   cutEdges.clear();
   for (const k of wantCut) cutEdges.add(k);
-  touched.forEach(k => { const ch = chunks.get(k); if (ch) { const tmp = {}; buildPieces(ch.cx, ch.cz, tmp); swapMesh(ch, 'build', tmp.build); } });
+  touched.forEach(k => { const ch = chunks.get(k); if (ch) setPieces(ch); });
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
-function refreshRooms(c, r, w) {
-  const a = [c, r], b = w ? [c - 1, r] : [c, r - 1];
-  for (const [tc, tr] of [a, b]) { const id = roomOf.get(T(tc, tr)); if (id) dropRoom(id); }
+function refreshRooms(c, r, w, k = 0) {
+  const a = [c, r], b = w ? [c - 1, r] : [c, r - 1], K = k * SNN;
+  for (const [tc, tr] of [a, b]) { const id = roomOf.get(K + T(tc, tr)); if (id) dropRoom(id); }
   for (const [tc, tr] of [a, b]) {
-    if (roomOf.has(T(tc, tr))) continue;
-    const tiles = findRoom(tc, tr);
-    if (tiles) makeRoom(tiles);
+    if (roomOf.has(K + T(tc, tr))) continue;
+    const tiles = findRoom(tc, tr, k);
+    if (tiles) makeRoom(tiles, undefined, null, k);
   }
+  roomsSettled(c, r);
+}
+// a floor or stair came or went on story k at (c, r): the rooms there on k (an upper room needs its floor), on the
+// story under it (whose roof goes round the floor) and over it (a stair's well counts as floor) are found again
+function refreshStory(k, c, r) {
+  const i = T(c, r), ks = [k - 1, k, k + 1].filter(s => s >= 0 && s <= STORY_MAX);
+  for (const s of ks) { const id = roomOf.get(s * SNN + i); if (id) dropRoom(id); }
+  for (const s of ks) {
+    if (roomOf.has(s * SNN + i)) continue;
+    const tiles = findRoom(c, r, s);
+    if (tiles) makeRoom(tiles, undefined, null, s);
+  }
+  roomsSettled(c, r);
+}
+function roomsSettled(c, r) {
   settleBuildings();
   // a roof going up or coming down round a hearth: its chimney grows or shrinks to suit
   for (const h of hearths.values()) if (Math.abs(h.c - c) < 24 && Math.abs(h.r - r) < 24) rebuildObjects(h.c, h.r);
@@ -8852,7 +8981,7 @@ function refreshRooms(c, r, w) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -8906,9 +9035,7 @@ function finishChunk(ch) {
     const k = ch.stage || ch.band > bands ? 2 : 1;
     chunkTime.parts[k] = Math.max(chunkTime.parts[k], performance.now() - t0);
   } else {
-    const tmp = {};
-    buildPieces(ch.cx, ch.cz, tmp);
-    swapMesh(ch, 'build', tmp.build);
+    setPieces(ch);
     grassChunk(ch.cx, ch.cz);
     ch.stage = 2;
     chunkTime.n++;
@@ -8936,9 +9063,7 @@ function rebuildObjects(c, r) {
 function rebuildPieces(c, r) {
   const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
   if (!ch) return;
-  const tmp = {};
-  buildPieces(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'build', tmp.build);
+  setPieces(ch);
   grassChunk(ch.cx, ch.cz);
 }
 function dropChunk(key) {
@@ -9495,9 +9620,14 @@ const FOE = {
 // ---------- Movement and collision ----------
 // can something walk from tile (c, r) across its side d? Cliffs, water, walls and closed doors say no.
 function stepOpen(c, r, d, foe) {
+  if (!foe && moverHero) return heroStep(c, r, d);
+  return groundStep(c, r, d, foe);
+}
+function groundStep(c, r, d, foe) {
   const nc = c + DC[d], nr = r + DR[d];
   if (nc < 0 || nr < 0 || nc >= N || nr >= N) return false;
   const i = T(c, r), n = T(nc, nr);
+  if (foe && stairAt.has(n)) return false;   // (nothing wild climbs your stairs)
   if (!terrainOpen(i, n, d) || OBJ[OB[n]].tile) return false;
   if (foe && BI[n] === TOWN && BI[i] !== TOWN) return false;
   // nothing wild walks into lava (you can, if you must)
@@ -9505,14 +9635,86 @@ function stepOpen(c, r, d, foe) {
   if (w && !(isDoorVal(w) && openDoors.has(edgeKey(...edgeOf(c, r, d))))) return false;
   return true;
 }
+// ----- walking the stories (v369) -----
+// While the hero moves (moverHero), stepOpen asks heroStep: from tile (c, r) over side d, for the story they're on
+// (H.story) or the stair they're on (H.stair). Onto a stair only at its foot, walking up it, or at its top from its
+// landing; off it only at those two ends; on an upper story only onto floor, and never through a wall.
+let moverHero = false;
+const heroUp = () => H.story > 0 || !!H.stair;
+function enterOpen(c, r, d, k, b) {
+  const on = stairAt.get(k * SNN + b);
+  if (on) return b === on.t0 && d === on.d && (k ? wallOpen(c, r, d, k) : groundStep(c, r, d, false));
+  const below = k ? stairAt.get((k - 1) * SNN + b) : null;
+  if (below) return b === below.t1 && d === ((below.d + 2) & 3) && wallOpen(c, r, d, k);
+  if (!k) return groundStep(c, r, d, false);
+  return UP[k].FL.has(b) && wallOpen(c, r, d, k);
+}
+function heroStep(c, r, d) {
+  const nc = c + DC[d], nr = r + DR[d];
+  if (nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1) return false;
+  const a = T(c, r), b = T(nc, nr), st = H.stair;
+  if (!st) return enterOpen(c, r, d, H.story, b);
+  if ((a === st.t0 && b === st.t1) || (a === st.t1 && b === st.t0)) return true;
+  if (a === st.t0 && d === ((st.d + 2) & 3)) return enterOpen(c, r, d, st.k, b);
+  if (a === st.t1 && d === st.d) return enterOpen(c, r, d, st.k + 1, b);
+  return false;
+}
+// how far up its flight a point is on a stair, 0 at the foot's back edge to 1 at the top
+function stairT(st, x, z) {
+  const along = (x - (st.c + 0.5 - DC[st.d] * 0.5)) * DC[st.d] + (z - (st.r + 0.5 - DR[st.d] * 0.5)) * DR[st.d];
+  return clamp(along / 2, 0, 1);
+}
+// the hero crossed from tile a to b: onto a stair, off one (at its foot: its story; at its top: the next), or down
+// into a stair's well from the landing
+function heroCross(a, b) {
+  const st = H.stair;
+  if (st) {
+    if (b === st.t0 || b === st.t1) return;
+    H.stair = null; H.story = b === st.land || (b !== T(st.c - DC[st.d], st.r - DR[st.d]) && stairT(st, H.x, H.z) > 0.5) ? st.k + 1 : st.k;
+    return;
+  }
+  const s = H.story, on = stairAt.get(s * SNN + b);
+  if (on) { H.stair = on; return; }
+  const below = s ? stairAt.get((s - 1) * SNN + b) : null;
+  if (below) { H.stair = below; H.story = s - 1; }
+}
+// the floor under the hero gone (taken down, or the stair): down to the highest story with floor there
+function heroSettle() {
+  if (H.stair && stairs.get(H.stair.key) !== H.stair) { H.story = H.stair.k; H.stair = null; }
+  if (H.stair || !H.story) return;
+  const i = T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1));
+  let s = H.story;
+  while (s > 0 && !UP[s].FL.has(i) && !stairAt.has(s * SNN + i)) s--;
+  if (s === H.story) return;
+  H.story = s;
+  const st = stairAt.get(s * SNN + i);
+  if (st) H.stair = st;
+}
+function heroFloorY() {
+  if (H.stair) return H.stair.y0 + 0.06 + stairT(H.stair, H.x, H.z) * WALL_H;
+  if (H.story) return storyY(H.story, T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1))) + 0.06;
+  return surfaceY(H.x, H.z);
+}
+// the story to show up to: in build mode the one you're building on; else, when there's a floor (or a roof) over
+// you, the one you're on (what's over you hides), and otherwise all of them
+function storyView() {
+  if (mode === 'build') return buildStory;
+  const i = T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1));
+  const s = H.stair ? H.stair.k + (stairT(H.stair, H.x, H.z) > 0.5 ? 1 : 0) : H.story;
+  for (let k = s + 1; k <= STORY_MAX; k++) if (UP[k].FL.has(i)) return s;
+  if (roomOf.has(s * SNN + i)) return s;
+  return STORY_MAX;
+}
 const CORNER = [[0, 0, 3, 0, -1, -1], [1, 0, 1, 0, 1, -1], [1, 1, 1, 2, 1, 1], [0, 1, 3, 2, -1, 1]];
 // push a circle out of every blocked edge, corner post and solid prop around it
 function collide(p, rad, foe) {
   // stop at the foot of a slope spilling in from higher ground, not at the tile edge
   const sr = Math.max(rad, Math.min(rad + SLOPE_W - 0.25, 0.48));
+  // (the hero on a stair or an upper story: only the sides heroStep shuts, nothing on the ground below)
+  const up = !foe && moverHero && heroUp();
   for (let it = 0; it < 2; it++) {
     const c = Math.floor(p.x), r = Math.floor(p.z), u = p.x - c, v = p.z - r;
-    const rim = RIM[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))];
+    const rim = up ? 0 : RIM[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))];
     // and a little short of a cliff top, where rocks line the edge
     const lip = rad + (BR[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))] ? 0.03 : 0.1), side = b => rim & 1 << b ? sr : rim & 256 << b ? lip : rad;
     const r0 = side(0), r1 = side(1), r2 = side(2), r3 = side(3);
@@ -9535,6 +9737,7 @@ function collide(p, rad, foe) {
       const l = Math.sqrt(dd) || 1e-4;
       p.x = px + ex / l * rad; p.z = pz + ez / l * rad;
     }
+    if (up) continue;
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
       const cc = c + dc, rr = r + dr;
       if (cc < 0 || rr < 0 || cc >= N || rr >= N) continue;
@@ -9660,6 +9863,8 @@ function moveEntity(e, dx, dz, rad, foe) {
   const dist = Math.hypot(dx, dz);
   if (dist < 1e-6) return 0;
   const n = Math.ceil(dist / 0.12), sx = e.x, sz = e.z;
+  moverHero = e === H;
+  try {
   for (let k = 0; k < n; k++) {
     mv.x = e.x + dx / n; mv.z = e.z + dz / n;
     const oc = Math.floor(e.x), or = Math.floor(e.z), nc = Math.floor(mv.x), nr = Math.floor(mv.z);
@@ -9670,7 +9875,9 @@ function moveEntity(e, dx, dz, rad, foe) {
     const fc = Math.floor(mv.x), fr = Math.floor(mv.z);
     if ((fc !== oc || fr !== or) && !reachableStep(oc, or, fc, fr, foe)) { mv.x = e.x; mv.z = e.z; }
     e.x = mv.x; e.z = mv.z;
+    if (moverHero && (Math.floor(e.x) !== oc || Math.floor(e.z) !== or)) heroCross(T(oc, or), T(Math.floor(e.x), Math.floor(e.z)));
   }
+  } finally { moverHero = false; }
   return Math.hypot(e.x - sx, e.z - sz);
 }
 function reachableStep(c0, r0, c1, r1, foe) {
@@ -9763,7 +9970,7 @@ lights.forEach(l => l.layers.enableAll());
 
 const MAX_HP = 100;
 const H = {
-  x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true,
+  x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true, story: 0, stair: null,
   kills: 0, level: 1, xp: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
@@ -10022,6 +10229,8 @@ const ICON = {
   logwall: iconArt(['.l.l.l.l', 'lLlLlLlL', 'lLlLlLlL', 'bbbbbbbb', 'lLlLlLlL', 'lLlLlLlL', 'lLlLlLlL'], { l: '#5a3a22', L: '#8a5a32', b: '#3a2416' }),
   stonewall: iconArt(['GG.GG.GG', 'GGGGGGGG', 'gGgggGgg', 'GGGGGGGG', 'ggGgggGg', 'GGGGGGGG', 'gGgggGgg'], { G: '#5a5664', g: '#8c8a96' }),
   stonefloor: iconArt(['GGGgGGGG', 'GGGgGGGG', 'gggggggg', 'GgGGGGgG', 'GgGGGGgG', 'gggggggg'], { G: '#8c8894', g: '#3e3a44' }),
+  woodstairs: iconArt(['......BB', '......bb', '....BBBB', '....bbbb', '..BBBBBB', '..bbbbbb', 'BBBBBBBB', 'bbbbbbbb'], { B: '#8a6a44', b: '#5a3e26' }),
+  stonestairs: iconArt(['......GG', '......gG', '....GGGG', '....gGGG', '..GGGGGG', '..gGGGGG', 'GGGGGGGG', 'gGGGGGGG'], { G: '#8c8894', g: '#5a5664' }),
   hearth: iconArt(['...GG...', '...GG...', '..GGGG..', '.GGGGGG.', '.G.yy.G.', '.GyrryG.', 'GGGGGGGG'], { G: '#8a8694', y: '#f2c14e', r: '#e8642a' }),
   fence: iconArt(['b...b...b', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'LLLLLLLLL', 'b...b...b', 'b...b...b'], { b: '#6a4a2c', L: '#8a6440' }),
   stonefence: iconArt(['.ccc.ccc.', 'ccccccccc', '.GG.gGG.G', 'GggGGgGGg', 'gGGgGGggG', 'GgGGgGGGg'], { c: '#a8a49a', G: '#8e8a80', g: '#6a665e' }),
@@ -11100,6 +11309,7 @@ const SLOTS = {
 // each group's kinds, as its row opens over the bar
 const KIND_SLOT = {
   floor: { name: 'WOOD FLOOR', icon: 'floor' }, stonefloor: { name: 'STONE FLOOR', icon: 'stonefloor' },
+  woodstairs: { name: 'WOOD STAIRS', icon: 'woodstairs' }, stonestairs: { name: 'STONE STAIRS', icon: 'stonestairs' },
   wall: { name: 'TIMBER WALL', icon: 'wall' }, logwall: { name: 'LOG WALL', icon: 'logwall' }, stonewall: { name: 'STONE WALL', icon: 'stonewall' },
   fence: { name: 'WOOD FENCE', icon: 'fence' }, stonefence: { name: 'FIELDSTONE WALL', icon: 'stonefence' },
   door: { name: 'WOODEN DOOR', icon: 'door' }, gate: { name: 'WOODEN GATE', icon: 'gate' },
@@ -11150,6 +11360,7 @@ function renderBar() {
   if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), pad: catPad[subOpen], name: KIND_SLOT[k].name, short: KIND_SLOT[k].short, icon: KIND_SLOT[k].icon, cost: k }, sub)));
   sub.hidden = !subOpen;
   $('modeTag').hidden = mode !== 'build';
+  $('modeTag').textContent = 'BUILD MODE · ' + STORY_NAME[buildStory] + ' (↑ ↓)';
   $('modeTag').classList.toggle('up', !!subOpen);
   updateBar();
   renderHot();
@@ -11922,6 +12133,8 @@ function propAhead(range, arc, a) {
 }
 function hurtHero(dmg, fromX, fromZ, lvl = 1) {
   if (!H.alive || H.invuln > 0) return;
+  // (up a story, nothing on the ground beneath can reach you)
+  if (heroUp() && H.y - heightAt(fromX, fromZ) > 1.2) return;
   dmg = Math.max(1, Math.round(dmg * gapMul(-levelGap(lvl)) * (1 - armorCut(lvl))));
   H.hp -= dmg; H.hurtT = 0; H.lastHurt = time;
   const dx = H.x - fromX, dz = H.z - fromZ, l = Math.hypot(dx, dz) || 1;
@@ -11951,6 +12164,7 @@ function respawn() {
     if (stepOpen(h.c, h.r, d, false) && !OBJ[OB[n]].solid) { at = [h.c + 0.5 + DC[d] * 0.85, h.r + 0.5 + DR[d] * 0.85]; break; }
   }
   [H.x, H.z] = at || [spawn.x, spawn.z];
+  H.story = 0; H.stair = null;
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.alive = true; H.invuln = 2;
   H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
   renderHp();
@@ -11975,7 +12189,10 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM' || (e.code === 'Escape' && mapOpen)) { toggleMap(); e.preventDefault(); return; }
   if (e.code === 'KeyP' && !e.repeat) { togglePlots(); return; }
   if (e.code === 'KeyN' && !e.repeat && mapOpen) { toggleReveal(); return; }
-  if (e.code === 'KeyR' && !e.repeat && started && !mapOpen && !e.ctrlKey && !e.metaKey && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) { audioOn(); refineAll(); }
+  if (e.code === 'KeyR' && !e.repeat && started && !mapOpen && !e.ctrlKey && !e.metaKey && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) {
+    // (in build mode with stairs picked, R turns them instead)
+    if (mode === 'build' && isStair(buildKind)) { stairTurn = (stairTurn + 1) & 3; updateGhost(); } else { audioOn(); refineAll(); }
+  }
   if (e.code === 'KeyH' && !e.repeat && !e.ctrlKey && !e.metaKey && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) toggleUI();
   if (e.code === 'KeyL' && !e.repeat) {
     GI.on = (Math.round(GI.on) + 1) % 3; tuning.refresh();
@@ -11990,6 +12207,7 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyB') setMode(mode === 'build' ? 'play' : 'build');
+  if (mode === 'build' && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) { e.preventDefault(); setStory(buildStory + (e.code === 'ArrowUp' ? 1 : -1)); }
   if (e.code === 'Escape' && mode === 'build') { if (subOpen) { subOpen = null; renderBar(); } else setMode('play'); }
   else if (mode === 'build' && /^Digit[1-9]$/.test(e.code)) {
     const n = +e.code.slice(5);
@@ -13563,8 +13781,10 @@ function showJumpHint() {
 function moveInput() {
   if (TOUCH.force) return TOUCH.force;
   let f = 0, s = 0;
-  if (keys.has('KeyW') || keys.has('ArrowUp')) f++;
-  if (keys.has('KeyS') || keys.has('ArrowDown')) f--;
+  // (in build mode the up and down arrows pick the story instead)
+  const arrows = mode !== 'build';
+  if (keys.has('KeyW') || (arrows && keys.has('ArrowUp'))) f++;
+  if (keys.has('KeyS') || (arrows && keys.has('ArrowDown'))) f--;
   if (keys.has('KeyD') || keys.has('ArrowRight')) s++;
   if (keys.has('KeyA') || keys.has('ArrowLeft')) s--;
   if (!f && !s && PAD.on && (PAD.ls[0] || PAD.ls[1])) { s = PAD.ls[0]; f = -PAD.ls[1]; }
@@ -13578,7 +13798,9 @@ function moveInput() {
 // the nearest door within reach of the hero
 function nearDoor() {
   let best = null, bd = 1.7;
+  const hk = H.stair ? -1 : H.story;   // (only the doors on your story)
   for (const d of doors.values()) {
+    if (d.k !== hk) continue;
     const mx = d.w ? d.c : d.c + 0.5, mz = d.w ? d.r + 0.5 : d.r, dist = Math.hypot(mx - H.x, mz - H.z);
     if (dist < bd) { bd = dist; best = d; }
   }
@@ -13626,11 +13848,11 @@ function useDoor(d = nearDoor()) {
     // don't shut it on anyone standing in the doorway
     const inWay = [H, ...foes].some(e => both.some(q => Math.hypot(e.x - (q.w ? q.c : q.c + 0.5), e.z - (q.w ? q.r + 0.5 : q.r)) < 0.45));
     if (inWay) { sfx.nope(); return; }
-    for (const q of both) { q.open = false; openDoors.delete(edgeKey(q.c, q.r, q.w)); }
+    for (const q of both) { q.open = false; openDoors.delete(dKey(q.c, q.r, q.w, q.k)); }
   } else {
     // swing away from the hero
     const side = d.w ? (H.x < d.c ? 1 : -1) : (H.z < d.r ? 1 : -1);
-    for (const q of both) { q.open = true; openDoors.add(edgeKey(q.c, q.r, q.w)); q.side = side; }
+    for (const q of both) { q.open = true; openDoors.add(dKey(q.c, q.r, q.w, q.k)); q.side = side; }
   }
   sfx.door();
 }
@@ -13659,7 +13881,7 @@ function showGhosts(spots) {
     const s = spots[k];
     g.visible = !!s;
     if (!s) return;
-    g.geometry = ghostGeo[s.kind]; g.material = s.go ? ghostMat : s.queue ? ghostQueue : ghostBad;
+    g.geometry = isStair(s.kind) ? stairGhost(s.kind) : ghostGeo[s.kind]; g.material = s.go ? ghostMat : s.queue ? ghostQueue : ghostBad;
     g.position.set(s.x, s.y, s.z); g.rotation.y = s.ry || 0;
   });
 }
@@ -13669,8 +13891,8 @@ function setMode(m) {
   renderBar();
   showGhosts([]); showPlotHover(0);
   if (m === 'build') toast(PAD.on ? 'Build mode. Claim a plot with a hearth (RB), then build on it: X floors, Y walls, A doors. Hold RT and move to lay rows.'
-    : 'Build mode. Claim a plot with a hearth (4), then build on it: 1 floors, 2 walls, 3 doors. Drag to lay rows.', 'calm');
-  if (m === 'build') { PAD.cur.x = Math.sin(H.face) * 2.5; PAD.cur.z = Math.cos(H.face) * 2.5; }
+    : 'Build mode. Claim a plot with a hearth (4), then build on it: 1 floors and stairs, 2 walls, 3 doors. Drag to lay rows. ↑ ↓ picks the story.', 'calm');
+  if (m === 'build') { PAD.cur.x = Math.sin(H.face) * 2.5; PAD.cur.z = Math.cos(H.face) * 2.5; setStory(H.stair ? H.stair.k : H.story); }
 }
 function setBuildKind(k) { buildKind = k; if (k !== 'move') moving = null; const cat = catOf(k); if (cat) catPick[cat] = k; updateBar(); }
 const BUILD_RANGE = 12;
@@ -13682,6 +13904,149 @@ function floorSpot(c, r, kind) {
   let why = FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.';
   if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
   return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
+}
+// ---------- Building up the stories (v369) ----------
+// The story being built on (↑ / ↓ in build mode); the cursor then picks on that story's plane, over the ground
+// level of the tile you stand on.
+let buildStory = 0, stairTurn = 0;
+function setStory(k) {
+  buildStory = clamp(k | 0, 0, STORY_MAX);
+  if (mode === 'build') { renderBar(); updateGhost(); }
+}
+function pickBuild() {
+  if (!buildStory || forcedPick) return pickGround(false);
+  const rect = cv.getBoundingClientRect();
+  viewRay((mouse.x - rect.left) / rect.width * 2 - 1, -(mouse.y - rect.top) / rect.height * 2 + 1);
+  const y = LV[T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1))] * STEP + buildStory * WALL_H;
+  if (Math.abs(rayDir.y) < 1e-4) return null;
+  const t = (y - ray.y) / rayDir.y;
+  if (t <= 0) return null;
+  const x = ray.x + rayDir.x * t, z = ray.z + rayDir.z * t;
+  return x < 0 || z < 0 || x >= N || z >= N ? null : { x, y, z, wall: null };
+}
+// a floor on story k: on your plot, over nothing if need be, joined to a floor on k (over ground of the same level)
+// or to the landing at the top of a stair from the story below. (loose: only the joining is wanting, which another
+// floor of the same drag may give: dragSpots)
+function upFloorSpot(c, r, kind, k) {
+  const i = T(c, r), U = UP[k];
+  let ok = LV[i] > 0 && BI[i] !== TOWN && !U.FL.has(i) && !stairAt.has(k * SNN + i) && !stairAt.has((k - 1) * SNN + i), loose = false;
+  let why = U.FL.has(i) ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'The stairs come up through here.';
+  if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
+  if (ok && !upJoined(k, c, r)) { ok = false; loose = true; why = 'An upper floor has to join the top of the stairs or another floor on this story.'; }
+  return { kind, c, r, k, ok, loose, why, x: c + 0.5, z: r + 0.5, y: storyY(k, i) + 0.04 };
+}
+function upJoined(k, c, r, extra = null) {
+  const i = T(c, r);
+  for (let d = 0; d < 4; d++) {
+    const n = T(c + DC[d], r + DR[d]);
+    if (LV[n] === LV[i] && (UP[k].FL.has(n) || (extra && extra.has(n)))) return true;
+  }
+  for (const st of stairs.values()) if (st.k === k - 1 && st.land === i && LV[st.t0] === LV[i]) return true;
+  return false;
+}
+// a wall, fence or door on story k: on the side of a floor on that story
+function upEdgeSpot(ec, er, w, kind, k) {
+  const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1), U = UP[k];
+  const fa = U.FL.has(a), fb = U.FL.has(b), there = (w ? U.WW : U.WN).get(a);
+  let ok = (fa || fb) && !there && BI[a] !== TOWN && BI[b] !== TOWN;
+  let why = there ? 'Something is built here already.' : !(fa || fb) ? 'Walls up here need a floor beside them.' : 'The townsfolk would rather you built outside town.';
+  if (ok && ![a, b].some(t => (t === a ? fa : fb) && claimedAt(t))) { ok = false; why = plotWhy(fa ? a : b); }
+  const sa = stairAt.get(k * SNN + a) || stairAt.get((k - 1) * SNN + a);
+  if (ok && sa && (sa === stairAt.get(k * SNN + b) || sa === stairAt.get((k - 1) * SNN + b))) { ok = false; why = 'That would cut across the stairs.'; }
+  const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
+  if (ok && !H.stair && H.story === k) {
+    const ex = w ? Math.abs(H.x - ec) : Math.max(0, Math.abs(H.x - mx) - 0.5), ez = w ? Math.max(0, Math.abs(H.z - mz) - 0.5) : Math.abs(H.z - er);
+    if (Math.hypot(ex, ez) < 0.36) { ok = false; why = 'Something is standing in the way.'; }
+  }
+  return { kind, c: ec, r: er, w, k, ok, why, x: mx, z: mz, y: Math.max(LV[a], LV[b]) * STEP + k * WALL_H + (isFenceKind(kind) ? FENCE_H : WALL_H) / 2, ry: w ? Math.PI / 2 : 0 };
+}
+// which way a stair under the cursor rises: away from you (R turns it a quarter)
+function stairDir(c, r) {
+  const ax = c + 0.5 - H.x, az = r + 0.5 - H.z;
+  const [vx, vz] = Math.hypot(ax, az) < 0.3 ? [Math.sin(H.face), Math.cos(H.face)] : [ax, az];
+  const d = Math.abs(vx) > Math.abs(vz) ? (vx > 0 ? 1 : 3) : (vz > 0 ? 2 : 0);
+  return (d + stairTurn) & 3;
+}
+// a stair on story k with its foot at (c, r), rising toward d: both its tiles clear (on the ground: as a floor's
+// ground; up a story: floored), at one level with its landing, nothing over its well, no wall across it
+function stairSpot(c, r, d, kind, k) {
+  const dx = DC[d], dz = DR[d], ok0 = c - 2 >= 1 && r - 2 >= 1 && c + 2 < N - 1 && r + 2 < N - 1;
+  const t0 = T(c, r), t1 = T(c + dx, r + dz), land = T(c + 2 * dx, r + 2 * dz), both = [t0, t1];
+  const groundOk = t => LV[t] > 0 && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && !OBJ[OB[t]].solid && !OBJ[OB[t]].tile && !stationTile.has(t) && OB[t] !== O.HEARTH;
+  let ok = ok0 && k < STORY_MAX, why = k >= STORY_MAX ? 'This is the top story: no stairs up from here.' : 'Stairs need two tiles of clear, flat ground.';
+  if (ok && !both.every(t => LV[t] === LV[t0]) || (ok && LV[land] !== LV[t0])) { ok = false; why = 'Stairs need their two tiles and the landing at one level.'; }
+  if (ok && !both.every(t => k ? UP[k].FL.has(t) : groundOk(t))) { ok = false; why = k ? 'Stairs up here need floor under both their tiles.' : why; }
+  if (ok && both.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
+  if (ok && both.some(t => stairAt.has(k * SNN + t) || (k && stairAt.has((k - 1) * SNN + t)))) { ok = false; why = 'There are stairs here already.'; }
+  if (ok && both.some(t => UP[k + 1].FL.has(t))) { ok = false; why = 'There is a floor overhead: take it up first, or start the stairs elsewhere.'; }
+  if (ok && !wallOpenAny(c, r, d, k)) { ok = false; why = 'A wall stands across where the stairs would go.'; }
+  if (ok) { const t = both.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
+  const x = c + 0.5 + dx * 0.5, z = r + 0.5 + dz * 0.5;
+  if (ok && [H, ...(k ? [] : foes)].some(e => (e !== H || (!H.stair && H.story === k)) && both.some(t => Math.floor(e.x) === t % N && Math.floor(e.z) === Math.floor(t / N)))) { ok = false; why = 'Something is standing in the way.'; }
+  return { kind, c, r, d, k, stair: true, ok, why, x, z, y: storyY(k, t0), ry: Math.atan2(dx, dz) };
+}
+// (no wall of any kind, door or not, on the side between a stair's two tiles)
+const wallOpenAny = (c, r, d, k) => !upWallOn(c, r, d, k);
+function placeStair(s) {
+  const dx = DC[s.d], dz = DR[s.d], t0 = T(s.c, s.r), t1 = T(s.c + dx, s.r + dz), K = s.k * SNN;
+  const st = { c: s.c, r: s.r, d: s.d, k: s.k, kind: s.kind, t0, t1, land: T(s.c + 2 * dx, s.r + 2 * dz), y0: storyY(s.k, t0), key: K + t0 };
+  stairs.set(K + t0, st); stairAt.set(K + t0, st); stairAt.set(K + t1, st);
+  if (!s.k) for (const t of [t0, t1]) if (OB[t]) { OB[t] = 0; markObj(t % N, Math.floor(t / N)); }
+  refreshStory(s.k + 1, s.c, s.r); refreshStory(s.k + 1, s.c + dx, s.r + dz);
+  markPieces(s.c + dx, s.r + dz);
+}
+function removeStair(st) {
+  stairs.delete(st.key); stairAt.delete(st.k * SNN + st.t0); stairAt.delete(st.k * SNN + st.t1);
+  const c1 = st.t1 % N, r1 = Math.floor(st.t1 / N);
+  refreshStory(st.k + 1, st.c, st.r); refreshStory(st.k + 1, c1, r1);
+  markPieces(st.c, st.r); markPieces(c1, r1);
+  const ch = Math.floor(st.r / CH) * NC + Math.floor(st.c / CH);
+  buildCount[ch] = Math.max(0, buildCount[ch] - 1);
+}
+// a piece on an upper story goes up
+function placeUp(s) {
+  const k = s.k, U = UP[k], i = T(s.c, s.r);
+  if (isFloor(s.kind)) { U.FL.set(i, FLOOR_VAL[s.kind]); refreshStory(k, s.c, s.r); return; }
+  (s.w ? U.WW : U.WN).set(i, KIND_VAL[s.kind]);
+  if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind, false, k);
+  if (!isFenceKind(s.kind)) {
+    const before = rooms.size;
+    refreshRooms(s.c, s.r, s.w, k);
+    if (rooms.size > before) { sfx.roof(); toast('The room is closed in. A roof goes up.', 'good'); }
+  }
+}
+// right click on an upper story: a wall or door near the cursor, else the stair, else the floor
+function removeUp(k) {
+  const p = pickBuild();
+  if (!p) return;
+  const U = UP[k], c = Math.floor(p.x), r = Math.floor(p.z), u = p.x - c, v = p.z - r, i = T(c, r), dist = [v, 1 - u, 1 - v, u];
+  let target = null;
+  for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && upWallOn(c, r, d, k)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[upWallOn(c, r, d, k)], c: ec, r: er, w }; }
+  const st = !target && stairAt.get(k * SNN + i);
+  if (st) target = { kind: st.kind, c: st.c, r: st.r, st };
+  if (!target && U.FL.has(i)) target = { kind: FLOOR_KIND[U.FL.get(i)], c, r };
+  if (!target) { sfx.nope(); return; }
+  const mx = 'w' in target ? (target.w ? target.c : target.c + 0.5) : c + 0.5, mz = 'w' in target ? (target.w ? target.r + 0.5 : target.r) : r + 0.5;
+  if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
+  if (isFloor(target.kind) && stairAt.has(k * SNN + i)) { sfx.nope(); toast('Stairs stand on this floor: take them down first.'); return; }
+  if (target.st && H.stair === target.st) { sfx.nope(); toast('Step off the stairs first.'); return; }
+  if (target.st) removeStair(target.st);
+  else {
+    const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
+    buildCount[ch] = Math.max(0, buildCount[ch] - 1);
+    if (isFloor(target.kind)) { U.FL.delete(i); refreshStory(k, c, r); }
+    else {
+      (target.w ? U.WW : U.WN).delete(T(target.c, target.r));
+      const key = dKey(target.c, target.r, target.w, k), dr = doors.get(key);
+      if (dr) { scene.remove(dr.pivot); doors.delete(key); openDoors.delete(key); }
+      refreshRooms(target.c, target.r, target.w, k);
+    }
+    markPieces(target.c, target.r);
+  }
+  pay(target.kind, -1);
+  flushDirty();
+  sfx.remove();
+  floatText('+' + costText(target.kind), mx, LV[T(target.c, target.r)] * STEP + k * WALL_H + 1.2, mz, '#e0b070');
 }
 // a wall or door on the edge named by (ec, er, w)
 function edgeSpot(ec, er, w, kind) {
@@ -13695,6 +14060,7 @@ function edgeSpot(ec, er, w, kind) {
   let why = (w ? WW : WN)[a] ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.'
     : cliff && isDoorKind(kind) ? `A ${kind} here would open onto the drop.` : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
   if (ok) for (const t of cliff ? [hi] : [a, b]) if (!claimedAt(t)) { ok = false; why = plotWhy(t); break; }
+  if (ok && stairAt.has(a) && stairAt.get(a) === stairAt.get(b)) { ok = false; why = 'That would cut across the stairs.'; }
   // (never through the middle of a station)
   if (ok && stationTile.has(a) && stationTile.get(a) === stationTile.get(b)) { ok = false; why = `That would cut through the ${KIND_SLOT[stationTile.get(a).kind].name.toLowerCase()}.`; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
@@ -13708,7 +14074,7 @@ function edgeSpot(ec, er, w, kind) {
 // a hearth claims the unclaimed plot it stands on
 function hearthSpot(c, r) {
   const i = T(c, r), pl = PLOT[i] ? plots[PLOT[i]] : null;
-  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile;
+  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && !stairAt.has(i);
   let why = 'A hearth needs clear, flat, dry ground.';
   if (!pl) { ok = false; why = 'A hearth has to stand on a plot: the white outlines on the map.'; }
   else if (pl.claimed) { ok = false; why = 'This plot is already claimed; it has its hearth.'; }
@@ -13718,11 +14084,13 @@ function hearthSpot(c, r) {
 }
 // where the current piece would go under the cursor, and whether it may
 function buildSpot() {
-  const p = lastPick = pickGround(false);
+  const p = lastPick = pickBuild(), k = buildStory;
   if (!p) return null;
   const c = Math.floor(p.x), r = Math.floor(p.z);
   if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return null;
-  if (isFloor(buildKind)) return floorSpot(c, r, buildKind);
+  if (isStair(buildKind)) return stairSpot(c, r, stairDir(c, r), buildKind, k);
+  if (isFloor(buildKind)) return k ? upFloorSpot(c, r, buildKind, k) : floorSpot(c, r, buildKind);
+  if (k && (buildKind === 'hearth' || isStation(buildKind))) return { kind: buildKind, c, r, k, ok: false, why: 'Only floors, walls, fences, doors and stairs go on the upper stories.', x: c + 0.5, z: r + 0.5, y: storyY(k, T(c, r)) + 0.45 };
   if (buildKind === 'hearth') return hearthSpot(c, r);
   if (isStation(buildKind)) return stationSpotAt(p, buildKind);
   // walls and doors snap to the tile side nearest the cursor
@@ -13730,19 +14098,27 @@ function buildSpot() {
   const dist = [v, 1 - u, 1 - v, u];
   let d = 0; for (let k = 1; k < 4; k++) if (dist[k] < dist[d]) d = k;
   const [ec, er, w] = edgeOf(c, r, d);
-  return edgeSpot(ec, er, w, buildKind);
+  return k ? upEdgeSpot(ec, er, w, buildKind, k) : edgeSpot(ec, er, w, buildKind);
 }
 // the pieces of a drag so far: a rectangle of floor, or a straight run of wall along the way it's dragged
 const MAX_AREA = 24, MAX_RUN = 40;
 function dragSpots() {
-  const p = lastPick = pickGround(false);
+  const p = lastPick = pickBuild(), k = buildStory;
   if (!p) return drag.spots || [];
   const out = [];
   if (isFloor(drag.kind)) {
     const c0 = Math.floor(drag.x), r0 = Math.floor(drag.z);
     const c1 = clamp(Math.floor(p.x), c0 - MAX_AREA + 1, c0 + MAX_AREA - 1), r1 = clamp(Math.floor(p.z), r0 - MAX_AREA + 1, r0 + MAX_AREA - 1);
     for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++) for (let c = Math.min(c0, c1); c <= Math.max(c0, c1); c++)
-      if (c >= 1 && r >= 1 && c < N - 1 && r < N - 1) out.push(floorSpot(c, r, drag.kind));
+      if (c >= 1 && r >= 1 && c < N - 1 && r < N - 1) out.push(k ? upFloorSpot(c, r, drag.kind, k) : floorSpot(c, r, drag.kind));
+    // (up a story, a floor joined only through others in the same drag is joined too, once they are)
+    if (k) {
+      const go = new Set(out.filter(s => s.ok).map(s => T(s.c, s.r)));
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const s of out) if (s.loose && upJoined(k, s.c, s.r, go)) { s.ok = true; s.loose = false; go.add(T(s.c, s.r)); grew = true; }
+      }
+    }
     return out;
   }
   const dx = p.x - drag.x, dz = p.z - drag.z;
@@ -13750,10 +14126,10 @@ function dragSpots() {
   if (Math.abs(dx) >= Math.abs(dz)) {
     // east-west: the north sides of a row of tiles, on the grid line nearest where the drag began
     const er = Math.round(drag.z), a = Math.floor(Math.min(drag.x, p.x)), b = Math.min(Math.floor(Math.max(drag.x, p.x)), a + MAX_RUN - 1);
-    for (let c = a; c <= b; c++) if (c >= 1 && c < N - 1 && er >= 1 && er < N - 1) out.push(edgeSpot(c, er, 0, drag.kind));
+    for (let c = a; c <= b; c++) if (c >= 1 && c < N - 1 && er >= 1 && er < N - 1) out.push(k ? upEdgeSpot(c, er, 0, drag.kind, k) : edgeSpot(c, er, 0, drag.kind));
   } else {
     const ec = Math.round(drag.x), a = Math.floor(Math.min(drag.z, p.z)), b = Math.min(Math.floor(Math.max(drag.z, p.z)), a + MAX_RUN - 1);
-    for (let r = a; r <= b; r++) if (r >= 1 && r < N - 1 && ec >= 1 && ec < N - 1) out.push(edgeSpot(ec, r, 1, drag.kind));
+    for (let r = a; r <= b; r++) if (r >= 1 && r < N - 1 && ec >= 1 && ec < N - 1) out.push(k ? upEdgeSpot(ec, r, 1, drag.kind, k) : edgeSpot(ec, r, 1, drag.kind));
   }
   return out;
 }
@@ -13765,10 +14141,10 @@ function settle(spots) {
   for (const s of spots) {
     const cost = COST[s.kind], far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE, pl = spotPlot(s);
     for (const r in cost) if (!(r in have)) have[r] = haveCount(r);
-    const behind = queueable(s.kind) && Object.keys(cost).some(r => waiting.get(pl)?.has(r));
+    const behind = queueable(s.kind) && !s.k && Object.keys(cost).some(r => waiting.get(pl)?.has(r));
     const afford = !behind && Object.entries(cost).every(([r, n]) => n <= have[r]), queued = buildQueue.has(spotKey(s));
     s.go = s.ok && !far && afford;
-    s.queue = s.ok && !far && !afford && queueable(s.kind) && !queued;
+    s.queue = s.ok && !far && !afford && queueable(s.kind) && !s.k && !queued;
     if (s.ok && far) s.why = 'Too far away to build.';
     else if (s.ok && !afford && queued) s.why = 'That is queued already.';
     else if (s.ok && !afford) {
@@ -13829,6 +14205,7 @@ function placeSpot(s) {
   unqueue(spotKey(s));
   const ch = Math.floor(s.r / CH) * NC + Math.floor(s.c / CH);
   buildCount[ch]++;
+  if (s.stair || s.k) { if (s.stair) placeStair(s); else placeUp(s); markPieces(s.c, s.r); return; }
   if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
     FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH && !stationTile.has(i)) OB[i] = 0; markObj(s.c, s.r);
@@ -13865,7 +14242,7 @@ function placeMany(spots) {
   flushDirty();
   sfx.place();
   const mid = go[Math.floor(go.length / 2)];
-  puff(mid.x, mid.y - (isFloor(mid.kind) || mid.kind === 'hearth' || isStation(mid.kind) ? 0 : (isFenceKind(mid.kind) ? FENCE_H : WALL_H) / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
+  puff(mid.x, mid.y - (isFloor(mid.kind) || isStair(mid.kind) || mid.kind === 'hearth' || isStation(mid.kind) ? 0 : (isFenceKind(mid.kind) ? FENCE_H : WALL_H) / 2), mid.z, '#c8bca0', Math.min(12, 4 + go.length), 0.7);
   if (miss && !queue.length && go.length < spots.length) toast(`Built ${go.length} of ${spots.length}. ${miss.why}`);
 }
 // ---------- Plot stores ----------
@@ -14229,7 +14606,7 @@ function takeDownStation(i) {
 // tile under it, facing you: all its tiles clear, flat, dry, at one height, on your plot, with no wall between them
 function stationSpot(c, r, kind, self = null) {
   const f = stFoot(kind), h = f / 2, i = T(c, r), all = stTiles(c, r, f);
-  let ok = c >= 1 && r >= 1 && c < N - 2 && r < N - 2 && all.every(t => LV[t] > 0 && LV[t] === LV[i] && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && ((self && stationTile.get(t) === self) || (!OBJ[OB[t]].solid && !OBJ[OB[t]].tile)))
+  let ok = c >= 1 && r >= 1 && c < N - 2 && r < N - 2 && all.every(t => LV[t] > 0 && LV[t] === LV[i] && !stairAt.has(t) && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && ((self && stationTile.get(t) === self) || (!OBJ[OB[t]].solid && !OBJ[OB[t]].tile)))
     && (f === 1 || (!WW[T(c + 1, r)] && !WW[T(c + 1, r + 1)] && !WN[T(c, r + 1)] && !WN[T(c + 1, r + 1)]));
   let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs ${f === 1 ? 'a tile' : '2 x 2 tiles'} of clear, flat, dry ground.`;
   if (ok && all.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
@@ -14416,6 +14793,7 @@ function updateStations(dt) {
   }
 }
 function removePiece() {
+  if (buildStory) { removeUp(buildStory); return; }
   let target = null;
   const hit = pickGround(true);
   if (!hit) return;
@@ -14430,6 +14808,14 @@ function removePiece() {
     for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[wallOn(c, r, d)], c: ec, r: er, w }; }
     if (!target && OB[i] === O.HEARTH) target = { kind: 'hearth', c, r };
     if (!target && stationTile.has(i)) { const st = stationTile.get(i); target = { kind: st.kind, c: st.c, r: st.r }; }
+    if (!target && stairAt.has(i)) {
+      const st = stairAt.get(i);
+      if (Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
+      if (H.stair === st) { sfx.nope(); toast('Step off the stairs first.'); return; }
+      removeStair(st); pay(st.kind, -1); flushDirty(); sfx.remove();
+      floatText('+' + costText(st.kind), st.c + 0.5, st.y0 + 1.2, st.r + 0.5, '#e0b070');
+      return;
+    }
     if (!target && FL[i]) target = { kind: FLOOR_KIND[FL[i]], c, r };
   }
   if (!target) { sfx.nope(); return; }
@@ -14759,7 +15145,7 @@ function update(dt) {
   if (H.alive) {
     const m = moveInput();
     let vx = 0, vz = 0;
-    H.canJump = jumpEdge(m);
+    H.canJump = heroUp() ? null : jumpEdge(m);
     if (H.flip) {
       // the flip: across and down on an arc, turning over once, then a puff of dust where you land
       const F = H.flip;
@@ -14816,7 +15202,8 @@ function update(dt) {
       H.stepF += ((mx * fx + mz * fz) / ml - H.stepF) * k;
       H.stepS += ((mx * fz - mz * fx) / ml - H.stepS) * k;
     }
-    if (!H.flip) H.y = surfaceY(H.x, H.z);
+    heroSettle();
+    if (!H.flip) H.y = heroFloorY();
 
     // attacks
     if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear) startSwing();
@@ -14964,11 +15351,15 @@ function update(dt) {
 
   spikes.exit(); spikes.enter('update: roofs, sky, lamps, HUD');
   // ----- roofs: hidden over the building you stand in, and all of them while building -----
-  const inside = roomOf.get(T(Math.floor(H.x), Math.floor(H.z)));
+  // (v369: the room on your story; and what's over you, when something is, hides: storyView)
+  const inside = roomOf.get((H.stair ? H.stair.k : H.story) * SNN + T(Math.floor(H.x), Math.floor(H.z)));
   let inBld = inside ? rooms.get(inside).bld : 0;
   // (on a mausoleum's portico or a cabin's porch, under its roof, the roof goes too)
   if (!inBld) { const j = roofOver.get(T(Math.floor(H.x), Math.floor(H.z))), b = j !== undefined && bldOf(j); if (b) inBld = b.id; }
-  for (const b of buildings.values()) b.mesh.visible = mode !== 'build' && b.id !== inBld;
+  const view = storyView();
+  for (const b of buildings.values()) if (b.mesh) b.mesh.visible = mode !== 'build' && b.id !== inBld && b.k <= view;
+  for (const ch of chunks.values()) for (let k = 1; k <= STORY_MAX; k++) { const m = ch['up' + k]; if (m) m.visible = k <= view; }
+  for (const d of doors.values()) if (d.k) d.pivot.visible = d.k <= view;
   updateCutaway(inside);
 
   updateGhost();
@@ -14998,7 +15389,7 @@ function update(dt) {
       pr.innerHTML = key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
       const mx = nd.w ? nd.c : nd.c + 0.5, mz = nd.w ? nd.r + 0.5 : nd.r;
       const L = Math.max(LV[T(nd.c, nd.r)], LV[nd.w ? T(nd.c - 1, nd.r) : T(nd.c, nd.r - 1)]);
-      v3.set(mx, L * STEP + (nd.gate ? FENCE_H : WALL_H) / 2, mz);
+      v3.set(mx, L * STEP + nd.k * WALL_H + (nd.gate ? FENCE_H : WALL_H) / 2, mz);
     }
     v3.project(camera);
     const rect = cv.getBoundingClientRect();
@@ -16039,7 +16430,7 @@ function fastTravel() {
   const t = travelTo;
   if (!t || !H.alive) return;
   if (mapOpen) toggleMap();
-  [H.x, H.z] = [t.c + 0.5, t.r + 2.5]; H.y = surfaceY(H.x, H.z);
+  [H.x, H.z] = [t.c + 0.5, t.r + 2.5]; H.story = 0; H.stair = null; H.y = surfaceY(H.x, H.z);
   H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
   H.invuln = 2;
   camTarget.set(H.x, H.y, H.z);
@@ -17305,7 +17696,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 368, crashSeen = new Map();
+const GAME_VERSION = 369, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -17341,6 +17732,16 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
+  // (tests) the stories: pick the one to build on, read what's up there and where the hero stands
+  story: k => { if (k != null) setStory(k); return buildStory; },
+  stories: (near = [H.x, H.z]) => {
+    const by = t => Math.hypot(t[0] - near[0], t[1] - near[1]) < 12;
+    return { up: UP.slice(1).map(U => ({ fl: U.FL.size, wn: U.WN.size, ww: U.WW.size })), stairs: [...stairs.values()].map(st => ({ c: st.c, r: st.r, d: st.d, k: st.k, kind: st.kind })),
+      hero: { story: H.story, stair: !!H.stair, y: +H.y.toFixed(3), x: +H.x.toFixed(2), z: +H.z.toFixed(2) }, view: storyView(),
+      rooms: [...rooms.values()].filter(rm => by(rm.tiles[0])).map(rm => ({ k: rm.k, n: rm.tiles.length })),
+      roofs: [...buildings.values()].filter(b => by(b.tiles[0])).map(b => ({ k: b.k, n: b.tiles.length, verts: b.mesh && b.mesh.geometry ? b.mesh.geometry.attributes.position.count : 0 })) };
+  },
+  turnStairs: () => { stairTurn = (stairTurn + 1) & 3; return stairTurn; },
   // (tests) put a name on the place plate and report the size it was fitted at
   place: t => { setPlace(t); const e = $('region'); return { px: e.style.fontSize || PLACE_PX + 'px', fits: e.scrollWidth <= e.clientWidth, w: e.clientWidth, sw: e.scrollWidth }; },
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
@@ -17415,7 +17816,7 @@ window.GAME = {
   travelPick: () => travelTo && travelTo.name, travel: () => fastTravel(), mapShow: (k, on) => (k && setMapShow(k, on), { ...MAP_SHOW }),
   toggleMap: () => toggleMap(),
   lamps: () => lampLights.map(l => [l.color.getHexString(), +l.intensity.toFixed(2), +l.distance.toFixed(1), +Math.hypot(l.position.x - H.x, l.position.z - H.z).toFixed(1)]),
-  teleport: (x, z) => { H.x = x; H.z = z; H.y = surfaceY(x, z); camTarget.set(H.x, H.y, H.z); },
+  teleport: (x, z) => { H.x = x; H.z = z; H.story = 0; H.stair = null; H.y = surfaceY(x, z); camTarget.set(H.x, H.y, H.z); },
   give: (w, s) => { if (w) addItem('wood', w); if (s) addItem('stone', s); },
   setClock: c => { SKY.timeOfDay = c * 24; advanceClock(0); },
   setMode, setBuildKind,
@@ -17484,7 +17885,7 @@ window.GAME = {
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
-  walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) moveEntity(H, dx / n, dz / n, 0.26, false); H.y = surfaceY(H.x, H.z); return [H.x, H.z]; },
+  walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
   plotAt: (c, r) => PLOT[T(c, r)],
   // tests: claim the plot under a tile without a hearth
