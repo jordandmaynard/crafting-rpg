@@ -557,7 +557,7 @@ class Renderer {
     let last = null;
     for (const mesh of casters) {
       const mat = mesh.material, inst = !!mesh.isInstancedMesh, own = !inst && !!mat.shadowCode;
-      const pipe = own ? this._shadowPipelineMat(mat) : this._shadowPipeline(mat.side, inst);
+      const pipe = own ? this._shadowPipelineMat(mat) : this._shadowPipeline(mat.shadowSide ?? mat.side, inst);
       if (!pipe) continue;
       if (pipe !== last) { pass.setPipeline(pipe); last = pipe; }
       const [bg, off] = this._writeObj(mesh, mat);
@@ -776,7 +776,10 @@ class Renderer {
   // shadow map with that, its uniforms and every attribute bound as for the material itself (buildMat: the walls
   // the cutaway lowers cast a lowered shadow)
   _shadowPipelineMat(mat) {
-    const cull = mat.side === M.DoubleSide ? 'none' : mat.side === M.BackSide ? 'back' : 'front', key = 'shadowM|' + mat.id + '|' + cull;
+    // (shadowSide: the side the shadow map draws, when it isn't the material's own: buildMat culls back faces on
+    // screen but casts from both, as it always has)
+    const side = mat.shadowSide ?? mat.side;
+    const cull = side === M.DoubleSide ? 'none' : side === M.BackSide ? 'back' : 'front', key = 'shadowM|' + mat.id + '|' + cull;
     let p = this._pipelines.get(key);
     if (p !== undefined) return p;
     const info = this._materialInfo(mat);

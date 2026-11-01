@@ -6090,7 +6090,13 @@ function stem(geo, color, x, y, z, o, rx, ry, rz, flex) {
   part(geo, color, x, y, z, Object.assign({ into: 'plant' }, o));
   PLANT.tag(from, rx, ry, rz, flex);
 }
+// (v440: built pieces cull their back faces, and a bare triangle's winding is whatever its caller gave it, so in the
+// build buffer it's laid both ways round, the one facing you drawn)
 function tri(a, b, c, ca, cb = ca, cc = ca, B = OUT) {
+  triOne(a, b, c, ca, cb, cc, B);
+  if (B.dl) triOne(a, c, b, ca, cc, cb, B);
+}
+function triOne(a, b, c, ca, cb, cc, B) {
   B.need(9);
   const p = B.p, k = B.c; let n = B.n;
   p[n] = a[0]; p[n + 1] = a[1]; p[n + 2] = a[2]; k[n] = ca.r; k[n + 1] = ca.g; k[n + 2] = ca.b; n += 3;
@@ -6155,23 +6161,30 @@ function seg(geo, color, a, b, r, into = 'world') {
 }
 // (while partPre is set, every piece is moved by it too: see stationParts)
 let partPre = null, partAll = null;   // (partAll: every piece into that one buffer, whatever it says: moveGhost)
+const SAME_CORNERS = [0, 0, 0], SWAP_CORNERS = [0, 1, -1];   // (offsets in corners: 0 1 2 -> 0 2 1)
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
   const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
+  // (v440: a mirrored pose (negative scale) turns every triangle inside out: lay each one's corners the other way
+  // round, so its front still faces out where back faces are culled. sw: the corner read for corner j of a triangle)
+  const det = e[0] * (e[5] * e[10] - e[6] * e[9]) - e[4] * (e[1] * e[10] - e[2] * e[9]) + e[8] * (e[1] * e[6] - e[2] * e[5]);
+  const sw = det < 0 ? SWAP_CORNERS : SAME_CORNERS;
   if (B.dl) {
     if (emitSurf) SURF = emitSurf(k);
     const sx = dummy.scale.x, sy = dummy.scale.y, sz = dummy.scale.z, q = dummy.quaternion, code = SURF + (geo === G.box ? 8 : 0);
     const dl = B.dl, dh = B.dh, dq = B.dq;
-    for (let i = 0, v = n / 3; i < src.length; i += 3, v++) {
+    for (let i0 = 0, v = n / 3; i0 < src.length; i0 += 3, v++) {
+      const i = i0 + sw[(i0 / 3) % 3] * 3;
       dl[v * 4] = src[i] * sx; dl[v * 4 + 1] = src[i + 1] * sy; dl[v * 4 + 2] = src[i + 2] * sz; dl[v * 4 + 3] = code;
       dh[v * 3] = sx / 2; dh[v * 3 + 1] = sy / 2; dh[v * 3 + 2] = sz / 2;
       dq[v * 4] = q.x; dq[v * 4 + 1] = q.y; dq[v * 4 + 2] = q.z; dq[v * 4 + 3] = q.w;
     }
   }
-  for (let i = 0; i < src.length; i += 3) {
+  for (let i0 = 0; i0 < src.length; i0 += 3) {
+    const i = i0 + sw[(i0 / 3) % 3] * 3;
     const px = src[i], py = src[i + 1], pz = src[i + 2];
     p[n] = e[0] * px + e[4] * py + e[8] * pz + e[12];
     p[n + 1] = e[1] * px + e[5] * py + e[9] * pz + e[13];
@@ -6618,7 +6631,7 @@ function makeChipTex() {
   return t;
 }
 // (v438) G > Built pieces test (see setBuildTest): shade 0 full, 1 no lighting, 2 flat colour; cull back faces
-const BUILD_TEST = { shade: 0, cull: false };
+const BUILD_TEST = { shade: 0, cull: true };
 const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(24) }, tRose: { value: roseTex } };
 // (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
 // shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
@@ -6690,7 +6703,7 @@ function updateRoses() {
   }
 }
 function updateDetailU() { const d = DETAIL_U.d.value; d.x = DETAIL.strength; d.y = DETAIL.bevel; }
-const buildMat = new GFX.ShaderMaterial({ uniforms: DETAIL_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
+const buildMat = new GFX.ShaderMaterial({ uniforms: DETAIL_U, vertexColors: true, side: GFX.FrontSide, shadowSide: GFX.DoubleSide, lit: true,
   attributes: { dl: 'vec4f', dh: 'vec3f', dq: 'vec4f', ct: 'vec2f' },
   // (the shadow map drops the same walls: see cutTag)
   shadowCode: CUT_WGSL + /* wgsl */ `
@@ -21319,7 +21332,7 @@ spikes.sources = () => [[renderer, 'renderer'], [gi, 'gi probes'], [haze, 'lit h
 const PROF_SPLIT = { world: false };
 // (v438) G > Built pieces test, to find what their cost is: shade 0 full, 1 no lighting (bevels kept), 2 flat colour;
 // cull: drop back faces (pieces wound the wrong way vanish too, so it's only a test)
-function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; }
+function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; buildMat.shadowSide = GFX.DoubleSide; }
 const WORLD_PARTS = ['roofs', 'built pieces', 'glass', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
 function worldPart(m) {
   const t = m.material;
@@ -21475,7 +21488,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 439, crashSeen = new Map();
+const GAME_VERSION = 440, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

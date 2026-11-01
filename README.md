@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v440:** Built pieces cull back faces (buildMat side FrontSide, shadowSide DoubleSide so shadows are unchanged; renderer honours mat.shadowSide), saving ~0.4 ms. Fixes so nothing vanishes: emitPart lays mirrored (negative-determinant) poses' triangles the other way round (SWAP_CORNERS), and bare tri()/quad() triangles in the build buffer are laid both ways round (the bay window roofs). Headless check t_wind.js: 424k posed triangles all face out, 0 inside out. G > Built pieces test Cull backs now defaults On.
+
 **v439:** Built pieces' cost was GI lighting on surfaces nobody sees (Jordan: GI 0 took built pieces 2.45 -> 0.4 ms; no lighting 0.18). Now the world's opaque things draw first with roofs first of all (material drawFirst, renderer sort), then the ground (groundShapeMat depthFunc Less, so flush floors keep winning ties), then the world's see-through things (drawFilter worldOpaque/worldClear, row 'world see-through'). Floors, walls and furniture under roofs and the ground under buildings now fail the depth test before shading. Split world lists roofs first.
 
 **v438:** G panel > Built pieces test, to find what the built pieces cost (bevels ruled out): Full / No lighting (skips shadows, GI, lamps; bevels kept) / Flat colour (skips all shading), and Cull backs (drops back faces; wrongly wound pieces vanish too). BUILD_TEST, setBuildTest, hook GAME.buildTest(shade, cull); flag in DETAIL_U.roses[23].
