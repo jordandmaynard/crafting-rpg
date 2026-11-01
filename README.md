@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v424:** the spike walking into a two-story house, and Port names. The cutaway drew the whole chunk again (every story, synchronously) whenever it cut a wall or stood one back up, and a town chunk had grown to ~135k triangles, mostly stone arch windows at 4,400 triangles each. Now: the arch slices only what meets its curve (about 2,000), `setPieces(ch, only)` redraws just the stories whose cut changed, and build meshes skip vertex normals (buildMat works its normal out per pixel). Town names: "Port" is given after the docks are laid, only to towns with a dock, any size, `PORT_SHARE` 0.45 of them and never all. Hooks GAME.timePieces(), GAME.wallCost().
+
 **v423:** Jordan's tuning baked (lead diamonds 0.27 x 0.50; bay depth 0.21, timber window 0.56 to 1.59; braces on every plain timber wall, 0.40 of them pairs; shutters open 175 degrees). The bay windows' sides are plastered timber wall instead of glass.
 
 **v422:** Jordan's slate tuning baked (bump 2, row 0.20, width 0.25, shade 0.69). Bay windows: the depth slider (T > Timber walls and windows > Bay windows: how far they stick out) now goes to 0.6; the little roof is in the building's own roof colour, laid with the slate map at the big roofs' pitch (buildMat SURF 5 for bare triangles, sharing slateMat's texture); two diagonal knee braces run from the wall up under the sill shelf's front; the shutters hang from the bay's front corner posts.

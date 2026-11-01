@@ -969,7 +969,7 @@ function makeTownName(rand, tier, used) {
     else if (tier === 1) { const root = pick(W.townRoot); name = (/^(King|Queen|Hawk|Wolf|Stag|Raven|Lion|Eagle|Falcon|Kestrel|Swan)$/.test(root) && rand() < 0.5 ? root + 's' : root) + pick(W.townEnd); }
     else {
       const u = rand(), stem = pick(W.cityRoot) + pick(W.cityEnd);
-      name = u < 0.7 ? stem : u < 0.86 ? 'Port ' + stem : u < 0.93 ? stem + ' Royal' : 'High ' + stem;
+      name = u < 0.84 ? stem : u < 0.92 ? stem + ' Royal' : 'High ' + stem;   // (Port only for towns with a dock: portNames, v424)
     }
     name = name.replace(/sss+/i, 'ss').replace(/([aeiou])\1\1+/gi, '$1$1').toUpperCase();
     const plain = name.replace(/^(PORT|HIGH) | ROYAL$/g, '');
@@ -3855,6 +3855,7 @@ async function layRoads(rand, progress) {
     t.arm = arm;
   });
   placeDocks();
+  portNames();
   // roads run dry through the bog
   for (let i = 0; i < N * N; i++) if (PATH[i] && WT[i] === 1) WT[i] = 0;
   computeRim();
@@ -3960,6 +3961,16 @@ function layDock(site, goals, town) {
     water: T(c0 + DC[d] * (DOCKS.len + 1), r0 + DR[d] * (DOCKS.len + 1)) };
   docks.push(k);
   return k;
+}
+// (v424, Jordan: only a town with a dock may be a Port, of any size, and not every dock town is one)
+const PORT_SHARE = 0.45;
+function portNames() {
+  const dockT = towns.filter(t => docks.some(k => k.town === t));
+  const ok = dockT.filter(t => !/^(PORT|HIGH) |PORT$| ROYAL$/.test(t.name) && t.name.length <= 13).sort((a, b) => hs(a.c, a.r, 424) - hs(b.c, b.r, 424));
+  // (the share of them that are Ports, at least one if any can be, and never every dock town)
+  let n = Math.max(ok.length ? 1 : 0, Math.round(ok.length * PORT_SHARE));
+  if (n >= dockT.length) n = dockT.length - 1;
+  for (let j = 0; j < n; j++) ok[j].name = 'PORT ' + ok[j].name;
 }
 function placeDocks() {
   docks.length = 0; DOCK.fill(0); DOCK_NEAR.fill(0); DOCK_WAY.fill(0);
@@ -5450,7 +5461,13 @@ class BuildBuf extends Buf {
     }
   }
   mesh(mat) {
-    const m = super.mesh(mat);
+    // (no vertex normals: buildMat works its normal out per pixel, and the shadow pass reads positions only; they
+    // were a fifth of the copying and all of computeVertexNormals on 100k triangles a town chunk)
+    if (!this.n) return null;
+    const g0 = new GFX.BufferGeometry();
+    g0.setAttribute('position', new GFX.BufferAttribute(this.p.slice(0, this.n), 3));
+    g0.setAttribute('color', new GFX.BufferAttribute(this.c.slice(0, this.n), 3));
+    const m = shadowy(new GFX.Mesh(g0, mat));
     if (m) {
       const v = this.n / 3, g = m.geometry;
       g.setAttribute('dl', new GFX.BufferAttribute(this.dl.slice(0, v * 4), 4));
@@ -10595,38 +10612,54 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   let rA = rows, rB = -1;
   for (let row = 0; row < rows; row++) if (!(rh * (row + 1) <= sill - F || rh * row >= apex + F)) { rA = Math.min(rA, row); rB = row; }
   const saveE = emitSurf; emitSurf = null; SURF = 0;
+  // (v424: a stone window cost 4400 triangles, every piece sliced; now only what meets the arch's curve is sliced,
+  // the rest one box each, and the 2-story houses' cutaway rebuilds no longer stall)
+  const fo = h => Math.max(half(h), halfO(h)), SL = 0.04;
   try {
-    if (rB >= rA) {
-      const hA = rA * rh, hB = (rB + 1) * rh, n = Math.max(24, Math.round((hB - hA) / 0.03)), dh = (hB - hA) / n, mortar = core;
-      for (let s = 0; s < n; s++) {
-        const h = hA + dh * (s + 0.5), hw = half(h), fo = Math.max(hw, halfO(h)), row = Math.min(rows - 1, Math.floor(h / rh));
-        const off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, m, a) => a.indexOf(v) === m && v <= 1);
-        for (const sgn of [-1, 1]) {
-          const lim = fo === 0 ? (sgn < 0 ? 1 : 0) : 0.5 + sgn * fo;   // (the frame's outer edge on this side)
-          for (let m = 0; m + 1 < edges.length; m++) {
-            const a0 = sgn < 0 ? edges[m] : Math.max(edges[m], lim), a1 = sgn < 0 ? Math.min(edges[m + 1], lim) : edges[m + 1];
-            if (fo > 0 && (sgn < 0 ? edges[m] >= 0.5 : edges[m + 1] <= 0.5)) continue;   // (the other side's)
-            if (fo === 0 && sgn > 0) continue;   // (no window at this height: one pass draws the whole row)
-            if (a1 - a0 < 0.003) continue;
-            const kk = hs(c * 5 + row, r * 3 + m, 54 + w), col = shade(CC('#8a8694'), 0.8 + kk * 0.3);
-            box((a0 + a1) / 2, y + h, a1 - a0, dh + 0.002, 0.32, col);
-          }
-          // the vertical joints this slice crosses (and half joints at the tile's ends), where they're clear of the frame
-          for (const e of edges) {
-            const ja = e === 0 ? 0.0075 : e === 1 ? 0.9925 : e, jw = e === 0 || e === 1 ? 0.015 : 0.03;
-            if ((sgn < 0 ? ja < 0.5 : ja >= 0.5) && Math.abs(ja - 0.5) > fo + jw / 2) box(ja, y + h, jw, dh + 0.002, 0.322, mortar);
-          }
-          if (fo - hw > 0.004) box(0.5 + sgn * (hw + fo) / 2, y + h, fo - hw, dh + 0.002, 0.34, frame);
+    // the frame and glass: straight below the springing (boxes), sliced up the arch
+    box(0.5, y + sill - F / 2, WO * 2, F, 0.34, frame);
+    for (const sgn of [-1, 1]) box(0.5 + sgn * (W + F / 2), y + (sill + spring) / 2, F, spring - sill, 0.34, frame);
+    box(0.5, y + (sill + spring) / 2, W * 2, spring - sill, 0.04, GLASS);
+    const na = Math.max(8, Math.ceil((apexO - spring) / SL)), da = (apexO - spring) / na;
+    for (let s = 0; s < na; s++) {
+      const h = spring + da * (s + 0.5), hw = half(h), fw = fo(h);
+      for (const sgn of [-1, 1]) if (fw - hw > 0.004) box(0.5 + sgn * (hw + fw) / 2, y + h, fw - hw, da + 0.002, 0.34, frame);
+      if (hw > 0.004) box(0.5, y + h, hw * 2, da + 0.002, 0.04, GLASS);
+    }
+    // the stone of the rows the window reaches: clear of the frame's widest point in the row, a box a block; between
+    // that and the frame, thin slices; the joints where the plain wall has its gaps
+    const mortar = core;
+    for (let row = rA; row <= rB; row++) {
+      const h0 = row * rh, h1 = h0 + rh, off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, m, a) => a.indexOf(v) === m && v <= 1);
+      let fMax = 0, fMin = 1;
+      for (let q = 0; q <= 16; q++) { const f = fo(h0 + rh * q / 16); fMax = Math.max(fMax, f); fMin = Math.min(fMin, f); }
+      const colOf = m => shade(CC('#8a8694'), 0.8 + hs(c * 5 + row, r * 3 + m, 54 + w) * 0.3);
+      // stone between |a - 0.5| = lo and hi on one side, from yy0 to yy1, cut at the blocks' edges
+      const span = (sgn, lo, hi, yy0, yy1) => {
+        if (hi - lo < 0.003) return;
+        const A0 = sgn < 0 ? 0.5 - hi : 0.5 + lo, A1 = sgn < 0 ? 0.5 - lo : 0.5 + hi;
+        for (let m = 0; m + 1 < edges.length; m++) {
+          const a0 = Math.max(edges[m], A0), a1 = Math.min(edges[m + 1], A1);
+          if (a1 - a0 > 0.003) box((a0 + a1) / 2, y + (yy0 + yy1) / 2, a1 - a0, yy1 - yy0 + 0.002, 0.32, colOf(m));
         }
-        if (hw > 0.004) box(0.5, y + h, hw * 2, dh + 0.002, 0.04, GLASS);
+      };
+      const ns = Math.max(3, Math.ceil(rh / SL)), ds = rh / ns;
+      for (const sgn of [-1, 1]) {
+        span(sgn, fMax, 0.5, h0, h1);
+        if (fMax - fMin > 0.003) for (let s = 0; s < ns; s++) { const h = h0 + ds * (s + 0.5); span(sgn, fo(h), fMax, h - ds / 2, h + ds / 2); }
       }
-      // the bed joints between the courses, either side of the frame
-      for (let row = rA; row <= rB + 1; row++) {
-        const hb = row * rh, fo = Math.max(half(hb), halfO(hb)), jh = row === 0 ? 0.015 : 0.03;
-        const yb = row === 0 ? 0.0075 : hb;
-        if (fo === 0) box(0.5, y + yb, 1, jh, 0.322, mortar);
-        else for (const sgn of [-1, 1]) { const wdt = 0.5 - fo; if (wdt > 0.005) box(0.5 + sgn * (fo + wdt / 2), y + yb, wdt, jh, 0.322, mortar); }
+      // vertical joints: one box where clear for the whole row, else slice by slice
+      for (const e of edges) {
+        const ja = e === 0 ? 0.0075 : e === 1 ? 0.9925 : e, jw = e === 0 || e === 1 ? 0.015 : 0.03, d = Math.abs(ja - 0.5);
+        if (d > fMax + jw / 2) box(ja, y + (h0 + h1) / 2, jw, rh, 0.322, mortar);
+        else if (d > fMin + jw / 2) for (let s = 0; s < ns; s++) { const h = h0 + ds * (s + 0.5); if (d > fo(h) + jw / 2) box(ja, y + h, jw, ds + 0.002, 0.322, mortar); }
       }
+    }
+    // the bed joints between the courses, either side of the frame
+    for (let row = rA; row <= rB + 1; row++) {
+      const hb = row * rh, f = fo(hb), jh = row === 0 ? 0.015 : 0.03, yb = row === 0 ? 0.0075 : hb;
+      if (f === 0) box(0.5, y + yb, 1, jh, 0.322, mortar);
+      else for (const sgn of [-1, 1]) { const wdt = 0.5 - f; if (wdt > 0.005) box(0.5 + sgn * (f + wdt / 2), y + yb, wdt, jh, 0.322, mortar); }
     }
   } finally { emitSurf = saveE; SURF = 0; }
   box(0.5, y + sill - 0.03, W * 2 + 0.16, 0.06, 0.38, frame);   // (the sill, standing out a little)
@@ -10635,7 +10668,9 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   leadedPanes(at, y, ry, (a, h) => Math.abs(a - 0.5) <= half(h) - 0.01, 0.5 - W, 0.5 + W, sill + 0.01, apex);
   for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, 0.34, shade(CC('#7e7a88'), k));   // (the crenels, as the plain wall)
 }
-function buildPieces(cx, cz, ch) {
+// (only: a Set of the stories to draw, the rest left alone; null = all of them. v424: the cutaway redraws just the
+// stories whose walls it cut or stood up again, not the whole chunk)
+function buildPieces(cx, cz, ch, only = null) {
   // (the slate roofs' map and settings, shared with buildMat for the bay windows' roofs; slateMat is made after buildMat)
   if (!DETAIL_U.tSlate) { DETAIL_U.tSlate = SLATE_U.tSlate; DETAIL_U.sl = SLATE_U.s; DETAIL_U.slope = SLATE_U.slope; }
   ch.build = null; ch.buildGI = null; ch.glass = null;
@@ -10644,6 +10679,7 @@ function buildPieces(cx, cz, ch) {
   const giCuts = [];
   try {
   const c0 = cx * CH, r0 = cz * CH;
+  if (!only || only.has(0)) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
     if (FL[i] === 3) marbleFloor(c, r);
@@ -10663,9 +10699,10 @@ function buildPieces(cx, cz, ch) {
   ch.build = bufBuild.mesh(buildMat);
   ch.buildGI = ch.build ? giGeo(bufBuild, giCuts, bufGIProxy) : null;
   ch.glass = glassMesh(bufGlass);
+  }
   // the stories above, a mesh each, so the ones over you can be hidden (storyView)
   for (let k = 1; k <= STORY_MAX; k++) {
-    if (!storyUsed(k)) continue;
+    if (!storyUsed(k) || (only && !only.has(k))) continue;
     const U = UP[k];
     bufBuild.n = 0; bufGlass.n = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
     try {
@@ -10689,12 +10726,14 @@ function buildPieces(cx, cz, ch) {
   } finally { GLASSB = null; }
 }
 // a chunk's pieces built again, every story's mesh swapped in
-function setPieces(ch) {
+function setPieces(ch, only = null) {
   const tmp = {};
-  buildPieces(ch.cx, ch.cz, tmp);
-  ch.buildGI = tmp.buildGI;
-  swapMesh(ch, 'build', tmp.build); swapMesh(ch, 'glass', tmp.glass || null);
-  for (let k = 1; k <= STORY_MAX; k++) if (tmp['up' + k] || ch['up' + k] || tmp['glass' + k] || ch['glass' + k]) {
+  buildPieces(ch.cx, ch.cz, tmp, only);
+  if (!only || only.has(0)) {
+    ch.buildGI = tmp.buildGI;
+    swapMesh(ch, 'build', tmp.build); swapMesh(ch, 'glass', tmp.glass || null);
+  }
+  for (let k = 1; k <= STORY_MAX; k++) if ((!only || only.has(k)) && (tmp['up' + k] || ch['up' + k] || tmp['glass' + k] || ch['glass' + k])) {
     swapMesh(ch, 'glass' + k, tmp['glass' + k] || null);
     if (ch['glass' + k]) ch['glass' + k].visible = k <= shownStory;
     swapMesh(ch, 'up' + k, tmp['up' + k] || null);
@@ -11180,13 +11219,14 @@ function updateCutaway(inside) {
   const mau = inside && rooms.has(inside) ? mausAt.get(T(...rooms.get(inside).tiles[0])) : null;
   if (mau) for (const q of mau.cols) if ((q.x - H.x) * sy + (q.z - H.z) * cy > 0.3) wantCut.add(q.key);
   if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
-  const touched = new Set();
-  const mark = e => { const t = (e % (2 * SNN)) >> 1, c = t % N; touched.add(Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH)); };
+  const touched = new Map();   // (chunk -> the stories whose cut changed)
+  const mark = e => { const t = (e % (2 * SNN)) >> 1, c = t % N, key = Math.floor((t - c) / N / CH) * NC + Math.floor(c / CH), k = Math.floor(e / (2 * SNN));
+    if (!touched.has(key)) touched.set(key, new Set()); touched.get(key).add(k); };
   for (const k of cutEdges) if (!wantCut.has(k)) mark(k);
   for (const k of wantCut) if (!cutEdges.has(k)) mark(k);
   cutEdges.clear();
   for (const k of wantCut) cutEdges.add(k);
-  touched.forEach(k => { const ch = chunks.get(k); if (ch) setPieces(ch); });
+  touched.forEach((ks, key) => { const ch = chunks.get(key); if (ch) setPieces(ch, ks); });
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
 function refreshRooms(c, r, w, k = 0) {
@@ -20569,7 +20609,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 423, crashSeen = new Map();
+const GAME_VERSION = 424, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -20880,6 +20920,13 @@ window.GAME = {
   camYaw: () => yaw,
   tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, ROAD_LABEL },
   rescaleObelisks: () => rescaleObelisks(),
+  // (triangles a wall type draws, and how many of each type are built in the world: [type, tris, count ground, count upper])
+  wallCost: () => { const out = {}; for (let t = 1; t <= 14; t++) { const b = new BuildBuf(), save = OUT; OUT = b; try { wallPiece(500, 500, 0, t); } finally { OUT = save; } out[t] = [b.n / 9, 0, 0]; }
+    for (let i = 0; i < WN.length; i++) { if (WN[i]) out[WN[i]][1]++; if (WW[i]) out[WW[i]][1]++; }
+    for (let k = 1; k <= STORY_MAX; k++) { for (const v of UP[k].WN.values()) out[v][2]++; for (const v of UP[k].WW.values()) out[v][2]++; }
+    return out; },
+  // (time each loaded chunk's pieces being drawn again, as the cutaway does: [chunk, ms, triangles])
+  timePieces: () => [...chunks.values()].map(ch => { const t0 = performance.now(); setPieces(ch); return [ch.cx, ch.cz, +(performance.now() - t0).toFixed(2), ch.build ? ch.build.geometry.attributes.position.count / 3 : 0]; }).filter(r => r[3]),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
     inside: cabP(m, 1.5, 3.5), porchAt: cabP(m, 0.5, 0.5), outside: cabP(m, m.doorA + 0.5, -0.6) })),
