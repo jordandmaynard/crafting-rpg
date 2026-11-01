@@ -17379,7 +17379,7 @@ function tileRGB(i) {
 // tile centres (a staircase becomes a slope, a corner a curve) but stays a hard line, anti-aliased over about a
 // pixel (edge). Thin things win close calls by their class's bias (roads, rivers, sea, cliff rims, buildings), so a
 // one-tile road on the diagonal stays joined. Inside one colour the shades blend (the sea's ripple noise).
-const MAP_SMOOTH = { on: 1, round: 0.6, road: 0.12, river: 0.1, sea: 0.03, cliff: 0.1, build: 0.14, edge: 1 };
+const MAP_SMOOTH = { on: 0, lines: 1, round: 0.6, road: 0.12, river: 0.1, sea: 0.03, cliff: 0.1, build: 0.14, edge: 1 };
 const mapCol = new Uint8Array(N * N * 4), mapKey = new Uint8Array(N * N * 4);
 // a tile's colour key (the sea's ripples left out, so the open sea is one colour) and its class
 function mapKeyOf(i, R, Gc, B) {
@@ -17393,7 +17393,7 @@ void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. :
   const FS = `#version 300 es
 precision highp float; precision highp int;
 uniform highp sampler2D C; uniform highp usampler2D K;
-uniform vec2 org, size; uniform float ppt, edge, rnd; uniform float bias[6]; uniform int n;
+uniform vec2 org, size; uniform float ppt, edge, rnd; uniform float bias[6]; uniform int n, mode;
 out vec4 o;
 void main() {
   vec2 p = org + vec2(gl_FragCoord.x, size.y - gl_FragCoord.y) / ppt;
@@ -17423,7 +17423,18 @@ void main() {
   float d = e < 0 ? 1. : s[a] - s[e];
   vec3 other = e < 0 ? col[a] : col[e];
   float fw = clamp(fwidth(d), 1e-4, 2.5 / ppt) * edge;
-  vec3 res = mix(other, col[a], clamp(0.5 + d / max(fw, 1e-4), 0., 1.));
+  float t = clamp(0.5 + d / max(fw, 1e-4), 0., 1.);
+  vec3 res = mix(other, col[a], t);
+  if (mode == 2) {
+    // (only roads and rivers smooth: everything else as square tiles, the nearest tile that isn't road or river)
+    int g = -1;
+    for (int j = 0; j < 4; j++) if (k[j].a != 1u && k[j].a != 2u && (g < 0 || w[j] > w[g])) g = j;
+    bool la = k[a].a == 1u || k[a].a == 2u, le = e >= 0 && (k[e].a == 1u || k[e].a == 2u);
+    vec3 ground = g < 0 ? col[a] : c[g];
+    if (la && !le) res = mix(ground, col[a], t);
+    else if (!la && le) res = mix(col[e], ground, t);
+    else if (!la) res = ground;
+  }
   o = vec4(res, 1.) * inside;
 }`;
   function init() {
@@ -17437,7 +17448,7 @@ void main() {
       gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr);
       if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
       gl.useProgram(pr);
-      U = {}; for (const nm of ['C', 'K', 'org', 'size', 'ppt', 'edge', 'rnd', 'bias', 'n']) U[nm] = gl.getUniformLocation(pr, nm);
+      U = {}; for (const nm of ['C', 'K', 'org', 'size', 'ppt', 'edge', 'rnd', 'bias', 'n', 'mode']) U[nm] = gl.getUniformLocation(pr, nm);
       const tex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v); return t; };
       texC = tex(0); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, N, N);
       texK = tex(1); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8UI, N, N);
@@ -17465,7 +17476,9 @@ void main() {
     dirty(i) { if (i === undefined || tiles.length > 4000) full = true; else if (!full) tiles.push(i); },
     // the map from world (x0, z0) at ppt pixels a tile into a w by h picture at the canvas's top left (null if off)
     render(x0, z0, ppt, w, h) {
-      if (!MAP_SMOOTH.on || !init()) return null;
+      const mode = MAP_SMOOTH.on ? 1 : MAP_SMOOTH.lines ? 2 : 0;
+      if (!mode || !init()) return null;
+      gl.uniform1i(U.mode, mode);
       w = Math.max(1, Math.ceil(w)); h = Math.max(1, Math.ceil(h));
       if (cv.width < w || cv.height < h) { cv.width = Math.max(cv.width, w); cv.height = Math.max(cv.height, h); }
       if (full || tiles.length) upload();
@@ -18729,11 +18742,12 @@ const TUNING = [
     [WEAPON_TIER, 'cost', 'Material a weapon takes', 1, 50, 1],
   ]],
   ['Map smoothing', [
-    [MAP_SMOOTH, 'on', 'Smooth map edges on (1) or square tiles (0)', 0, 1, 1, mapSmoothLive],
+    [MAP_SMOOTH, 'on', 'Smooth all map edges (1) or square tiles (0)', 0, 1, 1, mapSmoothLive],
+    [MAP_SMOOTH, 'lines', 'Roads and rivers as smooth lines over square tiles (1)', 0, 1, 1, mapSmoothLive],
     [MAP_SMOOTH, 'round', 'Rounder lines (0 the four nearest tiles, 1 the 4x4 around)', 0, 1, 0.05, mapSmoothLive],
     [MAP_SMOOTH, 'edge', 'Edge softness (pixels)', 0.25, 4, 0.05, mapSmoothLive],
-    [MAP_SMOOTH, 'road', 'Roads and paths win close calls by', 0, 0.4, 0.01, mapSmoothLive],
-    [MAP_SMOOTH, 'river', 'Rivers and lakes win close calls by', 0, 0.4, 0.01, mapSmoothLive],
+    [MAP_SMOOTH, 'road', 'Roads and paths win close calls by (wider roads)', -0.2, 0.4, 0.01, mapSmoothLive],
+    [MAP_SMOOTH, 'river', 'Rivers and lakes win close calls by (wider rivers)', -0.2, 0.4, 0.01, mapSmoothLive],
     [MAP_SMOOTH, 'sea', 'Sea wins close calls by', 0, 0.4, 0.01, mapSmoothLive],
     [MAP_SMOOTH, 'cliff', 'Cliff rims win close calls by', 0, 0.4, 0.01, mapSmoothLive],
     [MAP_SMOOTH, 'build', 'Buildings and bridges win close calls by', 0, 0.4, 0.01, mapSmoothLive],
@@ -19012,7 +19026,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 393, crashSeen = new Map();
+const GAME_VERSION = 394, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
