@@ -11797,6 +11797,51 @@ function buildPlotTint(x, z) {
   scene.add(m);
 }
 let plotPicking = false;
+// ---------- The story grid (v371, Jordan) ----------
+// Building on an upper story, a see-through white grid lies on that story's plane over your plot (or round you, off
+// it): a line on every tile edge with hash marks at its quarters, so it's plain which floor you're placing on.
+const STORY_GRID = { opacity: 0.32, line: 0.035, tick: 0.1, mid: 0.18, radius: 14 };
+const gridMat = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: STORY_GRID.opacity, depthWrite: false, side: GFX.DoubleSide });
+const gridBuf = new Buf();
+let gridMesh = null, gridKey = '';
+function updateStoryGrid() {
+  const k = mode === 'build' ? buildStory : 0;
+  const hc = Math.floor(H.x), hr = Math.floor(H.z), key = k ? k + ':' + hc + ':' + hr + ':' + ownsPlot() : '';
+  if (key === gridKey) return;
+  gridKey = key;
+  if (gridMesh) { scene.remove(gridMesh); gridMesh.geometry.dispose(); gridMesh = null; }
+  if (!k) return;
+  const R = STORY_GRID.radius, onPlot = claimedAt(T(clamp(hc, 0, N - 1), clamp(hr, 0, N - 1)));
+  const inGrid = (c, r) => c >= 1 && r >= 1 && c < N - 1 && r < N - 1 && Math.hypot(c + 0.5 - H.x, r + 0.5 - H.z) <= (onPlot ? R : 8) && (!onPlot || claimedAt(T(c, r)));
+  const save = OUT; OUT = gridBuf; gridBuf.n = 0;
+  const W = CC('#ffffff'), lw = STORY_GRID.line / 2;
+  // a strip from (x0, z0) to (x1, z1), w wide, at height y
+  const strip = (x0, z0, x1, z1, w, y) => {
+    const dx = x1 - x0, dz = z1 - z0, l = Math.hypot(dx, dz) || 1, nx = -dz / l * w, nz = dx / l * w;
+    quad([x0 + nx, y, z0 + nz], [x1 + nx, y, z1 + nz], [x1 - nx, y, z1 - nz], [x0 - nx, y, z0 - nz], W);
+  };
+  // an edge from corner (ax, az) along (ux, uz) one tile, with its hash marks across it
+  const edge = (ax, az, ux, uz, y) => {
+    strip(ax, az, ax + ux, az + uz, lw, y);
+    for (const t of [0.25, 0.5, 0.75]) {
+      const h = (t === 0.5 ? STORY_GRID.mid : STORY_GRID.tick) / 2, mx = ax + ux * t, mz = az + uz * t;
+      strip(mx - uz * h, mz + ux * h, mx + uz * h, mz - ux * h, lw * 0.8, y);
+    }
+  };
+  try {
+    for (let r = hr - R - 1; r <= hr + R + 1; r++) for (let c = hc - R - 1; c <= hc + R + 1; c++) {
+      if (!inGrid(c, r)) continue;
+      const y = storyY(k, T(c, r)) + 0.09;
+      edge(c, r, 1, 0, y); edge(c, r, 0, 1, y);
+      if (!inGrid(c + 1, r)) edge(c + 1, r, 0, 1, y);
+      if (!inGrid(c, r + 1)) edge(c, r + 1, 1, 0, y);
+    }
+    gridMesh = gridBuf.mesh(gridMat);
+  } finally { OUT = save; }
+  if (!gridMesh) return;
+  gridMesh.castShadow = gridMesh.receiveShadow = false; gridMesh.renderOrder = 4;
+  scene.add(gridMesh);
+}
 function updatePlotWalls() {
   const on = mode === 'build' && !ownsPlot();
   // the map and minimap show the plots in this state too: repaint them when it changes
@@ -15367,6 +15412,7 @@ function update(dt) {
 
   updateGhost();
   updatePlotWalls();
+  updateStoryGrid();
   updateSky();
   updateLamps();
 
@@ -17699,7 +17745,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 370, crashSeen = new Map();
+const GAME_VERSION = 371, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -17745,6 +17791,7 @@ window.GAME = {
       roofs: [...buildings.values()].filter(b => by(b.tiles[0])).map(b => ({ k: b.k, n: b.tiles.length, verts: b.mesh && b.mesh.geometry ? b.mesh.geometry.attributes.position.count : 0, shown: !!(b.mesh && b.mesh.visible) })), seen: seenStory(), cuts: cutEdges.size };
   },
   turnStairs: () => { stairTurn = (stairTurn + 1) & 3; return stairTurn; },
+  storyGrid: () => ({ on: !!gridMesh, verts: gridMesh ? gridMesh.geometry.attributes.position.count : 0, y: gridMesh ? +gridMesh.geometry.attributes.position.array[1].toFixed(2) : null }),
   // (tests) put a name on the place plate and report the size it was fitted at
   place: t => { setPlace(t); const e = $('region'); return { px: e.style.fontSize || PLACE_PX + 'px', fits: e.scrollWidth <= e.clientWidth, w: e.clientWidth, sw: e.scrollWidth }; },
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
