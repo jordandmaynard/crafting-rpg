@@ -788,6 +788,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
     <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
     <label class="opt check"><input type="checkbox" id="optFps"><span>Show frame rate: frames a second and the frame's time, in the corner (nothing else is measured)</span></label>
+    <label class="opt check"><input type="checkbox" id="optMapFont"><span>Map names in the book font: the world map's place names in the game's serif type with a black outline, instead of the pixel font</span></label>
     <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's or spear's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
     <h1 class="optsSub">WORLD <small>(the map's debug and seed tools)</small></h1>
     <div class="maprow"><span id="mapSeed">SEED</span><button id="plotsBtn">PLOTS: OFF</button><button id="bandsBtn" title="Debug: the danger bands (distance from towns), 1 to 10">BANDS: OFF</button><button id="newWorld">NEW WORLD</button></div>
@@ -4150,7 +4151,7 @@ function eyeExposure() {
 // hdrPeak × white (src/gfx/renderer.js setHDR).
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false };
+  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: false };
   try { return Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { return d; }
 })();
 let optsOpen = false;
@@ -4160,6 +4161,7 @@ function applyOptions() {
   $('optPeak').disabled = !OPTIONS.hdr;
   $('optRelease').checked = OPTIONS.attackOnRelease;
   $('optFps').checked = OPTIONS.showFps; $('fpsTag').hidden = !OPTIONS.showFps;
+  $('optMapFont').checked = OPTIONS.mapFont;
   try { localStorage.setItem(OPTIONS_KEY, JSON.stringify(OPTIONS)); } catch (err) { /* private window: just this visit */ }
 }
 // (whether the display says it can show HDR, and, with HDR on, whether the browser took the canvas's 'extended' tone
@@ -4181,6 +4183,7 @@ function toggleOptions(open = !optsOpen) {
 }
 $('optHdr').addEventListener('change', () => { OPTIONS.hdr = $('optHdr').checked; applyOptions(); showHdrNote(); });
 $('optFps').addEventListener('change', () => { OPTIONS.showFps = $('optFps').checked; applyOptions(); });
+$('optMapFont').addEventListener('change', () => { OPTIONS.mapFont = $('optMapFont').checked; applyOptions(); if (mapOpen) drawBigMap(); });
 $('optRelease').addEventListener('change', () => { OPTIONS.attackOnRelease = $('optRelease').checked; applyOptions(); });
 $('optPeak').addEventListener('input', () => { OPTIONS.hdrPeak = parseFloat($('optPeak').value); applyOptions(); });
 $('optsClose').addEventListener('click', () => toggleOptions(false));
@@ -17329,14 +17332,25 @@ function mapScale() {
 // smaller regions drop off, and come back as you zoom in. Long names go on two lines.
 const REGION_INK = ['#ece2a4', '#bfe2a2', '#cfdc96', '#cdc6dc', '#e4f2ff', '#f2d29a', '#efe4c8', '#a9dcae', '#ffb488'];
 const LABEL_PX = 16;
+// the book font for the map's names (Options): px size, weight, stroke (px of black outline), spacing (px between
+// letters), line (line height in sizes), wrap (letters before a name takes two lines), caps (1 keeps the names in
+// capitals, 0 writes them as names: Saltcross Path)
+const MAP_FONT = { px: 22, weight: 600, stroke: 4, spacing: 0.5, line: 1.1, wrap: 16, caps: 0 };
+const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
+mapNamesLive.live = true;
 function drawMapLabels(ctx, k, W, Hh) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const u = Math.max(0.5, Math.round(k * 2) / 2), at = (x, z) => { const [bx, bz] = worldToBig(x, z); return [bx * k, bz * k]; };
   const seen = (x, z) => mapReveal || fogSeen[clamp(Math.floor(z / 8), 0, FOG_N - 1) * FOG_N + clamp(Math.floor(x / 8), 0, FOG_N - 1)] > 127;
-  ctx.font = `${LABEL_PX * u}px "Press Start 2P", monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const lh = (LABEL_PX + 4) * u;
+  // (Options: map names in the book font: Spectral with a round black stroke, MAP_FONT, instead of the pixel font)
+  const book = OPTIONS.mapFont, F = MAP_FONT, cased = t => book && !F.caps ? plateName(t) : t;
+  ctx.font = book ? `${F.weight} ${F.px * u}px Spectral, Georgia, serif` : `${LABEL_PX * u}px "Press Start 2P", monospace`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (book) { ctx.letterSpacing = `${F.spacing * u}px`; ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.lineWidth = F.stroke * u; }
+  const lh = book ? F.px * F.line * u : (LABEL_PX + 4) * u;
   const label = (t, x, y, ink) => {
     x = Math.round(x); y = Math.round(y);
+    if (book) { ctx.strokeStyle = '#000'; ctx.strokeText(t, x, y); ctx.fillStyle = ink; ctx.fillText(t, x, y); return; }
     ctx.fillStyle = '#000';
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) ctx.fillText(t, x + dx * u, y + dy * u);
     ctx.fillStyle = ink; ctx.fillText(t, x, y);
@@ -17348,14 +17362,15 @@ function drawMapLabels(ctx, k, W, Hh) {
   boxes.push([1042 * k, 485 * k, 166 * k, 198 * k], [0, 658 * k, W, 42 * k]);   // (and off the compass and the footer)
   // a name's lines: two when it's long, split where they come out most even
   const linesOf = name => {
+    name = cased(name);
     const words = name.split(' ');
-    if (name.length <= 12 || words.length < 2) return [name];
+    if (name.length <= (book ? F.wrap : 12) || words.length < 2) return [name];
     let best = 1, bd = 1e9;
     for (let m = 1; m < words.length; m++) { const d = Math.abs(words.slice(0, m).join(' ').length - words.slice(m).join(' ').length); if (d < bd) { bd = d; best = m; } }
     return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
   };
   const place = (lines, spots, ink) => {
-    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 4 * u, h = lines.length * lh;
+    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + (book ? F.stroke + 4 : 4) * u, h = lines.length * lh;
     for (const [x, z] of spots) {
       const box = [x - w / 2, z - h / 2, w, h];
       if (!fits(box)) continue;
@@ -17367,13 +17382,14 @@ function drawMapLabels(ctx, k, W, Hh) {
   for (const t of towns) {
     if (!MAP_SHOW.towns || !seen(t.c, t.r)) continue;
     const [x, z] = at(t.c, t.r);
-    place([t.name], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
+    place([cased(t.name)], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
   // regions, lakes, seas, rivers and roads you've found, biggest first
   // (each sort only if its NAMES button on the map is on)
   const found = regions.filter(g => MAP_SHOW.biomes && (g.found || mapReveal)).map(g => [g, REGION_INK[g.biome]])
     .concat(features.filter(f => MAP_SHOW[f.kind === 'road' ? 'roads' : 'waters'] && (f.found || mapReveal)).map(f => [f, FEATURE_INK[f.kind]]));
   for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink);
+  if (book) ctx.letterSpacing = '0px';
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123) or kept (the
 // map's EACH LOAD button); a new world is a fresh one, kept from then on if seeds are being kept
@@ -18196,6 +18212,15 @@ const TUNING = [
     ...FANTASY.map(m => [WEAPON_TIER, m.k, m.name + ' weapons: damage (times)', 0.1, 8, 0.05]),
     [WEAPON_TIER, 'cost', 'Material a weapon takes', 1, 50, 1],
   ]],
+  ['Map names (book font)', [
+    [MAP_FONT, 'px', 'Size (px)', 10, 40, 1, mapNamesLive],
+    [MAP_FONT, 'weight', 'Weight (400 regular, 600 semibold)', 400, 600, 200, mapNamesLive],
+    [MAP_FONT, 'stroke', 'Black outline (px)', 0, 10, 0.5, mapNamesLive],
+    [MAP_FONT, 'spacing', 'Letter spacing (px)', -1, 6, 0.1, mapNamesLive],
+    [MAP_FONT, 'line', 'Line height (times the size)', 0.8, 1.6, 0.05, mapNamesLive],
+    [MAP_FONT, 'wrap', 'Letters before a name wraps', 8, 30, 1, mapNamesLive],
+    [MAP_FONT, 'caps', 'Capitals (1) or names (0)', 0, 1, 1, mapNamesLive],
+  ]],
   ['Windows', [
     [GLASS_FX, 'transfer', 'Both faces lit as the sunward one is (0 off, 1 on)', 0, 1, 1],
     [GLASS_FX, 'glow', 'Lamps and fires shining through (times)', 0, 10, 0.05],
@@ -18455,7 +18480,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 383, crashSeen = new Map();
+const GAME_VERSION = 384, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
