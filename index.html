@@ -17344,39 +17344,151 @@ const fogCv = document.createElement('canvas'); fogCv.width = fogCv.height = N /
 const fogCtx = fogCv.getContext('2d');   // (kept on the GPU; anything that asks what's been seen reads fogSeen)
 const MAP_RGB = PAL.map(p => [p.a.r * 255, p.a.g * 255, p.a.b * 255]);
 MAP_RGB[GRAVE] = [96, 94, 106];
+// (tileCls: what the colour is, for the smooth map's edges: 0 ground, 1 road or path, 2 river or lake, 3 sea,
+// 4 cliff rim, 5 built)
+let tileCls = 0;
 function tileRGB(i) {
   const c = i % N, r = (i - c) / N, L = LV[i];
-  if (BR[i]) return [150, 108, 62];
+  tileCls = 0;
+  if (BR[i]) { tileCls = 5; return [150, 108, 62]; }
   if (CY[i]) return [34, 26, 24];
   if (LAVA[i]) return [232, 92, 30];
-  if (!L) return WT[i] === 3 ? [58, 118, 150] : WT[i] === 2 ? [46, 104, 138] : [42 * 0.9 + hs(c, r, 5) * 6, 90, 122];
+  if (!L) { tileCls = 3; return WT[i] === 3 ? [58, 118, 150] : WT[i] === 2 ? [46, 104, 138] : [42 * 0.9 + hs(c, r, 5) * 6, 90, 122]; }
   let [R, Gc, B] = MAP_RGB[BI[i]];
   if (BI[i] === TOWN) { const cell = townCell(c, r); if (cell === 'plaza' || cell === 'street') [R, Gc, B] = [160, 148, 128]; }
-  if (WT[i]) { R = R * 0.5 + 22; Gc = Gc * 0.5 + 37; B = B * 0.5 + 32; }
-  if (PATH[i] && BI[i] !== TOWN) [R, Gc, B] = [196, 170, 120];
+  if (WT[i]) { R = R * 0.5 + 22; Gc = Gc * 0.5 + 37; B = B * 0.5 + 32; tileCls = 2; }
+  if (PATH[i] && BI[i] !== TOWN) { [R, Gc, B] = [196, 170, 120]; tileCls = 1; }
   let f = 0.72 + L * 0.05;
   const o = OB[i];
   if (OBJ[o].tree) f *= 0.78;
-  if (o === O.HOUSE) { R = 168; Gc = 72; B = 58; f = 1; }
+  if (o === O.HOUSE) { R = 168; Gc = 72; B = 58; f = 1; tileCls = 5; }
   if (o === O.SHRINE) { R = 230; Gc = 220; B = 160; f = 1; }
   if (SH[i]) f *= 1.08;
   // cliff edges a shade darker so the terraces read
-  if (c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) f *= 0.72;
-  if (FIELD[i]) { R = 176; Gc = 146; B = 70; f = 1; }
+  if (c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) { f *= 0.72; if (!tileCls) tileCls = 4; }
+  if (FIELD[i]) { R = 176; Gc = 146; B = 70; f = 1; tileCls = 0; }
   if (GROT[i] === 1) { R = 90; Gc = 220; B = 200; f = 1; }
   if (OB[i] === O.STATUE || OB[i] === O.STATUEX) { R = 150; Gc = 112; B = 64; f = 1; }
-  if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; }
-  if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; }
+  if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; tileCls = 5; }
+  if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; tileCls = 5; }
   return [R * f, Gc * f, B * f];
 }
+// The smooth map (v393, T > Map smoothing): the map's tiles drawn by a small WebGL2 shader instead of as big
+// squares. Each pixel looks at the four tiles around it; tiles of the same colour (mapKey) pool their bilinear
+// weights, and the pixel takes the colour with the most, so the line between two colours runs smoothly between
+// tile centres (a staircase becomes a slope, a corner a curve) but stays a hard line, anti-aliased over about a
+// pixel (edge). Thin things win close calls by their class's bias (roads, rivers, sea, cliff rims, buildings), so a
+// one-tile road on the diagonal stays joined. Inside one colour the shades blend (the sea's ripple noise).
+const MAP_SMOOTH = { on: 1, round: 0.6, road: 0.12, river: 0.1, sea: 0.03, cliff: 0.1, build: 0.14, edge: 1 };
+const mapCol = new Uint8Array(N * N * 4), mapKey = new Uint8Array(N * N * 4);
+// a tile's colour key (the sea's ripples left out, so the open sea is one colour) and its class
+function mapKeyOf(i, R, Gc, B) {
+  if (tileCls === 3 && WT[i] !== 2 && WT[i] !== 3) { R = 38; Gc = 90; B = 122; }
+  mapKey[i * 4] = R; mapKey[i * 4 + 1] = Gc; mapKey[i * 4 + 2] = B; mapKey[i * 4 + 3] = tileCls;
+}
+const smoothMap = (() => {
+  let cv = null, gl = null, U = null, texC, texK, failed = false, full = true, tiles = [];
+  const VS = `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
+  const FS = `#version 300 es
+precision highp float; precision highp int;
+uniform highp sampler2D C; uniform highp usampler2D K;
+uniform vec2 org, size; uniform float ppt, edge, rnd; uniform float bias[6]; uniform int n;
+out vec4 o;
+void main() {
+  vec2 p = org + vec2(gl_FragCoord.x, size.y - gl_FragCoord.y) / ppt;
+  float inside = step(0., p.x) * step(0., p.y) * step(p.x, float(n)) * step(p.y, float(n));
+  vec2 g = p - 0.5, b = floor(g), f = g - b;
+  ivec2 i0 = ivec2(b);
+  ivec2 q[4] = ivec2[4](i0, i0 + ivec2(1, 0), i0 + ivec2(0, 1), i0 + ivec2(1, 1));
+  float w[4] = float[4]((1. - f.x) * (1. - f.y), f.x * (1. - f.y), (1. - f.x) * f.y, f.x * f.y);
+  uvec4 k[4]; vec3 c[4];
+  for (int j = 0; j < 4; j++) { ivec2 t = clamp(q[j], ivec2(0), ivec2(n - 1)); k[j] = texelFetch(K, t, 0); c[j] = texelFetch(C, t, 0).rgb; }
+  // (and the 4 by 4 tiles around, weighted by a cubic B-spline, for rounder lines over long gentle staircases)
+  vec4 bx = vec4((1. - f.x) * (1. - f.x) * (1. - f.x), 3. * f.x * f.x * f.x - 6. * f.x * f.x + 4., -3. * f.x * f.x * f.x + 3. * f.x * f.x + 3. * f.x + 1., f.x * f.x * f.x) / 6.;
+  vec4 bz = vec4((1. - f.y) * (1. - f.y) * (1. - f.y), 3. * f.y * f.y * f.y - 6. * f.y * f.y + 4., -3. * f.y * f.y * f.y + 3. * f.y * f.y + 3. * f.y + 1., f.y * f.y * f.y) / 6.;
+  uvec3 kb[16];
+  for (int zz = 0; zz < 4; zz++) for (int xx = 0; xx < 4; xx++) kb[zz * 4 + xx] = texelFetch(K, clamp(i0 + ivec2(xx - 1, zz - 1), ivec2(0), ivec2(n - 1)), 0).rgb;
+  float s[4]; vec3 col[4];
+  for (int j = 0; j < 4; j++) {
+    float sw = 0., sb = 0.; vec3 sc = vec3(0.);
+    for (int m = 0; m < 4; m++) if (k[m].rgb == k[j].rgb) { sw += w[m]; sc += c[m] * w[m]; }
+    for (int m = 0; m < 16; m++) if (kb[m] == k[j].rgb) sb += bx[m % 4] * bz[m / 4];
+    s[j] = mix(sw, sb, rnd) + bias[int(k[j].a)]; col[j] = sw > 1e-5 ? sc / sw : c[j];
+  }
+  int a = 0;
+  for (int j = 1; j < 4; j++) if (s[j] > s[a]) a = j;
+  int e = -1;
+  for (int j = 0; j < 4; j++) if (k[j].rgb != k[a].rgb && (e < 0 || s[j] > s[e])) e = j;
+  float d = e < 0 ? 1. : s[a] - s[e];
+  vec3 other = e < 0 ? col[a] : col[e];
+  float fw = clamp(fwidth(d), 1e-4, 2.5 / ppt) * edge;
+  vec3 res = mix(other, col[a], clamp(0.5 + d / max(fw, 1e-4), 0., 1.));
+  o = vec4(res, 1.) * inside;
+}`;
+  function init() {
+    if (gl || failed) return !!gl;
+    try {
+      cv = document.createElement('canvas'); cv.width = cv.height = 16;
+      gl = cv.getContext('webgl2', { antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
+      if (!gl) throw new Error('no webgl2');
+      const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+      const pr = gl.createProgram();
+      gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr);
+      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+      gl.useProgram(pr);
+      U = {}; for (const nm of ['C', 'K', 'org', 'size', 'ppt', 'edge', 'rnd', 'bias', 'n']) U[nm] = gl.getUniformLocation(pr, nm);
+      const tex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v); return t; };
+      texC = tex(0); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, N, N);
+      texK = tex(1); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8UI, N, N);
+      gl.uniform1i(U.C, 0); gl.uniform1i(U.K, 1); gl.uniform1i(U.n, N);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      full = true;
+    } catch (err) { console.warn('smooth map off:', err); failed = true; gl = null; }
+    return !!gl;
+  }
+  function upload() {
+    if (full) {
+      gl.activeTexture(gl.TEXTURE0); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, N, gl.RGBA, gl.UNSIGNED_BYTE, mapCol);
+      gl.activeTexture(gl.TEXTURE1); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, N, gl.RGBA_INTEGER, gl.UNSIGNED_BYTE, mapKey);
+      full = false; tiles.length = 0; return;
+    }
+    for (const i of tiles) {
+      const c = i % N, r = (i - c) / N;
+      gl.activeTexture(gl.TEXTURE0); gl.texSubImage2D(gl.TEXTURE_2D, 0, c, r, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, mapCol.subarray(i * 4, i * 4 + 4));
+      gl.activeTexture(gl.TEXTURE1); gl.texSubImage2D(gl.TEXTURE_2D, 0, c, r, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_BYTE, mapKey.subarray(i * 4, i * 4 + 4));
+    }
+    tiles.length = 0;
+  }
+  return {
+    // (a tile changed, or with no tile all of them)
+    dirty(i) { if (i === undefined || tiles.length > 4000) full = true; else if (!full) tiles.push(i); },
+    // the map from world (x0, z0) at ppt pixels a tile into a w by h picture at the canvas's top left (null if off)
+    render(x0, z0, ppt, w, h) {
+      if (!MAP_SMOOTH.on || !init()) return null;
+      w = Math.max(1, Math.ceil(w)); h = Math.max(1, Math.ceil(h));
+      if (cv.width < w || cv.height < h) { cv.width = Math.max(cv.width, w); cv.height = Math.max(cv.height, h); }
+      if (full || tiles.length) upload();
+      gl.viewport(0, cv.height - h, w, h);
+      gl.uniform2f(U.org, x0, z0); gl.uniform2f(U.size, w, cv.height); gl.uniform1f(U.ppt, ppt); gl.uniform1f(U.edge, MAP_SMOOTH.edge); gl.uniform1f(U.rnd, MAP_SMOOTH.round);
+      const M = MAP_SMOOTH; gl.uniform1fv(U.bias, [0, M.road, M.river, M.sea, M.cliff, M.build]);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      return cv;
+    },
+  };
+})();
+const mapSmoothLive = () => { miniT = 0; if (mapOpen) drawBigMap(); };
+mapSmoothLive.live = true;
 function paintMap() {
   const img = mapCtx.createImageData(N, N), d = img.data;
-  for (let i = 0; i < N * N; i++) { const [R, Gc, B] = tileRGB(i); d[i * 4] = R; d[i * 4 + 1] = Gc; d[i * 4 + 2] = B; d[i * 4 + 3] = 255; }
+  for (let i = 0; i < N * N; i++) { const [R, Gc, B] = tileRGB(i); d[i * 4] = R; d[i * 4 + 1] = Gc; d[i * 4 + 2] = B; d[i * 4 + 3] = 255; mapKeyOf(i, R, Gc, B); }
+  mapCol.set(d); smoothMap.dirty();
   mapCtx.putImageData(img, 0, 0);
   fogCtx.fillStyle = '#0b0912'; fogCtx.fillRect(0, 0, N / 8, N / 8); fogSeen.fill(0);
 }
 function paintMapTile(c, r) {
-  const [R, Gc, B] = tileRGB(T(c, r));
+  const i = T(c, r), [R, Gc, B] = tileRGB(i);
+  mapCol[i * 4] = R; mapCol[i * 4 + 1] = Gc; mapCol[i * 4 + 2] = B; mapCol[i * 4 + 3] = 255; mapKeyOf(i, R, Gc, B); smoothMap.dirty(i);
   mapCtx.fillStyle = `rgb(${R | 0},${Gc | 0},${B | 0})`;
   mapCtx.fillRect(c, r, 1, 1);
 }
@@ -17435,7 +17547,10 @@ function paintMini() {
   Object.assign(miniSnap, { x: x0, z: z0, s: S, r: R });
   g.clearRect(0, 0, side, side);
   g.imageSmoothingEnabled = false;
-  g.drawImage(mapCv, x0, z0, R * 2, R * 2, 0, 0, side, side);
+  const smooth = smoothMap.render(x0, z0, S, side, side);
+  miniSnap.smooth = !!smooth;
+  if (smooth) g.drawImage(smooth, 0, 0, side, side, 0, 0, side, side);
+  else g.drawImage(mapCv, x0, z0, R * 2, R * 2, 0, 0, side, side);
   if (plotsOnMap()) {
     g.drawImage(plotCv, x0, z0, R * 2, R * 2, 0, 0, side, side);
     if (miniHover) { const pl = plots[miniHover]; g.drawImage(plotFill(pl), (pl.x0 - x0) * S, (pl.z0 - z0) * S, (pl.x1 - pl.x0 + 1) * S, (pl.z1 - pl.z0 + 1) * S); }
@@ -17494,8 +17609,9 @@ function drawMini(dt) {
   const rot = miniRot();
   ctx.rotate(rot);
   $('northNeedle').style.transform = `rotate(${rot}rad)`;
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = !!miniSnap.smooth;   // (the smooth map is drawn at the minimap's size already)
   ctx.drawImage(miniCv, (miniSnap.x - H.x) * miniSnap.s, (miniSnap.z - H.z) * miniSnap.s);
+  ctx.imageSmoothingEnabled = false;
   const Z = miniZoom;
   // foes close by
   ctx.fillStyle = '#ff4a3a';
@@ -17638,9 +17754,11 @@ function drawBigMap() {
   const ctx = big.getContext('2d'), Z = bigPpt() * k;
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, W, Hh);
+  const smooth = smoothMap.render(bigView.x - W / 2 / Z, bigView.z - Hh / 2 / Z, Z, W, Hh);
+  if (smooth) ctx.drawImage(smooth, 0, 0, W, Hh, 0, 0, W, Hh);
   ctx.setTransform(Z, 0, 0, Z, W / 2 - bigView.x * Z, Hh / 2 - bigView.z * Z);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(mapCv, 0, 0);
+  if (!smooth) ctx.drawImage(mapCv, 0, 0);
   if (plotsOnMap()) ctx.drawImage(plotCv, 0, 0);
   if (plotsOnMap() && bigHover) { const pl = plots[bigHover]; ctx.drawImage(plotFill(pl), pl.x0, pl.z0); }
   // the unexplored, faded out softly to the paper as the fog was (and the minimap's is)
@@ -17706,7 +17824,7 @@ const LABEL_PX = 16;
 // capitals, 0 writes them as names: Saltcross Path)
 const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wrap: 16, caps: 0 };
 // continents' and islands' names on the map: size (times a name's), weight (book font) and ink
-const LAND_LABEL = { big: 2.5, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 6, bigInk: '#f6e3b4', isleInk: '#ecdcb6' };
+const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6' };
 let mapFontsAsked = false;
 let mapLabelMiss = [];   // (continents and islands on the map whose names found no room, for tests)
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
@@ -18610,6 +18728,16 @@ const TUNING = [
     ...FANTASY.map(m => [WEAPON_TIER, m.k, m.name + ' weapons: damage (times)', 0.1, 8, 0.05]),
     [WEAPON_TIER, 'cost', 'Material a weapon takes', 1, 50, 1],
   ]],
+  ['Map smoothing', [
+    [MAP_SMOOTH, 'on', 'Smooth map edges on (1) or square tiles (0)', 0, 1, 1, mapSmoothLive],
+    [MAP_SMOOTH, 'round', 'Rounder lines (0 the four nearest tiles, 1 the 4x4 around)', 0, 1, 0.05, mapSmoothLive],
+    [MAP_SMOOTH, 'edge', 'Edge softness (pixels)', 0.25, 4, 0.05, mapSmoothLive],
+    [MAP_SMOOTH, 'road', 'Roads and paths win close calls by', 0, 0.4, 0.01, mapSmoothLive],
+    [MAP_SMOOTH, 'river', 'Rivers and lakes win close calls by', 0, 0.4, 0.01, mapSmoothLive],
+    [MAP_SMOOTH, 'sea', 'Sea wins close calls by', 0, 0.4, 0.01, mapSmoothLive],
+    [MAP_SMOOTH, 'cliff', 'Cliff rims win close calls by', 0, 0.4, 0.01, mapSmoothLive],
+    [MAP_SMOOTH, 'build', 'Buildings and bridges win close calls by', 0, 0.4, 0.01, mapSmoothLive],
+  ]],
   ['Map names (book font)', [
     [OPTIONS, 'mapFont', 'Book font on (1) or the pixel font (0) (also in Options)', 0, 1, 1, mapFontLive],
     [MAP_FONT, 'px', 'Size (px)', 10, 40, 1, mapNamesLive],
@@ -18884,7 +19012,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 392, crashSeen = new Map();
+const GAME_VERSION = 393, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -19193,7 +19321,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
+  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH },
   rescaleObelisks: () => rescaleObelisks(),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
