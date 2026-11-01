@@ -2,7 +2,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Cinzel:wght@600&family=Spectral:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=Cinzel:wght@600&family=Spectral:ital,wght@0,400;0,600;0,700;1,400;1,600&display=swap">
 <style>
 /* Layout: full-bleed low-res 3D world, pixel HUD pinned to the corners, action bar at the bottom centre. Single dark look by choice, matching Dungeon Golf and Bone Road. */
 :root {
@@ -1036,8 +1036,17 @@ function nameLands(rand, used) {
   for (const m of landmasses) { m.big = m.n >= TOWN_LAND; m.name = makeLandName(rand, used, m.big); m.found = false; }
   const ID = new Int32Array(N * N);
   for (let i = 0; i < N * N; i++) ID[i] = LANDID[i] - 1;
-  labelSpots(ID, landmasses);
+  const dist = labelSpots(ID, landmasses);
+  // and a spread of inland points (every LAND_PTS tiles, at least 4 in, deepest first), so a name still finds
+  // a place on the map when its centre is off screen or covered
+  for (const m of landmasses) m.pts = [];
+  for (let r = LAND_PTS / 2; r < N; r += LAND_PTS) for (let c = LAND_PTS / 2; c < N; c += LAND_PTS) {
+    const i = r * N + c, g = ID[i];
+    if (g >= 0 && dist[i] >= 4) landmasses[g].pts.push([c + 0.5, r + 0.5, dist[i]]);
+  }
+  for (const m of landmasses) m.pts.sort((a, b) => b[2] - a[2]);
 }
+const LAND_PTS = 12;
 // every name a set of words can make (each pattern's combinations, less the ones that read badly)
 function allNames(w) {
   const out = [];
@@ -1957,6 +1966,7 @@ function labelSpots(ID, list) {
       if (g.spots.length >= 6) break;
     }
   });
+  return dist;
 }
 // Lakes and seas (each body of still water), rivers (each run of running water, joined ones as one) and roads
 // (each stretch laid between two places, outside towns) get names too. You don't walk into them, so coming
@@ -4482,7 +4492,7 @@ function eyeExposure() {
 // hdrPeak × white (src/gfx/renderer.js setHDR).
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 0 };
+  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 1 };
   try { Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { /* defaults */ }
   d.mapFont = +d.mapFont || 0;   // (a number, so T > Map names can switch it too)
   return d;
@@ -17683,9 +17693,11 @@ const LABEL_PX = 16;
 // the book font for the map's names (Options): px size, weight, stroke (px of black outline), spacing (px between
 // letters), line (line height in sizes), wrap (letters before a name takes two lines), caps (1 keeps the names in
 // capitals, 0 writes them as names: Saltcross Path)
-const MAP_FONT = { px: 22, weight: 600, stroke: 4, spacing: 0.5, line: 1.1, wrap: 16, caps: 0 };
-// continents' names on the map: big (times a name's size)
-const LAND_LABEL = { big: 1.7 };
+const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wrap: 16, caps: 0 };
+// continents' and islands' names on the map: size (times a name's), weight (book font) and ink
+const LAND_LABEL = { big: 2.1, isle: 1.2, bigWeight: 700, isleWeight: 600, bigInk: '#fbf6ea', isleInk: '#f4efe2' };
+let mapFontsAsked = false;
+let mapLabelMiss = [];   // (continents and islands on the map whose names found no room, for tests)
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
 mapNamesLive.live = true;
 const mapFontLive = () => { applyOptions(); if (mapOpen) drawBigMap(); };
@@ -17695,8 +17707,16 @@ function drawMapLabels(ctx, k, W, Hh) {
   const u = Math.max(0.5, Math.round(k * 2) / 2), at = (x, z) => { const [bx, bz] = worldToBig(x, z); return [bx * k, bz * k]; };
   const seen = (x, z) => mapReveal || fogSeen[clamp(Math.floor(z / 8), 0, FOG_N - 1) * FOG_N + clamp(Math.floor(x / 8), 0, FOG_N - 1)] > 127;
   // (Options: map names in the book font: Spectral with a round black stroke, MAP_FONT, instead of the pixel font)
-  const book = OPTIONS.mapFont, F = MAP_FONT, cased = t => book && !F.caps ? plateName(t) : t;
-  ctx.font = book ? `${F.weight} ${F.px * u}px Spectral, Georgia, serif` : `${LABEL_PX * u}px "Press Start 2P", monospace`;
+  const book = OPTIONS.mapFont, F = MAP_FONT, L = LAND_LABEL, cased = t => book && !F.caps ? plateName(t) : t;
+  // a style's font: st.big (size times), st.weight, st.italic (roads) and st.spread (continents' spaced capitals)
+  const fontOf = (st = {}) => book ? `${st.italic ? 'italic ' : ''}${st.weight || F.weight} ${F.px * (st.big || 1) * u}px Spectral, Georgia, serif`
+    : `${st.italic ? 'italic ' : ''}${LABEL_PX * (st.big || 1) * u}px "Press Start 2P", monospace`;
+  if (book && !mapFontsAsked && document.fonts) {   // (canvas text falls back until a weight is loaded: redraw once they are)
+    mapFontsAsked = true;
+    Promise.all([F.weight, L.bigWeight, L.isleWeight].flatMap(w => [`${w} 16px Spectral`, `italic ${w} 16px Spectral`]).map(f => document.fonts.load(f).catch(() => 0)))
+      .then(() => { if (mapOpen) drawBigMap(); });
+  }
+  ctx.font = fontOf();
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   if (book) { ctx.letterSpacing = `${F.spacing * u}px`; ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.lineWidth = F.stroke * u; }
   const lh = book ? F.px * F.line * u : (LABEL_PX + 4) * u;
@@ -17721,20 +17741,21 @@ function drawMapLabels(ctx, k, W, Hh) {
     for (let m = 1; m < words.length; m++) { const d = Math.abs(words.slice(0, m).join(' ').length - words.slice(m).join(' ').length); if (d < bd) { bd = d; best = m; } }
     return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
   };
-  const place = (lines, spots, ink, big = 1) => {
-    if (big !== 1) {
-      ctx.font = book ? `${F.weight} ${F.px * big * u}px Spectral, Georgia, serif` : `${LABEL_PX * big * u}px "Press Start 2P", monospace`;
-      if (book) ctx.letterSpacing = `${F.px * big * 0.18 * u}px`;
-    }
-    const lhh = lh * big, w = Math.max(...lines.map(l => ctx.measureText(l).width)) + (book ? F.stroke + 4 : 4) * u, h = lines.length * lhh;
-    for (const [x, z] of spots) {
+  const place = (lines, spots, ink, st) => {
+    if (st) { ctx.font = fontOf(st); if (book && st.spread) ctx.letterSpacing = `${F.px * st.big * 0.18 * u}px`; }
+    const lhh = lh * (st && st.big || 1), w = Math.max(...lines.map(l => ctx.measureText(l).width)) + (book ? F.stroke + 4 : 4) * u, h = lines.length * lhh;
+    let put = false;
+    for (let [x, z] of spots) {
+      if (st && st.clamp) { x = clamp(x, w / 2 + 2, W - w / 2 - 2); z = clamp(z, h / 2 + 2, Hh - h / 2 - 2); }   // (slid inside the map)
       const box = [x - w / 2, z - h / 2, w, h];
       if (!fits(box)) continue;
       boxes.push(box);
       lines.forEach((l, j) => label(l, x, z + (j - (lines.length - 1) / 2) * lhh, ink));
+      put = true;
       break;
     }
-    if (big !== 1) { ctx.font = book ? `${F.weight} ${F.px * u}px Spectral, Georgia, serif` : `${LABEL_PX * u}px "Press Start 2P", monospace`; if (book) ctx.letterSpacing = `${F.spacing * u}px`; }
+    if (st) { ctx.font = fontOf(); if (book) ctx.letterSpacing = `${F.spacing * u}px`; }
+    return put;
   };
   for (const t of towns) {
     if (!MAP_SHOW.towns || !seen(t.c, t.r)) continue;
@@ -17742,15 +17763,20 @@ function drawMapLabels(ctx, k, W, Hh) {
     place([cased(t.name)], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
   // continents (big, spaced capitals) and islands you've set foot on, with the Places names (v387; Places since v390)
+  // (its deepest spots first, then any of its inland points on the map, deepest first; v391)
+  mapLabelMiss = [];
   if (MAP_SHOW.towns) for (const m of landmasses) {
     if (!m.name || !(m.found || mapReveal) || !m.spots) continue;
-    place(m.big ? [cased(m.name)] : linesOf(m.name), m.spots.map(([x, z]) => at(x, z)), m.big ? '#f6e3b4' : '#ecdcb6', m.big ? LAND_LABEL.big : 1);
+    const spots = m.spots.concat(m.pts || []).map(([x, z]) => at(x, z)).filter(([x, z]) => x >= 0 && z >= 0 && x <= W && z <= Hh);
+    const st = m.big ? { big: L.big, weight: L.bigWeight, spread: true, clamp: true } : { big: L.isle, weight: L.isleWeight, clamp: true };
+    if (spots.length && !place(m.big ? [cased(m.name)] : linesOf(m.name), spots, m.big ? L.bigInk : L.isleInk, st)) mapLabelMiss.push(m.name);
   }
   // regions, lakes, seas, rivers and roads you've found, biggest first
   // (each sort only if its NAMES button on the map is on)
   const found = regions.filter(g => MAP_SHOW.biomes && (g.found || mapReveal)).map(g => [g, REGION_INK[g.biome]])
     .concat(features.filter(f => MAP_SHOW[f.kind === 'road' ? 'roads' : 'waters'] && (f.found || mapReveal)).map(f => [f, FEATURE_INK[f.kind]]));
-  for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink);
+  // (roads and paths in italics, v391)
+  for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink, g.kind === 'road' ? { italic: true } : null);
   if (book) ctx.letterSpacing = '0px';
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123) or kept (the
@@ -18583,6 +18609,10 @@ const TUNING = [
     [MAP_FONT, 'line', 'Line height (times the size)', 0.8, 1.6, 0.05, mapNamesLive],
     [MAP_FONT, 'wrap', 'Letters before a name wraps', 8, 30, 1, mapNamesLive],
     [MAP_FONT, 'caps', 'Capitals (1) or names (0)', 0, 1, 1, mapNamesLive],
+    [LAND_LABEL, 'big', 'Continent names: size (times)', 1, 4, 0.05, mapNamesLive],
+    [LAND_LABEL, 'bigWeight', 'Continent names: weight', 400, 700, 100, mapNamesLive],
+    [LAND_LABEL, 'isle', 'Island names: size (times)', 0.6, 3, 0.05, mapNamesLive],
+    [LAND_LABEL, 'isleWeight', 'Island names: weight', 400, 700, 100, mapNamesLive],
   ]],
   ['Windows', [
     [GLASS_FX, 'transfer', 'Both faces lit as the sunward one is (0 off, 1 on)', 0, 1, 1],
@@ -18843,7 +18873,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 390, crashSeen = new Map();
+const GAME_VERSION = 391, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -19035,7 +19065,7 @@ window.GAME = {
   regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   graveyards: () => graveyards.map(g => ({ ...g })),
-  lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
+  mapLabelMiss: () => mapLabelMiss, lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
