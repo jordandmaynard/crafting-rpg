@@ -18121,11 +18121,11 @@ const LABEL_PX = 16;
 // capitals, 0 writes them as names: Saltcross Path)
 const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wrap: 16, caps: 0 };
 // continents' and islands' names on the map: size (times a name's), weight (book font) and ink
-const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6' };
+const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6', ocean: 2.6, oceanWeight: 700, sea: 1.25, seaWeight: 600 };   // (oceans and seas sized near continents and islands, upright: v403)
 let mapFontsAsked = false;
 // road names on the map (v401): 0 flat, 1 tilted to the road's run there (at most 45 degrees), 2 each letter upright
 // along the road
-const ROAD_LABEL = { style: 1, smooth: 3 };
+const ROAD_LABEL = { style: 2, smooth: 12 };
 let mapLabelMiss = [];   // (continents and islands on the map whose names found no room, for tests)
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
 mapNamesLive.live = true;
@@ -18142,7 +18142,7 @@ function drawMapLabels(ctx, k, W, Hh) {
     : `${st.italic ? 'italic ' : ''}${LABEL_PX * (st.big || 1) * u}px "Press Start 2P", monospace`;
   if (book && !mapFontsAsked && document.fonts) {   // (canvas text falls back until a weight is loaded: redraw once they are)
     mapFontsAsked = true;
-    Promise.all([F.weight, L.bigWeight, L.isleWeight].flatMap(w => [`${w} 16px Spectral`, `italic ${w} 16px Spectral`]).map(f => document.fonts.load(f).catch(() => 0)))
+    Promise.all([F.weight, L.bigWeight, L.isleWeight, L.oceanWeight, L.seaWeight].flatMap(w => [`${w} 16px Spectral`, `italic ${w} 16px Spectral`]).map(f => document.fonts.load(f).catch(() => 0)))
       .then(() => { if (mapOpen) drawBigMap(); });
   }
   ctx.font = fontOf();
@@ -18290,7 +18290,24 @@ function drawMapLabels(ctx, k, W, Hh) {
   // (roads and paths in italics, v391; following the road, v401)
   for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) {
     if (g.kind === 'road' && ROAD_LABEL.style && g.line && g.line.length >= 4 && placeRoad(g, ink)) continue;
-    place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink, g.kind === 'road' ? { italic: true } : null);
+    const st = g.kind === 'road' ? { italic: true } : g.kind === 'ocean' ? { big: L.ocean, weight: L.oceanWeight } : g.kind === 'sea' ? { big: L.sea, weight: L.seaWeight } : null;
+    const spots = g.spots.map(([x, z]) => at(x, z));
+    // (an ocean's or sea's big name, where its own spots have no room: anywhere on screen over its water, nearest
+    // its middle on screen first)
+    if (place(linesOf(g.name), spots, ink, st)) continue;
+    if (g.kind === 'ocean' || g.kind === 'sea') {
+      const id = features.indexOf(g), more = [];
+      for (let r = 4; r < N; r += 12) for (let c = 4; c < N; c += 12) {
+        if (FEAT[T(c, r)] !== id || !seen(c, r)) continue;
+        const p = at(c + 0.5, r + 0.5);
+        if (p[0] > 0 && p[1] > 0 && p[0] < W && p[1] < Hh) more.push(p);
+      }
+      if (more.length) {
+        const mx = more.reduce((t, p) => t + p[0], 0) / more.length, mz = more.reduce((t, p) => t + p[1], 0) / more.length;
+        more.sort((a, b) => Math.hypot(a[0] - mx, a[1] - mz) - Math.hypot(b[0] - mx, b[1] - mz));
+        place(linesOf(g.name), more, ink, st);
+      }
+    }
   }
   if (book) ctx.letterSpacing = '0px';
 }
@@ -19141,6 +19158,10 @@ const TUNING = [
     [LAND_LABEL, 'bigSpacing', 'Continent names: letter spacing (px)', -1, 24, 0.5, mapNamesLive],
     [LAND_LABEL, 'isle', 'Island names: size (times)', 0.6, 3, 0.05, mapNamesLive],
     [LAND_LABEL, 'isleWeight', 'Island names: weight', 400, 700, 100, mapNamesLive],
+    [LAND_LABEL, 'ocean', 'Ocean names: size (times)', 0.6, 4, 0.05, mapNamesLive],
+    [LAND_LABEL, 'oceanWeight', 'Ocean names: weight', 400, 700, 100, mapNamesLive],
+    [LAND_LABEL, 'sea', 'Sea names: size (times)', 0.6, 3, 0.05, mapNamesLive],
+    [LAND_LABEL, 'seaWeight', 'Sea names: weight', 400, 700, 100, mapNamesLive],
   ]],
   ['Windows', [
     [GLASS_FX, 'transfer', 'Both faces lit as the sunward one is (0 off, 1 on)', 0, 1, 1],
@@ -19401,7 +19422,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 402, crashSeen = new Map();
+const GAME_VERSION = 403, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
