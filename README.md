@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v431:** Jordan's HUD layout is now the default: a slimmer belt (97) a touch higher (16), the centre piece 5 lower and the hotbar and action + mode buttons 20 lower.
+
 **v430:** The cathedral gables' stone courses now run right out to the roof's edge, with a triangular stone at each end of every course filling the wedge under the slope, and one stone capping the peak.
 
 **v429:** The ability buttons are back: they had slipped behind the new belt. T > HUD bars gains sliders for the belt's height and how far up it sits, and for moving the centre piece, the hotbar and the action + mode buttons up or down.
