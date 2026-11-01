@@ -320,7 +320,7 @@ body:not(.noUI) #showUI { display: none; }
 .minimap-frame { position: absolute; left: 0; top: 0; width: 315px; height: 300px; z-index: 3; pointer-events: none; -webkit-user-drag: none; }
 .watch-bezel { position: absolute; left: 0; top: 300px; width: 315px; height: 78px; z-index: 3; pointer-events: none; -webkit-user-drag: none; }
 .watch-index { position: absolute; left: 149px; top: 299px; width: 16px; height: 30px; z-index: 6; pointer-events: none; -webkit-user-drag: none; }
-#miniWrap .place { position: absolute; left: 48px; top: 241px; width: 219px; height: 25px; font: 600 20px/25px var(--wk); letter-spacing: 0.02em; text-align: center; color: #302012; z-index: 4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#miniWrap .place { position: absolute; left: 48px; top: 241px; width: 219px; height: 25px; font: 600 20px/25px var(--wk); letter-spacing: 0.02em; text-align: center; color: #302012; z-index: 4; white-space: nowrap; overflow: hidden; }
 #miniWrap .time { position: absolute; left: 48px; top: 266px; width: 219px; height: 19px; font: 400 15px/19px var(--wk); letter-spacing: 0.04em; text-align: center; color: #5a3b20; z-index: 4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #miniWrap .compass { position: absolute; left: 248px; top: 1px; width: 68px; height: 68px; padding: 0; border: 0; border-radius: 50%; background: none; isolation: isolate; z-index: 5; color: #f7e4b9; cursor: pointer; }
 #miniWrap .compass::before { content: ""; position: absolute; inset: 0; z-index: -1; border-radius: 50%; background: url("ui/minimap/compass-face.webp") center / 100% 100% no-repeat; filter: var(--compTint, none); pointer-events: none; }
@@ -11670,6 +11670,35 @@ function lootLabel(near) {
   const ids = [...new Set(near.map(d => d.id))], n = near.reduce((a, d) => a + d.n, 0);
   return ids.length > 1 ? 'PICK UP ALL' : 'PICK UP ' + ITEMS[ids[0]].name.toUpperCase() + (n > 1 ? ' × ' + n : '');
 }
+// the piles of bones lying about graveyards and the wastes (O.BONES) can be picked up like dropped bones (Jordan,
+// v366): BONE_PILE.give bones each, the pile gone for good
+const BONE_PILE = { give: 2 };
+function bonePileNear() {
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+  let best = null, bd = LOOT_REACH + 0.2;
+  for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+    const c = c0 + dc, r = r0 + dr;
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const i = T(c, r);
+    if (OB[i] !== O.BONES || Math.abs(LV[i] * STEP - H.y) > 0.6) continue;
+    const [x, z] = objPos(c, r, O.BONES), l = Math.hypot(x - H.x, z - H.z);
+    if (l < bd) { bd = l; best = { i, c, r, x, z }; }
+  }
+  return best;
+}
+function pickUpBonePile(b) {
+  if (!b || OB[b.i] !== O.BONES) return;
+  const lost = addItem('bone', BONE_PILE.give);
+  if (lost >= BONE_PILE.give) { packFull(); return; }
+  const d = detach(b.i, b.c, b.r);
+  OB[b.i] = 0;
+  paintMapTile(b.c, b.r);
+  scene.remove(d.g); detached.delete(b.i);
+  if (lost) dropLoot('bone', lost, b.x, b.z);
+  floatText('+' + (BONE_PILE.give - lost) + ' ' + ITEMS.bone.name.toUpperCase(), H.x, H.y + 1.3, H.z, '#e8c08a');
+  sfx.coin();
+  if (craftAt) renderCraft();
+}
 function pickUpLoot() {
   const near = dropsNear(), got = {};
   let full = false;
@@ -11725,6 +11754,7 @@ function detach(i, c, r) {
 // each point taken off yields one wood, stone or ore, fractions carried over to the next blow.
 // RESOURCES.amount (T > Resources) scales everything gathered or dropped: these, and the hides foes leave.
 const RESOURCES = { amount: 4};
+const TOMB_BONE = 0.25;   // (the chance a broken gravestone drops a bone)
 const harvestCarry = { wood: 0, stone: 0, roughSandstone: 0, copperOre: 0, ironOre: 0, hide: 0, bone: 0, ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', 0])) };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const o = OB[i], od = OBJ[o];
@@ -11759,6 +11789,8 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
       sfx.fell();
     } else {
       scene.remove(d.g); detached.delete(i);
+      // a gravestone sometimes turns up a bone (Jordan, v366)
+      if (o === O.TOMB && Math.random() < TOMB_BONE) dropLoot('bone', 1, d.x, d.z);
       chips(d.x, top, d.z, 'stone', od.ore ? 6 : 10);
       if (od.ore) chips(d.x, top, d.z, res, 6);
       puff(d.x, LV[i] * STEP, d.z, '#a8a4b0', 8, 1.2);
@@ -13529,6 +13561,8 @@ function actionHere() {
   if (mode !== 'play' || !H.alive) return null;
   const opts = [], near = dropsNear(), dist = o => Math.hypot(o.x - H.x, o.z - H.z);
   if (near.length) { const d = near.reduce((a, b) => dist(b) < dist(a) ? b : a); opts.push({ kind: 'loot', drops: near, x: d.x, z: d.z }); }
+  const bp = bonePileNear();
+  if (bp) opts.push({ kind: 'bones', pile: bp, x: bp.x, z: bp.z });
   for (const t of tablesNear()) opts.push({ kind: 'table', table: t, x: t.x, z: t.z });
   for (const st of stationsNear()) { const [x, z] = stMid(st); opts.push({ kind: 'station', st, x, z }); }
   for (const [d, x, z] of doorsNear()) opts.push({ kind: 'door', door: d, x, z });
@@ -13540,6 +13574,7 @@ function useAction() {
   const a = actionHere();
   if (!a) return;
   if (a.kind === 'loot') pickUpLoot();
+  else if (a.kind === 'bones') pickUpBonePile(a.pile);
   else if (a.kind === 'table') toggleCraft(craftAt ? null : a.table);
   else if (a.kind === 'station') { if (openSt === a.st && invOpen) toggleInv(false); else openStation(a.st); }
   else useDoor(a.door);
@@ -14527,6 +14562,7 @@ function updateSky() {
   const period = hour < 5 ? 'Night' : hour < 8 ? 'Dawn' : hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : hour < 20 ? 'Dusk' : 'Night';
   if ($('clock').textContent !== period) $('clock').textContent = period;
   drawDayStrip();
+  fitPlace();
   for (const id of ['clock', 'region']) { const e = $(id); if (e.title !== e.textContent) e.title = e.textContent; }
 }
 // The watch under the map (Wanderer's Kit minimap watch B, v349): four painted skies (night, dawn, day, dusk) panned
@@ -14910,6 +14946,9 @@ function update(dt) {
       const h = act.drops[0];
       pr.innerHTML = key + lootLabel(act.drops);
       v3.set(h.x, surfaceY(h.x, h.z) + 0.45, h.z);
+    } else if (act.kind === 'bones') {
+      pr.innerHTML = key + 'PICK UP ' + ITEMS.bone.name.toUpperCase() + ' × ' + BONE_PILE.give;
+      v3.set(act.pile.x, LV[act.pile.i] * STEP + 0.45, act.pile.z);
     } else if (act.kind === 'table') {
       pr.innerHTML = key + (craftAt ? 'PUT AWAY' : 'USE ' + TABLE_NAME[act.table.kind]);
       v3.set(act.table.x, LV[T(act.table.c, act.table.r)] * STEP + 1.0, act.table.z);
@@ -14939,7 +14978,7 @@ function update(dt) {
     if (name !== regionName) {
       if (g && !g.found) { g.found = true; toast('Discovered ' + titleCase(name) + '!', 'good'); }
       else if (regionName) toast('Entering ' + titleCase(name) + '.', 'calm');
-      regionName = name; $('region').textContent = plateName(name);
+      regionName = name; setPlace(plateName(name));
     }
     discoverFeatures();
     revealFog();
@@ -15237,6 +15276,26 @@ function weaponHands(p, obj) {
 }
 // the place name on the minimap's plate: title case, its first word capitalised too ("The Rolling Pastures"; toasts
 // keep "the" small mid-sentence) (v354, Jordan)
+// The place plate under the minimap (v367, Jordan): a name too long for the plate shrinks as little as it must
+// to fit instead of ending in an ellipsis. Starts from the CSS size each time, then steps down 0.25px at a time from
+// the width ratio. A plate not laid out yet (HUD hidden, fonts loading) is fitted again when it can be measured.
+const PLACE_PX = 20;
+let placeFit = true;
+function setPlace(text) { const e = $('region'); if (e.textContent !== text) e.textContent = text; placeFit = false; fitPlace(); }
+function fitPlace() {
+  const e = $('region');
+  if (placeFit || !e) return;
+  e.style.fontSize = '';
+  const w = e.clientWidth;
+  if (!w) return;
+  let px = PLACE_PX;
+  if (e.scrollWidth > w) {
+    px = Math.floor(PLACE_PX * w / e.scrollWidth * 4) / 4 + 0.5;
+    do { px -= 0.25; e.style.fontSize = px + 'px'; } while (e.scrollWidth > w && px > 8);
+  }
+  placeFit = true;
+}
+if (document.fonts) document.fonts.ready.then(() => { placeFit = false; fitPlace(); });
 const plateName = n => { const t = titleCase(n); return t.charAt(0).toUpperCase() + t.slice(1); };
 function animateHero(dt) {
   const bowHeld = mode === 'play' && H.alive && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
@@ -17207,7 +17266,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 365, crashSeen = new Map();
+const GAME_VERSION = 367, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -17233,7 +17292,7 @@ generate((f, label) => { $('loadFill').style.width = (f * 100).toFixed(1) + '%';
   streamChunks(Infinity);
   revealFog();
   updateSky();
-  regionName = towns[0].name; $('region').textContent = plateName(regionName);
+  regionName = towns[0].name; setPlace(plateName(regionName));
   genMs = performance.now() - genStart;
   $('loadFill').style.width = '100%'; $('loadText').textContent = 'THE WORLD AWAITS';
   $('start').disabled = false; $('start').focus();
@@ -17243,6 +17302,8 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
+  // (tests) put a name on the place plate and report the size it was fitted at
+  place: t => { setPlace(t); const e = $('region'); return { px: e.style.fontSize || PLACE_PX + 'px', fits: e.scrollWidth <= e.clientWidth, w: e.clientWidth, sw: e.scrollWidth }; },
   // (tests) build every custom shader's pipeline now, whether or not it's on screen; errors go to the console
   prof: () => prof,
   // how long the first blow on a prop takes to cut it out of its chunk: the chunk's objects drawn again, and its grass
@@ -17376,6 +17437,8 @@ window.GAME = {
   ores: () => { const n = {}; for (let i = 0; i < N * N; i++) n[OB[i]] = (n[OB[i]] || 0) + 1; return { rock: (n[O.ROCK] || 0) + (n[O.ICEROCK] || 0) + (n[O.SANDROCK] || 0), ...Object.fromEntries(ORE_ROCK_OF.map(([m, o]) => [m, n[o] || 0])), ids: ORE_ROCK_OF.map(([, o]) => o) }; },
   findOb: o => { for (let i = 0; i < N * N; i++) if (OB[i] === o) return [i % N, Math.floor(i / N)]; return null; },
   strike: (c, r) => { const i = T(c, r); strikeProp(i, c, r, 1, 0); return OB[i]; },
+  findObj: (name, near = 60) => { const c0 = Math.floor(H.x), r0 = Math.floor(H.z), o = O[name]; let best = null, bd = 1e9; for (let r = Math.max(0, r0 - near); r < Math.min(N, r0 + near); r++) for (let c = Math.max(0, c0 - near); c < Math.min(N, c0 + near); c++) if (OB[T(c, r)] === o) { const d = Math.hypot(c - c0, r - r0); if (d < bd) { bd = d; best = [c, r]; } } return best; },
+  objAt: (c, r) => OB[T(c, r)], dropsHere: () => drops.map(d => [d.id, d.n]),
   smoke: () => ({ verts: smokeMesh ? smokeMesh.geometry.attributes.position.array.length / 3 : 0, visible: !!(smokeMesh && smokeMesh.visible) }),
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),

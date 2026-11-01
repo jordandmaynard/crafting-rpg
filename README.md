@@ -289,6 +289,10 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v367:** Place plate under the minimap (Jordan): a name too long for it shrinks as little as it must to fit (setPlace/fitPlace, from 20px down in 0.25px steps; refits when fonts load or the HUD comes back) instead of an ellipsis. Hook GAME.place(text); test t_place.js.
+
+**v366:** Bone piles (O.BONES, graveyards) can be picked up with F like dropped loot: "PICK UP BONE x 2" gives BONE_PILE.give (2) bones and removes the pile for good (overflow drops on the ground). Gravestones (O.TOMB) drop 1 bone 25% of the time when broken (TOMB_BONE). Hooks GAME.findObj, objAt, dropsHere; test t_bones.js.
+
 **v365:** HDR fix (Jordan: toggling HDR did nothing on his HDR monitor). Since v340 the line writing hdrPeak into the frame (F.post.y) sat inside a trailing comment in renderer._writeFrame, so postOutput always clipped at white. Restored (0 for the plain character view). Options' HDR note now says whether the browser accepted the extended canvas (renderer.hdrState()) and that only the brightest things change. Desktop render targets were never 8-bit (only MOBILE sets outlineRT.colorFormat).
 
 **v364:** queued building pieces also take from your pack while you stand on their plot (runBuildQueue: have = plot stores + pack when homePlot() === q.plot, paid via spend). Test t_qpack.js.
