@@ -1132,10 +1132,15 @@ const RANGES = { count: [3, 6], length: [260, 620], width: [42, 72], turn: 0.32,
 //   latitude: temperature from the north edge to the south; noise: its wobble; lapse: lost a level above 3;
 //   snow / cool / hot: temperature bands; wind: rain carried a cell (kept), pickup: taken up over water a cell,
 //   drizzle: dropped a cell anyway, climb: dropped going up (per unit of height); near: tiles of wet round water;
-//   desert / meadow / forest: moisture edges; swampWet, swampLevel, swampNear, swampFlat: what a swamp needs
+//   desert / meadow / forest: moisture edges; swampWet, swampLevel, swampNear, swampFlat, swampPatch: what a swamp
+//   needs (moisture rank, level at most, tiles from a river or lake at most, average level round it at most, patch
+//   noise over this; v385: only the wettest climates, in patches); lowWet, lowFlat, lowNear: the other way to a swamp,
+//   level 1 flats by fresh water anywhere not dry; bankWet, bankNear, bankPatch: river and lake banks in the wettest
+//   country (up to level 4), in patches; nearWet: the share of moisture that comes from a river or lake
+//   near (v385, was 0.4: every shore had turned wet)
 const CLIMATE = { latitude: 1.4, noise: 0.28, lapse: 0.13, snow: -0.53, cool: -0.15, hot: 0.17,
   wind: 0.985, pickup: 0.22, drizzle: 0.025, climb: 4.5, near: 14, desert: 0.38, meadowHot: 0.6, meadow: 0.38,
-  swampWet: 0.42, swampLevel: 3, swampNear: 18, swampFlat: 3.4 };
+  swampWet: 0.6, swampLevel: 3, swampNear: 16, swampFlat: 3.2, swampPatch: -0.08, lowWet: 0.4, lowFlat: 2.2, lowNear: 10, bankWet: 0.72, bankNear: 10, bankPatch: -0.05, nearWet: 0.15 };
 // River deltas (v382): a river that reaches the sea over low flat land splits some way back into arms fanning out
 // to the coast, swamp all round. minLen: tiles of river it needs; back: how far up it splits [least, most]; arms
 // [least, most] besides the river; spread: radians off its line; fan: tiles of delta swamp round the arms
@@ -1603,7 +1608,7 @@ async function generate(progress) {
   // drier than 0.25, whatever the seed)
   const wetRaw = new Float32Array(N * N), WB = 1024, hist = new Float32Array(WB);
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
-    const i = T(c, r), v = clamp(lerpG(RAIN, c, r) * 0.6 + Math.exp(-near[i] / CLIMATE.near) * 0.4 + fbm(nW, c / 90 + 11, r / 90, 2) * 0.12, 0, 1);
+    const i = T(c, r), v = clamp(lerpG(RAIN, c, r) * (1 - CLIMATE.nearWet) + Math.exp(-near[i] / CLIMATE.near) * CLIMATE.nearWet + fbm(nW, c / 90 + 11, r / 90, 2) * 0.12, 0, 1);
     wetRaw[i] = v;
     if (LV[i] && WT[i] < 2) hist[Math.min(WB - 1, Math.floor(v * WB))]++;
   }
@@ -1616,7 +1621,13 @@ async function generate(progress) {
     if (temp < CLIMATE.snow) b = SNOW;
     else if (lerpG(BLS, c, r) > WASTE_AT) b = WASTES;
     else if (curse > 0.36 && L <= 5) b = GRAVE;
-    else if ((deltaZone && deltaZone[i] && L <= CLIMATE.swampLevel) || (wet > CLIMATE.swampWet && temp > CLIMATE.cool - 0.1 && L <= CLIMATE.swampLevel && near[i] <= CLIMATE.swampNear && lowAvg[i] <= CLIMATE.swampFlat)) b = SWAMP;
+    else if ((deltaZone && deltaZone[i] && L <= 3) || (temp > CLIMATE.cool - 0.1 && near[i] <= CLIMATE.swampNear && (
+      // a wet climate's low, flat ground, in patches
+      (wet > CLIMATE.swampWet && L <= CLIMATE.swampLevel && lowAvg[i] <= CLIMATE.swampFlat && fbm(nW, c / 120 + 77, r / 120 - 31, 3) > CLIMATE.swampPatch) ||
+      // or the lowest flats anywhere not dry, by a river or lake
+      (wet > CLIMATE.lowWet && L <= 1 && lowAvg[i] <= CLIMATE.lowFlat && near[i] <= CLIMATE.lowNear) ||
+      // or the banks in the very wettest country, higher up too, in patches
+      (wet > CLIMATE.bankWet && L <= 4 && near[i] <= CLIMATE.bankNear && fbm(nW, c / 120 + 77, r / 120 - 31, 3) > CLIMATE.bankPatch)))) b = SWAMP;
     else if (temp > CLIMATE.hot) b = wet < CLIMATE.desert ? DESERT : wet < CLIMATE.meadowHot ? MEADOW : FOREST;
     else b = wet < CLIMATE.meadow ? MEADOW : FOREST;
     BI[i] = b;
@@ -1783,11 +1794,13 @@ function nameRegions() {
   REG.fill(-1); regions.length = 0;
   const newRegion = b => { regions.push({ biome: b, name: makeRegionName(NAME_WORDS[b], rand, used, BIOMES[b].name), n: 0, spots: [], found: false }); return regions.length - 1; };
   let cid = 0;
+  // (the open sea is no region: it has a biome only as the climate left it; v385, with the continents' oceans)
+  const sea = i => !LANDID[i];
   for (let s = 0; s < NN; s++) {
-    if (comp[s] >= 0 || BI[s] === TOWN) continue;
+    if (comp[s] >= 0 || BI[s] === TOWN || sea(s)) continue;
     const b = BI[s];
     comp[s] = cid; q[0] = s;
-    const size = spread(1, j => comp[j] < 0 && BI[j] === b, j => { comp[j] = cid; });
+    const size = spread(1, j => comp[j] < 0 && BI[j] === b && !sea(j), j => { comp[j] = cid; });
     if (size >= REGION_MIN) {
       const tiles = q.slice(0, size), k = Math.ceil(size / REGION_SPLIT), inC = j => comp[j] === cid;
       if (k === 1) { const id = newRegion(b); for (const i of tiles) REG[i] = id; }
@@ -1813,7 +1826,7 @@ function nameRegions() {
   // crumbs: into the nearest region
   let n = 0;
   for (let i = 0; i < NN; i++) if (REG[i] >= 0) q[n++] = i;
-  spread(n, j => REG[j] < 0 && BI[j] !== TOWN, (j, i) => { REG[j] = REG[i]; });
+  spread(n, j => REG[j] < 0 && BI[j] !== TOWN && !sea(j), (j, i) => { REG[j] = REG[i]; });
   labelSpots(REG, regions);
   nameFeatures(rand, used);
 }
@@ -4151,8 +4164,10 @@ function eyeExposure() {
 // hdrPeak × white (src/gfx/renderer.js setHDR).
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: false };
-  try { return Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { return d; }
+  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 0 };
+  try { Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { /* defaults */ }
+  d.mapFont = +d.mapFont || 0;   // (a number, so T > Map names can switch it too)
+  return d;
 })();
 let optsOpen = false;
 function applyOptions() {
@@ -4161,7 +4176,7 @@ function applyOptions() {
   $('optPeak').disabled = !OPTIONS.hdr;
   $('optRelease').checked = OPTIONS.attackOnRelease;
   $('optFps').checked = OPTIONS.showFps; $('fpsTag').hidden = !OPTIONS.showFps;
-  $('optMapFont').checked = OPTIONS.mapFont;
+  $('optMapFont').checked = !!OPTIONS.mapFont;
   try { localStorage.setItem(OPTIONS_KEY, JSON.stringify(OPTIONS)); } catch (err) { /* private window: just this visit */ }
 }
 // (whether the display says it can show HDR, and, with HDR on, whether the browser took the canvas's 'extended' tone
@@ -4183,7 +4198,7 @@ function toggleOptions(open = !optsOpen) {
 }
 $('optHdr').addEventListener('change', () => { OPTIONS.hdr = $('optHdr').checked; applyOptions(); showHdrNote(); });
 $('optFps').addEventListener('change', () => { OPTIONS.showFps = $('optFps').checked; applyOptions(); });
-$('optMapFont').addEventListener('change', () => { OPTIONS.mapFont = $('optMapFont').checked; applyOptions(); if (mapOpen) drawBigMap(); });
+$('optMapFont').addEventListener('change', () => { OPTIONS.mapFont = +$('optMapFont').checked; applyOptions(); if (mapOpen) drawBigMap(); });
 $('optRelease').addEventListener('change', () => { OPTIONS.attackOnRelease = $('optRelease').checked; applyOptions(); });
 $('optPeak').addEventListener('input', () => { OPTIONS.hdrPeak = parseFloat($('optPeak').value); applyOptions(); });
 $('optsClose').addEventListener('click', () => toggleOptions(false));
@@ -17338,6 +17353,8 @@ const LABEL_PX = 16;
 const MAP_FONT = { px: 22, weight: 600, stroke: 4, spacing: 0.5, line: 1.1, wrap: 16, caps: 0 };
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
 mapNamesLive.live = true;
+const mapFontLive = () => { applyOptions(); if (mapOpen) drawBigMap(); };
+mapFontLive.live = true;
 function drawMapLabels(ctx, k, W, Hh) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const u = Math.max(0.5, Math.round(k * 2) / 2), at = (x, z) => { const [bx, bz] = worldToBig(x, z); return [bx * k, bz * k]; };
@@ -18213,6 +18230,7 @@ const TUNING = [
     [WEAPON_TIER, 'cost', 'Material a weapon takes', 1, 50, 1],
   ]],
   ['Map names (book font)', [
+    [OPTIONS, 'mapFont', 'Book font on (1) or the pixel font (0) (also in Options)', 0, 1, 1, mapFontLive],
     [MAP_FONT, 'px', 'Size (px)', 10, 40, 1, mapNamesLive],
     [MAP_FONT, 'weight', 'Weight (400 regular, 600 semibold)', 400, 600, 200, mapNamesLive],
     [MAP_FONT, 'stroke', 'Black outline (px)', 0, 10, 0.5, mapNamesLive],
@@ -18480,7 +18498,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 384, crashSeen = new Map();
+const GAME_VERSION = 385, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -18669,7 +18687,7 @@ window.GAME = {
   objAt: (c, r) => OB[T(c, r)], dropsHere: () => drops.map(d => [d.id, d.n]),
   smoke: () => ({ verts: smokeMesh ? smokeMesh.geometry.attributes.position.array.length / 3 : 0, visible: !!(smokeMesh && smokeMesh.visible) }),
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
-  regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
+  regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
