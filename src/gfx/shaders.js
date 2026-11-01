@@ -260,6 +260,11 @@ fn ggx(f0: vec3f, rough: f32, N: vec3f, V: vec3f, L: vec3f) -> vec3f {
 }
 // the lit colour of a surface at world point w with normal N
 fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N: vec3f, receive: bool) -> vec3f {
+  return shadeLitN(albedo, emissive, metal, rough0, w, N, N, receive);
+}
+// (Ng: the surface's own normal, for the shadow and GI lookups; N, the one it's lit by, may be bent by a normal map.
+// Looked up along a bent normal, the shadow map's bias wanders pixel to pixel and the surface speckles)
+fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N: vec3f, Ng: vec3f, receive: bool) -> vec3f {
   let V = toEye(w);
   let diff = albedo * (1.0 - metal);
   let f0 = mix(vec3f(0.04), albedo, metal);
@@ -268,7 +273,7 @@ fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N
   if (F.hemiSky.w > 0.5) {
     var amb = mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.5 * N.y + 0.5);
     if (F.giA.x > 0.5) {
-      let g = giGather(w + N * F.giA.w, N, F.giA.x > 1.5);
+      let g = giGather(w + Ng * F.giA.w, N, F.giA.x > 1.5);
       if (g.w > 1e-6) {
         // sky visibility: the sky's share by what of it the probes see that way, the ground's by how open they are
         var lit = g.light;
@@ -283,7 +288,7 @@ fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
     var lc = F.sunColor.rgb * cloudShade(w.xz);
-    if (receive) { lc *= mix(1.0, sunShadow(w, N), F.cloud2.z); }
+    if (receive) { lc *= mix(1.0, sunShadow(w, Ng), F.cloud2.z); }
     let irr = sat(dot(N, L)) * lc;
     col += irr * diff + irr * PI * ggx(f0, rough, N, V, L);
   }
