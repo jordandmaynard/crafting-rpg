@@ -3152,14 +3152,19 @@ function cathRoof(ca) {
     } finally { OUT = save; }
   };
 }
-const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Set();
+const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Map();   // (ROSE_WALLS: wall key -> the rose it's cut for)
 // (v433) the rose window: its centre this far up its story's wall, the hole through the wall round it
 // (v434) out: where the glass stands across the wall (the inside face, so the hole's own lip takes none of its light);
 // blur: how much the light spreads (glass radii a tile it travels) and blur0 at the glass; haze: the beams' colour in
 // the lit haze; glow: how brightly the glass shines from inside; style: ROSE_STYLES. T > Stained glass.
 // (v436) size: how big its light falls, times the true size; grow: how much bigger again a tile it travels; fill:
 // how bright the part that falls outside the true patch is (the sunlight there is the glass's own, not the shadow map's)
-const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, style: 2, size: 4, grow: 0.135, fill: 2 };
+// (v445, Jordan: bigger, to fit its light and be seen without zooming in: the cathedral's rose spans three walls of
+// the gallery's front, a whole story high (bigHole its hole's radius, bigY its centre up the wall); the one-wall rose
+// (y, hole, glass) is kept for if players may build them. size and grow scaled by 0.44 / 0.81 so the light falls as
+// big as Jordan had it)
+const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, bigHole: 0.82, bigY: 0.98, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, style: 2, size: 2.17, grow: 0.073, fill: 2 };
+const roseDims = q => q && q.big ? { y: ROSE.bigY, hole: ROSE.bigHole, glass: ROSE.bigHole - 0.01 } : { y: ROSE.y, hole: ROSE.hole, glass: ROSE.glass };
 // (v442, Jordan's cathedral-stained-glass-v1 kit, art/deliveries) The rose's design: one of four 256 x 256 lossless
 // paintings beside the page (rose/*.webp; the circle r 125 round the middle opaque, outside clear), copied into the
 // texture its glass shows (windowMat), its light on the floor takes its colours from (buildMat roseApply) and the
@@ -3275,7 +3280,11 @@ function raiseCathedral(t, c0, r0, d, W, dep, house, piece) {
     }
   }
   ca.gallery = st.land;
-  if (ca.rose) ROSE_WALLS.add(ca.rose.key);
+  if (ca.rose) {
+    // (v445: the big rose: the walls either side of the door's on the gallery's front are plain stone, cut for it too)
+    const q = ca.rose; q.big = true; ROSE_WALLS.set(q.key, q);
+    for (const a of [-1, 1]) { const [c, r] = at(a, 1), [ec, er, ew] = edgeOf(c, r, back); (ew ? U.WW : U.WN).set(T(ec, er), 4); ROSE_WALLS.set(edgeKey(ec, er, ew) + 2 * SNN, q); }
+  }
   // the arcades, in line with the towers' inner faces, a column every two tiles; the altar (v428: no porch columns)
   const A = (W - 1) / 2 - 1.5;
   for (const sg of [-1, 1]) for (let B = 4.5; B <= dep - 1.5; B += 2) { const [x, z] = P(sg * A, B); ca.cols.push(pillar({ x, z, y, R: 0.16, col: true, key: 8 * SNN + T(Math.floor(x), Math.floor(z)) })); }
@@ -3417,7 +3426,8 @@ function cathUpper(ca) {
     // the rose window: a stone ring, glass, eight spokes and a boss, standing just out from the wall over the door
     const q = ca.rose;
     if (q) {
-      const ax = DC[q.e] !== 0, n0 = OUT.n, g0 = GLASSB ? GLASSB.n : 0, ry = y + ROSE.y;
+      const dm = roseDims(q), RH = dm.hole, nk = RH / 0.45;
+      const ax = DC[q.e] !== 0, n0 = OUT.n, g0 = GLASSB ? GLASSB.n : 0, ry = y + dm.y;
       const at = out => [q.x + DC[q.e] * out, q.z + DR[q.e] * out];
       // (v428: the disc turned to face out, as it was meant to; its glass stained, a fan of coloured panes in two rings)
       const disc = (out, rad, th, col, into = 'world') => { const [x, z] = at(out); part(G.cyl8, col, x, ry, z, ax ? { sx: rad * 2, sy: th, sz: rad * 2, rz: Math.PI / 2, into } : { sx: rad * 2, sy: th, sz: rad * 2, rx: Math.PI / 2, into }); };
@@ -3430,12 +3440,12 @@ function cathUpper(ca) {
       const ring = (n, rad, out, sOut, sRad, sTan, col) => {
         for (let w = 0; w < n; w++) { const a = (w + 0.5) / n * Math.PI * 2, [x, y2, z] = pt(Math.cos(a) * rad, Math.sin(a) * rad, out); part(G.box, col, x, y2, z, ax ? { sx: sOut, sy: sRad, sz: sTan, rx: -a + Math.PI / 2 } : { sx: sTan, sy: sRad, sz: sOut, rz: a + Math.PI / 2 }); }
       };
-      ring(20, 0.48, 0.22, 0.1, 0.08, 0.16, shade(band, 1.12));
-      ring(20, 0.49, ROSE.out + 0.05, 0.08, 0.1, 0.17, shade(band, 1.06));
-      ring(28, ROSE.hole + 0.015, 0, 0.36, 0.03, 0.11, shade(band, 0.92));
-      const mark = CC('#ff00ff'), gb = GLASSB || OUT, R1 = ROSE.glass + 0.03;
-      for (let w = 0; w < 32; w++) {
-        const a0 = w / 32 * Math.PI * 2, a1 = (w + 1) / 32 * Math.PI * 2;
+      ring(Math.round(20 * nk), RH + 0.03, 0.22, 0.1, 0.08, 0.16, shade(band, 1.12));
+      ring(Math.round(20 * nk), RH + 0.04, ROSE.out + 0.05, 0.08, 0.1, 0.17, shade(band, 1.06));
+      ring(Math.round(28 * nk), RH + 0.015, 0, 0.36, 0.03, 0.11, shade(band, 0.92));
+      const mark = CC('#ff00ff'), gb = GLASSB || OUT, R1 = dm.glass + 0.03, NS = Math.round(32 * Math.sqrt(nk));
+      for (let w = 0; w < NS; w++) {
+        const a0 = w / NS * Math.PI * 2, a1 = (w + 1) / NS * Math.PI * 2;
         tri(pt(0, 0, ROSE.out), pt(Math.cos(a0) * R1, Math.sin(a0) * R1, ROSE.out), pt(Math.cos(a1) * R1, Math.sin(a1) * R1, ROSE.out), mark, mark, mark, gb);
       }
       cutTag(OUT, n0, q.key + 1, 1); if (GLASSB) cutTag(GLASSB, g0, q.key + 1, 1);
@@ -6639,7 +6649,8 @@ function updateRoses() {
   near.sort((x, y) => x[0] - y[0]);
   for (let j = 0; j < Math.min(2, near.length); j++) {
     const ca = near[j][1], q = ca.rose, nx = DC[q.e], nz = DR[q.e], o = j * 8;
-    a[o] = q.x + nx * ROSE.out; a[o + 1] = ca.y + WALL_H + ROSE.y; a[o + 2] = q.z + nz * ROSE.out; a[o + 3] = ROSE.glass;
+    const dm = roseDims(q);
+    a[o] = q.x + nx * ROSE.out; a[o + 1] = ca.y + WALL_H + dm.y; a[o + 2] = q.z + nz * ROSE.out; a[o + 3] = dm.glass;
     a[o + 4] = nx; a[o + 5] = nz; a[o + 6] = ROSE.tint; a[o + 7] = 1;
   }
 }
@@ -10932,7 +10943,7 @@ function wallPieceRaw(c, r, w, type, cut) {
     return;
   }
   if (type === 14 && !cut) { stoneWindowWall(c, r, w, y, at, ry, k); return; }
-  if (type === 4 && !cut && ROSE_WALLS.has(edgeKey(c, r, w) + PCUT)) { roseWall(c, r, w, y, at, ry, k); return; }
+  if (type === 4 && !cut && ROSE_WALLS.has(edgeKey(c, r, w) + PCUT)) { roseWall(c, r, w, y, at, ry, k, ROSE_WALLS.get(edgeKey(c, r, w) + PCUT)); return; }
   if (type === 4 || type === 14) {
     const top = cut ? CUT_H : WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
     // a mortar core the full length and height, so the joints between blocks never show through
@@ -11218,28 +11229,34 @@ const STONE_WIN = { W: 0.33, sill: 0.45, spring: 0.95 };   // (v414: wider, its 
 // rose: coursed as the plain stone wall is, with a round hole through it (ROSE.hole across, ROSE.y up). The rows the
 // hole reaches are cut round it in thin slices, the mortar core sliced the same way behind them; the rose itself, its
 // rims and the reveal lining the hole are drawn with the cathedral (cathUpper)
-function roseWall(c, r, w, y, at, ry, k) {
+// (v445: q the rose; a big one's hole spans three walls, so each cuts its own share: ac is the hole's middle along
+// this wall, 0..1 its ends, found from where the rose stands)
+function roseWall(c, r, w, y, at, ry, k, q) {
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
-  const top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows, RO = ROSE.hole, hc = ROSE.y, core = '#4a4652', SL = 0.04;
+  const dm = roseDims(q), top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows, RO = dm.hole, hc = dm.y, core = '#4a4652', SL = 0.04;
+  const p0 = at(0, y), p1 = at(1, y), ex = p1[0] - p0[0], ez = p1[2] - p0[2];
+  const ac = q ? ((q.x - p0[0]) * ex + (q.z - p0[2]) * ez) / (ex * ex + ez * ez) : 0.5;
   const fo = h => Math.abs(h - hc) >= RO ? 0 : Math.sqrt(RO * RO - (h - hc) ** 2);
   const saveE = emitSurf;
   try {
     for (let row = 0; row < rows; row++) {
       const h0 = rh * row, h1 = h0 + rh, off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, n, a) => a.indexOf(v) === n && v <= 1);
       const colOf = m => shade(CC('#8a8694'), 0.8 + hs(c * 5 + row, r * 3 + m, 54 + w) * 0.3);
-      if (h1 <= hc - RO || h0 >= hc + RO) {
+      let fMax = 0, fMin = 1;
+      for (let q2 = 0; q2 <= 16; q2++) { const f = fo(h0 + rh * q2 / 16); fMax = Math.max(fMax, f); fMin = Math.min(fMin, f); }
+      if (h1 <= hc - RO || h0 >= hc + RO || ac - fMax >= 1 || ac + fMax <= 0) {
         emitSurf = saveE;
         box(0.5, y + (h0 + h1) / 2, 1, rh, 0.27, core);
         for (let m = 0; m + 1 < edges.length; m++) box((edges[m] + edges[m + 1]) / 2, y + (h0 + h1) / 2, edges[m + 1] - edges[m] - 0.03, rh - 0.03, 0.32, colOf(m));
         continue;
       }
       emitSurf = null; SURF = 0;
-      let fMax = 0, fMin = 1;
-      for (let q = 0; q <= 16; q++) { const f = fo(h0 + rh * q / 16); fMax = Math.max(fMax, f); fMin = Math.min(fMin, f); }
-      // stone (and the core behind it) between |a - 0.5| = lo and hi on one side, from yy0 to yy1, cut at the blocks' joints
+      // stone (and the core behind it) between |a - ac| = lo and hi on one side, from yy0 to yy1, kept to the wall's
+      // own 0..1 and cut at the blocks' joints
       const span = (sgn, lo, hi, yy0, yy1) => {
         if (hi - lo < 0.003) return;
-        const A0 = sgn < 0 ? 0.5 - hi : 0.5 + lo, A1 = sgn < 0 ? 0.5 - lo : 0.5 + hi;
+        const A0 = Math.max(0, sgn < 0 ? ac - hi : ac + lo), A1 = Math.min(1, sgn < 0 ? ac - lo : ac + hi);
+        if (A1 - A0 < 0.003) return;
         box((A0 + A1) / 2, y + (yy0 + yy1) / 2, A1 - A0, yy1 - yy0 + 0.002, 0.27, core);
         const s0 = Math.max(yy0, h0 + 0.015), s1 = Math.min(yy1, h1 - 0.015);
         if (s1 - s0 < 0.003) return;
@@ -11250,7 +11267,7 @@ function roseWall(c, r, w, y, at, ry, k) {
       };
       const ns = Math.max(3, Math.ceil(rh / SL)), ds = rh / ns;
       for (const sgn of [-1, 1]) {
-        span(sgn, fMax, 0.5, h0, h1);
+        span(sgn, fMax, 2, h0, h1);
         if (fMax - fMin > 0.003) for (let q = 0; q < ns; q++) { const h = h0 + ds * (q + 0.5); span(sgn, fo(h), fMax, h - ds / 2, h + ds / 2); }
       }
     }
@@ -21433,7 +21450,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 444, crashSeen = new Map();
+const GAME_VERSION = 445, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

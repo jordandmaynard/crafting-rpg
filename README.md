@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v445:** The cathedral's rose window is a 3-wide set piece: it spans the three gallery-front walls over the door (the ones beside the door's were stone windows, now plain stone cut for it), a whole story high (ROSE.bigHole 0.82, bigY 0.98; glass 0.81 vs 0.44). ROSE_WALLS is a Map wall key -> rose; roseWall cuts each wall's share of the hole (ac from the rose's centre), rims/reveal/glass scale with roseDims(q). The one-wall rose (ROSE.y/hole/glass) stays for player-built ones later. size 4 -> 2.17 and grow 0.135 -> 0.073 so the light falls as big as before.
+
 **v444:** The cathedral roof's shadow stand-in (and the willow's curtains') use castOnlyBoth, a double-sided cast-only material: with the one-sided castOnlyMat the shadow pass culled gable and roof faces that looked toward the sun, so light came in over the facade above the rose while you were inside.
 
 **v443:** Painted icons drop their 64px files (103 removed; Jordan's call, desktop 4K always picks 128 or 256): srcset is 128w/256w and src the 128. Artifact goes from 441 to 338 files (limit 511). Smaller screens get the 128 shrunk by the browser.
