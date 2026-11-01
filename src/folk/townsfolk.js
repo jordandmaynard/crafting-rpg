@@ -143,8 +143,13 @@ export function makeFolkKit(GFX) {
 
   function build(d) {
     const g = new GFX.Group(), parts = [];
+    // (v3: each box a hair bigger than the one before, cycling every 17, in a step that's no round number so it never
+    // lands back on the hand-set sizes: two boxes whose faces would lie in one plane never do, so pieces that meet
+    // flush don't z-fight. At most 6 mm. Check with the scratchpad's t_zfight.mjs, which scans seeds 1-3000.)
+    let nBox = 0;
     const box = (parent, w, h, dd, x, y, z, c, rx = 0, rz = 0, ry = 0) => {
-      const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, dd), mat(c)); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); parts.push(m); return m;
+      const e = 0.00037 * (nBox++ % 17);
+      const m = new GFX.Mesh(new GFX.BoxGeometry(w + e, h + e, dd + e), mat(c)); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); parts.push(m); return m;
     };
     const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
     const fem = d.body === 'fem', T = d.torso, L = d.legs, skin = d.skin;
@@ -193,11 +198,11 @@ export function makeFolkKit(GFX) {
       for (const s of [1, -1]) {
         const p = pivot(body, s * B.hip / 4, 0.4, 0); flaps.push(p);
         const top = 0.4, mid = (top + bottom) / 2, w = B.hip / 2 + 0.008;
-        const h1 = (top - mid), h2 = (mid - bottom);
-        box(p, w, h1, B.dep + 0.03, s * 0.002, -(h1 / 2), 0, color);
-        box(p, w + flare * 0.5, h2 + 0.004, B.dep + 0.03 + flare, s * flare * 0.25, -h1 - h2 / 2 + 0.002, 0, color);
+        const h1 = (top - mid), h2 = (mid - bottom), dz = s > 0 ? 0.004 : 0;   // (v3: the halves overlap in the middle: one a touch deeper)
+        box(p, w, h1, B.dep + 0.03 + dz, s * 0.002, -(h1 / 2), 0, color);
+        box(p, w + flare * 0.5, h2 + 0.004, B.dep + 0.03 + flare + dz, s * flare * 0.25, -h1 - h2 / 2 + 0.002, 0, color);
         // a darker hem
-        box(p, w + flare * 0.5 + 0.004, 0.025, B.dep + 0.034 + flare, s * flare * 0.25, -(top - bottom) + 0.012, 0, shade(color, -0.22));
+        box(p, w + flare * 0.5 + 0.004, 0.025, B.dep + 0.034 + flare + dz, s * flare * 0.25, -(top - bottom) + 0.012, 0, shade(color, -0.22));
       }
     };
     if (skirted) skirtHalves(L.color, hem, L.item === 'skirt' ? 0.05 : 0.07);
@@ -212,7 +217,8 @@ export function makeFolkKit(GFX) {
     if (T.item === 'vest') {
       // a sleeveless vest, open down the front over the shirt, with two buttons each side
       for (const s of [1, -1]) {
-        box(chest, B.sh / 2 - 0.02, 0.16, B.dep + 0.012, s * (B.sh / 4 + 0.01), 0.59 - CH, 0, T.color);
+        // (v3: a hair taller than the shirt under it, so their tops never share a plane)
+        box(chest, B.sh / 2 - 0.02, 0.17, B.dep + 0.012, s * (B.sh / 4 + 0.01), 0.593 - CH, 0, T.color);
         box(chest, B.wa / 2 - 0.02, 0.17, B.dep + 0.006, s * (B.wa / 4 + 0.01), 0.45 - CH, 0, T.color);
         for (const y of [0.5, 0.58]) box(chest, 0.018, 0.018, 0.008, s * 0.035, y - CH, B.dep / 2 + 0.009, T.trim);
       }
@@ -223,7 +229,7 @@ export function makeFolkKit(GFX) {
       for (const y of [0.42, 0.47, 0.52]) for (const s of [1, -1]) box(chest, 0.05, 0.008, 0.006, 0, y - CH, B.dep / 2 + 0.011, T.trim, 0, s * 0.6);
     } else if (T.item === 'dress') {
       // a square neckline in the trim
-      box(chest, 0.11, 0.02, 0.006, 0, 0.64 - CH, B.dep / 2 + 0.003, T.trim);
+      box(chest, 0.11, 0.02, 0.006, 0, 0.645 - CH, B.dep / 2 + 0.003, T.trim);
     } else if (T.item === 'tunic' || T.item === 'shirt') {
       // a slit neck, laced
       box(chest, 0.03, 0.07, 0.006, 0, 0.625 - CH, B.dep / 2 + 0.003, shade(T.color, -0.3));
@@ -273,7 +279,8 @@ export function makeFolkKit(GFX) {
     const bc = d.age === 'old' ? d.hair : shade(d.hair, -0.05);
     if (d.beard === 'full') {
       box(head, 0.17, 0.07, 0.035, 0, 0.035, 0.08, bc);
-      for (const s of [1, -1]) box(head, 0.025, 0.1, 0.12, s * 0.088, 0.06, 0.03, bc);
+      // (the side whiskers' fronts stop short of the face's, v3: flush with it they z-fought)
+      for (const s of [1, -1]) box(head, 0.025, 0.1, 0.11, s * 0.088, 0.06, 0.03, bc);
       box(head, 0.08, 0.02, 0.012, 0, 0.068, 0.096, bc);
     } else if (d.beard === 'moustache') box(head, 0.09, 0.022, 0.014, 0, 0.065, 0.095, bc);
     else if (d.beard === 'stubble') box(head, 0.176, 0.06, 0.03, 0, 0.035, 0.078, shade(skin, -0.18));
@@ -312,7 +319,7 @@ export function makeFolkKit(GFX) {
       box(head, 0.225, 0.22, 0.05, 0, 0.1, -0.095, H.color);
       for (const s of [1, -1]) box(head, 0.03, 0.2, 0.2, s * 0.11, 0.11, -0.005, H.color);
       box(head, 0.07, 0.06, 0.07, 0, 0.21, -0.12, shade(H.color, -0.1), 0.5);
-      box(chest, B.sh + 0.05, 0.07, B.dep + 0.04, 0, 0.665 - CH, -0.005, H.color);
+      box(chest, B.sh + 0.05, 0.07, B.dep + 0.04, 0, 0.665 - CH, -0.008, H.color);
       box(chest, B.sh - 0.02, 0.05, B.dep + 0.03, 0, 0.62 - CH, -0.005, shade(H.color, -0.15));
     } else if (hat === 'cap') {
       // a soft cloth cap with a short peak
@@ -335,7 +342,7 @@ export function makeFolkKit(GFX) {
       // a close linen cap over the ears, tied under the chin
       box(head, 0.21, 0.05, 0.205, 0, 0.215, -0.006, H.color);
       box(head, 0.21, 0.17, 0.045, 0, 0.12, -0.088, H.color);
-      for (const s of [1, -1]) box(head, 0.025, 0.15, 0.16, s * 0.103, 0.13, -0.01, H.color);
+      for (const s of [1, -1]) box(head, 0.025, 0.15, 0.16, s * 0.103, 0.13, -0.006, H.color);
       box(head, 0.2, 0.025, 0.02, 0, 0.19, 0.09, shade(H.color, -0.1));
     }
     // ---- arms: shoulder, elbow, wrist ----
