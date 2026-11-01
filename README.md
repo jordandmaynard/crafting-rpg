@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v430:** The cathedral gables' stone courses now run right out to the roof's edge, with a triangular stone at each end of every course filling the wedge under the slope, and one stone capping the peak.
+
 **v429:** The ability buttons are back: they had slipped behind the new belt. T > HUD bars gains sliders for the belt's height and how far up it sits, and for moving the centre piece, the hotbar and the action + mode buttons up or down.
 
 **v428:** Steadier motion when the GPU falls behind (say, zoomed far out): no more than two frames are queued, and if the GPU can't keep up with the display the game draws on every 2nd or 3rd refresh at an even pace (72 on a 144 Hz screen, say) rather than lurching between fast and slow. Options > Steady frame pacing turns it off, and the frame-rate readout shows "1 in k of Hz". Eased turns, follows and fades are now exact at any frame rate, and lava spatter no longer happens more often at high frame rates. Cathedral: the front and back gables are laid in coursed stone with string courses, a blind arcade and a quatrefoil, the rose window faces the right way and has stained glass, and the porch columns are gone.
