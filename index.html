@@ -3157,7 +3157,9 @@ const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new
 // (v434) out: where the glass stands across the wall (the inside face, so the hole's own lip takes none of its light);
 // blur: how much the light spreads (glass radii a tile it travels) and blur0 at the glass; haze: the beams' colour in
 // the lit haze; glow: how brightly the glass shines from inside; style: ROSE_STYLES. T > Stained glass.
-const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, tint: 0.85, out: -0.24, blur: 0.05, blur0: 0.02, haze: 1, glow: 0.6, style: 1 };
+// (v436) size: how big its light falls, times the true size; grow: how much bigger again a tile it travels; fill:
+// how bright the part that falls outside the true patch is (the sunlight there is the glass's own, not the shadow map's)
+const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, tint: 0.85, out: -0.24, blur: 0.05, blur0: 0.02, haze: 1, glow: 0.6, style: 1, size: 1, grow: 0, fill: 1 };
 // (v434, Jordan: stained glass styles after V Rising's and Albion Online's, in our blocky style) The rose's design,
 // painted once into a 256 x 256 texture that its glass shows (windowMat), its light on the floor takes its colours
 // from (buildMat roseTint) and the lit haze's beams too. rgb the glass, alpha 1 inside the rose. Dark glass and the
@@ -5839,7 +5841,12 @@ function renderWorld() {
   renderer.passName = 'snow and sand';
   camera.layers.set(6); renderer.render(scene, camera);
   renderer.passName = 'world';
-  camera.layers.set(0); renderer.render(scene, camera);
+  camera.layers.set(0);
+  // (v436: G > Split world: the world drawn in parts, a profiler row each, to see what it costs)
+  if (prof.on && PROF_SPLIT.world) {
+    for (const part of WORLD_PARTS) { renderer.passName = 'world: ' + part; renderer.drawFilter = m => worldPart(m) === part; renderer.render(scene, camera); }
+    renderer.drawFilter = null;
+  } else renderer.render(scene, camera);
   // the grass tufts on their own (layer 4: they cast no shadow), so the profiler shows what they cost
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
@@ -6605,7 +6612,7 @@ function makeChipTex() {
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
-const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(20) }, tRose: { value: roseTex } };
+const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(24) }, tRose: { value: roseTex } };
 // (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
 // shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
 // sun is followed back to the nearest two roses' glass, and where it passes through one, the sunlight there (the
@@ -6634,32 +6641,38 @@ fn roseAt(w: vec3f, j: i32, taps: i32) -> vec4f {
   if (t < 0.02 || t > 60.0) { return vec4f(0.0); }
   let d = w + L * t - a.xyz;
   let u = dot(d, vec3f(-nn.z, 0.0, nn.x)); let v = d.y;
-  let br = a.w * (g.x + g.y * t);
-  if (length(vec2f(u, v)) > a.w + br) { return vec4f(0.0); }
-  var sum = roseLight(u, v, a.w);
+  // (v436: drawn bigger than it truly falls, for drama: size, and grow a tile it travels)
+  let Rs = a.w * max(U.roses[5].x + U.roses[5].y * t, 0.05);
+  let br = Rs * (g.x + g.y * t);
+  if (length(vec2f(u, v)) > Rs + br) { return vec4f(0.0); }
+  var sum = roseLight(u, v, Rs);
   for (var k = 0; k < taps; k++) {
     let ang = f32(k) * 6.2831853 / f32(taps);
-    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, a.w);
-    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, a.w);
+    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, Rs);
+    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, Rs);
   }
   sum /= f32(1 + taps * 2);
   return vec4f(sum.rgb / max(sum.w, 1e-3), sum.w);
 }
-fn roseTint(w: vec3f, n: vec3f) -> vec3f {
-  var m = vec3f(1.0);
-  if (F.sunDir.w < 0.5) { return m; }
+// c: the lit colour; where the sun truly comes through (the shadow map's say) it's tinted, and where the drawn light
+// reaches past that (blur, size, grow) the glass's coloured sunlight is added (fill)
+fn roseApply(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f) -> vec3f {
+  if (F.sunDir.w < 0.5) { return c; }
+  var o = c;
   for (var j = 0; j < 2; j++) {
     let r = roseAt(w, j, 6);
     if (r.w <= 0.0) { continue; }
-    m *= mix(vec3f(1.0), r.rgb, r.w * U.roses[j * 2 + 1].z * sunShadow(w, n));
+    let k = r.w * U.roses[j * 2 + 1].z;
+    let s = sunShadow(w, n);
+    o = o * mix(vec3f(1.0), r.rgb, k * s) + albedo * F.sunColor.rgb * sat(dot(N, F.sunDir.xyz)) * cloudShade(w.xz) * r.rgb * k * (1.0 - s) * U.roses[5].z;
   }
-  return m;
+  return o;
 }
 `;
 // the nearest two roses within reach of the hero, every frame
 function updateRoses() {
   const a = DETAIL_U.roses.value; a.fill(0);
-  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow;
+  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow; a[20] = ROSE.size; a[21] = ROSE.grow; a[22] = ROSE.fill;
   const near = [];
   for (const ca of cathedrals) { const q = ca.rose; if (!q) continue; const d = Math.hypot(q.x - H.x, q.z - H.z); if (d < 48) near.push([d, ca]); }
   near.sort((x, y) => x[0] - y[0]);
@@ -6752,7 +6765,7 @@ fn axis(k: i32) -> vec3f { return select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0,
       N = normalize(N0 + Tu * bu + Tv * bv);
     }
   }
-  let c = shadeLitN(col, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5) * roseTint(i.world, N0);
+  let c = roseApply(shadeLitN(col, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5), col, i.world, N, N0);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
@@ -21122,6 +21135,9 @@ const TUNING = [
     [ROSE, 'tint', 'How strongly its light takes the glass\'s colours', 0, 1, 0.01],
     [ROSE, 'blur', 'How much its light spreads on the way down (a tile)', 0, 0.3, 0.005],
     [ROSE, 'blur0', 'Its light\'s softness at the glass', 0, 0.2, 0.005],
+    [ROSE, 'size', 'How big its light falls (times the true size)', 0.5, 4, 0.01],
+    [ROSE, 'grow', 'How much bigger again its light gets a tile it travels', 0, 1, 0.005],
+    [ROSE, 'fill', 'Brightness of its light where it falls past the true patch', 0, 3, 0.01],
     [ROSE, 'haze', 'Coloured beams in the lit haze', 0, 1, 0.01],
     [ROSE, 'glow', 'The glass shining with the daylight behind it', 0, 3, 0.01],
   ]],
@@ -21284,10 +21300,25 @@ const spikes = new GFX.SpikeRecorder();
 prof.spikes = spikes;
 // the objects whose calls spike capture times (the game's own functions are timed by update's sections)
 spikes.sources = () => [[renderer, 'renderer'], [gi, 'gi probes'], [haze, 'lit haze'], [eye, 'eye'], [bloom, 'bloom'], [groundHaze, 'ground haze'], [caustics, 'caustics']];
+// (v436) G > Split world: the world pass drawn in parts by what they're made of, a row each (costs a little itself)
+const PROF_SPLIT = { world: false };
+const WORLD_PARTS = ['built pieces', 'glass', 'roofs', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
+function worldPart(m) {
+  const t = m.material;
+  if (t === buildMat) return 'built pieces';
+  if (t === windowMat) return 'glass';
+  if (t === roofMat || t === slateMat || t === slateSteep) return 'roofs';
+  if (t === groundMat || t === glowMat || t === metalMat) return 'trees + rocks + props';
+  if (t === trunkMat) return 'trunks';
+  if (t === plantMat) return 'plants';
+  if (m.isInstancedMesh || m.castShadow && !m.geometry.attributes.color) return 'foes + hero';
+  return 'other';
+}
 const profPanel = $('gpuPanel'), profLive = profPanel.querySelector('.plive'), spikePanel = profPanel.querySelector('.pspike');
 const clockText = ([day, c]) => { const m = Math.floor(c * 1440); return `day ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
-const showSpikes = () => { spikePanel.innerHTML = spikes.html(clockText); };
+const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div>` + spikes.html(clockText); };
 spikePanel.addEventListener('click', e => {
+  if (e.target.closest('[data-split]')) { PROF_SPLIT.world = !PROF_SPLIT.world; showSpikes(); return; }
   const b = e.target.closest('[data-spike]');
   if (!b) return;
   spikes.click(b);
@@ -21424,7 +21455,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 435, crashSeen = new Map();
+const GAME_VERSION = 436, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21504,6 +21535,7 @@ window.GAME = {
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
   roseImage: st => { paintRose(st); const d = Array.from(roseTex.image.data); paintRose(ROSE.style); return d; },
+  splitWorld: v => { PROF_SPLIT.world = !!v; if (!prof.on) toggleProfiler(); return WORLD_PARTS; },
   compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {

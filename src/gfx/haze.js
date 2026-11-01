@@ -44,8 +44,9 @@ struct HP {
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
                         // how much of the sky's (for shafts with more contrast); mosaic pixels a ray, each way (block)
-  rose: array<vec4f, 5>,  // stained-glass roses the sun shines through (the game's U.roses): per rose [glass middle,
-                          // radius], [outward normal xz, tint, on]; then [blur at the glass, blur a tile, beams, glow]
+  rose: array<vec4f, 6>,  // stained-glass roses the sun shines through (the game's U.roses): per rose [glass middle,
+                          // radius], [outward normal xz, tint, on]; then [blur at the glass, blur a tile, beams, glow],
+                          // [size, grow a tile, fill, -]
 }
 @group(2) @binding(0) var<uniform> H: HP;
 `;
@@ -124,9 +125,8 @@ ${COMMON}
 @group(2) @binding(9) var roseSamp: sampler;
 // the sun's light at p, coloured by a rose window's glass it came through (1 where it came through none): the beams.
 // One look into the design, spread by how far the light has come since the glass
-fn roseHaze(p: vec3f) -> vec3f {
-  var m = vec3f(1.0);
-  if (H.rose[4].z <= 0.0) { return m; }
+fn roseHaze(p: vec3f) -> vec4f {
+  if (H.rose[4].z <= 0.0) { return vec4f(1.0, 1.0, 1.0, 0.0); }
   let L = F.sunDir.xyz;
   for (var j = 0; j < 2; j++) {
     let a = H.rose[j * 2]; let b = H.rose[j * 2 + 1];
@@ -138,14 +138,14 @@ fn roseHaze(p: vec3f) -> vec3f {
     if (t < 0.0 || t > 60.0) { continue; }
     let d = p + L * t - a.xyz;
     let u = dot(d, vec3f(-nn.z, 0.0, nn.x));
-    let R = a.w * (1.0 + H.rose[4].x + H.rose[4].y * t);
-    if (length(vec2f(u, d.y)) > R) { continue; }
-    let tx = textureSampleLevel(roseTex, roseSamp, vec2f(0.5 + u / (2.0 * a.w), 0.5 - d.y / (2.0 * a.w)), 0.0);
+    let Rs = a.w * max(H.rose[5].x + H.rose[5].y * t, 0.05);
+    if (length(vec2f(u, d.y)) > Rs * (1.0 + H.rose[4].x + H.rose[4].y * t)) { continue; }
+    let tx = textureSampleLevel(roseTex, roseSamp, vec2f(0.5 + u / (2.0 * Rs), 0.5 - d.y / (2.0 * Rs)), 0.0);
     let mx = max(tx.r, max(tx.g, tx.b));
     let col = mix(vec3f(0.18), tx.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
-    m *= mix(vec3f(1.0), col, tx.a * b.z * H.rose[4].z);
+    return vec4f(col, tx.a * b.z * H.rose[4].z);
   }
-  return m;
+  return vec4f(1.0, 1.0, 1.0, 0.0);
 }
 ${DEPTH_T}
 // smooth value noise in one lookup: the lattice is the texture, and reading it at the smoothstepped place inside
@@ -330,7 +330,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
   var T = 1.0;
   var sP = 0.0; var uP = 0.0; var wP = 1.0; var pP = pa; var shP = 1.0;
   // the light at the last step's end: the sky's and the sun's (both before shadow), and the rest
-  var skyP = vec3f(0.0); var sunP = vec3f(0.0); var restP = vec3f(0.0);
+  var skyP = vec3f(0.0); var sunP = vec3f(0.0); var restP = vec3f(0.0); var beamP = vec3f(0.0);
   for (var i = 0; i <= n; i++) {
     var s = 0.0;
     if (i == n) { s = 1.0; }
@@ -355,7 +355,15 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       }
       sky = mix(ambA, ambB, kf - f32(ki));
     }
-    if (any(sunC > vec3f(0.0))) { sunL = sunC * cloudShade(p.xz) * roseHaze(p); }
+    var beam = vec3f(0.0);
+    if (any(sunC > vec3f(0.0))) {
+      // (a rose window's beam: the sun through it tinted, and where its drawn light reaches past the true shaft, the
+      // glass's coloured light added, as the floor has it)
+      let rz = roseHaze(p);
+      let sc = sunC * cloudShade(p.xz);
+      sunL = sc * mix(vec3f(1.0), rz.rgb, rz.w);
+      beam = sc * rz.rgb * rz.w * H.rose[5].z;
+    }
     if (lamps != 0u) {
       for (var j = 0; j < ${MAX_POINTS}; j++) {
         if (((lamps >> u32(j)) & 1u) == 0u) { continue; }
@@ -385,6 +393,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       var L = 0.5 * (rest + restP);
       L += 0.5 * (sky + skyP) * select(1.0, mix(1.0, sh, H.glow.z), shadeSky);
       L += 0.5 * (sunL + sunP) * mix(1.0, sh, H.glow.y);
+      L += 0.5 * (beam + beamP) * (1.0 - sh) * H.glow.y;
       // what the step scatters toward the camera, less what it loses again before it leaves the step
       if (!gotN && sN <= s) {
         let tp = exp(-k * len * (sN - sP));
@@ -394,7 +403,7 @@ fn march(@builtin(global_invocation_id) id: vec3u) {
       S += T * H.tint.rgb * L * (1.0 - t);
       T *= t;
     }
-    sP = s; uP = u; wP = w; pP = p; shP = shE; skyP = sky; sunP = sunL; restP = rest;
+    sP = s; uP = u; wP = w; pP = p; shP = shE; skyP = sky; sunP = sunL; restP = rest; beamP = beam;
   }
   if (!gotN) { SN = S; TN = T; }
   textureStore(hazeN, q, vec4f(SN * H.tint.w, TN));
@@ -564,7 +573,7 @@ export class LitHaze {
     d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
     d.set([f.lavaHeight, f.shafts, f.shadeSky, B], 60);
-    if (f.rose) d.set(f.rose.subarray(0, 20), 64);
+    if (f.rose) d.set(f.rose.subarray(0, 24), 64);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {

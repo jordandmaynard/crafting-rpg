@@ -494,7 +494,9 @@ class Renderer {
     let c = this._seen;
     if (!c || c.frame !== this._frameNo || c.scene !== scene || c.camera !== camera) c = this._seen = { frame: this._frameNo, scene, camera, list: this._walk(scene, camera, false) };
     const out = [], L = camera.layers;
-    for (const it of c.list) if (it.mesh.layers.test(L)) out.push(it);
+    // (drawFilter: when set, only what it passes is drawn: the profiler's split of one render into parts)
+    const f = this.drawFilter;
+    for (const it of c.list) if (it.mesh.layers.test(L) && (!f || f(it.mesh))) out.push(it);
     return out;
   }
   _walk(scene, camera, layered) {
