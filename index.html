@@ -6612,6 +6612,8 @@ function makeChipTex() {
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
+// (v438) G > Built pieces test (see setBuildTest): shade 0 full, 1 no lighting, 2 flat colour; cull back faces
+const BUILD_TEST = { shade: 0, cull: false };
 const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(24) }, tRose: { value: roseTex } };
 // (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
 // shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
@@ -6672,7 +6674,7 @@ fn roseApply(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f) -> vec3f {
 // the nearest two roses within reach of the hero, every frame
 function updateRoses() {
   const a = DETAIL_U.roses.value; a.fill(0);
-  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow; a[20] = ROSE.size; a[21] = ROSE.grow; a[22] = ROSE.fill;
+  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow; a[20] = ROSE.size; a[21] = ROSE.grow; a[22] = ROSE.fill; a[23] = BUILD_TEST.shade;
   const near = [];
   for (const ca of cathedrals) { const q = ca.rose; if (!q) continue; const d = Math.hypot(q.x - H.x, q.z - H.z); if (d < 48) near.push([d, ca]); }
   near.sort((x, y) => x[0] - y[0]);
@@ -6703,6 +6705,9 @@ fn qrot(q: vec4f, v: vec3f) -> vec3f { let t = 2.0 * cross(q.xyz, v); return v +
 fn pick(m: vec3f, k: i32) -> f32 { return select(select(m.z, m.y, k == 1), m.x, k == 0); }
 fn axis(k: i32) -> vec3f { return select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0, 1.0, 0.0), k == 1), vec3f(1.0, 0.0, 0.0), k == 0); }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  // (v438 G > Built pieces test: 2 flat colour, 1 no lighting; a uniform, so the branch stays uniform)
+  let dbg = U.roses[5].w;
+  if (dbg > 1.5) { return vec4f(i.color, 1.0); }
   let N0 = flatNormal(i.eye);
   var N = N0;
   var col = i.color;
@@ -6765,6 +6770,7 @@ fn axis(k: i32) -> vec3f { return select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0,
       N = normalize(N0 + Tu * bu + Tv * bv);
     }
   }
+  if (dbg > 0.5) { return vec4f(col * (0.4 + 0.6 * max(N.y, 0.0)), 1.0); }
   let c = roseApply(shadeLitN(col, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5), col, i.world, N, N0);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
@@ -21302,6 +21308,9 @@ prof.spikes = spikes;
 spikes.sources = () => [[renderer, 'renderer'], [gi, 'gi probes'], [haze, 'lit haze'], [eye, 'eye'], [bloom, 'bloom'], [groundHaze, 'ground haze'], [caustics, 'caustics']];
 // (v436) G > Split world: the world pass drawn in parts by what they're made of, a row each (costs a little itself)
 const PROF_SPLIT = { world: false };
+// (v438) G > Built pieces test, to find what their cost is: shade 0 full, 1 no lighting (bevels kept), 2 flat colour;
+// cull: drop back faces (pieces wound the wrong way vanish too, so it's only a test)
+function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; }
 const WORLD_PARTS = ['built pieces', 'glass', 'roofs', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
 function worldPart(m) {
   const t = m.material;
@@ -21316,9 +21325,11 @@ function worldPart(m) {
 }
 const profPanel = $('gpuPanel'), profLive = profPanel.querySelector('.plive'), spikePanel = profPanel.querySelector('.pspike');
 const clockText = ([day, c]) => { const m = Math.floor(c * 1440); return `day ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
-const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div>` + spikes.html(clockText); };
+const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div>` + spikes.html(clockText); };
 spikePanel.addEventListener('click', e => {
   if (e.target.closest('[data-split]')) { PROF_SPLIT.world = !PROF_SPLIT.world; showSpikes(); return; }
+  const bt = e.target.closest('[data-btest]'); if (bt) { setBuildTest(+bt.dataset.btest, BUILD_TEST.cull); showSpikes(); return; }
+  if (e.target.closest('[data-bcull]')) { setBuildTest(BUILD_TEST.shade, !BUILD_TEST.cull); showSpikes(); return; }
   const b = e.target.closest('[data-spike]');
   if (!b) return;
   spikes.click(b);
@@ -21455,7 +21466,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 437, crashSeen = new Map();
+const GAME_VERSION = 438, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21535,6 +21546,7 @@ window.GAME = {
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
   roseImage: st => { paintRose(st); const d = Array.from(roseTex.image.data); paintRose(ROSE.style); return d; },
+  buildTest: (shade, cull) => { setBuildTest(shade, !!cull); return BUILD_TEST; },
   splitWorld: v => { PROF_SPLIT.world = !!v; if (!prof.on) toggleProfiler(); return WORLD_PARTS; },
   matTris: () => { const out = {}; scene.traverse(o => { if (!o.isMesh || !o.visible || !o.geometry || !o.geometry.attributes.position) return; const k = (typeof worldPart === 'function' ? worldPart(o) : 'x') + (o.layers.mask === 1 ? '' : ' L' + o.layers.mask); const n = o.geometry.attributes.position.count / 3; out[k] = (out[k] || 0) + Math.round(n); }); return out; },
   compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },

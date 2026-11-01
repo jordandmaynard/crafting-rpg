@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v438:** G panel > Built pieces test, to find what the built pieces cost (bevels ruled out): Full / No lighting (skips shadows, GI, lamps; bevels kept) / Flat colour (skips all shading), and Cull backs (drops back faces; wrongly wound pieces vanish too). BUILD_TEST, setBuildTest, hook GAME.buildTest(shade, cull); flag in DETAIL_U.roses[23].
+
 **v437:** Jordan's tuning baked in: minimap 1px nearer the right edge and 6px nearer the top, compass at x -15 / y 19 (HUD_BARS miniRight/miniTop/compassX/compassY); stained glass style 2 (radiant saint), tint 0.6, blur 0, size 4, grow 0.135, fill 2. GAME.matTris() counts triangles per profiler world part.
 
 **v436:** The profiler (G) can split the world row into parts by what they're made of (built pieces, glass, roofs, trees and props, trunks, plants, foes), a row each, to see what the world costs. T > Stained glass gains size (how big the rose's light falls), grow (how much bigger again it gets a tile it travels) and fill (how bright the part past the true patch is), for a bigger, more dramatic cast; the beams in the haze follow.
