@@ -3160,102 +3160,37 @@ const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new
 // (v436) size: how big its light falls, times the true size; grow: how much bigger again a tile it travels; fill:
 // how bright the part that falls outside the true patch is (the sunlight there is the glass's own, not the shadow map's)
 const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, style: 2, size: 4, grow: 0.135, fill: 2 };
-// (v434, Jordan: stained glass styles after V Rising's and Albion Online's, in our blocky style) The rose's design,
-// painted once into a 256 x 256 texture that its glass shows (windowMat), its light on the floor takes its colours
-// from (buildMat roseTint) and the lit haze's beams too. rgb the glass, alpha 1 inside the rose. Dark glass and the
-// lead between the pieces let little light through, so a figure in dark glass falls on the floor as a silhouette.
-// ROSE.style: 0 the fan of panes, 1 a crowned king with his sword, 2 a robed saint in a burst of flame.
-const ROSE_STYLES = ['Fan of panes', 'Crowned king', 'Radiant saint'];
+// (v442, Jordan's cathedral-stained-glass-v1 kit, art/deliveries) The rose's design: one of four 256 x 256 lossless
+// paintings beside the page (rose/*.webp; the circle r 125 round the middle opaque, outside clear), copied into the
+// texture its glass shows (windowMat), its light on the floor takes its colours from (buildMat roseApply) and the
+// lit haze's beams too. Dark glass and lead let little light through, so a figure in dark glass falls on the floor
+// as a silhouette. Until one has loaded the texture is clear and no light comes through. ROSE.style: ROSE_STYLES.
+const ROSE_STYLES = ['Grail with god rays', 'Knight with raised sword', 'Praying priestess', 'Geometric rose'];
+const ROSE_FILES = ['01-grail-god-rays', '02-knight-sun-rays', '03-praying-priestess', '04-geometric'];
 const ROSE_TEX_S = 256;
 const roseTex = new GFX.DataTexture(new Uint8Array(ROSE_TEX_S * ROSE_TEX_S * 4), ROSE_TEX_S, ROSE_TEX_S);
-function paintRose(style) {
-  const S = ROSE_TEX_S, C = S / 2, R = S / 2 - 3, cv = document.createElement('canvas');
-  cv.width = cv.height = S;
-  const g = cv.getContext('2d', { willReadFrequently: true }), LEAD = '#16121a';
-  let seed = 7 + style * 101;
-  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-  const poly = (pts, fill, lw = 3) => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(C + x * R, C + y * R) : g.moveTo(C + x * R, C + y * R)); g.closePath(); g.fillStyle = fill; g.fill(); if (lw) { g.lineWidth = lw; g.strokeStyle = LEAD; g.stroke(); } };
-  const wedge = (r0, r1, a0, a1, fill, lw = 3) => { g.beginPath(); g.arc(C, C, r1 * R, a0, a1); g.arc(C, C, r0 * R, a1, a0, true); g.closePath(); g.fillStyle = fill; g.fill(); if (lw) { g.lineWidth = lw; g.strokeStyle = LEAD; g.stroke(); } };
-  const ring = (r, lw) => { g.beginPath(); g.arc(C, C, r * R, 0, Math.PI * 2); g.lineWidth = lw; g.strokeStyle = LEAD; g.stroke(); };
-  g.save(); g.beginPath(); g.arc(C, C, R, 0, Math.PI * 2); g.clip();
-  g.fillStyle = LEAD; g.fillRect(0, 0, S, S);
-  // a background of irregular panes (a Voronoi of seeds), shaded from a palette, lead between them
-  const panes = (r0, r1, cols, n) => {
-    const pts = [];
-    for (let k = 0; k < n; k++) { const a = rnd() * Math.PI * 2, d = Math.sqrt(r0 * r0 + rnd() * (r1 * r1 - r0 * r0)); pts.push([C + Math.cos(a) * d * R, C + Math.sin(a) * d * R, cols[Math.floor(rnd() * cols.length)]]); }
-    const img = g.getImageData(0, 0, S, S), D = img.data;
-    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-      const rr = Math.hypot(x - C, y - C) / R;
-      if (rr < r0 || rr > r1) continue;
-      let b1 = 1e9, b2 = 1e9, bi = 0;
-      for (let k = 0; k < n; k++) { const dd = (x - pts[k][0]) ** 2 + (y - pts[k][1]) ** 2; if (dd < b1) { b2 = b1; b1 = dd; bi = k; } else if (dd < b2) b2 = dd; }
-      const lead = Math.sqrt(b2) - Math.sqrt(b1) < 2.2;
-      const col = lead ? [22, 18, 26] : hexRGB(pts[bi][2]), o = (y * S + x) * 4;
-      D[o] = col[0]; D[o + 1] = col[1]; D[o + 2] = col[2]; D[o + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
-  };
-  const border = (r0, cols, n, lw = 3) => { for (let k = 0; k < n; k++) wedge(r0, 1.02, k / n * Math.PI * 2, (k + 1) / n * Math.PI * 2, cols[k % cols.length], lw); ring(r0, 4); };
-  if (style === 0) {
-    const P = ['#b02a34', '#2a52b0', '#d8a032', '#2f8a4a', '#7a3aa0'];
-    for (let w = 0; w < 16; w++) {
-      const a0 = w / 16 * Math.PI * 2, a1 = (w + 1) / 16 * Math.PI * 2;
-      wedge(0.5, 1.02, a0, a1, P[w % 2 ? 1 : (w / 2) % 2 ? 0 : 2]);
-      wedge(0.12, 0.5, a0, a1, P[w % 2 ? 3 : 4]);
-    }
-    ring(0.5, 5); g.fillStyle = '#c8b48a'; g.beginPath(); g.arc(C, C, 0.13 * R, 0, Math.PI * 2); g.fill(); ring(0.13, 4);
-    for (let w = 0; w < 8; w++) { const a = w / 8 * Math.PI * 2; g.beginPath(); g.moveTo(C + Math.cos(a) * 0.13 * R, C + Math.sin(a) * 0.13 * R); g.lineTo(C + Math.cos(a) * R, C + Math.sin(a) * R); g.lineWidth = 6; g.strokeStyle = LEAD; g.stroke(); }
-  } else if (style === 1) {
-    // the king: blue panes behind, a gold halo, a red robe and purple mantle, a square head, a gold crown, the
-    // sword held point up before him; a border of red and gold
-    panes(0, 0.8, ['#1f4fa8', '#2a63c0', '#173d8a', '#2a7fa8', '#3a5ccc'], 46);
-    border(0.8, ['#b52a2a', '#d9a630', '#b52a2a', '#2a8a5a'], 16);
-    g.fillStyle = '#f0c040'; g.beginPath(); g.arc(C, C - 0.3 * R, 0.25 * R, 0, Math.PI * 2); g.fill(); ring2(g, C, C - 0.3 * R, 0.25 * R, LEAD);
-    poly([[-0.34, 0.02], [0.34, 0.02], [0.46, 0.8], [-0.46, 0.8]], '#7a2a8a');
-    poly([[-0.22, 0.02], [0.22, 0.02], [0.3, 0.8], [-0.3, 0.8]], '#c42a2e');
-    poly([[-0.24, 0.0], [0.24, 0.0], [0.2, 0.1], [-0.2, 0.1]], '#e8e0d0');
-    poly([[-0.13, -0.42], [0.13, -0.42], [0.13, -0.16], [-0.13, -0.16]], '#eab48a');
-    poly([[-0.13, -0.22], [0.13, -0.22], [0.1, -0.04], [-0.1, -0.04]], '#8a5a2a');
-    poly([[-0.15, -0.42], [-0.15, -0.58], [-0.08, -0.48], [0, -0.6], [0.08, -0.48], [0.15, -0.58], [0.15, -0.42]], '#f2c22a');
-    // eyes, and the sword held point up at his side, his hand on its grip
-    poly([[-0.075, -0.33], [-0.035, -0.33], [-0.035, -0.29], [-0.075, -0.29]], '#2a1a14', 0);
-    poly([[0.035, -0.33], [0.075, -0.33], [0.075, -0.29], [0.035, -0.29]], '#2a1a14', 0);
-    const sx = 0.36;
-    poly([[sx - 0.035, -0.5], [sx + 0.035, -0.5], [sx + 0.035, 0.2], [sx - 0.035, 0.2]], '#cfeeff');
-    poly([[sx - 0.035, -0.5], [sx, -0.58], [sx + 0.035, -0.5]], '#cfeeff');
-    poly([[sx - 0.13, 0.2], [sx + 0.13, 0.2], [sx + 0.13, 0.27], [sx - 0.13, 0.27]], '#f2c22a');
-    poly([[sx - 0.03, 0.27], [sx + 0.03, 0.27], [sx + 0.03, 0.42], [sx - 0.03, 0.42]], '#6a3a1a');
-    poly([[sx - 0.055, 0.42], [sx + 0.055, 0.42], [sx + 0.055, 0.48], [sx - 0.055, 0.48]], '#f2c22a');
-    poly([[sx - 0.08, 0.29], [sx + 0.06, 0.29], [sx + 0.06, 0.39], [sx - 0.08, 0.39]], '#eab48a');
-    poly([[0.22, 0.12], [sx - 0.06, 0.24], [sx - 0.08, 0.33], [0.24, 0.24]], '#c42a2e');
-    // and a gold orb in his other hand
-    g.fillStyle = '#f2c22a'; g.beginPath(); g.arc(C - 0.28 * R, C + 0.26 * R, 0.07 * R, 0, Math.PI * 2); g.fill(); ring2(g, C - 0.28 * R, C + 0.26 * R, 0.07 * R, LEAD);
-    poly([[-0.3, 0.14], [-0.26, 0.14], [-0.26, 0.19], [-0.3, 0.19]], '#f2c22a', 2);
-  } else {
-    // the saint: a burst of flame-coloured rays, a dark robed figure arms out before it, gold scrolls under its
-    // feet; a border of blue and crimson
-    for (let w = 0; w < 28; w++) wedge(0, 0.82, w / 28 * Math.PI * 2, (w + 1) / 28 * Math.PI * 2, ['#ff8a1a', '#ffc040', '#e0401a', '#ffb02a'][w % 4]);
-    g.fillStyle = '#fff0a0'; g.beginPath(); g.arc(C, C - 0.3 * R, 0.17 * R, 0, Math.PI * 2); g.fill(); ring2(g, C, C - 0.3 * R, 0.17 * R, LEAD);
-    border(0.82, ['#1f3fa0', '#a8202a'], 20);
-    const dark = '#2a1a2e';
-    poly([[-0.1, -0.4], [0.1, -0.4], [0.1, -0.2], [-0.1, -0.2]], dark);
-    poly([[-0.14, -0.2], [0.14, -0.2], [0.62, -0.08], [0.6, 0.02], [0.2, -0.02], [0.3, 0.62], [-0.3, 0.62], [-0.2, -0.02], [-0.6, 0.02], [-0.62, -0.08]], dark);
-    for (const sg of [-1, 1]) {
-      poly([[sg * 0.06, 0.62], [sg * 0.5, 0.6], [sg * 0.56, 0.7], [sg * 0.44, 0.76], [sg * 0.4, 0.68], [sg * 0.14, 0.72]], '#e8b830');
-      poly([[sg * 0.5, 0.52], [sg * 0.6, 0.48], [sg * 0.64, 0.58], [sg * 0.56, 0.6]], '#e8b830');
-    }
-    poly([[-0.08, 0.66], [0.08, 0.66], [0.04, 0.8], [-0.04, 0.8]], '#e8b830');
-  }
-  g.restore();
-  const D = g.getImageData(0, 0, S, S).data, out = roseTex.image.data;
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const o = (y * S + x) * 4, inside = Math.hypot(x + 0.5 - C, y + 0.5 - C) <= R;
-    out[o] = D[o]; out[o + 1] = D[o + 1]; out[o + 2] = D[o + 2]; out[o + 3] = inside ? 255 : 0;
-  }
-  roseTex.needsUpdate = true;
+const roseArt = new Map();   // style -> its pixels (Uint8ClampedArray), once loaded
+function roseLoad(style) {
+  if (roseArt.has(style)) return Promise.resolve(roseArt.get(style));
+  return new Promise(ok => {
+    const img = new Image();
+    img.onload = () => {
+      const S = ROSE_TEX_S, cv = document.createElement('canvas'); cv.width = cv.height = S;
+      const g = cv.getContext('2d', { willReadFrequently: true });
+      g.imageSmoothingEnabled = true; g.drawImage(img, 0, 0, S, S);
+      const d = g.getImageData(0, 0, S, S).data; roseArt.set(style, d); ok(d);
+    };
+    img.onerror = () => ok(null);
+    img.src = 'rose/' + ROSE_FILES[style] + '.webp';
+  });
 }
-function ring2(g, x, y, r, col) { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.lineWidth = 3; g.strokeStyle = col; g.stroke(); }
-function hexRGB(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+function paintRose(style) {
+  style = clamp(Math.round(style), 0, ROSE_FILES.length - 1);
+  return roseLoad(style).then(d => {
+    if (!d || clamp(Math.round(ROSE.style), 0, ROSE_FILES.length - 1) !== style) return;
+    roseTex.image.data.set(d); roseTex.needsUpdate = true;
+  });
+}
 paintRose(ROSE.style);
 function placeCathedral(t, n, house, cands, piece) {
   const own = n + 1, inTown = (c, r) => TN[T(c, r)] === own;
@@ -21165,7 +21100,7 @@ const TUNING = [
     [GLASS_FX, 'rough', 'Roughness (the sun\'s glint)', 0.05, 1, 0.01],
   ]],
   ['Stained glass', [
-    [ROSE, 'style', 'Rose window design (0 fan of panes, 1 crowned king, 2 radiant saint)', 0, 2, 1, v => paintRose(Math.round(v))],
+    [ROSE, 'style', 'Rose window design (0 grail with god rays, 1 knight with raised sword, 2 praying priestess, 3 geometric rose)', 0, 3, 1, v => paintRose(v)],
     [ROSE, 'tint', 'How strongly its light takes the glass\'s colours', 0, 1, 0.01],
     [ROSE, 'blur', 'How much its light spreads on the way down (a tile)', 0, 0.3, 0.005],
     [ROSE, 'blur0', 'Its light\'s softness at the glass', 0, 0.2, 0.005],
@@ -21494,7 +21429,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 441, crashSeen = new Map();
+const GAME_VERSION = 442, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21573,7 +21508,7 @@ window.GAME = {
   },
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  roseImage: st => { paintRose(st); const d = Array.from(roseTex.image.data); paintRose(ROSE.style); return d; },
+  roseImage: async st => { const d = await roseLoad(st); return d ? Array.from(d) : null; },
   buildTest: (shade, cull) => { setBuildTest(shade, !!cull); return BUILD_TEST; },
   splitWorld: v => { PROF_SPLIT.world = !!v; if (!prof.on) toggleProfiler(); return WORLD_PARTS; },
   matTris: () => { const out = {}; scene.traverse(o => { if (!o.isMesh || !o.visible || !o.geometry || !o.geometry.attributes.position) return; const k = (typeof worldPart === 'function' ? worldPart(o) : 'x') + (o.layers.mask === 1 ? '' : ' L' + o.layers.mask); const n = o.geometry.attributes.position.count / 3; out[k] = (out[k] || 0) + Math.round(n); }); return out; },
