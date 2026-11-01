@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v405:** ocean names work like continent names: each has one fixed place (oceanSpots, g.at): the ocean tile farthest from land, kept in from the world's edge and clear of the continents' names and the bigger oceans' names. They're drawn right after the continents and don't move as the map pans; hidden only where the compass or footer covers them. Ocean names 1.5x (Jordan's paste). The Land bookmark is now Lands.
+
 **v404:** map bookmarks: Places is now Land (continent and island names, MAP_SHOW.land), a new Towns tab under it (town squares and names, MAP_SHOW.towns; placeholder tab art = the Land tab, glyph ui/map/glyph-towns.webp from art/src/glyph-towns.py), and Terrain is renamed Regions.
 
 **v403:** ocean names on the map drawn near continent size (LAND_LABEL.ocean 2.6, weight 700) and sea names at island size (sea 1.25, weight 600), both upright; other waters unchanged. Where an ocean's or sea's own label spots have no room, it tries anywhere on screen over its water, nearest its middle first. Sliders in T > Map names. Road names default to letter by letter (ROAD_LABEL style 2, smooth 12, Jordan's paste).

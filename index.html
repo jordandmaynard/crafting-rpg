@@ -812,7 +812,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 <div id="mapModal" hidden>
   <section class="wk worldmap" id="mapWin" aria-label="World map">
     <nav class="map-marks" aria-label="Map layers">
-      <button class="map-mark" data-show="land" data-art="places" title="Continent and island names"><img src="ui/map/glyph-places.webp" alt="" draggable="false"><span>Land</span></button>
+      <button class="map-mark" data-show="land" data-art="places" title="Continent and island names"><img src="ui/map/glyph-places.webp" alt="" draggable="false"><span>Lands</span></button>
       <button class="map-mark" data-show="towns" data-art="towns" title="Towns and their names"><img src="ui/map/glyph-towns.webp" alt="" draggable="false"><span>Towns</span></button>
       <button class="map-mark" data-show="roads" data-art="roads" title="Road names"><img src="ui/map/glyph-roads.webp" alt="" draggable="false"><span>Roads</span></button>
       <button class="map-mark" data-show="biomes" data-art="terrain" title="Region names"><img src="ui/map/glyph-terrain.webp" alt="" draggable="false"><span>Regions</span></button>
@@ -18123,7 +18123,7 @@ const LABEL_PX = 16;
 // capitals, 0 writes them as names: Saltcross Path)
 const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wrap: 16, caps: 0 };
 // continents' and islands' names on the map: size (times a name's), weight (book font) and ink
-const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6', ocean: 2.6, oceanWeight: 700, sea: 1.25, seaWeight: 600 };   // (oceans and seas sized near continents and islands, upright: v403)
+const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6', ocean: 1.5, oceanWeight: 700, sea: 1.25, seaWeight: 600 };   // (oceans and seas sized near continents and islands, upright: v403)
 let mapFontsAsked = false;
 // road names on the map (v401): 0 flat, 1 tilted to the road's run there (at most 45 degrees), 2 each letter upright
 // along the road
@@ -18133,6 +18133,44 @@ const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
 mapNamesLive.live = true;
 const mapFontLive = () => { applyOptions(); if (mapOpen) drawBigMap(); };
 mapFontLive.live = true;
+// each ocean's fixed label place (g.at, tile centre): its tile farthest (4-way steps) from land, kept in from the
+// world's edge
+function oceanSpots() {
+  const D = new Int32Array(N * N).fill(-1), q = new Int32Array(N * N);
+  let h = 0, t = 0;
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r);
+    if (LV[i]) { D[i] = 0; q[t++] = i; }
+  }
+  while (h < t) {
+    const i = q[h++], c = i % N, r = (i - c) / N;
+    for (let d = 0; d < 4; d++) {
+      const nc = c + DC[d], nr = r + DR[d];
+      if (nc < 0 || nr < 0 || nc >= N || nr >= N) continue;
+      const n = i + DI[d];
+      if (D[n] < 0) { D[n] = D[i] + 1; q[t++] = n; }
+    }
+  }
+  for (let i = 0; i < N * N; i++) if (D[i] < 0) D[i] = N;
+  // (kept well in from the world's edge, more so across, where a name is wide, and clear of the continents' names
+  // and the oceans placed before it, biggest first: a name is about 170 x 45 tiles at the widest view)
+  const score = i => { const c = i % N, r = (i - c) / N; return Math.min(D[i], Math.min(c, N - 1 - c) - 70, Math.min(r, N - 1 - r) - 24); };
+  const taken = landmasses.filter(m => m.big && m.at).map(m => [m.at[0], m.at[1], 210]);
+  const tiles = new Map();
+  for (let i = 0; i < N * N; i++) { const f = FEAT[i]; if (f >= 0 && features[f].kind === 'ocean') { if (!tiles.has(f)) tiles.set(f, []); tiles.get(f).push(i); } }
+  [...tiles.keys()].sort((x, y) => tiles.get(y).length - tiles.get(x).length).forEach(f => {
+    let bi = -1, bv = -1e9;
+    for (const i of tiles.get(f)) {
+      const c = i % N, r = (i - c) / N;
+      let v = score(i);
+      for (const [x, z, w] of taken) v = Math.min(v, 12 + Math.max((Math.abs(c - x) - w) / 3, Math.abs(r - z) - 48));
+      if (v > bv) { bv = v; bi = i; }
+    }
+    features[f].at = [bi % N + 0.5, Math.floor(bi / N) + 0.5];
+    taken.push([bi % N, Math.floor(bi / N), 170]);
+  });
+  features.forEach(g => { if (g.kind === 'ocean' && !g.at) g.at = null; });
+}
 function drawMapLabels(ctx, k, W, Hh) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const u = Math.max(0.5, Math.round(k * 2) / 2), at = (x, z) => { const [bx, bz] = worldToBig(x, z); return [bx * k, bz * k]; };
@@ -18164,7 +18202,8 @@ function drawMapLabels(ctx, k, W, Hh) {
   { const [x, z] = at(H.x, H.z), r = 16 * k; boxes.push([x - r, z - r, r * 2, r * 2]); }   // (and off your arrow)
   const poiPx = p => { const [c, r] = poiTile(p); return at(c + 0.5, r + 0.5); };
   if (MAP_SHOW.markers) for (const { p } of poiAll) { const [c, r] = poiTile(p); if (!seen(c, r)) continue; const [x, z] = poiPx(p); boxes.push([x - 7 * k, z - 8 * k, 14 * k, 16 * k]); }   // (and off the markers)
-  boxes.push([1042 * k, (MAP_H - 215) * k, 166 * k, 198 * k], [0, (MAP_H - 42) * k, W, 42 * k]);   // (and off the compass and the footer)
+  const chrome = [[1042 * k, (MAP_H - 215) * k, 166 * k, 198 * k], [0, (MAP_H - 42) * k, W, 42 * k]];
+  boxes.push(...chrome);   // (and off the compass and the footer)
   // a name's lines: two when it's long, split where they come out most even
   const linesOf = name => {
     name = cased(name);
@@ -18181,6 +18220,7 @@ function drawMapLabels(ctx, k, W, Hh) {
     for (const [x, z] of spots) {
       const box = [x - w / 2, z - h / 2, w, h];
       if (!(st && st.always) && !fits(box)) continue;
+      if (st && st.under && st.under.some(b => overlaps(box, b))) continue;   // (a fixed name the compass or footer covers)
       boxes.push(box);
       lines.forEach((l, j) => label(l, x, z + (j - (lines.length - 1) / 2) * lhh, ink));
       put = true;
@@ -18194,6 +18234,11 @@ function drawMapLabels(ctx, k, W, Hh) {
   mapLabelMiss = [];
   const shown = m => MAP_SHOW.land && m.name && (m.found || mapReveal);
   for (const m of landmasses) if (m.big && shown(m) && m.at) place([cased(m.name)], [at(m.at[0], m.at[1])], L.bigInk, { big: L.big, weight: L.bigWeight, spread: true, always: true });
+  // oceans, like continents, at one fixed place each (v405): the water farthest from any land or the world's edge
+  if (MAP_SHOW.waters) for (const g of features) if (g.kind === 'ocean' && (g.found || mapReveal)) {
+    if (!g.at) oceanSpots();
+    if (g.at) place(linesOf(g.name), [at(g.at[0], g.at[1])], FEATURE_INK.ocean, { big: L.ocean, weight: L.oceanWeight, always: true, under: chrome });
+  }
   // a road's name along it (ROAD_LABEL.style 1: tilted with it, 2: letter by letter, upright); false if it found no room
   function placeRoad(g, ink) {
     const text = cased(g.name), K = Math.max(0, ROAD_LABEL.smooth | 0);
@@ -18291,13 +18336,14 @@ function drawMapLabels(ctx, k, W, Hh) {
     .concat(features.filter(f => MAP_SHOW[f.kind === 'road' ? 'roads' : 'waters'] && (f.found || mapReveal)).map(f => [f, FEATURE_INK[f.kind]]));
   // (roads and paths in italics, v391; following the road, v401)
   for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) {
+    if (g.kind === 'ocean') continue;   // (drawn above, at their fixed places)
     if (g.kind === 'road' && ROAD_LABEL.style && g.line && g.line.length >= 4 && placeRoad(g, ink)) continue;
-    const st = g.kind === 'road' ? { italic: true } : g.kind === 'ocean' ? { big: L.ocean, weight: L.oceanWeight } : g.kind === 'sea' ? { big: L.sea, weight: L.seaWeight } : null;
+    const st = g.kind === 'road' ? { italic: true } : g.kind === 'sea' ? { big: L.sea, weight: L.seaWeight } : null;
     const spots = g.spots.map(([x, z]) => at(x, z));
     // (an ocean's or sea's big name, where its own spots have no room: anywhere on screen over its water, nearest
     // its middle on screen first)
     if (place(linesOf(g.name), spots, ink, st)) continue;
-    if (g.kind === 'ocean' || g.kind === 'sea') {
+    if (g.kind === 'sea') {
       const id = features.indexOf(g), more = [];
       for (let r = 4; r < N; r += 12) for (let c = 4; c < N; c += 12) {
         if (FEAT[T(c, r)] !== id || !seen(c, r)) continue;
@@ -19424,7 +19470,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 404, crashSeen = new Map();
+const GAME_VERSION = 405, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
