@@ -17069,9 +17069,20 @@ function spawnTick(dt) {
 }
 
 // ---------- Update ----------
+// a leg's swing over the walk cycle, -1 .. 1 (v411, Jordan felt the walk speed change at each end of the cycle):
+// with WALK.plant 1 the half where the foot is down sweeps back at an even pace, as the body goes on at an even pace,
+// and the other half swings it forward again; a plain sine (plant 0) stops the planted foot at both ends of each
+// step while the body keeps going, so the hero seemed to surge there
+function legSwing(ph) {
+  const u = ((ph % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), sn = Math.sin(u);
+  // (sin rises over -pi/2 .. pi/2: the planted half, a straight line from -1 to 1)
+  const w = u > 1.5 * Math.PI ? u - 2 * Math.PI : u;
+  const lin = w <= Math.PI / 2 ? w / (Math.PI / 2) : sn;
+  return sn + (lin - sn) * WALK.plant;
+}
 // the walk (T > Walk): cadence is leg swings per tile walked (radians of the cycle); the rest are swing angles
 // knee, foot, elbow, twist and tuck (v288) are the joints' share of the walk: set them all to 0 for the old stiff-limbed walk
-const WALK = { cadence: 2.5, stride: 0.75, backStride: 0.55, arms: 0.65, sideOpen: 0.57, bob: 0.03, lean: 0.1, knee: 1.77, foot: 0.1, elbow: 0.62, twist: 0.12, tuck: 1.9 };
+const WALK = { plant: 1, cadence: 2.5, stride: 0.75, backStride: 0.55, arms: 0.65, sideOpen: 0.57, bob: 0.03, lean: 0.1, knee: 1.77, foot: 0.1, elbow: 0.62, twist: 0.12, tuck: 1.9 };
 let time = 0, regionName = '', regionT = 0;
 function heroSpeed() { const i = T(Math.floor(H.x), Math.floor(H.z)); return (mode === 'build' ? 4.4 : 4.6) * (WT[i] === 1 ? 0.62 : 1) * driftSlow(H.x, H.z); }
 function update(dt) {
@@ -17684,8 +17695,8 @@ function animateHero(dt) {
   const on = H.moving && H.dash < 0 && !(H.lunge >= 0 && H.lungeKind !== 'charge'), walk = on ? Math.sin(H.walkPhase) : 0;
   const f = H.stepF, sd = H.stepS, side = sd * sd, stride = f >= 0 ? WALK.stride : WALK.backStride;
   const open = on ? Math.abs(Math.sin(H.walkPhase)) * WALK.sideOpen * side : 0, lean = on ? Math.sin(H.walkPhase) * 0.3 * WALK.sideOpen * side * Math.sign(sd) : 0;
-  hero.legL.rotation.set(walk * stride * f, 0, open + lean);
-  hero.legR.rotation.set(-walk * stride * f, 0, -open + lean);
+  hero.legL.rotation.set((on ? legSwing(H.walkPhase) : 0) * stride * f, 0, open + lean);
+  hero.legR.rotation.set((on ? legSwing(H.walkPhase + Math.PI) : 0) * stride * f, 0, -open + lean);
   // the knee bends as a leg swings through (going whichever way you step), most as it passes under you
   const lift = on ? Math.min(1, Math.abs(f) + side * 0.7) : 0, cw = Math.cos(H.walkPhase);
   hero.knees[0].rotation.x = WALK.knee * lift * Math.max(0, -cw);
@@ -19246,6 +19257,7 @@ const TUNING = [
     [GRADE, 'saturation', 'Saturation', 0, 2, 0.01],
   ]],
   ['Walk', [
+    [WALK, 'plant', 'Planted foot sweeps back evenly (0 = plain sine swing)', 0, 1, 0.01],
     [WALK, 'cadence', 'Cadence: steps per tile walked', 1, 12, 0.1],
     [WALK, 'stride', 'Forward stride (leg swing)', 0, 1.5, 0.01],
     [WALK, 'backStride', 'Backward stride', 0, 1.5, 0.01],
@@ -20100,7 +20112,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 411, crashSeen = new Map();
+const GAME_VERSION = 412, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
