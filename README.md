@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v368:** Crate window from Jordan's Wanderer's Kit crate kit (art/deliveries/wanderers-kit-crate-v1.zip, docs/ui-reskin/crate-v1/). #storeCol.crate is one 840x480 painting (ui/crate/crate-window.webp, from the 2x PNG at q94) with the ten wells in it; squares sit at layout.json's rects with no skin, and states are colour tints clipped by ui/crate/crate-slot-mask.webp (hover, drop/held = selected, pad focus = blue). Live title (shrinks to fit via fitText), occupied/10 count, painted close. The 20-slot iron chest keeps the plain framed window. Test t_crate.js.
+
 **v367:** Place plate under the minimap (Jordan): a name too long for it shrinks as little as it must to fit (setPlace/fitPlace, from 20px down in 0.25px steps; refits when fonts load or the HUD comes back) instead of an ellipsis. Hook GAME.place(text); test t_place.js.
 
 **v366:** Bone piles (O.BONES, graveyards) can be picked up with F like dropped loot: "PICK UP BONE x 2" gives BONE_PILE.give (2) bones and removes the pile for good (overflow drops on the ground). Gravestones (O.TOMB) drop 1 bone 25% of the time when broken (TOMB_BONE). Hooks GAME.findObj, objAt, dropsHere; test t_bones.js.
