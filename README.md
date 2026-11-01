@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v415:** leaded diamond panes, shutters and detail normal maps. Timber and stone windows get thin lead cames corner to corner (`LEAD` w/h; the gothic arch's cut to the arch). Timber windows get a pair of painted plank shutters on their outer face (one colour a building, `SHUTTER` on/open angle; the outside is found from rooms, else from which side has a floor). Built pieces now draw with `buildMat`: `BuildBuf` keeps each piece's own frame per vertex, so stone, wood (grain along the piece) and plaster get subtle procedural detail normal maps in the piece's own metres, edges within a few cm bevel over with a chipped wobble, and marble gets bevels only. Walls are tagged by part colour (`wallSurf`), floors and stairs by kind. T > Detail maps (strength, bevel, shade, per material) and T > Windows: lead and shutters.
+
 **v414:** wider windows and Tudor timber walls. The timber window's glass now runs to within a frame's width of the corner posts, in three even panes across and two down; the stone gothic arch is wider and taller (half-width 0.33, sill 0.45, springing 0.95). Plain timber walls get a sill beam, a centre stud and opposing diagonal braces so they read as half-timbering instead of paper screens (`TIMBER` = plaster/beam colour, beam width, braces on/off).
 
 **v413:** the fountain's water has no shore foam, shore line or shore ripples (FOUNT_U): in pools that small they covered it.
