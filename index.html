@@ -1037,16 +1037,27 @@ function nameLands(rand, used) {
   const ID = new Int32Array(N * N);
   for (let i = 0; i < N * N; i++) ID[i] = LANDID[i] - 1;
   const dist = labelSpots(ID, landmasses);
-  // and a spread of inland points (every LAND_PTS tiles, at least 4 in, deepest first), so a name still finds
-  // a place on the map when its centre is off screen or covered
-  for (const m of landmasses) m.pts = [];
-  for (let r = LAND_PTS / 2; r < N; r += LAND_PTS) for (let c = LAND_PTS / 2; c < N; c += LAND_PTS) {
-    const i = r * N + c, g = ID[i];
-    if (g >= 0 && dist[i] >= 4) landmasses[g].pts.push([c + 0.5, r + 0.5, dist[i]]);
-  }
-  for (const m of landmasses) m.pts.sort((a, b) => b[2] - a[2]);
+  // a continent's name has one fixed place (m.at), drawn before the other names so they make room for it: the
+  // inland point (every LAND_AT.grid tiles, at least LAND_AT.depth of its deepest in) nearest its middle that
+  // leaves room for the towns' names at the widest zoom: each town more than townZ tiles above or below it, or
+  // past its end (about townX tiles a letter); failing that, the one in the way of fewest towns
+  const A = LAND_AT, pts = landmasses.map(() => []);
+  for (let r = A.grid / 2; r < N; r += A.grid) for (let c = A.grid / 2; c < N; c += A.grid) { const i = r * N + c; if (ID[i] >= 0) pts[ID[i]].push([c + 0.5, r + 0.5, dist[i]]); }
+  landmasses.forEach((m, id) => {
+    const P = pts[id], deep = P.reduce((d, p) => Math.max(d, p[2]), 0);
+    m.at = m.spots && m.spots[0];
+    if (!P.length) return;
+    const mx = P.reduce((s, p) => s + p[0], 0) / P.length, mz = P.reduce((s, p) => s + p[1], 0) / P.length;
+    let best = 1e18;
+    const half = m.name.length * A.townX + 12;
+    for (const [x, z, d] of P) {
+      if (d < deep * A.depth) continue;
+      const e = towns.filter(t => Math.abs(t.r - z) < A.townZ && Math.abs(t.c - x) < half).length * 1e6 + Math.hypot(x - mx, z - mz);
+      if (e < best) { best = e; m.at = [x, z]; }
+    }
+  });
 }
-const LAND_PTS = 12;
+const LAND_AT = { grid: 8, depth: 0.45, townZ: 48, townX: 10 };
 // every name a set of words can make (each pattern's combinations, less the ones that read badly)
 function allNames(w) {
   const out = [];
@@ -17695,7 +17706,7 @@ const LABEL_PX = 16;
 // capitals, 0 writes them as names: Saltcross Path)
 const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wrap: 16, caps: 0 };
 // continents' and islands' names on the map: size (times a name's), weight (book font) and ink
-const LAND_LABEL = { big: 2.1, isle: 1.2, bigWeight: 700, isleWeight: 600, bigInk: '#fbf6ea', isleInk: '#f4efe2' };
+const LAND_LABEL = { big: 2.5, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 6, bigInk: '#f6e3b4', isleInk: '#ecdcb6' };
 let mapFontsAsked = false;
 let mapLabelMiss = [];   // (continents and islands on the map whose names found no room, for tests)
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
@@ -17742,13 +17753,12 @@ function drawMapLabels(ctx, k, W, Hh) {
     return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
   };
   const place = (lines, spots, ink, st) => {
-    if (st) { ctx.font = fontOf(st); if (book && st.spread) ctx.letterSpacing = `${F.px * st.big * 0.18 * u}px`; }
+    if (st) { ctx.font = fontOf(st); if (book && st.spread) ctx.letterSpacing = `${L.bigSpacing * u}px`; }
     const lhh = lh * (st && st.big || 1), w = Math.max(...lines.map(l => ctx.measureText(l).width)) + (book ? F.stroke + 4 : 4) * u, h = lines.length * lhh;
     let put = false;
-    for (let [x, z] of spots) {
-      if (st && st.clamp) { x = clamp(x, w / 2 + 2, W - w / 2 - 2); z = clamp(z, h / 2 + 2, Hh - h / 2 - 2); }   // (slid inside the map)
+    for (const [x, z] of spots) {
       const box = [x - w / 2, z - h / 2, w, h];
-      if (!fits(box)) continue;
+      if (!(st && st.always) && !fits(box)) continue;
       boxes.push(box);
       lines.forEach((l, j) => label(l, x, z + (j - (lines.length - 1) / 2) * lhh, ink));
       put = true;
@@ -17757,19 +17767,19 @@ function drawMapLabels(ctx, k, W, Hh) {
     if (st) { ctx.font = fontOf(); if (book) ctx.letterSpacing = `${F.spacing * u}px`; }
     return put;
   };
+  // continents (big, spaced capitals) at their one fixed place, drawn first so every other name keeps off them
+  // (v392), then the islands you've set foot on (italics) where they fit; both with the Places names
+  mapLabelMiss = [];
+  const shown = m => MAP_SHOW.towns && m.name && (m.found || mapReveal);
+  for (const m of landmasses) if (m.big && shown(m) && m.at) place([cased(m.name)], [at(m.at[0], m.at[1])], L.bigInk, { big: L.big, weight: L.bigWeight, spread: true, always: true });
   for (const t of towns) {
     if (!MAP_SHOW.towns || !seen(t.c, t.r)) continue;
     const [x, z] = at(t.c, t.r);
     place([cased(t.name)], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
   }
-  // continents (big, spaced capitals) and islands you've set foot on, with the Places names (v387; Places since v390)
-  // (its deepest spots first, then any of its inland points on the map, deepest first; v391)
-  mapLabelMiss = [];
-  if (MAP_SHOW.towns) for (const m of landmasses) {
-    if (!m.name || !(m.found || mapReveal) || !m.spots) continue;
-    const spots = m.spots.concat(m.pts || []).map(([x, z]) => at(x, z)).filter(([x, z]) => x >= 0 && z >= 0 && x <= W && z <= Hh);
-    const st = m.big ? { big: L.big, weight: L.bigWeight, spread: true, clamp: true } : { big: L.isle, weight: L.isleWeight, clamp: true };
-    if (spots.length && !place(m.big ? [cased(m.name)] : linesOf(m.name), spots, m.big ? L.bigInk : L.isleInk, st)) mapLabelMiss.push(m.name);
+  for (const m of landmasses) {
+    if (m.big || !shown(m) || !m.spots) continue;
+    if (!place(linesOf(m.name), m.spots.map(([x, z]) => at(x, z)), L.isleInk, { big: L.isle, weight: L.isleWeight, italic: true })) mapLabelMiss.push(m.name);
   }
   // regions, lakes, seas, rivers and roads you've found, biggest first
   // (each sort only if its NAMES button on the map is on)
@@ -18611,6 +18621,7 @@ const TUNING = [
     [MAP_FONT, 'caps', 'Capitals (1) or names (0)', 0, 1, 1, mapNamesLive],
     [LAND_LABEL, 'big', 'Continent names: size (times)', 1, 4, 0.05, mapNamesLive],
     [LAND_LABEL, 'bigWeight', 'Continent names: weight', 400, 700, 100, mapNamesLive],
+    [LAND_LABEL, 'bigSpacing', 'Continent names: letter spacing (px)', -1, 24, 0.5, mapNamesLive],
     [LAND_LABEL, 'isle', 'Island names: size (times)', 0.6, 3, 0.05, mapNamesLive],
     [LAND_LABEL, 'isleWeight', 'Island names: weight', 400, 700, 100, mapNamesLive],
   ]],
@@ -18873,7 +18884,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 391, crashSeen = new Map();
+const GAME_VERSION = 392, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
