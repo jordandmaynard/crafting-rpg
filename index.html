@@ -5524,6 +5524,7 @@ function tri(a, b, c, ca, cb = ca, cc = ca, B = OUT) {
   p[n] = a[0]; p[n + 1] = a[1]; p[n + 2] = a[2]; k[n] = ca.r; k[n + 1] = ca.g; k[n + 2] = ca.b; n += 3;
   p[n] = b[0]; p[n + 1] = b[1]; p[n + 2] = b[2]; k[n] = cb.r; k[n + 1] = cb.g; k[n + 2] = cb.b; n += 3;
   p[n] = c[0]; p[n + 1] = c[1]; p[n + 2] = c[2]; k[n] = cc.r; k[n + 1] = cc.g; k[n + 2] = cc.b; n += 3;
+  if (B.dl) B.dl.fill(0, (n / 3 - 3) * 4, n / 3 * 4);   // (a bare triangle: plain, no bevel)
   B.n = n;
 }
 function quad(a, b, c, d, ca, cb = ca, cc = cb, cd = ca) { tri(a, b, c, ca, cb, cc); tri(a, c, d, ca, cc, cd); }
@@ -10316,21 +10317,26 @@ function wallPieceRaw(c, r, w, type) {
   else if (!door) {
     let p = at(0.5, y + 0.25); part(G.box, shade(CC('#7a7484'), k), p[0], p[1], p[2], { sx: 1, sy: 0.5, sz: 0.24, ry });
     p = at(0.5, y + 0.5 + (WALL_H - 0.6) / 2); part(G.box, shade(CC(TIMBER.plaster), k), p[0], p[1], p[2], { sx: 0.98, sy: WALL_H - 0.6, sz: 0.18, ry });
-    // half-timbering (v414, Jordan: they read as rice-paper walls): a sill beam on the stone, a rail across the middle,
-    // a stud up the middle, and in each half a brace below the rail and one above it at the opposite slant, so a
-    // wall reads < | > and a row of them runs on in chevrons
+    // half-timbering (v414, Jordan: they read as rice-paper walls): a sill beam on the stone, a rail across the middle
+    // and a stud up the middle, so four panels; a diagonal brace in one or two of them now and then (v417)
     const beam = TIMBER.beam, mid = WALL_H * 0.6, th = TIMBER.width;
     p = at(0.5, y + 0.53); part(G.box, beam, p[0], p[1], p[2], { sx: 0.98, sy: th, sz: 0.22, ry });
     p = at(0.5, y + mid); part(G.box, beam, p[0], p[1], p[2], { sx: 0.98, sy: th, sz: 0.22, ry });
     p = at(0.5, y + (0.53 + WALL_H) / 2); part(G.box, beam, p[0], p[1], p[2], { sx: th, sy: WALL_H - 0.53, sz: 0.21, ry });
-    if (TIMBER.braces) {
+    // (v417, Jordan: a diagonal as an accent here and there, in one or two of the four panels, not all four on every
+    // wall): TIMBER.braces of the walls get one, a pair mirrored about the stud (a chevron) or a single one
+    const roll = hs(c * 7 + w, r * 3 + Math.round(PDY), 417), pickQ = hs(c * 5 + w, r * 11 + Math.round(PDY), 418);
+    if (roll < TIMBER.braces) {
       const brace = (a0, y0, a1, y1) => {
         const q = at((a0 + a1) / 2, y + (y0 + y1) / 2), ang = Math.atan2(y1 - y0, a1 - a0) * (w ? -1 : 1);
         part(G.box, beam, q[0], q[1], q[2], { sx: Math.hypot(a1 - a0, y1 - y0), sy: th * 0.9, sz: 0.2, ry, rz: ang });
       };
-      const e = 0.1, m = 0.46, lo = 0.53 + th / 2, hi = WALL_H - 0.1 - th / 2;
-      brace(e, mid, m, lo); brace(e, mid, m, hi);              // (the left half: <)
-      brace(1 - m, lo, 1 - e, mid); brace(1 - m, hi, 1 - e, mid);   // (the right half: >)
+      const e = 0.1, m = 0.46, lo = 0.53 + th / 2, hi = WALL_H - 0.1 - th / 2, rl = mid - th / 2, ru = mid + th / 2;
+      // the four panels' braces, each from an outer corner in toward the stud: lower left, lower right, upper left, upper right
+      const Q = [() => brace(e, rl, m, lo), () => brace(1 - m, lo, 1 - e, rl), () => brace(e, ru, m, hi), () => brace(1 - m, hi, 1 - e, ru)];
+      const pair = roll < TIMBER.braces * TIMBER.pairs;
+      if (pair) { const lower = pickQ < 0.6; Q[lower ? 0 : 2](); Q[lower ? 1 : 3](); }
+      else Q[Math.floor(pickQ * 4) % 4]();
     }
   } else {
     // (just a threshold: the door itself fills the frame up to the beam)
@@ -10340,7 +10346,7 @@ function wallPieceRaw(c, r, w, type) {
   for (const a of [0, 1]) { p = at(a, y + WALL_H / 2); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 0.16, sy: WALL_H, sz: 0.26, ry }); }
 }
 // The timber walls' look (v414): plaster, the dark oak of the beams, how thick they are, and the braces (T > Walls)
-const TIMBER = { plaster: '#d9cba8', beam: '#4a3020', width: 0.09, braces: 1 };
+const TIMBER = { plaster: '#d9cba8', beam: '#4a3020', width: 0.09, braces: 0.35, pairs: 0.5 };   // (braces: share of walls with a diagonal; pairs: share of those with two)
 // The windows (v373; wider in v414, the glass nearly to the posts). Glass is a pale blue-green pane behind lead or timber bars.
 const GLASS = '#8fbccc';
 // How glass is drawn (v377, Jordan: not see-through, but seeming to let light in). windowMat lights both faces as the
@@ -10395,7 +10401,7 @@ function glassMesh(b) {
 const WALL_GI = {
   1: [[0, WALL_H, '#cdb894']], 3: [[0, WALL_H, '#7a5432']], 4: [[0, WALL_H, '#8a8694']], 12: [[0, MARBLE_H, MARBLE]],
   2: [[WALL_H - 0.1, WALL_H, '#4a3020']], 10: [[WALL_H - 0.1, WALL_H, '#4a4650']], 11: [[TOMB_DOOR_H, MARBLE_H, MARBLE]],
-  13: [[0, 0.74, '#cdb894'], [1.42, WALL_H, '#cdb894']], 14: [[0, 0.45, '#8a8694'], [1.52, WALL_H, '#8a8694']],
+  13: [[0, 0.6, '#cdb894'], [1.72, WALL_H, '#cdb894']], 14: [[0, 0.45, '#8a8694'], [1.52, WALL_H, '#8a8694']],
 };
 function wallGI(c, r, w, type, cuts) {
   const n0 = bufBuild.n;
@@ -10425,20 +10431,48 @@ function giGeo(b, cuts, proxy) {
 // plaster either side and above and below, the window's own posts, four panes and the bars between them
 function timberWindow(at, y, ry, k, out = 0, pick = 0) {
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
-  const plaster = shade(CC(TIMBER.plaster), k), beam = TIMBER.beam, y0 = 0.74, y1 = 1.42, hw = WINDOW_HW;
+  const plaster = shade(CC(TIMBER.plaster), k), beam = TIMBER.beam, y0 = BAY.y0, y1 = BAY.y1, hw = WINDOW_HW, ym = (y0 + y1) / 2;
+  const bay = out && BAY.on && BAY.depth > 0.02, g = hw - 0.04, bar = '#3a2a1c';
   box(0.5, y + 0.25, 1, 0.5, 0.24, shade(CC('#7a7484'), k));
-  box(0.5, y + (0.5 + y0) / 2, 0.98, y0 - 0.5, 0.18, plaster);
+  if (y0 > 0.52) box(0.5, y + (0.5 + y0) / 2, 0.98, y0 - 0.5, 0.18, plaster);
   box(0.5, y + (y1 + WALL_H - 0.1) / 2, 0.98, WALL_H - 0.1 - y1, 0.18, plaster);
-  for (const s of [-1, 1]) box(0.5 + s * (hw + (0.49 - hw) / 2 + 0.01), y + (y0 + y1) / 2, 0.49 - hw - 0.02, y1 - y0, 0.18, plaster);
+  for (const s of [-1, 1]) box(0.5 + s * (hw + (0.49 - hw) / 2 + 0.01), y + ym, 0.49 - hw - 0.02, y1 - y0, 0.18, plaster);
   box(0.5, y + y0, 0.98, 0.08, 0.22, beam); box(0.5, y + y1, 0.98, 0.08, 0.22, beam);
-  for (const s of [-1, 1]) box(0.5 + s * hw, y + (y0 + y1) / 2, 0.08, y1 - y0, 0.21, beam);
-  box(0.5, y + (y0 + y1) / 2, hw * 2, y1 - y0, 0.04, GLASS);
-  for (const a of [-1, 1]) box(0.5 + a * (hw - 0.04) / 3, y + (y0 + y1) / 2, 0.035, y1 - y0, 0.08, '#3a2a1c');   // (three lights across)
-  // (v415) leaded diamond panes in each light
-  const g = hw - 0.04;
-  leadedPanes(at, y, ry, (a, h) => true, 0.5 - g, 0.5 + g, y0 + 0.04, y1 - 0.04);
-  if (out && SHUTTER.on) shutters(at, y + (y0 + y1) / 2, ry, out, hw, y1 - y0 - 0.03, pick);
+  for (const s of [-1, 1]) box(0.5 + s * hw, y + ym, 0.08, y1 - y0, 0.21, beam);
+  if (!bay) {
+    box(0.5, y + ym, hw * 2, y1 - y0, 0.04, GLASS);
+    for (const a of [-1, 1]) box(0.5 + a * g / 3, y + ym, 0.035, y1 - y0, 0.08, bar);   // (three lights across)
+    leadedPanes(at, y, ry, (a, h) => true, 0.5 - g, 0.5 + g, y0 + 0.04, y1 - 0.04);
+  } else {
+    // (v417, Jordan: a little bay, bumped out BAY.depth from the wall's face: glass front and sides between corner posts,
+    // a sill shelf on two brackets under it, and a lean-to roof of its own over it)
+    const wv = Math.abs(ry) > 0.1, nrm = wv ? [out, 0, 0] : [0, 0, out], f0 = 0.1, D = BAY.depth, nf = f0 + D;
+    const W3 = (a, n, yy) => { const p = at(a, yy); return [p[0] + nrm[0] * n, p[1], p[2] + nrm[2] * n]; };
+    const B = (a, n, yy, sx, sy, sz, col) => { const p = W3(a, n, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
+    const yb = y0 + 0.05, yt = y1 - 0.04, gh = yt - yb, gm = (yb + yt) / 2;
+    B(0.5, f0 + (D + 0.05) / 2, y + yb - 0.03, hw * 2 + 0.12, 0.06, D + 0.05, beam);               // (the sill shelf)
+    for (const s of [-1, 1]) B(0.5 + s * (hw - 0.04), f0 + D * 0.45, y + yb - 0.14, 0.06, 0.16, D * 0.8, beam);   // (its brackets)
+    for (const s of [-1, 1]) B(0.5 + s * hw, nf, y + gm, 0.07, gh, 0.07, beam);                      // (the front corner posts)
+    B(0.5, nf, y + yt + 0.03, hw * 2 + 0.07, 0.07, 0.08, beam);                                      // (the head)
+    for (const s of [-1, 1]) B(0.5 + s * hw, f0 + D / 2, y + yt + 0.03, 0.07, 0.07, D, beam);
+    B(0.5, nf, y + gm, hw * 2, gh, 0.03, GLASS);
+    for (const s of [-1, 1]) B(0.5 + s * hw, f0 + D / 2, y + gm, 0.03, gh, D - 0.04, GLASS);
+    for (const a of [-1, 1]) B(0.5 + a * g / 3, nf, y + gm, 0.035, gh, 0.06, bar);
+    leadedPanes((a, yy) => W3(a, nf, yy), y, ry, (a, h) => true, 0.5 - g, 0.5 + g, yb + 0.03, yt - 0.03);
+    // the lean-to: from the wall over the head down to past the front, slate grey, with a fascia and closed ends
+    const r0 = y + y1 + 0.2, r1 = y + yt + 0.08, ov = 0.06, aL = 0.5 - hw - 0.06, aR = 0.5 + hw + 0.06;
+    const top = shade(CC(BAY.roof), k), side = shade(CC(BAY.roof), k * 0.78), fas = shade(CC(beam), 1);
+    const n1 = nf + ov, wl = [W3(aL, f0, r0), W3(aR, f0, r0)], fr = [W3(aL, n1, r1), W3(aR, n1, r1)];
+    quad(wl[0], wl[1], fr[1], fr[0], top);
+    quad(fr[0], fr[1], W3(aR, n1, r1 - 0.06), W3(aL, n1, r1 - 0.06), fas);
+    tri(W3(aL, f0, r0), W3(aL, n1, r1), W3(aL, f0, r1 - 0.06), side);
+    tri(W3(aR, f0, r0), W3(aR, f0, r1 - 0.06), W3(aR, n1, r1), side);
+    quad(W3(aL, n1, r1 - 0.06), W3(aR, n1, r1 - 0.06), W3(aR, f0, r1 - 0.06), W3(aL, f0, r1 - 0.06), side);
+  }
+  if (out && SHUTTER.on) shutters(at, y + ym, ry, out, hw, y1 - y0 - 0.03, pick, hw + (bay ? 0.05 : 0));
 }
+// The bay windows (v417): how far they bump out, the timber window's height (y0..y1 over the wall's foot), the roof's colour
+const BAY = { on: 1, depth: 0.2, y0: 0.6, y1: 1.72, roof: '#5c5e6a' };
 // Leaded glass (v415, Jordan: diamond-pane windows): thin lead cames run corner to corner both ways across the
 // glass between a0..a1 along the wall and h0..h1 up it, each cut to where inside(a, h) holds (convex: the gothic
 // arch); LEAD.w by LEAD.h a diamond
@@ -10475,13 +10509,13 @@ function shutterPick(c, r, w, out) {
   if (!rm) { const r0 = rooms.get(roomOf.get(inside)); return r0 ? hs(r0.bld, 7, 415) : hs(c * 3 + w, r, 415); }
   return hs(rm.bld, 7, 415);
 }
-function shutters(at, ym, ry, out, hw, hh, pick) {
+function shutters(at, ym, ry, out, hw, hh, pick, ha = hw) {
   const wv = Math.abs(ry) > 0.1, th = SHUTTER.open * Math.PI / 180, col = SHUTTER.colors[Math.floor(pick * SHUTTER.colors.length) % SHUTTER.colors.length];
   const nrm = wv ? [out, 0, 0] : [0, 0, out], alongV = wv ? [0, 0, 1] : [1, 0, 0], off = 0.14;
   const saveE = emitSurf; emitSurf = null; SURF = SURF_WOOD;
   try {
     for (const side of [-1, 1]) {
-      const h = at(0.5 + side * hw, ym);
+      const h = at(0.5 + side * ha, ym);
       // (shut, a shutter runs from its hinge toward the middle: -side along the wall)
       const da = -side * Math.cos(th), dn = Math.sin(th);
       const dir = [alongV[0] * da + nrm[0] * dn, 0, alongV[2] * da + nrm[2] * dn], yaw = Math.atan2(-dir[2], dir[0]);
@@ -10493,9 +10527,9 @@ function shutters(at, ym, ry, out, hw, hh, pick) {
     }
   } finally { emitSurf = saveE; SURF = 0; }
 }
-const WINDOW_HW = 0.4;
-// (letting go of a shutter or lead slider draws every built piece again)
-function redrawPieces() { for (const ch of chunks.values()) setPieces(ch); }   // (a timber window's half-width: the glass to within a frame's width of the corner posts)
+const WINDOW_HW = 0.4;   // (a timber window's half-width: the glass to within a frame's width of the corner posts)
+// (letting go of a shutter, lead or bay slider draws every built piece again)
+function redrawPieces() { for (const ch of chunks.values()) setPieces(ch); }
 const STONE_WIN = { W: 0.33, sill: 0.45, spring: 0.95 };   // (v414: wider, its frame to within a frame's width of the tile's ends; was 0.2, 0.55, 1.12)
 // a stone wall with a pointed (equilateral) gothic arch window: the courses go round it, cut in fine slices where
 // they meet the arch so its curve shows; a paler stone frame and sill, glass, a mullion and a transom
@@ -10767,6 +10801,67 @@ const buildings = new Map(); // id -> { id, rooms, tiles, set, color, mesh, roof
 let roomSeq = 1, bldSeq = 1;
 const bldOf = i => { const rm = rooms.get(roomOf.get(i)); return rm ? buildings.get(rm.bld) : null; };
 const roofMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
+// Slate (v417, Jordan: an overlapping slate roof as a normal map for timber houses). Worked out on the roof's own
+// plane from the world position: rows SLATE.row apart down the slope, slates SLATE.width wide, every other row half a
+// slate over. Each slate lies a little flatter than the roof (it rests on the one below), its lower edge rolls over,
+// the top of each row sits in the shade of the row above's lip, there's a dark gap between neighbours, and each
+// slate is a touch lighter or darker and turned a hair. T > Slate roofs.
+const SLATE = { bump: 1, row: 0.16, width: 0.22, shade: 1, tint: 0.1 };
+const SLATE_U = { s: { value: { x: 1, y: 0.16, z: 0.22, w: 1 } }, tint: { value: 0.1 } };
+function updateSlateU() { const v = SLATE_U.s.value; v.x = SLATE.bump; v.y = SLATE.row; v.z = SLATE.width; v.w = SLATE.shade; SLATE_U.tint.value = SLATE.tint; }
+const slateMat = new GFX.ShaderMaterial({ uniforms: SLATE_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+}
+fn h21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N0 = flatNormal(i.eye);
+  let up = select(N0, -N0, N0.y < 0.0);
+  let hz = vec3f(up.x, 0.0, up.z);
+  // (only on the sloped faces: not the fascias, not a flat top)
+  let on = select(0.0, 1.0, abs(N0.y) > 0.35 && dot(hz, hz) > 1e-3) * select(0.0, 1.0, U.s.x > 0.0);
+  let t = normalize(cross(vec3f(0.0, 1.0, 0.0), up) + vec3f(1e-5, 0.0, 0.0));
+  let dn = cross(up, t);
+  let down = select(dn, -dn, dn.y > 0.0);
+  let rv = dot(i.world, down) / U.s.y;
+  let row = floor(rv);
+  let uu = dot(i.world, t) / U.s.z + row * 0.5;
+  let aaV = fwidth(rv); let aaU = fwidth(uu);
+  let f = rv - row; let cell = floor(uu); let fu = uu - cell;
+  let rnd = h21(vec2f(cell, row)); let rnd2 = h21(vec2f(row + 31.0, cell));
+  // flatter than the roof, twisted a little, the lower lip rolled over, the gaps between slates
+  var bend = -down * 0.22 + t * ((rnd2 - 0.5) * 0.14);
+  bend += down * sat((f - 0.88) / 0.12) * 0.9;
+  let gap = min(fu, 1.0 - fu);
+  let gw = max(0.05, aaU);
+  bend += t * select(-1.0, 1.0, fu < 0.5) * sat(1.0 - gap / gw) * 0.5;
+  var N = normalize(up + bend * U.s.x * on);
+  N = select(N, -N, N0.y < 0.0);
+  let lip = mix(1.0 - 0.35 * U.s.w, 1.0, smoothstep(0.0, max(0.18, aaV * 1.5), f));
+  let gs = mix(1.0 - 0.4 * U.s.w, 1.0, smoothstep(gw * 0.4, gw, gap));
+  let k = mix(1.0, lip * gs * (1.0 + (rnd - 0.5) * 2.0 * U.tint), on);
+  let c = shadeLit(i.color * k, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+// is a building timber (most of its walls, on its story and the one over it, timber or timber windows)?
+function timberBuilding(rm) {
+  const k = rm.k || 0, set = rm.set;
+  let tim = 0, other = 0;
+  for (const kk of [k, k + 1]) {
+    if (kk && !UP[kk]) continue;
+    for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
+      if (set.has(T(c + DC[d], r + DR[d]))) continue;
+      const [ec, er, ew] = edgeOf(c, r, d), i = T(ec, er), v = kk ? (ew ? UP[kk].WW : UP[kk].WN).get(i) : (ew ? WW : WN)[i];
+      if (!v || v === 2 || v === 5) continue;
+      if (v === 1 || v === 13) tim++; else other++;
+    }
+  }
+  return tim > other;
+}
 // (on an upper story every tile of a room needs a floor, or the stair coming up from below)
 const roomFloor = (k, i) => !k || UP[k].FL.has(i) || stairAt.has((k - 1) * SNN + i);
 function findRoom(c0, r0, k = 0) {
@@ -10868,11 +10963,12 @@ function roofMesh(rm, o = {}) {   // rm: a building
     return m;
   };
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
+  const slate = !o.snow && timberBuilding(rm);
   const tileA = o.snow ? CC('#eef3f8') : CC(rm.color), tileB = o.snow ? CC('#e2eaf2') : shade(tileA, 0.87), ridge = o.snow ? CC('#4a3220') : shade(tileA, 0.68);
   const snowLip = CC('#f4f8fb'), ice = CC('#cfe6f6');
   const Y = (x, z) => base + Math.min(2.6, f(x, z)) * ROOF_SLOPE;
   rm.roofY = Y;
-  const colAt = h => { const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
+  const colAt = h => { if (slate) return tileA; const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
   for (const [c, r] of open) {
     const pts = [];
     for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) { const x = c + i / 2, z = r + j / 2; pts.push([x, Y(x, z), z]); }
@@ -10902,7 +10998,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     }
   }
   if (o.extra) o.extra(base);
-  const m = bufTmp.mesh(roofMat);
+  const m = bufTmp.mesh(slate ? slateMat : roofMat);
   OUT = save;
   return m;
 }
@@ -17570,7 +17666,7 @@ function update(dt) {
 
   updateGhost();
   updatePlotWalls();
-  updateStoryGrid(); updateGrassHide(); updateGlassU(); updateDetailU();
+  updateStoryGrid(); updateGrassHide(); updateGlassU(); updateDetailU(); updateSlateU();
   updateSky();
   updateLamps();
 
@@ -20107,11 +20203,24 @@ const TUNING = [
     [LAMP_HALO, 'color', 'Glow colour', 'color'],
     [LAMP_FADE, 'width', 'Lamp lights: fade before handing over (tiles)', 0, 10, 0.1],
   ]],
-  ['Windows: lead and shutters', [
+  ['Timber walls and windows', [
     [LEAD, 'w', 'Diamond pane width', 0.05, 0.4, 0.01, redrawPieces],
     [LEAD, 'h', 'Diamond pane height', 0.05, 0.5, 0.01, redrawPieces],
     [SHUTTER, 'on', 'Shutters on timber windows (0 off, 1 on)', 0, 1, 1, redrawPieces],
+    [BAY, 'on', 'Bay windows: timber windows bump out where the outside is known (0 off, 1 on)', 0, 1, 1, redrawPieces],
+    [BAY, 'depth', 'Bay depth (tiles)', 0, 0.45, 0.01, redrawPieces],
+    [BAY, 'y0', 'Timber window bottom (over the wall foot)', 0.5, 1, 0.01, redrawPieces],
+    [BAY, 'y1', 'Timber window top', 1.3, 1.85, 0.01, redrawPieces],
+    [TIMBER, 'braces', 'Timber walls: share with a diagonal brace', 0, 1, 0.01, redrawPieces],
+    [TIMBER, 'pairs', 'Of those, share with a mirrored pair', 0, 1, 0.01, redrawPieces],
     [SHUTTER, 'open', 'Shutters open (degrees from shut)', 0, 175, 1, redrawPieces],
+  ]],
+  ['Slate roofs', [
+    [SLATE, 'bump', 'Slate relief on timber houses\' roofs (0 off)', 0, 3, 0.01],
+    [SLATE, 'row', 'Row height (tiles)', 0.06, 0.4, 0.01],
+    [SLATE, 'width', 'Slate width (tiles)', 0.08, 0.6, 0.01],
+    [SLATE, 'shade', 'Shade under the lips and in the gaps', 0, 2, 0.01],
+    [SLATE, 'tint', 'Slate to slate tint', 0, 0.4, 0.01],
   ]],
   ['Bevels', [
     [DETAIL, 'strength', 'Chipped bevels on walls, floors and stairs: how far they bend (0 off)', 0, 5, 0.01],
@@ -20376,7 +20485,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 416, crashSeen = new Map();
+const GAME_VERSION = 417, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -20570,7 +20679,7 @@ window.GAME = {
   graveyards: () => graveyards.map(g => ({ ...g })),
   mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, cut: k.cut, why: k.why, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
-  raw: () => ({ connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms }),
+  raw: () => ({ connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
