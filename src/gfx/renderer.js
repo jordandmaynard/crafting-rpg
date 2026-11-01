@@ -509,7 +509,9 @@ class Renderer {
         if (mat && mat.visible && (!o.frustumCulled || this._inFrustum(o, fr))) {
           const e = o.matrixWorld.elements;
           v.set(e[12], e[13], e[14]).applyMatrix4(vp);
-          (mat.transparent ? clear : opaque).push({ mesh: o, z: v.z, order: o.renderOrder, mid: mat.id });
+          // (drawFirst: opaque things drawn before the rest at their renderOrder, as roofs are, so what they cover fails
+          // the depth test before it's shaded)
+          (mat.transparent ? clear : opaque).push({ mesh: o, z: v.z, order: o.renderOrder - (mat.drawFirst ? 0.5 : 0), mid: mat.id });
         }
       }
       for (const c of o.children) visit(c);

@@ -5818,6 +5818,7 @@ function updateGI() {
 // the shadow map's casters: the world's (layer 0) and the ground's (5)
 const shadowLayers = new GFX.Layers(); shadowLayers.enable(5);
 renderer.shadowLayers = shadowLayers;
+const worldOpaque = m => !m.material.transparent, worldClear = m => !!m.material.transparent;
 function renderWorld() {
   // (the ground casts too unless SHADOWS.ground is off: phones, where its ~350k triangles were half the shadow map)
   if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
@@ -5833,20 +5834,24 @@ function renderWorld() {
   updateWillows();
   updateCaustics();
   scene.updateMatrixWorld();
-  // the ground first, on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow
-  // map is drawn in it, from the ground's and the world's casters both (shadowLayers)
-  renderer.passName = 'ground';   // (the profiler's names for each render's pass)
-  camera.layers.set(5); renderer.render(scene, camera);
-  renderer.shadowMap.autoUpdate = false;
-  renderer.passName = 'snow and sand';
-  camera.layers.set(6); renderer.render(scene, camera);
-  renderer.passName = 'world';
+  // the ground on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow map is
+  // drawn in the first render, from the ground's and the world's casters both (shadowLayers)
+  // (v439: the world's opaque things first, roofs first of all (drawFirst), then the ground, then the world's
+  // see-through things over both: whatever a roof or wall covers, the ground under a house or a room's floor,
+  // then fails the depth test before it's shaded, where before it was lit in full (GI and all) and painted over)
   camera.layers.set(0);
   // (v436: G > Split world: the world drawn in parts, a profiler row each, to see what it costs)
   if (prof.on && PROF_SPLIT.world) {
-    for (const part of WORLD_PARTS) { renderer.passName = 'world: ' + part; renderer.drawFilter = m => worldPart(m) === part; renderer.render(scene, camera); }
-    renderer.drawFilter = null;
-  } else renderer.render(scene, camera);
+    for (const part of WORLD_PARTS) { renderer.passName = 'world: ' + part; renderer.drawFilter = m => !m.material.transparent && worldPart(m) === part; renderer.render(scene, camera); renderer.shadowMap.autoUpdate = false; }
+  } else { renderer.passName = 'world'; renderer.drawFilter = worldOpaque; renderer.render(scene, camera); }
+  renderer.shadowMap.autoUpdate = false;
+  renderer.drawFilter = null;
+  renderer.passName = 'ground';   // (the profiler's names for each render's pass)
+  camera.layers.set(5); renderer.render(scene, camera);
+  renderer.passName = 'snow and sand';
+  camera.layers.set(6); renderer.render(scene, camera);
+  renderer.passName = 'world see-through';
+  camera.layers.set(0); renderer.drawFilter = worldClear; renderer.render(scene, camera); renderer.drawFilter = null;
   // the grass tufts on their own (layer 4: they cast no shadow), so the profiler shows what they cost
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
@@ -7769,6 +7774,8 @@ fn gsJoin(a: u32, b: u32) -> bool {
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
+// (v439: drawn after the world's opaque things, the ground loses ties to them, a floor laid flush on it stays on top)
+groundShapeMat.depthFunc = GFX.LessDepth;
 const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
 // ore metal: part metallic and polished, so its faces flash in a tight highlight as they turn to the light
 const METAL_LOOK = { metalness: 0.46, roughness: 0.4 };
@@ -11693,6 +11700,8 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 });
 // (v427) the same slates on a steeper roof: the cathedral's nave
 const slateSteep = new GFX.ShaderMaterial({ uniforms: { s: SLATE_U.s, slope: { value: CATH.pitch }, tSlate: SLATE_U.tSlate }, vertexColors: true, side: GFX.DoubleSide, lit: true, code: slateMat.code });
+// (v439) roofs drawn before the other opaque things, so the floors, walls and furniture under them are never shaded
+roofMat.drawFirst = slateMat.drawFirst = slateSteep.drawFirst = true;
 // is a building timber (most of its walls, on its story and the one over it, timber or timber windows)?
 function timberBuilding(rm) {
   const k = rm.k || 0, set = rm.set;
@@ -21311,7 +21320,7 @@ const PROF_SPLIT = { world: false };
 // (v438) G > Built pieces test, to find what their cost is: shade 0 full, 1 no lighting (bevels kept), 2 flat colour;
 // cull: drop back faces (pieces wound the wrong way vanish too, so it's only a test)
 function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; }
-const WORLD_PARTS = ['built pieces', 'glass', 'roofs', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
+const WORLD_PARTS = ['roofs', 'built pieces', 'glass', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
 function worldPart(m) {
   const t = m.material;
   if (t === buildMat) return 'built pieces';
@@ -21466,7 +21475,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 438, crashSeen = new Map();
+const GAME_VERSION = 439, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
