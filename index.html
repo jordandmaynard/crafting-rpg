@@ -837,6 +837,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
     <label class="opt"><span>Your name, on the belt under the hotbar</span><input type="text" id="optName" maxlength="24" autocomplete="off" spellcheck="false"></label>
     <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
+    <label class="opt check"><input type="checkbox" id="optPace"><span>Steady frame pacing: when the GPU can't keep up with the screen, draw on every second (or third) refresh so movement glides evenly, instead of as fast as it can unevenly</span></label>
     <label class="opt check"><input type="checkbox" id="optFps"><span>Show frame rate: frames a second and the frame's time, in the corner (nothing else is measured)</span></label>
     <label class="opt check"><input type="checkbox" id="optMapFont"><span>Map names in the book font: the world map's place names in the game's serif type with a black outline, instead of the pixel font</span></label>
     <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's or spear's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
@@ -3068,11 +3069,53 @@ function cathRoof(ca) {
       OUT = bufTmp;
       part(G.box, dark, ...at(0, ridge + 0.04, (B0 + B1) / 2), DC[ca.p] ? { sx: 0.16, sy: 0.1, sz: B1 - B0 } : { sx: B1 - B0, sy: 0.1, sz: 0.16 });
       for (const sg of [-1, 1]) quad(at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.2, 2.5), at(sg * (outer + 0.12), base - 0.2, B1), at(sg * (outer + 0.12), base - 0.06, B1), dark);
-      // the stone gables: over the door between the towers, and across the whole back
-      for (const [B, w] of [[0.5, hw], [ca.dep + 0.5, outer]]) for (const off of [-0.12, 0.12]) {
-        const Bb = B + (B < 1 ? off - 0.12 : off + 0.12);
-        quad(at(-w, base - 0.02, Bb), at(w, base - 0.02, Bb), at(hw, eave, Bb), at(-hw, eave, Bb), stone);
-        tri(at(-hw - 0.05, eave, Bb), at(hw + 0.05, eave, Bb), at(0, ridge + 0.1, Bb), stone);
+      // the stone gables: over the door between the towers, and across the whole back. A mortar backing, then (v428,
+      // Jordan: they were plain) coursed blocks as the walls are laid, cut to the gable's outline row by row, a moulded
+      // band along the walls' top and the eaves', a blind arcade of lancets and a quatrefoil under the peak
+      const mortar = CC('#4a4652'), blk = CC('#8a8694'), bandC = CC(CATH.band), darkC = CC(CATH.dark);
+      for (const [B, w] of [[0.5, hw], [ca.dep + 0.5, outer]]) {
+        const front = B < 1, sgn = front ? -1 : 1;
+        for (const off of [-0.12, 0.12]) {
+          const Bb = B + (front ? off - 0.12 : off + 0.12);
+          quad(at(-w, base - 0.02, Bb), at(w, base - 0.02, Bb), at(hw, eave, Bb), at(-hw, eave, Bb), mortar);
+          tri(at(-hw - 0.05, eave, Bb), at(hw + 0.05, eave, Bb), at(0, ridge + 0.1, Bb), mortar);
+        }
+        const Bo = B + sgn * 0.27;   // (the blocks' middle, a little proud of the backing's outer face)
+        const box = (A, yy, sA, sy, col, th = 0.08, dB = 0) => part(G.box, col, ...at(A, yy, Bo + sgn * dB), DC[ca.p] ? { sx: sA, sy, sz: th } : { sx: th, sy, sz: sA });
+        // (how far out from the middle the gable reaches at height yy)
+        const half = yy => yy <= eave ? w - (w - hw) * Math.max(0, yy - base) / Math.max(1e-3, eave - base) : hw * Math.max(0, ridge - yy) / Math.max(1e-3, ridge - eave);
+        const rows = Math.max(2, Math.round((ridge - base) / 0.28)), rh = (ridge - base) / rows;
+        for (let row = 0; row < rows; row++) {
+          const y0 = base + row * rh, hx = half(y0 + rh) - 0.02;
+          if (hx < 0.1) continue;
+          const off = row % 2 ? 0.25 : 0, edges = [-hx];
+          for (let a = Math.ceil((-hx - off) / 0.5) * 0.5 + off; a < hx - 0.08; a += 0.5) if (a > -hx + 0.08) edges.push(a);
+          edges.push(hx);
+          for (let j = 0; j + 1 < edges.length; j++) {
+            const kk = hs(Math.floor(B * 7) + j, row + Math.floor(ca.c0 + ca.r0), 432);
+            box((edges[j] + edges[j + 1]) / 2, y0 + rh / 2, edges[j + 1] - edges[j] - 0.03, rh - 0.03, shade(blk, 0.8 + kk * 0.3));
+          }
+        }
+        // the bands: along the walls' top, and at the eaves (front: only between the towers)
+        box(0, base + 0.05, w * 2 + 0.1, 0.12, shade(bandC, 1.02), 0.14, 0.04);
+        box(0, eave + 0.02, hw * 2 + 0.06, 0.1, shade(bandC, 1.02), 0.14, 0.04);
+        // a blind arcade: dark lancets in light frames between the bands
+        const nArc = Math.max(3, Math.floor(w * 2 / 0.7)) | 1, span = (Math.min(w, hw + (w - hw) * 0.35) * 2) / nArc, ya = base + 0.24, yb = Math.min(eave - 0.15, ya + 0.75);
+        for (let j = 0; j < nArc; j++) {
+          const A = -span * nArc / 2 + span * (j + 0.5);
+          if (Math.abs(A) + span / 2 > half(yb) + 0.02) continue;
+          box(A, (ya + yb) / 2, span * 0.62, yb - ya, shade(bandC, 1.05), 0.1, 0.02);
+          box(A, (ya + yb) / 2 - 0.02, span * 0.38, yb - ya - 0.1, darkC, 0.1, 0.035);
+          part(G.box, darkC, ...at(A, yb - 0.04, Bo + sgn * 0.035), DC[ca.p] ? { sx: span * 0.27, sy: span * 0.27, sz: 0.1, rz: Math.PI / 4 } : { sx: 0.1, sy: span * 0.27, sz: span * 0.27, rx: Math.PI / 4 });
+        }
+        // the quatrefoil under the peak: four round lobes round a boss, in a stone ring
+        const yq = eave + (ridge - eave) * 0.42, rq = Math.min(0.3, hw * 0.24);
+        if (half(yq + rq) > rq + 0.05) {
+          const cyl = (A, yy, r, th, col, dB) => part(G.cyl8, col, ...at(A, yy, Bo + sgn * dB), DC[ca.p] ? { sx: r * 2, sy: th, sz: r * 2, rx: Math.PI / 2 } : { sx: r * 2, sy: th, sz: r * 2, rz: Math.PI / 2 });
+          cyl(0, yq, rq + 0.07, 0.1, shade(bandC, 1.05), 0.02);
+          for (let l = 0; l < 4; l++) { const a = l * Math.PI / 2 + Math.PI / 4; cyl(Math.cos(a) * rq * 0.45, yq + Math.sin(a) * rq * 0.45, rq * 0.42, 0.1, darkC, 0.035); }
+          cyl(0, yq, rq * 0.18, 0.1, shade(bandC, 1.1), 0.045);
+        }
       }
       // a pinnacle on each gable's peak and the spire over the crossing
       for (const B of [0.38, ca.dep + 0.62]) part(G.cone4, shade(stone, 1.05), ...at(0, ridge + 0.4, B), { sx: 0.2, sy: 0.6, sz: 0.2, ry: Math.PI / 4 });
@@ -3152,10 +3195,9 @@ function raiseCathedral(t, c0, r0, d, W, dep, house, piece) {
       if (isDoor) ca.rose = { e, x: c + 0.5 + DC[e] * 0.5, z: r + 0.5 + DR[e] * 0.5, key: edgeKey(ec, er, ew) + 2 * SNN };
     }
   }
-  // the arcades, in line with the towers' inner faces, a column every two tiles; the porch's two; the altar
+  // the arcades, in line with the towers' inner faces, a column every two tiles; the altar (v428: no porch columns)
   const A = (W - 1) / 2 - 1.5;
   for (const sg of [-1, 1]) for (let B = 4.5; B <= dep - 1.5; B += 2) { const [x, z] = P(sg * A, B); ca.cols.push(pillar({ x, z, y, R: 0.16, col: true, key: 8 * SNN + T(Math.floor(x), Math.floor(z)) })); }
-  for (const sg of [-1, 1]) { const [x, z] = P(sg * 0.9, 0.22); ca.cols.push(pillar({ x, z, y, R: 0.16, col: true, key: 8 * SNN + T(Math.floor(x), Math.floor(z)) })); }
   { const [x, z] = P(0, dep - 0.15); pillar({ x, z, y, R: 0.42, col: false }); ca.altar = [x, z]; }
   for (const Ac of [o0 + 0.5, a1 - 0.5]) { const [x, z] = P(Ac, 1.45); ca.towers.push({ x, z, key: 9 * SNN + T(Math.floor(x), Math.floor(z)) }); }
   ca.anchor = doorT; cathAt.set(doorT, ca); cathedrals.push(ca); t.cathedral = ca;
@@ -3293,11 +3335,22 @@ function cathUpper(ca) {
     if (q) {
       const ax = DC[q.e] !== 0, n0 = OUT.n, g0 = GLASSB ? GLASSB.n : 0, ry = y + 1.08;
       const at = out => [q.x + DC[q.e] * out, q.z + DR[q.e] * out];
-      const disc = (out, rad, th, col, into = 'world') => { const [x, z] = at(out); part(G.cyl8, col, x, ry, z, ax ? { sx: th, sy: rad * 2, sz: rad * 2, rz: Math.PI / 2, into } : { sx: rad * 2, sy: th, sz: rad * 2, rx: Math.PI / 2, into }); };
-      disc(0.16, 0.47, 0.1, shade(band, 1.05));
-      disc(0.2, 0.39, 0.04, GLASS, 'glass');
-      for (let s = 0; s < 4; s++) { const [x, z] = at(0.23), a = s * Math.PI / 4; part(G.box, '#3a3640', x, ry, z, ax ? { sx: 0.05, sy: 0.04, sz: 0.78, rx: a } : { sx: 0.78, sy: 0.04, sz: 0.05, rz: a }); }
-      disc(0.24, 0.08, 0.06, shade(stone, 1.1));
+      // (v428: the disc turned to face out, as it was meant to; its glass stained, a fan of coloured panes in two rings)
+      const disc = (out, rad, th, col, into = 'world') => { const [x, z] = at(out); part(G.cyl8, col, x, ry, z, ax ? { sx: rad * 2, sy: th, sz: rad * 2, rz: Math.PI / 2, into } : { sx: rad * 2, sy: th, sz: rad * 2, rx: Math.PI / 2, into }); };
+      const tx = -DR[q.e], tz = DC[q.e], pt = (u, v, out) => { const [x, z] = at(out); return [x + tx * u, ry + v, z + tz * u]; };
+      disc(0.12, 0.5, 0.12, shade(band, 1.05));
+      const PANES = ['#b02a34', '#2a52b0', '#d8a032', '#2f8a4a', '#7a3aa0'], n = 16, gb = GLASSB || OUT;
+      for (let w = 0; w < n; w++) {
+        const a0 = w / n * Math.PI * 2, a1 = (w + 1) / n * Math.PI * 2, cA = Math.cos(a0), sA = Math.sin(a0), cB = Math.cos(a1), sB = Math.sin(a1);
+        const outer = CC(PANES[w % 2 ? 1 : (w / 2) % 2 ? 0 : 2]), inner = CC(PANES[w % 2 ? 3 : 4]);
+        tri(pt(cA * 0.2, sA * 0.2, 0.19), pt(cA * 0.42, sA * 0.42, 0.19), pt(cB * 0.42, sB * 0.42, 0.19), outer, outer, outer, gb);
+        tri(pt(cA * 0.2, sA * 0.2, 0.19), pt(cB * 0.42, sB * 0.42, 0.19), pt(cB * 0.2, sB * 0.2, 0.19), outer, outer, outer, gb);
+        tri(pt(0, 0, 0.19), pt(cA * 0.2, sA * 0.2, 0.19), pt(cB * 0.2, sB * 0.2, 0.19), inner, inner, inner, gb);
+      }
+      // the tracery: eight spokes, a ring between the panes' two rings, a boss
+      for (let w = 0; w < 4; w++) { const [x, z] = at(0.21), a = w * Math.PI / 4; part(G.box, '#3a3640', x, ry, z, ax ? { sx: 0.04, sy: 0.035, sz: 0.84, rx: a } : { sx: 0.84, sy: 0.035, sz: 0.04, rz: a }); }
+      for (let w = 0; w < 12; w++) { const a = (w + 0.5) / 12 * Math.PI * 2, [x, y2, z] = pt(Math.cos(a) * 0.2, Math.sin(a) * 0.2, 0.21); part(G.box, '#3a3640', x, y2, z, ax ? { sx: 0.04, sy: 0.035, sz: 0.11, rx: -a + Math.PI / 2 } : { sx: 0.11, sy: 0.035, sz: 0.04, rz: a + Math.PI / 2 }); }
+      disc(0.22, 0.06, 0.06, shade(stone, 1.1));
       cutTag(OUT, n0, q.key + 1, 1); if (GLASSB) cutTag(GLASSB, g0, q.key + 1, 1);
     }
   } finally { emitSurf = save; SURF = 0; }
@@ -5442,7 +5495,7 @@ function eyeExposure() {
 // hdrPeak × white (src/gfx/renderer.js setHDR).
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer' };
+  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer', steadyPace: true };
   try { Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { /* defaults */ }
   d.mapFont = +d.mapFont || 0;   // (a number, so T > Map names can switch it too)
   return d;
@@ -5454,6 +5507,7 @@ function applyOptions() {
   $('optPeak').disabled = !OPTIONS.hdr;
   $('optRelease').checked = OPTIONS.attackOnRelease;
   $('optFps').checked = OPTIONS.showFps; $('fpsTag').hidden = !OPTIONS.showFps;
+  $('optPace').checked = OPTIONS.steadyPace !== false;
   $('optMapFont').checked = !!OPTIONS.mapFont;
   // (the hero's name, on the belt)
   const nm = String(OPTIONS.name || '').trim() || 'Wanderer';
@@ -5480,6 +5534,7 @@ function toggleOptions(open = !optsOpen) {
 }
 $('optHdr').addEventListener('change', () => { OPTIONS.hdr = $('optHdr').checked; applyOptions(); showHdrNote(); });
 $('optFps').addEventListener('change', () => { OPTIONS.showFps = $('optFps').checked; applyOptions(); });
+$('optPace').addEventListener('change', () => { OPTIONS.steadyPace = $('optPace').checked; applyOptions(); });
 $('optName').addEventListener('keydown', e => { e.stopPropagation(); if (e.code === 'Enter' || e.code === 'Escape') $('optName').blur(); });
 $('optName').addEventListener('input', () => { OPTIONS.name = $('optName').value.slice(0, 24); applyOptions(); });
 $('optMapFont').addEventListener('change', () => { OPTIONS.mapFont = +$('optMapFont').checked; applyOptions(); if (mapOpen) drawBigMap(); });
@@ -15498,7 +15553,7 @@ function updateAxeThrow(dt) {
     }
   }
   if (!axeThrow) { axeSpin.visible = false; return; }
-  ax.y += ((ax.out ? surfH(ax.x, ax.z) : H.y) + 0.62 - ax.y) * Math.min(1, dt * 6);
+  ax.y += ((ax.out ? surfH(ax.x, ax.z) : H.y) + 0.62 - ax.y) * (1 - Math.exp(-dt * 6));
   ax.spin += dt * AXE.throwSpin;
   // a swoosh each turn
   if (ax.spin >= (ax.rev + 1) * Math.PI * 2) { ax.rev = Math.floor(ax.spin / (Math.PI * 2)); sfx.swoosh(); }
@@ -15694,7 +15749,7 @@ function rainTarget() {
 function updateBow(dt) {
   const b = H.bow;
   b.t += dt;
-  if (b.kind !== 'rain') H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 20);
+  if (b.kind !== 'rain') H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * (1 - Math.exp(-dt * 20));
   if (!b.fired && b.t >= b.len * (b.kind === 'shot' ? 0.6 : 0.5)) {
     b.fired = true;
     sfx.bow();
@@ -16338,7 +16393,7 @@ function updateHarpoon(dt) {
       hp.x += dx / (l || 1) * step; hp.z += dz / (l || 1) * step;
       if (l - step <= stop + 0.02) harpoon = null;
     }
-    hp.y += (hy - hp.y) * Math.min(1, dt * 8);
+    hp.y += (hy - hp.y) * (1 - Math.exp(-dt * 8));
   }
   if (!harpoon) { harpoonHead.visible = false; chainLinks.count = 0; chainLinks.needsUpdate = true; return; }
   // the spear points away from you along the chain, which runs from your hand to its butt; the links lie between,
@@ -17150,7 +17205,7 @@ function ventSmoke(dt) {
     const i = T(c, r);
     if (OB[i] === O.VENT) {
       // (their smoke: see buildSmoke)
-    } else if (LAVA[i] && !LV[i] && Math.random() < 0.012 * LAVA_FX.spatter) puff(c + Math.random(), WL[i] * STEP - LAVA_DROP, r + Math.random(), Math.random() < 0.5 ? '#ff8a30' : '#ffc040', 2, 0.25);
+    } else if (LAVA[i] && !LV[i] && Math.random() < 0.012 * 60 * dt * LAVA_FX.spatter) puff(c + Math.random(), WL[i] * STEP - LAVA_DROP, r + Math.random(), Math.random() < 0.5 ? '#ff8a30' : '#ffc040', 2, 0.25);
   }
 }
 // any of the wastes within a screen or so (checked coarsely)
@@ -17489,7 +17544,7 @@ function updateStations(dt) {
       }
     } else st.t = 0;
     // its parts come up to speed while it works, and run down after
-    st.spin += ((st.busy ? 1 : 0) - st.spin) * Math.min(1, dt * (st.busy ? 3 : 1.2));
+    st.spin += ((st.busy ? 1 : 0) - st.spin) * (1 - Math.exp(-dt * (st.busy ? 3 : 1.2)));
     if (st.body && st.pulse > 0) {
       // (swell and settle about its foot)
       st.pulse = Math.max(0, st.pulse - dt * 3.2);
@@ -17999,10 +18054,10 @@ function update(dt) {
       const slow = (H.swing >= 0 ? (H.strike === 'smash' && H.combo === 3 ? 0 : 0.45) : H.axeWind >= 0 ? 0.45 : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
       // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
-      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !(H.axeWind >= 0)) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * Math.min(1, dt * 16);
+      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !(H.axeWind >= 0)) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * (1 - Math.exp(-dt * 16));
     }
     vx += H.kx; vz += H.kz;
-    H.kx *= Math.max(0, 1 - dt * 9); H.kz *= Math.max(0, 1 - dt * 9);
+    H.kx *= Math.exp(-dt * 9); H.kz *= Math.exp(-dt * 9);
     const x0 = H.x, z0 = H.z;
     const moved = H.flip ? 0 : moveEntity(H, vx * dt, vz * dt, 0.26, false);
     if (H.lunge >= 0 && H.lungeKind === 'charge') chargeMoved(dt, moved, Math.hypot(vx - H.kx, vz - H.kz) * dt);
@@ -18011,7 +18066,7 @@ function update(dt) {
       H.walkPhase += moved * WALK.cadence;
       // which way the step goes against the way you face, eased so the gaits blend as it swings round
       const mx = H.x - x0, mz = H.z - z0, ml = Math.hypot(mx, mz) || 1, fx = Math.sin(H.face), fz = Math.cos(H.face);
-      const k = Math.min(1, dt * 10);
+      const k = (1 - Math.exp(-dt * 10));
       H.stepF += ((mx * fx + mz * fz) / ml - H.stepF) * k;
       H.stepS += ((mx * fz - mz * fx) / ml - H.stepS) * k;
     }
@@ -18116,7 +18171,7 @@ function update(dt) {
     if (d.fallT > 2.2) { scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1); }
   }
   for (const d of doors.values()) {
-    d.t += ((d.open ? 1 : 0) - d.t) * Math.min(1, dt * 10);
+    d.t += ((d.open ? 1 : 0) - d.t) * (1 - Math.exp(-dt * 10));
     d.pivot.children[0].rotation.y = d.t * 1.75 * d.side * (d.flip ? -1 : 1);
   }
   for (let k = orbs.length - 1; k >= 0; k--) {
@@ -18144,7 +18199,7 @@ function update(dt) {
     const d = debris[i]; d.life += dt;
     d.vy -= GRAV * dt * (d.fall || 1);
     // (light things, cut grass, flutter down)
-    if (d.fall) { d.vy = Math.max(d.vy, -1.2); d.vx *= 1 - Math.min(1, dt * 1.5); d.vz *= 1 - Math.min(1, dt * 1.5); }
+    if (d.fall) { d.vy = Math.max(d.vy, -1.2); d.vx *= Math.exp(-dt * 1.5); d.vz *= Math.exp(-dt * 1.5); }
     d.m.position.x += d.vx * dt; d.m.position.y += d.vy * dt; d.m.position.z += d.vz * dt;
     const fl = surfaceY(d.m.position.x, d.m.position.z) + 0.03;
     if (d.m.position.y < fl) { d.m.position.y = fl; d.vy *= -0.3; d.vx *= 0.55; d.vz *= 0.55; d.ax *= 0.5; d.az *= 0.5; }
@@ -18155,7 +18210,7 @@ function update(dt) {
   for (let i = dust.length - 1; i >= 0; i--) {
     const d = dust[i]; d.life += dt;
     d.m.position.x += d.vx * dt; d.m.position.y += d.vy * dt; d.m.position.z += d.vz * dt;
-    d.vx *= 1 - dt * 3; d.vz *= 1 - dt * 3;
+    d.vx *= Math.exp(-dt * 3); d.vz *= Math.exp(-dt * 3);
     const max = d.max || 0.7;
     d.m.scale.setScalar(1 + d.life * (d.grow || 1.5));
     d.m.material.opacity = Math.max(0, (d.op || 0.85) * (1 - d.life / max));
@@ -18754,16 +18809,16 @@ function animateHero(dt) {
   hero.head.rotation.y = stance + shoulder;
   hero.bowStr.forEach((h, k) => { h.rotation.x = (k ? -1 : 1) * Math.atan2(pull, 0.32); h.scale.z = Math.hypot(pull, 0.32) / 0.32; });
   hero.nock.visible = !!H.bow && !H.bow.fired; hero.nock.position.y = 0.12 + pull;
-  hero.sword.rotation.x += (sx - hero.sword.rotation.x) * Math.min(1, dt * 30);
+  hero.sword.rotation.x += (sx - hero.sword.rotation.x) * (1 - Math.exp(-dt * 30));
   hero.axe.rotation.set(hero.sword.rotation.x, 0, 0); hero.hammer.rotation.set(hero.sword.rotation.x, 0, 0);
   hero.axeHead.visible = !axeThrow;   // (it's out, spinning)
   // upright at rest; while attacking, held dead level against the arm's swing and the lean every frame (only the
   // turn between the two is eased, so it never lags into a tilt as the arm swings back)
-  spearHeld += ((H.spear ? 1 : 0) - spearHeld) * Math.min(1, dt * 30);
+  spearHeld += ((H.spear ? 1 : 0) - spearHeld) * (1 - Math.exp(-dt * 30));
   if (spearHeld < 0.01) spearHeld = 0;
   // (v347, Jordan: at rest it leans forward by SPEAR_POSE.restTilt, so the arm's forward swing brings it upright)
   hero.spear.rotation.set(-Math.PI / 2 + SPEAR_POSE.restTilt * (1 - spearHeld) + (Math.PI / 2 - ax - bend - spTilt) * spearHeld, 0, 0);
-  hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * Math.min(1, dt * 45);
+  hero.spearShaft.position.z += (thrust - hero.spearShaft.position.z) * (1 - Math.exp(-dt * 45));
   hero.spearShaft.visible = !harpoon;   // (it's out on the chain)
   hero.body.rotation.y = stance ? -stance : H.spear ? twist : hamPlan ? hamPlan.hips : axPlan && axPlan.body ? axPlan.hips * axPlan.w : H.swing >= 0 && H.punch ? (H.combo ? -0.3 : 0.3) * jab : H.swing >= 0 && H.combo < 2 ? -hero.armR.rotation.y * (H.strike === 'slash' ? 0.12 : 0.25) : 0;
   hero.body.rotation.x = bend || (on && f < 0 ? f * WALK.lean * 0.85 : 0);
@@ -18834,7 +18889,7 @@ function updateFoe(f, dt, night) {
   if (f.stunT > 0 && !f.carried && !f.grabbed) {
     f.stunT -= dt; f.atk = -1;
     if (!f.def.rooted) moveEntity(f, f.kx * dt, f.kz * dt, d.rad, true);
-    f.kx *= Math.max(0, 1 - dt * 8); f.kz *= Math.max(0, 1 - dt * 8);
+    f.kx *= Math.exp(-dt * 8); f.kz *= Math.exp(-dt * 8);
     f.y = surfaceY(f.x, f.z);
     f.g.position.set(f.x, f.y, f.z); f.g.rotation.set(0, f.face + Math.sin(time * 18) * 0.12, 0); f.shadow.position.set(f.x, f.y + 0.02, f.z);
     f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
@@ -18859,7 +18914,7 @@ function updateFoe(f, dt, night) {
   if (f.atk >= 0) {
     // wind up, lunge, recover
     f.atk += dt;
-    f.face += angDiff(Math.atan2(dx, dz), f.face) * Math.min(1, dt * 6);
+    f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 6));
     if (f.atk > 0.45 && !f.struck) {
       f.struck = true;
       if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2 && see) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z, f.level || 1); }
@@ -18867,7 +18922,7 @@ function updateFoe(f, dt, night) {
     if (f.atk > 0.85) { f.atk = -1; f.cd = 0.9 + Math.random() * 0.5; }
   } else if (f.aggro) {
     if (dist < d.reach && f.cd <= 0 && H.alive && see) { f.atk = 0; f.struck = false; }
-    else if (d.rooted) f.face += angDiff(Math.atan2(dx, dz), f.face) * Math.min(1, dt * 4);
+    else if (d.rooted) f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 4));
     else if (dist > d.reach * 0.75 || !see) {
       // straight at you when nothing's in the way, otherwise along a path round whatever is
       let tx = H.x, tz = H.z;
@@ -18882,7 +18937,7 @@ function updateFoe(f, dt, night) {
       if (f.sideT > 0) { f.sideT -= dt; const s = f.side; const ox = -mz * s, oz = mx * s; mx = mx * 0.3 + ox; mz = mz * 0.3 + oz; const l = Math.hypot(mx, mz); mx /= l; mz /= l; }
       const wade = driftSlow(f.x, f.z);
       vx = mx * d.speed * wade; vz = mz * d.speed * wade; want = d.speed * wade * dt;
-      f.face += angDiff(Math.atan2(mx, mz), f.face) * Math.min(1, dt * 8);
+      f.face += angDiff(Math.atan2(mx, mz), f.face) * (1 - Math.exp(-dt * 8));
     }
   } else if (f.homing && !d.rooted) {
     // back to where it came from, round anything in the way
@@ -18892,7 +18947,7 @@ function updateFoe(f, dt, night) {
     else {
       const ex = t[0] - f.x, ez = t[1] - f.z, el = Math.hypot(ex, ez) || 1, sp = d.speed * 0.55;
       vx = ex / el * sp; vz = ez / el * sp; want = sp * dt;
-      f.face += angDiff(Math.atan2(ex, ez), f.face) * Math.min(1, dt * 6);
+      f.face += angDiff(Math.atan2(ex, ez), f.face) * (1 - Math.exp(-dt * 6));
     }
   } else if (!d.rooted) {
     f.wanderT -= dt;
@@ -18903,13 +18958,13 @@ function updateFoe(f, dt, night) {
     if (f.wander) {
       const wx = f.wander[0] - f.x, wz = f.wander[1] - f.z, wl = Math.hypot(wx, wz);
       if (wl < 0.3) f.wander = null;
-      else { vx = wx / wl * d.speed * 0.35; vz = wz / wl * d.speed * 0.35; want = d.speed * 0.35 * dt; f.face += angDiff(Math.atan2(wx, wz), f.face) * Math.min(1, dt * 5); }
+      else { vx = wx / wl * d.speed * 0.35; vz = wz / wl * d.speed * 0.35; want = d.speed * 0.35 * dt; f.face += angDiff(Math.atan2(wx, wz), f.face) * (1 - Math.exp(-dt * 5)); }
     }
   }
   if (f.slowT > 0) { f.slowT -= dt; vx *= 1 - SPEAR.slow; vz *= 1 - SPEAR.slow; }
   if (d.rooted) f.kx = f.kz = 0;
   vx += f.kx; vz += f.kz;
-  f.kx *= Math.max(0, 1 - dt * 8); f.kz *= Math.max(0, 1 - dt * 8);
+  f.kx *= Math.exp(-dt * 8); f.kz *= Math.exp(-dt * 8);
   const got = moveEntity(f, vx * dt, vz * dt, d.rad, true);
   if (want > 0 && got < want * 0.3 && f.sideT <= 0) { f.sideT = 0.8; f.side = Math.random() < 0.5 ? 1 : -1; if (!f.aggro) f.wander = null; }
   f.y = surfaceY(f.x, f.z);
@@ -19023,10 +19078,10 @@ const camRight = new GFX.Vector3(), camUp = new GFX.Vector3(), camK = { a: 0, b:
 const CAM_DIST = 70;
 function updateCamera(dt) {
   { const [lo, hi] = zoomLimits(); if (zoom < lo || zoom > hi) setZoom(zoom); }   // the limits were just changed
-  yaw += (yawGoal - yaw) * Math.min(1, dt * 8);
+  yaw += (yawGoal - yaw) * (1 - Math.exp(-dt * 8));
   if (Math.abs(yawGoal - yaw) < 1e-3) yaw = yawGoal;
   const want = new GFX.Vector3(H.x, H.y, H.z);
-  camTarget.lerp(want, Math.min(1, dt * 7));
+  camTarget.lerp(want, (1 - Math.exp(-dt * 7)));
   if (camTarget.distanceToSquared(want) < 1e-8) camTarget.copy(want);
   if (VIEW.perspective > 0.5) {
     // as far back as frames the same height of ground at the hero as the orthographic view does
@@ -20938,9 +20993,48 @@ $('gpuClose').addEventListener('click', e => { e.stopPropagation(); if (!profPan
 let sceneCountT = 0, sceneMeshes = 0;
 const fpsTag = $('fpsTag');
 // a frame that throws is caught and shown (see showCrash), and the next one still comes, so the game keeps going
+// Frame pacing (v428, Jordan: zoomed far out, walking went slow/fast/slow/fast). When the GPU can't finish a frame
+// within the screen's refresh, the browser queued frames up (80 ms of them) and showed each after a varying number
+// of refreshes, while the game moved everything by the time between its own frames: an uneven glide. Now at most
+// two frames are with the GPU at once (the CPU's work on the next overlapping the GPU's on the last), and the game
+// draws on every pace.k-th refresh: k goes up when frames back up (two still with the GPU when the next is due) and
+// down when a frame, sent to an idle GPU, comes back well inside k - 1 refreshes for a good while (longer each time
+// that went wrong), so each frame stays up as long as the next: 72 steady frames a second on a 144 Hz screen rather
+// than 60 to 90 unevenly. Off in Options (Steady frame pacing), and under test.
+const pace = { R: 1000 / 60, k: 1, tick: 0, lastTick: 0, flying: 0, flyAt: 0, gpu: 0, due: 0, backed: 0, fast: 0, hold: 90, upAt: 0 };
+const paceOn = () => OPTIONS.steadyPace !== false && !navigator.webdriver;
 function frame(now) {
-  try { frameBody(now); } catch (err) { showCrash(err); }
   requestAnimationFrame(frame);
+  const P = pace, gap = now - P.lastTick; P.lastTick = now;
+  // (the refresh interval: the shortest gaps between ticks, eased)
+  if (gap > 2 && gap < 60) P.R = gap < P.R ? P.R * 0.7 + gap * 0.3 : P.R * 0.998 + gap * 0.002;
+  const on = paceOn();
+  if (on) {
+    if (++P.tick < P.k) return;
+    P.due++;
+    // (two frames still with the GPU: let this refresh go by; frames backing up often mean drawing less often)
+    if (P.flying >= 2 && now - P.flyAt < 250) {
+      if (++P.backed >= 6) {
+        P.k = Math.min(4, P.k + 1); P.backed = 0; P.due = 0; P.fast = 0;
+        if (now - P.upAt < 20000) P.hold = Math.min(3600, P.hold * 2);   // (it came straight back down and up again)
+        P.upAt = now;
+      }
+      return;
+    }
+    if (P.due >= 60) { P.due = 0; P.backed = 0; }
+    P.tick = 0;
+  } else { P.k = 1; P.flying = 0; }
+  try { frameBody(now); } catch (err) { showCrash(err); }
+  if (!on || !renderer.device.queue.onSubmittedWorkDone) return;
+  const t0 = performance.now(), idle = P.flying === 0;
+  P.flying++; P.flyAt = now;
+  renderer.device.queue.onSubmittedWorkDone().then(() => {
+    P.flying = Math.max(0, P.flying - 1);
+    if (!idle) return;
+    P.gpu = performance.now() - t0;
+    if (P.k > 1 && P.gpu < (P.k - 1) * P.R * 0.7) { if (++P.fast > P.hold) { P.k--; P.fast = 0; P.backed = 0; } }
+    else P.fast = 0;
+  }, () => { P.flying = Math.max(0, P.flying - 1); });
 }
 function frameBody(now) {
   const frameStart = performance.now();
@@ -20950,7 +21044,7 @@ function frameBody(now) {
   fpsAcc += real; fpsN++;
   if (fpsAcc > 0.5) {
     fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
-    if (OPTIONS.showFps) fpsTag.textContent = `${Math.round(fps)} FPS · ${(1000 / fps).toFixed(1)} ms`;
+    if (OPTIONS.showFps) fpsTag.textContent = `${Math.round(fps)} FPS · ${(1000 / fps).toFixed(1)} ms` + (pace.k > 1 ? ` · 1 in ${pace.k} of ${Math.round(1000 / pace.R)} Hz` : '');
     // (with the HUD hidden, the frame rate shows on the SHOW UI button, so the HUD's own cost can be measured)
     const su = $('showUI'), sut = OPTIONS.showFps && document.body.classList.contains('noUI') ? `SHOW UI · ${Math.round(fps)} FPS` : 'SHOW UI';
     if (su.textContent !== sut) su.textContent = sut;
@@ -21010,7 +21104,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 427, crashSeen = new Map();
+const GAME_VERSION = 428, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21405,6 +21499,7 @@ window.GAME = {
   options: OPTIONS,
   eye: async () => { await eye.read(); return { exposure: eye.exposure, brightness: eye.brightness, aim: eye.aim }; },
   cutCount: () => cutEdges.size,
+  pace: () => ({ R: +pace.R.toFixed(2), k: pace.k, gpu: +pace.gpu.toFixed(2), hold: pace.hold, on: paceOn() }),
   // (v426) the first cathedral's triangles, uncut (or cut: its cut list applied), for a painter's render
   cathDump: (cut = false, roof = true) => {
     const ca = cathedrals[0]; if (!ca) return null;
