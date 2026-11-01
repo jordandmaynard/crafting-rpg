@@ -5461,7 +5461,7 @@ class BuildBuf extends Buf {
   }
 }
 // what the pieces drawn now are made of (buildMat): 0 plain, 1 stone, 2 wood, 3 plaster, 4 smooth (marble: bevels only)
-const SURF_STONE = 1, SURF_WOOD = 2, SURF_PLASTER = 3, SURF_SMOOTH = 4;
+const SURF_STONE = 1, SURF_WOOD = 2, SURF_PLASTER = 3, SURF_SMOOTH = 4, SURF_SLATE = 5;   // (5: a bare triangle laid with the slate roofs' map)
 let SURF = 0, emitSurf = null;   // (emitSurf: while set, it picks SURF for each part from its colour)
 let OUT = new Buf(), GLOW = new Buf(), METAL = new Buf(), PRISMB = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
 // (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
@@ -5524,7 +5524,7 @@ function tri(a, b, c, ca, cb = ca, cc = ca, B = OUT) {
   p[n] = a[0]; p[n + 1] = a[1]; p[n + 2] = a[2]; k[n] = ca.r; k[n + 1] = ca.g; k[n + 2] = ca.b; n += 3;
   p[n] = b[0]; p[n + 1] = b[1]; p[n + 2] = b[2]; k[n] = cb.r; k[n + 1] = cb.g; k[n + 2] = cb.b; n += 3;
   p[n] = c[0]; p[n + 1] = c[1]; p[n + 2] = c[2]; k[n] = cc.r; k[n + 1] = cc.g; k[n + 2] = cc.b; n += 3;
-  if (B.dl) B.dl.fill(0, (n / 3 - 3) * 4, n / 3 * 4);   // (a bare triangle: plain, no bevel)
+  if (B.dl) { const v = n / 3; B.dl.fill(0, (v - 3) * 4, v * 4); if (SURF === SURF_SLATE) B.dl[(v - 3) * 4 + 3] = B.dl[(v - 2) * 4 + 3] = B.dl[(v - 1) * 4 + 3] = SURF_SLATE; }   // (a bare triangle: plain, no bevel; or slate)
   B.n = n;
 }
 function quad(a, b, c, d, ca, cb = ca, cc = cb, cd = ca) { tri(a, b, c, ca, cb, cc); tri(a, c, d, ca, cc, cd); }
@@ -6066,7 +6066,22 @@ fn axis(k: i32) -> vec3f { return select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0,
   let code = i.dl.w + 0.25;
   let isBox = code >= 8.0;
   let kind = i32(code - select(0.0, 8.0, isBox));
-  if (kind > 0 && U.d.x > 0.0) {
+  if (kind == 5) {
+    // (a bay window's lean-to: the slate roofs' map, laid as slateMat lays it)
+    let up = select(N0, -N0, N0.y < 0.0);
+    let on = select(0.0, 1.0, abs(N0.y) > 0.35);
+    let ax = abs(up.x) > abs(up.z);
+    let sg = select(select(-1.0, 1.0, up.z > 0.0), select(-1.0, 1.0, up.x > 0.0), ax);
+    let t = select(vec3f(1.0, 0.0, 0.0), vec3f(0.0, 0.0, 1.0), ax);
+    let down = normalize(select(vec3f(0.0, -U.slope, sg), vec3f(sg, -U.slope, 0.0), ax));
+    let along = select(i.world.x, i.world.z, ax);
+    let across = select(i.world.z, i.world.x, ax) * sg * sqrt(1.0 + U.slope * U.slope);
+    let tx = textureSampleLevel(tSlate, tSlateS, vec2f(along / U.sl.z, across / U.sl.y), 0.0);
+    let m = (tx.xy * 2.0 - 1.0) * U.sl.x * on;
+    N = normalize(up * (tx.z * 2.0 - 1.0 + (1.0 - on)) + t * m.x + down * m.y);
+    N = select(N, -N, N0.y < 0.0);
+    col *= mix(1.0, mix(1.0 - 0.45 * U.sl.w, 1.0, tx.a), on);
+  } else if (kind > 0 && U.d.x > 0.0) {
     let L = i.dl.xyz; let H = max(i.dh, vec3f(1e-4)); let q = normalize(i.dq);
     let centre = i.world - qrot(q, L);
     var Tu = vec3f(1.0, 0.0, 0.0); var Tv = vec3f(0.0, 0.0, 1.0);
@@ -10315,7 +10330,7 @@ function wallPieceRaw(c, r, w, type) {
     for (const a of [0, 1]) { p = at(a, y + CUT_H / 2); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 0.16, sy: CUT_H, sz: 0.26, ry }); }
     return;
   }
-  if (type === 13) { const out = windowOutside(c, r, w); timberWindow(at, y, ry, k, out, shutterPick(c, r, w, out)); }
+  if (type === 13) { const out = windowOutside(c, r, w); timberWindow(at, y, ry, k, out, shutterPick(c, r, w, out), out ? windowRoofColor(c, r, w, out) : null); }
   else if (!door) {
     let p = at(0.5, y + 0.25); part(G.box, shade(CC('#7a7484'), k), p[0], p[1], p[2], { sx: 1, sy: 0.5, sz: 0.24, ry });
     p = at(0.5, y + 0.5 + (WALL_H - 0.6) / 2); part(G.box, shade(CC(TIMBER.plaster), k), p[0], p[1], p[2], { sx: 0.98, sy: WALL_H - 0.6, sz: 0.18, ry });
@@ -10431,7 +10446,7 @@ function giGeo(b, cuts, proxy) {
 }
 // a timber wall with a square window: the stone foot, a beam right across under the window and another over it,
 // plaster either side and above and below, the window's own posts, four panes and the bars between them
-function timberWindow(at, y, ry, k, out = 0, pick = 0) {
+function timberWindow(at, y, ry, k, out = 0, pick = 0, roofCol = null) {
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const plaster = shade(CC(TIMBER.plaster), k), beam = TIMBER.beam, y0 = BAY.y0, y1 = BAY.y1, hw = WINDOW_HW, ym = (y0 + y1) / 2;
   const bay = out && BAY.on && BAY.depth > 0.02, g = hw - 0.04, bar = '#3a2a1c';
@@ -10453,7 +10468,8 @@ function timberWindow(at, y, ry, k, out = 0, pick = 0) {
     const B = (a, n, yy, sx, sy, sz, col) => { const p = W3(a, n, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
     const yb = y0 + 0.05, yt = y1 - 0.04, gh = yt - yb, gm = (yb + yt) / 2;
     B(0.5, f0 + (D + 0.05) / 2, y + yb - 0.03, hw * 2 + 0.12, 0.06, D + 0.05, beam);               // (the sill shelf)
-    for (const s of [-1, 1]) B(0.5 + s * (hw - 0.04), f0 + D * 0.45, y + yb - 0.14, 0.06, 0.16, D * 0.8, beam);   // (its brackets)
+    // (two little knee braces from the wall up under the shelf's front: v418, Jordan)
+    for (const s of [-1, 1]) { const a = 0.5 + s * (hw - 0.06); seg(G.box, beam, W3(a, f0 + 0.02, y + yb - 0.06 - Math.max(0.22, D * 1.1)), W3(a, nf - 0.01, y + yb - 0.07), 0.025); }
     for (const s of [-1, 1]) B(0.5 + s * hw, nf, y + gm, 0.07, gh, 0.07, beam);                      // (the front corner posts)
     B(0.5, nf, y + yt + 0.03, hw * 2 + 0.07, 0.07, 0.08, beam);                                      // (the head)
     for (const s of [-1, 1]) B(0.5 + s * hw, f0 + D / 2, y + yt + 0.03, 0.07, 0.07, D, beam);
@@ -10462,16 +10478,23 @@ function timberWindow(at, y, ry, k, out = 0, pick = 0) {
     for (const a of [-1, 1]) B(0.5 + a * g / 3, nf, y + gm, 0.035, gh, 0.06, bar);
     leadedPanes((a, yy) => W3(a, nf, yy), y, ry, (a, h) => true, 0.5 - g, 0.5 + g, yb + 0.03, yt - 0.03);
     // the lean-to: from the wall over the head down to past the front, slate grey, with a fascia and closed ends
-    const r0 = y + y1 + 0.2, r1 = y + yt + 0.08, ov = 0.06, aL = 0.5 - hw - 0.06, aR = 0.5 + hw + 0.06;
-    const top = shade(CC(BAY.roof), k), side = shade(CC(BAY.roof), k * 0.78), fas = shade(CC(beam), 1);
-    const n1 = nf + ov, wl = [W3(aL, f0, r0), W3(aR, f0, r0)], fr = [W3(aL, n1, r1), W3(aR, n1, r1)];
+    // (v418: in the building's own roof colour, laid with slate, at the big roofs' pitch)
+    const ov = 0.06, n1 = nf + ov, r1 = y + yt + 0.08, r0 = r1 + ROOF_SLOPE * (n1 - f0), aL = 0.5 - hw - 0.06, aR = 0.5 + hw + 0.06;
+    const rc = CC(roofCol || BAY.roof), top = shade(rc, 1), side = shade(rc, 0.72), fas = shade(CC(beam), 1);
+    const wl = [W3(aL, f0, r0), W3(aR, f0, r0)], fr = [W3(aL, n1, r1), W3(aR, n1, r1)];
+    const saveS = SURF; SURF = SURF_SLATE;
     quad(wl[0], wl[1], fr[1], fr[0], top);
+    SURF = saveS;
     quad(fr[0], fr[1], W3(aR, n1, r1 - 0.06), W3(aL, n1, r1 - 0.06), fas);
     tri(W3(aL, f0, r0), W3(aL, n1, r1), W3(aL, f0, r1 - 0.06), side);
     tri(W3(aR, f0, r0), W3(aR, f0, r1 - 0.06), W3(aR, n1, r1), side);
     quad(W3(aL, n1, r1 - 0.06), W3(aR, n1, r1 - 0.06), W3(aR, f0, r1 - 0.06), W3(aL, f0, r1 - 0.06), side);
   }
-  if (out && SHUTTER.on) shutters(at, y + ym, ry, out, hw, y1 - y0 - 0.03, pick, hw + (bay ? 0.05 : 0));
+  // (on a bay they hang from its front corner posts, v418)
+  if (out && SHUTTER.on) {
+    if (bay) shutters(at, y + (y0 + 0.05 + y1 - 0.04) / 2, ry, out, hw, y1 - y0 - 0.12, pick, hw + 0.04, 0.1 + BAY.depth);
+    else shutters(at, y + ym, ry, out, hw, y1 - y0 - 0.03, pick);
+  }
 }
 // The bay windows (v417): how far they bump out, the timber window's height (y0..y1 over the wall's foot), the roof's colour
 const BAY = { on: 1, depth: 0.2, y0: 0.6, y1: 1.72, roof: '#5c5e6a' };
@@ -10511,9 +10534,15 @@ function shutterPick(c, r, w, out) {
   if (!rm) { const r0 = rooms.get(roomOf.get(inside)); return r0 ? hs(r0.bld, 7, 415) : hs(c * 3 + w, r, 415); }
   return hs(rm.bld, 7, 415);
 }
-function shutters(at, ym, ry, out, hw, hh, pick, ha = hw) {
+// (the roof colour of the building a window's in, for its bay's little roof: null when its rooms aren't known yet)
+function windowRoofColor(c, r, w, out) {
+  const k = Math.round(PDY / WALL_H), inside = out > 0 ? (w ? T(c - 1, r) : T(c, r - 1)) : T(c, r);
+  for (const kk of [k, 0]) { const rm = rooms.get(roomOf.get(kk * SNN + inside)); if (rm) { const b = buildings.get(rm.bld); return (b && b.color) || rm.color; } }
+  return null;
+}
+function shutters(at, ym, ry, out, hw, hh, pick, ha = hw, off = 0.14) {
   const wv = Math.abs(ry) > 0.1, th = SHUTTER.open * Math.PI / 180, col = SHUTTER.colors[Math.floor(pick * SHUTTER.colors.length) % SHUTTER.colors.length];
-  const nrm = wv ? [out, 0, 0] : [0, 0, out], alongV = wv ? [0, 0, 1] : [1, 0, 0], off = 0.14;
+  const nrm = wv ? [out, 0, 0] : [0, 0, out], alongV = wv ? [0, 0, 1] : [1, 0, 0];
   const saveE = emitSurf; emitSurf = null; SURF = SURF_WOOD;
   try {
     for (const side of [-1, 1]) {
@@ -10607,6 +10636,8 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, 0.34, shade(CC('#7e7a88'), k));   // (the crenels, as the plain wall)
 }
 function buildPieces(cx, cz, ch) {
+  // (the slate roofs' map and settings, shared with buildMat for the bay windows' roofs; slateMat is made after buildMat)
+  if (!DETAIL_U.tSlate) { DETAIL_U.tSlate = SLATE_U.tSlate; DETAIL_U.sl = SLATE_U.s; DETAIL_U.slope = SLATE_U.slope; }
   ch.build = null; ch.buildGI = null; ch.glass = null;
   if (!buildCount[cz * NC + cx]) return;
   OUT = bufBuild; bufBuild.n = 0; GLASSB = bufGlass; bufGlass.n = 0; bufGIProxy.n = 0;
@@ -10808,7 +10839,7 @@ const roofMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
 // a slate over), blurred soft and kept as a normal (rgb) and the height (a), as makeCobbleTex does. Laid on the roof's
 // own plane from the world position: each slate rises toward its lower edge (resting on the row below), rounds over
 // at that edge and at its sides, and the gaps sit low and a little darker. T > Slate roofs.
-const SLATE = { bump: 1, row: 0.16, width: 0.22, shade: 0.5 };
+const SLATE = { bump: 2, row: 0.2, width: 0.25, shade: 0.69 };
 const SLATE_TEX = { across: 8, rows: 6, cell: 64, round: 0.3, chips: 0.28, cracks: 0.22 };
 // (v421, Jordan: round the bottom corners of every slate, not the tops, and chip and crack some of them)
 function makeSlateTex() {
@@ -10866,7 +10897,7 @@ function makeSlateTex() {
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
-const SLATE_U = { s: { value: { x: 1, y: 0.16, z: 0.22, w: 0.5 } }, slope: { value: ROOF_SLOPE }, tSlate: { value: makeSlateTex() } };
+const SLATE_U = { s: { value: { x: 2, y: 1.2, z: 2, w: 0.69 } }, slope: { value: ROOF_SLOPE }, tSlate: { value: makeSlateTex() } };
 function updateSlateU() { const v = SLATE_U.s.value; v.x = SLATE.bump; v.y = SLATE.row * SLATE_TEX.rows; v.z = SLATE.width * SLATE_TEX.across; v.w = SLATE.shade; }
 const slateMat = new GFX.ShaderMaterial({ uniforms: SLATE_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -20262,7 +20293,7 @@ const TUNING = [
     [LEAD, 'h', 'Diamond pane height', 0.05, 0.5, 0.01, redrawPieces],
     [SHUTTER, 'on', 'Shutters on timber windows (0 off, 1 on)', 0, 1, 1, redrawPieces],
     [BAY, 'on', 'Bay windows: timber windows bump out where the outside is known (0 off, 1 on)', 0, 1, 1, redrawPieces],
-    [BAY, 'depth', 'Bay depth (tiles)', 0, 0.45, 0.01, redrawPieces],
+    [BAY, 'depth', 'Bay windows: how far they stick out (tiles)', 0, 0.6, 0.01, redrawPieces],
     [BAY, 'y0', 'Timber window bottom (over the wall foot)', 0.5, 1, 0.01, redrawPieces],
     [BAY, 'y1', 'Timber window top', 1.3, 1.85, 0.01, redrawPieces],
     [TIMBER, 'braces', 'Timber walls: share with a diagonal brace', 0, 1, 0.01, redrawPieces],
@@ -20538,7 +20569,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 421, crashSeen = new Map();
+const GAME_VERSION = 422, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
