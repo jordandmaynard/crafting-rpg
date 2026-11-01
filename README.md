@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v444:** The cathedral roof's shadow stand-in (and the willow's curtains') use castOnlyBoth, a double-sided cast-only material: with the one-sided castOnlyMat the shadow pass culled gable and roof faces that looked toward the sun, so light came in over the facade above the rose while you were inside.
+
 **v443:** Painted icons drop their 64px files (103 removed; Jordan's call, desktop 4K always picks 128 or 256): srcset is 128w/256w and src the 128. Artifact goes from 441 to 338 files (limit 511). Smaller screens get the 128 shrunk by the browser.
 
 **v442:** Jordan's cathedral-stained-glass-v1 kit replaces the placeholder rose designs: rose/01-grail-god-rays, 02-knight-sun-rays, 03-praying-priestess, 04-geometric (.webp, lossless from the kit's 256 PNGs, pixel-identical, 5-7 KB each; zip in art/deliveries). roseLoad(style) loads and caches each painting's pixels, paintRose(style) copies them into roseTex (the procedural painters are gone). T > Stained glass style now 0-3; ROSE.style 2 is the priestess.
