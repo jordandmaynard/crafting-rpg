@@ -1208,13 +1208,15 @@ let spines = [], deltaZone = null, climateWind = [1, 0], climateAt = null;
 //   continent's oval takes [least, most]; stretchMax: long axis over short at most; isle: an island's long half-axis
 //   (share of the map) [least, most]; bays: gulfs bitten out of each continent's coast [least, most]; apart: islands
 //   grown by this don't touch anything; strait: half-width of the sea kept halfway between two continents [least,
-//   most]; warp: tiles the
+//   most]; archipelagos: volcanic clusters [least, most], archR: a cluster's radius (share of the map), archIsles: its
+//   islands [least, most], archIsle: an island's long half-axis there; warp: tiles the
 //   outlines bend by; rough: the coast's noise (in blob radii); detail: its scale (tiles); channel: tiles of sea
 //   between landmasses at least; minIsle: smallest island kept (tiles); pond: an enclosed sea smaller than this is
 //   filled; shore: tiles the land takes to rise from the beach; border: where (share of the half-map) the ocean starts
 const LANDS = { share: 0.44, continents: [2, 4], fill: [0.72, 0.9], stretchMax: 2.6, islands: [6, 14], isle: [0.03, 0.07], bays: [1, 3],
+  archipelagos: [1, 2], archR: [0.07, 0.11], archIsles: [6, 11], archIsle: [0.016, 0.034],
   apart: 1.3, strait: [8, 40], warp: 110, rough: 0.2, detail: 150, channel: 8, minIsle: 300, pond: 3000, shore: 26, border: 0.9 };
-let LANDID = new Uint16Array(N * N), landmasses = [], landStats = {};
+let LANDID = new Uint16Array(N * N), landmasses = [], landStats = {}, volcanoes = [];
 // label the 4-connected patches where is(i): id (1 up) in out, and the tiles of each patch in order in q;
 // gives [{ id, n, at }] (at: where its tiles start in q)
 function labelPatches(is, out, q) {
@@ -1324,6 +1326,26 @@ function landMask() {
       b.a *= 0.85; b.b *= 0.85;
     }
   }
+  // volcanic archipelagos (v388): a tight scatter of small islands round a spot of open sea, where the Blasted Wastes
+  // gather (see blastBias)
+  volcanoes = [];
+  const na = count(LANDS.archipelagos);
+  for (let v = 0; v < na; v++) {
+    const R = N * pick(LANDS.archR);
+    let cz = null;
+    for (let k = 0; k < 300 && !cz; k++) {
+      const x = lo + R * 0.6 + rand() * (hi - lo - R * 1.2), z = lo + R * 0.6 + rand() * (hi - lo - R * 1.2);
+      if (blobs.every(o => inBlob(o, x, z) > 1.15 + (o.kind === 'continent' ? 0.25 : 0.6)) && volcanoes.every(w => Math.hypot(w.x - x, w.z - z) > w.R + R)) cz = { x, z, R };
+    }
+    if (!cz) continue;
+    volcanoes.push(cz);
+    const want = count(LANDS.archIsles);
+    for (let k = 0, got = 0; k < 400 && got < want; k++) {
+      const b = blob(N * pick(LANDS.archIsle), 1 + rand() * 0.9, 'volcano'), t = rand() * Math.PI * 2, d = Math.sqrt(rand()) * cz.R * 0.85;
+      b.x = cz.x + Math.cos(t) * d; b.z = cz.z + Math.sin(t) * d;
+      if (clear(b, 1.25)) { blobs.push(b); got++; }
+    }
+  }
   // bays and gulfs bitten out of the continents' coasts
   for (const b of blobs) {
     if (b.kind !== 'continent') continue;
@@ -1396,8 +1418,25 @@ function landMask() {
     }
     dropSpecks();
   }
-  landStats = { blobs: blobs.map(b => [b.kind, Math.round(b.a), Math.round(b.b)]), bays: bays.length, cut: +cut.toFixed(3) };
-  return { M, inland: tileDist(i => !M[i], 4000) };
+  landStats = { blobs: blobs.map(b => [b.kind, Math.round(b.a), Math.round(b.b)]), bays: bays.length, cut: +cut.toFixed(3), volcanoes: volcanoes.map(v => [Math.round(v.x), Math.round(v.z), Math.round(v.R)]) };
+  const size = new Int32Array(NN);
+  for (const p of labelPatches(i => M[i], ID, q)) for (let k = p.at; k < p.at + p.n; k++) size[q[k]] = p.n;
+  return { M, size, inland: tileDist(i => !M[i], 4000) };
+}
+// How much more blasted each tile is for where it lies (v388, Jordan): islands lean that way (BLAST_BIAS.isle), the
+// volcanic archipelagos hard (volcano, full at the middle fading to nothing at reach times their radius), continents
+// away from it (continent); blurred so the wastes' edges stay soft. Ground blasted overSnow past WASTE_AT is wastes
+// even where it's cold enough for snow (a volcano in the north)
+const BLAST_BIAS = { isle: 0.1, volcano: 0.75, reach: 1.4, continent: -0.06, blur: 10, overSnow: 0.2 };
+function blastBias(LM) {
+  const B = new Float32Array(N * N), BB = BLAST_BIAS;
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r), n = LM.size[i];
+    let b = !n ? 0 : n < TOWN_LAND ? BB.isle : BB.continent;
+    for (const v of volcanoes) { const d = Math.hypot(c - v.x, r - v.z) / (v.R * BB.reach); if (d < 1) b += BB.volcano * (1 - d * d); }
+    B[i] = b;
+  }
+  return boxBlur(B, BB.blur);
 }
 // the landmasses once the world is cut (land, lakes, rivers, canyons; not the sea): LANDID and landmasses
 // ({ id, n, c, r: its deepest inland tile, deep: how far that is from the sea, x0, z0, x1, z1 }), biggest first
@@ -1575,6 +1614,8 @@ async function generate(progress) {
     return (A[y * G + x] * (1 - u) + A[y * G + x + 1] * u) * (1 - v) + (A[(y + 1) * G + x] * (1 - u) + A[(y + 1) * G + x + 1] * u) * v;
   };
   const sat = x => Math.max(0, Math.min(1, x));
+  // (v388) the blast leans to the islands, and hard to the volcanic archipelagos; continents see less of it
+  const BB = blastBias(LM), blastAt = (c, r) => lerpG(BLS, c, r) + BB[T(clamp(Math.round(c), 0, N - 1), clamp(Math.round(r), 0, N - 1))];
   // the prevailing wind: one of eight ways, by the seed
   { const a = Math.floor(mulberry32(SEED ^ 0x3d1)() * 8) * Math.PI / 4; climateWind = [Math.cos(a), Math.sin(a)]; }
   const hfAt = (x, y) => HF[T(Math.min(N - 1, Math.round(x * S)), Math.min(N - 1, Math.round(y * S)))];
@@ -1601,7 +1642,7 @@ async function generate(progress) {
     const meadow = sat((CLIMATE.meadow - wet) / 0.1) * sat((CLIMATE.hot - temp) / 0.1) * sat((0.4 - curse) / 0.08) * sat((temp - CLIMATE.snow) / 0.1);
     const cold = Math.max(sat((CLIMATE.snow + 0.05 - temp) / 0.15), sat((h - 0.72) / 0.1));
     // the wastes are broken country: more rise and fall than the graves they're like
-    const blast = sat((lerpG(BLS, c, r) - WASTE_AT + 0.04) / 0.08);
+    const blast = sat((blastAt(c, r) - WASTE_AT + 0.04) / 0.08);
     const k = 0.25 - 0.1 * meadow + 0.9 * Math.max(cold, SP[i]) + 0.75 * blast;
     HF[i] = Math.max(0.2, HB[i] + (h - HB[i]) * k + blast * fbm(nX, c / 18 + 300, r / 18, 2) * 0.12);
   }
@@ -1610,7 +1651,7 @@ async function generate(progress) {
   for (let gy = 0; gy < N / 26; gy++) for (let gx = 0; gx < N / 26; gx++) {
     const cx = (gx + 0.2 + hs(gx, gy, 71) * 0.6) * 26, cz = (gy + 0.2 + hs(gx, gy, 72) * 0.6) * 26;
     if (cx < 20 || cz < 20 || cx > N - 20 || cz > N - 20 || hs(gx, gy, 73) > 0.6) continue;
-    if (lerpG(BLS, cx, cz) < WASTE_AT + 0.03 || HF[T(Math.floor(cx), Math.floor(cz))] < 0.3) continue;
+    if (blastAt(cx, cz) < WASTE_AT + 0.03 || HF[T(Math.floor(cx), Math.floor(cz))] < 0.3) continue;
     const R = 4 + hs(gx, gy, 74) * 5, reach = Math.ceil(R * 1.7);
     craters.push({ c: cx, r: cz, R, lava: hs(gx, gy, 75) < 0.45 });
     for (let dz = -reach; dz <= reach; dz++) for (let dx = -reach; dx <= reach; dx++) {
@@ -1672,8 +1713,10 @@ async function generate(progress) {
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
     const i = T(c, r), L = Math.max(1, LV[i]), curse = lerpG(CUR, c, r), { temp, wet } = climateAt(c, r);
     let b;
-    if (temp < CLIMATE.snow) b = SNOW;
-    else if (lerpG(BLS, c, r) > WASTE_AT) b = WASTES;
+    const bl = blastAt(c, r);
+    if (bl > WASTE_AT + BLAST_BIAS.overSnow) b = WASTES;
+    else if (temp < CLIMATE.snow) b = SNOW;
+    else if (bl > WASTE_AT) b = WASTES;
     else if (curse > 0.36 && L <= 5) b = GRAVE;
     else if ((deltaZone && deltaZone[i] && L <= 3) || (temp > CLIMATE.cool - 0.1 && near[i] <= CLIMATE.swampNear && (
       // a wet climate's low, flat ground, in patches
@@ -18727,7 +18770,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 387, crashSeen = new Map();
+const GAME_VERSION = 388, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
