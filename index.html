@@ -891,6 +891,7 @@ const CY = new Uint8Array(N * N);   // 1 = canyon: a deep, dry gorge
 const BR = new Uint8Array(N * N);   // bridge deck at LV over water or a canyon: 1 runs east-west, 2 north-south
 const DOCK = new Uint8Array(N * N); // a dock's deck (BR too, so it stands over the water like a bridge; v400)
 const DOCK_NEAR = new Uint8Array(N * N);   // within 3 tiles of a dock: kept clear of trees, rocks and plants (v401)
+const DOCK_WAY = new Uint8Array(N * N);    // a dock's road and the tiles beside it: no town fence across it (v402)
 const FX = new Int8Array(N * N), FZ = new Int8Array(N * N);   // river flow direction, x127
 
 const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
@@ -2832,6 +2833,7 @@ function fenceTowns() {
       for (let d = 0; d < 4; d++) {
         const n = i + DI[d];
         if (BI[n] === TOWN || WT[n] || !terrainOpen(i, n, d)) continue;
+        if (DOCK_WAY[i] && DOCK_WAY[n]) continue;   // (open where a dock's road comes in)
         const [ec, er, w] = edgeOf(c, r, d), arr = w ? WW : WN, e = T(ec, er);
         if (arr[e]) continue;
         const gate = PATH[i] && PATH[n];
@@ -3383,6 +3385,7 @@ const roadVia = new Int32Array(N * N), roadRough = new Float32Array(N * N);
 const TURN = [0, 0.15, 0.6, 2, 3];
 const roadSeen = new Uint32Array(N * N), roadDone = new Uint32Array(N * N);
 let roadRun = 0, heapK = new Float64Array(1 << 16), heapV = new Int32Array(1 << 16);
+let roadKeen = 0;   // a town dock's road (v402): straight in through the yards to the nearest street, not round by the roads
 function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
   const run = ++roadRun, gc = g % N, gr = (g - gc) / N;
   let hn = 0;
@@ -3419,11 +3422,11 @@ function roadRoute(s, g, avoidTown = 0, maxExp = 700000) {
     const c = i % N, r = (i - c) / N, pd = roadDir[i];
     // what a road pays to cross a tile
     const tc = n => {
-      let k = PATH[n] ? 0.45 : 1 + roadRough[n];
+      let k = PATH[n] ? (roadKeen ? 0.9 : 0.45) : 1 + roadRough[n];
       if (RIM[n] & 255) k += 2.5;
       else if (RIM[n]) k += 0.5;
       if (WT[n]) k += 1.5;
-      if (TN[n] && townCell(n % N, (n - n % N) / N) === 'yard') k += 8;
+      if (TN[n] && townCell(n % N, (n - n % N) / N) === 'yard') k += roadKeen ? 1 : 8;
       return k;
     };
     const free = n => !FL[n] && !LAVA[n] && !(TN[n] && TN[n] === avoidTown);
@@ -3549,7 +3552,7 @@ async function layRoads(rand, progress) {
 // gate; a waystone or a road's end within DOCKS.near of the shore gets one too, a road laid to it. Named for the
 // town, or else for the water: Ternhold Dock.
 const docks = [];   // { c, r (its middle tile), base (the shore tile it stands out from), d, tiles, town, water }
-const DOCKS = { len: 6, wide: 3, townReach: 14, near: 10, apart: 30 };
+const DOCKS = { len: 6, wide: 3, townReach: 14, near: 10, apart: 30, cut: 14 };
 function dockFits(s, d, L) {
   const c0 = s % N, r0 = (s - c0) / N, pc = -DR[d], pr = DC[d], half = (DOCKS.wide - 1) / 2;
   const water = (c, r) => {
@@ -3565,7 +3568,9 @@ function dockFits(s, d, L) {
   return true;
 }
 // the shore tile nearest (nc, nr), within maxD, that a dock fits off
-function dockSite(nc, nr, maxD) {
+// The shore tile nearest (nc, nr), within maxD, that a dock fits off. When the dock's road has to climb to level G,
+// one where a cutting up from it can be dug comes first (see dockCut).
+function dockSite(nc, nr, maxD, G = 0) {
   let best = null, bd = 1e9;
   for (let r = nr - maxD; r <= nr + maxD; r++) for (let c = nc - maxD; c <= nc + maxD; c++) {
     if (c < 10 || r < 10 || c >= N - 10 || r >= N - 10) continue;
@@ -3574,24 +3579,78 @@ function dockSite(nc, nr, maxD) {
     const s = T(c, r), L = LV[s];
     if (!L || BI[s] === TOWN || TN[s] || BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) continue;
     if (docks.some(k => Math.hypot(k.c - c, k.r - r) < DOCKS.apart)) continue;
-    for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) { best = { s, d, L }; bd = dist; break; }
+    for (let d = 0; d < 4; d++) {
+      if (!dockFits(s, d, L)) continue;
+      const rank = dist + (G > L && !dockCut({ s, d, L }, G, true) ? 1000 : 0);
+      if (rank < bd) { best = { s, d, L }; bd = rank; }
+    }
   }
   return best;
 }
-function layDock(site, goal, town) {
-  if (!roadRoute(site.s, goal, 0, 200000)) return null;
+// The way up from a dock to the level of the place its road goes to (v402): a cutting straight inland along the
+// dock, as wide as the deck, flat where the ground is level with it and a ramp (RAMP_LEN long) at each step up,
+// dug down into the bank where there isn't room in front of it. Gives the tiles it changed with what they were,
+// to put back, or null when something stands in the way (a town, a road, water, a building).
+function dockCut(site, G, dry) {
+  const { s, d, L } = site, u = (d + 2) & 3, c0 = s % N, r0 = (s - c0) / N, pc = -DR[d], pr = DC[d], half = (DOCKS.wide - 1) / 2;
+  const at = (j, w) => T(c0 + DC[u] * j + pc * w, r0 + DR[u] * j + pr * w), plan = new Map();
+  const flatAt = (j, lv) => { for (let w = -half; w <= half; w++) { const t = at(j, w); if (LV[t] !== lv || SH[t]) return false; } return true; };
+  const set = (j, lv, sh) => { for (let w = -half; w <= half; w++) plan.set(at(j, w), [lv, sh]); };
+  let level = L, j = 0, top = 0;
+  while (level < G) {
+    if (j >= DOCKS.cut) return dockCut.why = 'long', null;
+    const o = LV[at(j + 1, 0)];
+    if (!o) return dockCut.why = 'water', null;
+    if (o === level && !SH[at(j + 1, 0)]) { if (!flatAt(j + 1, level)) set(j + 1, level, 0); j++; continue; }
+    if (o < level) break;
+    // a ramp up against the step, its foot on the flat before it (or on the last ramp's top)
+    const a = Math.max(top + 1, j - RAMP_LEN + 1);
+    for (let k = 0; k < RAMP_LEN; k++) {
+      const left = RAMP_LEN - 1 - k;   // tiles between this one and the top
+      const sh = RAMP_LEN === 1 ? u + 1 : RAMP_LEN === 2 ? (left ? 5 : 9) + u : (left === 2 ? 13 : left === 1 ? 17 : 21) + u;
+      set(a + k, level, sh);
+    }
+    for (let k = top + 1; k < a; k++) set(k, level, 0);   // (the flat before it, if the ground there wasn't)
+    top = j = a + RAMP_LEN; level++;
+    set(j, level, 0);
+  }
+  for (let w = -half; w <= half; w++) if (w) { const t = at(0, w); if (LV[t] && LV[t] !== L) plan.set(t, [L, 0]); }
+  const back = [];
+  for (const [t, [lv, sh]] of plan) {
+    if (LV[t] === lv && SH[t] === sh) continue;
+    if (TN[t] || BI[t] === TOWN || PATH[t] || BR[t] || DOCK[t] || WT[t] || LAVA[t] || FL[t] || CY[t] || OBJ[OB[t]].tile || !LV[t]) return dockCut.why = TN[t] ? 'town' : PATH[t] ? 'road' : 'ground', null;
+    for (let dd = 0; dd < 4; dd++) if (SH[t + DI[dd]] && !plan.has(t + DI[dd])) return dockCut.why = 'ramp', null;   // (nor leave a ramp beside it in the air)
+    back.push([t, LV[t], SH[t]]);
+  }
+  if (!dry) for (const [t, [lv, sh]] of plan) { LV[t] = lv; SH[t] = sh; }
+  return back;
+}
+function layDock(site, goals, town) {
+  // a cutting up to the level of the first goal, unless that would be dug through something
+  dockCut.why = '';
+  const G = LV[goals[0]], back = G > site.L ? dockCut(site, G) || [] : [];
+  roadKeen = town ? 1 : 0;
+  const goal = goals.find(g => roadRoute(site.s, g, 0, 200000));
+  roadKeen = 0;
+  if (goal === undefined) { for (const [t, lv, sh] of back) { LV[t] = lv; SH[t] = sh; } return null; }
+  // (the whole way, roads it joins as well, is kept clear of the town's fence)
+  for (let j = goal; j >= 0; j = roadFrom[j]) for (const t of [j, roadVia[j]]) {
+    if (t < 0) continue;
+    DOCK_WAY[t] = 1;
+    for (let dd = 0; dd < 4; dd++) DOCK_WAY[t + DI[dd]] = 1;
+  }
   const { s, d, L } = site, c0 = s % N, r0 = (s - c0) / N, pc = -DR[d], pr = DC[d], half = (DOCKS.wide - 1) / 2, tiles = [];
   for (let a = 1; a <= DOCKS.len; a++) for (let w = -half; w <= half; w++) {
     const t = T(c0 + DC[d] * a + pc * w, r0 + DR[d] * a + pr * w);
     LV[t] = L; SH[t] = 0; BR[t] = d & 1 ? 1 : 2; DOCK[t] = 1; tiles.push(t);
   }
-  const m = Math.ceil(DOCKS.len / 2), k = { c: c0 + DC[d] * m, r: r0 + DR[d] * m, base: s, d, tiles, town: town || null,
+  const m = Math.ceil(DOCKS.len / 2), k = { c: c0 + DC[d] * m, r: r0 + DR[d] * m, base: s, d, tiles, town: town || null, cut: back.length, why: dockCut.why,
     water: T(c0 + DC[d] * (DOCKS.len + 1), r0 + DR[d] * (DOCKS.len + 1)) };
   docks.push(k);
   return k;
 }
 function placeDocks() {
-  docks.length = 0; DOCK.fill(0); DOCK_NEAR.fill(0);
+  docks.length = 0; DOCK.fill(0); DOCK_NEAR.fill(0); DOCK_WAY.fill(0);
   placeDocksAll();
   for (const k of docks) for (const t of k.tiles) {
     const c = t % N, r = (t - c) / N;
@@ -3599,24 +3658,29 @@ function placeDocks() {
   }
 }
 function placeDocksAll() {
-  // coastal towns: the shore nearest the town outside it, a road to the gate nearest that (the end of each street
-  // out of town)
+  // coastal towns: the shore nearest the town outside it, its road all the way in to the nearest street tile
+  // (then the gates, the end of each street out of town, then the middle)
   towns.forEach((t, n) => {
-    const site = dockSite(t.c, t.r, TOWN_R + DOCKS.townReach);
+    const site = dockSite(t.c, t.r, TOWN_R + DOCKS.townReach, LV[T(t.c, t.r)]);
     if (!site) return;
+    const sc = site.s % N, sr = (site.s - sc) / N, by = [];
+    for (let r = t.r - TOWN_R - 2; r <= t.r + TOWN_R + 2; r++) for (let c = t.c - TOWN_R - 2; c <= t.c + TOWN_R + 2; c++) {
+      const i = T(c, r);
+      if (TN[i] === n + 1 && PATH[i]) by.push([Math.hypot(c - sc, r - sr), i]);
+    }
+    by.sort((a, b) => a[0] - b[0]);
     const gates = [];
     for (let d = 0; d < 4; d++) {
       let c = t.c, r = t.r;
       while (TN[T(c + DC[d], r + DR[d])] === n + 1) { c += DC[d]; r += DR[d]; }
       c += DC[d]; r += DR[d];
-      gates.push([Math.hypot(site.s % N - c, Math.floor(site.s / N) - r), T(c, r)]);
+      gates.push([Math.hypot(sc - c, sr - r), T(c, r)]);
     }
-    // (the nearest gate a road gets to, else the town's middle)
     gates.sort((a, b) => a[0] - b[0]);
-    for (const g of [...gates.map(g => g[1]), T(t.c, t.r)]) if (layDock(site, g, t)) break;
+    layDock(site, [...by.slice(0, 4).map(g => g[1]), ...gates.map(g => g[1]), T(t.c, t.r)], t);
   });
   // waystones by the shore, then the ends of roads (a road tile with one road beside it) by the shore
-  for (const w of waystones) { const site = dockSite(w.c, w.r, DOCKS.near); if (site) layDock(site, T(w.c, w.r)); }
+  for (const w of waystones) { const site = dockSite(w.c, w.r, DOCKS.near, LV[T(w.c, w.r)]); if (site) layDock(site, [T(w.c, w.r)]); }
   for (let i = N; i < N * N - N; i++) {
     if (!PATH[i] || BR[i] || BI[i] === TOWN || TN[i]) continue;
     let nb = 0;
@@ -3624,8 +3688,8 @@ function placeDocksAll() {
     if (nb > 1) continue;
     const c = i % N, r = (i - c) / N;
     if (docks.some(k => Math.hypot(k.c - c, k.r - r) < DOCKS.apart)) continue;
-    const site = dockSite(c, r, DOCKS.near);
-    if (site) layDock(site, i);
+    const site = dockSite(c, r, DOCKS.near, LV[i]);
+    if (site) layDock(site, [i]);
   }
 }
 
@@ -18130,30 +18194,42 @@ function drawMapLabels(ctx, k, W, Hh) {
   for (const m of landmasses) if (m.big && shown(m) && m.at) place([cased(m.name)], [at(m.at[0], m.at[1])], L.bigInk, { big: L.big, weight: L.bigWeight, spread: true, always: true });
   // a road's name along it (ROAD_LABEL.style 1: tilted with it, 2: letter by letter, upright); false if it found no room
   function placeRoad(g, ink) {
-    const text = cased(g.name), line = g.line, n = line.length, K = Math.max(0, ROAD_LABEL.smooth | 0);
+    const text = cased(g.name), K = Math.max(0, ROAD_LABEL.smooth | 0);
     ctx.font = fontOf({ italic: true });
     const tw = ctx.measureText(text).width, th = lh;
-    // the road on screen, smoothed over K tiles each way (its tiles step round corners), and the length along it
-    const raw = line.map(i => at(i % N + 0.5, Math.floor(i / N) + 0.5)), P = [], Ls = [0];
-    for (let j = 0; j < n; j++) {
-      let x = 0, z = 0, m = 0;
-      for (let q = Math.max(0, j - K); q <= Math.min(n - 1, j + K); q++) { x += raw[q][0]; z += raw[q][1]; m++; }
-      P.push([x / m, z / m]);
-      if (j) Ls.push(Ls[j - 1] + Math.hypot(P[j][0] - P[j - 1][0], P[j][1] - P[j - 1][1]));
+    // the road's unbroken runs (its tiles skip where it crosses an older road, a town or a bridge, v402): each
+    // spot's name follows only the run it's on
+    if (!g.runs) {
+      g.runs = [[]];
+      g.line.forEach((i, j) => {
+        const run = g.runs[g.runs.length - 1], p = run.length ? g.line[run[run.length - 1]] : -1;
+        if (p >= 0 && Math.max(Math.abs(i % N - p % N), Math.abs(Math.floor(i / N) - Math.floor(p / N))) > 1) g.runs.push([j]);
+        else run.push(j);
+      });
     }
-    const total = Ls[n - 1];
-    const pointAt = sAt => {
-      sAt = clamp(sAt, 0, total);
-      let lo = 0, hi = n - 1;
-      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (Ls[mid] <= sAt) lo = mid; else hi = mid; }
-      const f = Ls[hi] > Ls[lo] ? (sAt - Ls[lo]) / (Ls[hi] - Ls[lo]) : 0;
-      return [P[lo][0] + (P[hi][0] - P[lo][0]) * f, P[lo][1] + (P[hi][1] - P[lo][1]) * f];
-    };
-    if (!g.spotIdx) g.spotIdx = g.spots.map(([x, z]) => { let b = 0, bd = 1e9; line.forEach((i, j) => { const d = Math.hypot(i % N + 0.5 - x, Math.floor(i / N) + 0.5 - z); if (d < bd) { bd = d; b = j; } }); return b; });
+    if (!g.spotIdx) g.spotIdx = g.spots.map(([x, z]) => { let b = 0, bd = 1e9; g.line.forEach((i, j) => { const d = Math.hypot(i % N + 0.5 - x, Math.floor(i / N) + 0.5 - z); if (d < bd) { bd = d; b = j; } }); return b; });
     let put = false;
-    for (const j of g.spotIdx) {
+    for (const sj of g.spotIdx) {
+      const run = g.runs.find(r => r.includes(sj)), n = run.length, j = run.indexOf(sj);
+      if (n < 4) continue;
+      // the run on screen, smoothed over K tiles each way (its tiles step round corners), and the length along it
+      const raw = run.map(q => { const i = g.line[q]; return at(i % N + 0.5, Math.floor(i / N) + 0.5); }), P = [], Ls = [0];
+      for (let k = 0; k < n; k++) {
+        let x = 0, z = 0, m = 0;
+        for (let q = Math.max(0, k - K); q <= Math.min(n - 1, k + K); q++) { x += raw[q][0]; z += raw[q][1]; m++; }
+        P.push([x / m, z / m]);
+        if (k) Ls.push(Ls[k - 1] + Math.hypot(P[k][0] - P[k - 1][0], P[k][1] - P[k - 1][1]));
+      }
+      const total = Ls[n - 1];
+      const pointAt = sAt => {
+        sAt = clamp(sAt, 0, total);
+        let lo = 0, hi = n - 1;
+        while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (Ls[mid] <= sAt) lo = mid; else hi = mid; }
+        const f = Ls[hi] > Ls[lo] ? (sAt - Ls[lo]) / (Ls[hi] - Ls[lo]) : 0;
+        return [P[lo][0] + (P[hi][0] - P[lo][0]) * f, P[lo][1] + (P[hi][1] - P[lo][1]) * f];
+      };
       const s0 = Ls[j];
-      if (total < tw * (ROAD_LABEL.style === 2 ? 1.05 : 0.6)) break;   // (too short on the map at this zoom)
+      if (total < tw * (ROAD_LABEL.style === 2 ? 1.05 : 0.6)) continue;   // (too short on the map at this zoom)
       const a = pointAt(s0 - tw / 2), b = pointAt(s0 + tw / 2);
       let ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
       if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;   // (reading left to right)
@@ -18166,21 +18242,21 @@ function drawMapLabels(ctx, k, W, Hh) {
         ctx.save(); ctx.translate(Math.round(x), Math.round(z)); ctx.rotate(ang); label(text, 0, 0, ink); ctx.restore();
         put = true; break;
       }
-      // (2) letter by letter: spaced by width across and by height up or down, the road run left to right
-      // (read left to right, or top to bottom where the road runs steeply)
-      const dxr = b[0] - a[0], dzr = b[1] - a[1], flip = Math.abs(dxr) > Math.abs(dzr) ? dxr < 0 : dzr < 0, cs = Math.abs(Math.cos(ang)), sn = Math.abs(Math.sin(ang));
+      // (2) letter by letter, upright, spaced by width across and by height up or down. Always read left to
+      // right (v402): laid along the road whichever way runs left to right, and not at all where the road
+      // doubles back on itself under the name
+      const cs = Math.abs(Math.cos(ang)), sn = Math.abs(Math.sin(ang));
       const chars = [...text], adv = chars.map(ch => ctx.measureText(ch).width), steps = adv.map(w => w * cs + th * 0.72 * sn);
       const len = steps.reduce((t, v) => t + v, 0);
       if (len > total) continue;
-      let at0 = clamp((flip ? total - s0 : s0) - len / 2, 0, total - len);   // (along the road as read: from its far end when flipped)
-      const pts = [], bx = [];
-      for (let k = 0; k < chars.length; k++) {
-        const sk = at0 + steps[k] / 2;
-        at0 += steps[k];
-        const [x, z] = pointAt(flip ? total - sk : sk);
-        pts.push([x, z]);
-        bx.push([x - adv[k] / 2, z - th / 2, adv[k], th]);
-      }
+      const lay = flip => {
+        let at0 = clamp((flip ? total - s0 : s0) - len / 2, 0, total - len);
+        return steps.map(st => { const sk = at0 + st / 2; at0 += st; return pointAt(flip ? total - sk : sk); });
+      };
+      let pts = lay(false);
+      if (pts[pts.length - 1][0] < pts[0][0]) pts = lay(true);
+      if (pts.some((p, k) => k && p[0] < pts[k - 1][0] + adv[k - 1] * 0.25)) continue;
+      const bx = pts.map(([x, z], k) => [x - adv[k] / 2, z - th / 2, adv[k], th]);
       if (!bx.every(fits)) continue;
       boxes.push(...bx);
       const al = ctx.textAlign; ctx.textAlign = 'center';
@@ -19325,7 +19401,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 401, crashSeen = new Map();
+const GAME_VERSION = 402, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -19517,9 +19593,9 @@ window.GAME = {
   regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   graveyards: () => graveyards.map(g => ({ ...g })),
-  mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
+  mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, cut: k.cut, why: k.why, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
-  raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
+  raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
