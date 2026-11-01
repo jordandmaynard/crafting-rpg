@@ -10174,8 +10174,23 @@ function wallPiece(c, r, w, type) {
   if (type === 13) timberWindow(at, y, ry, k);
   else if (!door) {
     let p = at(0.5, y + 0.25); part(G.box, shade(CC('#7a7484'), k), p[0], p[1], p[2], { sx: 1, sy: 0.5, sz: 0.24, ry });
-    p = at(0.5, y + 0.5 + (WALL_H - 0.6) / 2); part(G.box, shade(CC('#cdb894'), k), p[0], p[1], p[2], { sx: 0.98, sy: WALL_H - 0.6, sz: 0.18, ry });
-    p = at(0.5, y + WALL_H * 0.6); part(G.box, '#5a3a24', p[0], p[1], p[2], { sx: 0.98, sy: 0.07, sz: 0.2, ry });
+    p = at(0.5, y + 0.5 + (WALL_H - 0.6) / 2); part(G.box, shade(CC(TIMBER.plaster), k), p[0], p[1], p[2], { sx: 0.98, sy: WALL_H - 0.6, sz: 0.18, ry });
+    // half-timbering (v414, Jordan: they read as rice-paper walls): a sill beam on the stone, a rail across the middle,
+    // a stud up the middle, and in each half a brace below the rail and one above it at the opposite slant, so a
+    // wall reads < | > and a row of them runs on in chevrons
+    const beam = TIMBER.beam, mid = WALL_H * 0.6, th = TIMBER.width;
+    p = at(0.5, y + 0.53); part(G.box, beam, p[0], p[1], p[2], { sx: 0.98, sy: th, sz: 0.22, ry });
+    p = at(0.5, y + mid); part(G.box, beam, p[0], p[1], p[2], { sx: 0.98, sy: th, sz: 0.22, ry });
+    p = at(0.5, y + (0.53 + WALL_H) / 2); part(G.box, beam, p[0], p[1], p[2], { sx: th, sy: WALL_H - 0.53, sz: 0.21, ry });
+    if (TIMBER.braces) {
+      const brace = (a0, y0, a1, y1) => {
+        const q = at((a0 + a1) / 2, y + (y0 + y1) / 2), ang = Math.atan2(y1 - y0, a1 - a0) * (w ? -1 : 1);
+        part(G.box, beam, q[0], q[1], q[2], { sx: Math.hypot(a1 - a0, y1 - y0), sy: th * 0.9, sz: 0.2, ry, rz: ang });
+      };
+      const e = 0.1, m = 0.46, lo = 0.53 + th / 2, hi = WALL_H - 0.1 - th / 2;
+      brace(e, mid, m, lo); brace(e, mid, m, hi);              // (the left half: <)
+      brace(1 - m, lo, 1 - e, mid); brace(1 - m, hi, 1 - e, mid);   // (the right half: >)
+    }
   } else {
     // (just a threshold: the door itself fills the frame up to the beam)
     const p = at(0.5, y + 0.02); part(G.box, '#6a6474', p[0], p[1], p[2], { sx: 1, sy: 0.04, sz: 0.26, ry });
@@ -10183,7 +10198,9 @@ function wallPiece(c, r, w, type) {
   let p = at(0.5, y + WALL_H - 0.05); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 1.04, sy: 0.1, sz: 0.24, ry });
   for (const a of [0, 1]) { p = at(a, y + WALL_H / 2); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 0.16, sy: WALL_H, sz: 0.26, ry }); }
 }
-// The windows (v373). Glass is a pale blue-green pane behind lead or timber bars.
+// The timber walls' look (v414): plaster, the dark oak of the beams, how thick they are, and the braces (T > Walls)
+const TIMBER = { plaster: '#d9cba8', beam: '#4a3020', width: 0.09, braces: 1 };
+// The windows (v373; wider in v414, the glass nearly to the posts). Glass is a pale blue-green pane behind lead or timber bars.
 const GLASS = '#8fbccc';
 // How glass is drawn (v377, Jordan: not see-through, but seeming to let light in). windowMat lights both faces as the
 // face toward the sun or moon is lit (its shadow test and GI too, so a sunlit pane glows on the inside: transfer),
@@ -10237,7 +10254,7 @@ function glassMesh(b) {
 const WALL_GI = {
   1: [[0, WALL_H, '#cdb894']], 3: [[0, WALL_H, '#7a5432']], 4: [[0, WALL_H, '#8a8694']], 12: [[0, MARBLE_H, MARBLE]],
   2: [[WALL_H - 0.1, WALL_H, '#4a3020']], 10: [[WALL_H - 0.1, WALL_H, '#4a4650']], 11: [[TOMB_DOOR_H, MARBLE_H, MARBLE]],
-  13: [[0, 0.74, '#cdb894'], [1.42, WALL_H, '#cdb894']], 14: [[0, 0.55, '#8a8694'], [1.47, WALL_H, '#8a8694']],
+  13: [[0, 0.74, '#cdb894'], [1.42, WALL_H, '#cdb894']], 14: [[0, 0.45, '#8a8694'], [1.52, WALL_H, '#8a8694']],
 };
 function wallGI(c, r, w, type, cuts) {
   const n0 = bufBuild.n;
@@ -10267,22 +10284,25 @@ function giGeo(b, cuts, proxy) {
 // plaster either side and above and below, the window's own posts, four panes and the bars between them
 function timberWindow(at, y, ry, k) {
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
-  const plaster = shade(CC('#cdb894'), k), beam = '#5a3a24', y0 = 0.74, y1 = 1.42, hw = 0.24;
+  const plaster = shade(CC(TIMBER.plaster), k), beam = TIMBER.beam, y0 = 0.74, y1 = 1.42, hw = WINDOW_HW;
   box(0.5, y + 0.25, 1, 0.5, 0.24, shade(CC('#7a7484'), k));
   box(0.5, y + (0.5 + y0) / 2, 0.98, y0 - 0.5, 0.18, plaster);
   box(0.5, y + (y1 + WALL_H - 0.1) / 2, 0.98, WALL_H - 0.1 - y1, 0.18, plaster);
   for (const s of [-1, 1]) box(0.5 + s * (hw + (0.49 - hw) / 2 + 0.01), y + (y0 + y1) / 2, 0.49 - hw - 0.02, y1 - y0, 0.18, plaster);
   box(0.5, y + y0, 0.98, 0.08, 0.22, beam); box(0.5, y + y1, 0.98, 0.08, 0.22, beam);
-  for (const s of [-1, 1]) box(0.5 + s * hw, y + (y0 + y1) / 2, 0.06, y1 - y0, 0.21, beam);
+  for (const s of [-1, 1]) box(0.5 + s * hw, y + (y0 + y1) / 2, 0.08, y1 - y0, 0.21, beam);
   box(0.5, y + (y0 + y1) / 2, hw * 2, y1 - y0, 0.04, GLASS);
-  box(0.5, y + (y0 + y1) / 2, 0.04, y1 - y0, 0.08, '#3a2a1c'); box(0.5, y + (y0 + y1) / 2, hw * 2, 0.04, 0.08, '#3a2a1c');
+  for (const a of [-1, 1]) box(0.5 + a * (hw - 0.04) / 3, y + (y0 + y1) / 2, 0.035, y1 - y0, 0.08, '#3a2a1c');   // (three lights across, two high)
+  box(0.5, y + (y0 + y1) / 2, hw * 2, 0.035, 0.08, '#3a2a1c');
 }
+const WINDOW_HW = 0.4;   // (a timber window's half-width: the glass to within a frame's width of the corner posts)
+const STONE_WIN = { W: 0.33, sill: 0.45, spring: 0.95 };   // (v414: wider, its frame to within a frame's width of the tile's ends; was 0.2, 0.55, 1.12)
 // a stone wall with a pointed (equilateral) gothic arch window: the courses go round it, cut in fine slices where
 // they meet the arch so its curve shows; a paler stone frame and sill, glass, a mullion and a transom
 function stoneWindowWall(c, r, w, y, at, ry, k) {
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
-  const W = 0.2, sill = 0.55, spring = 1.12, R = 2 * W, apex = spring + Math.sqrt(3) * W, F = 0.05;   // (F: the frame's width)
+  const W = STONE_WIN.W, sill = STONE_WIN.sill, spring = STONE_WIN.spring, R = 2 * W, apex = spring + Math.sqrt(3) * W, F = 0.05;   // (F: the frame's width)
   // the opening's half-width at height h over the wall's foot (0 outside it)
   const half = h => h < sill || h > apex ? 0 : h <= spring ? W : Math.max(0, Math.sqrt(R * R - (h - spring) ** 2) - W);
   const X0 = 0.5 - W - F - 0.01, X1 = 0.5 + W + F + 0.01;   // (the column the window and its frame stand in)
@@ -20112,7 +20132,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 413, crashSeen = new Map();
+const GAME_VERSION = 414, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
