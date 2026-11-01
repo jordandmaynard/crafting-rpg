@@ -6019,88 +6019,33 @@ function buildLava(c0, r0, grid, GW, ch) {
   ch.lava = new GFX.Mesh(g, lavaMat);
 }
 const groundMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
-// Detail normal maps on what's built (v415, Jordan: subtle irregularity, chipped edges, bevels on stone and timber
-// walls and stone and wood floors, its strength on a slider). Every piece knows its own frame (BuildBuf), so a box's
-// face is mapped in the box's own metres (wood grain runs along its longest side) from a spot picked by where the
-// piece stands, and within a few centimetres of its edges the face bends over as a bevel, its width wobbling with
-// the map so the edges look chipped. Stone, wood and plaster maps are made here: tileable height fields kept as a
-// normal (rgb) and the height (a; low = a groove, darkened a little). T > Detail maps.
-const DETAIL = { strength: 1, bevel: 1, shade: 1, stone: 1, wood: 1, plaster: 0.7 };
-function makeDetailTex(kind) {
-  const S = 256, h = new Float32Array(S * S);
-  let seed = 101 + kind * 977;
+// Chipped bevels on what's built (v415-v416, Jordan: subtle irregularity, chipped edges, bevels; v416 kept only the
+// bevels and dropped the stone, wood and plaster surface maps). Every piece knows its own frame (BuildBuf), so within a
+// few centimetres of a box's edges its face bends over as a bevel, the width wobbling along the edge with a small
+// noise map (chips). Plaster gets none, marble a narrow one. T > Bevels.
+const DETAIL = { strength: 2.77, bevel: 0.85 };   // (v416: Jordan's values; the surface maps removed, only the chipped bevels kept)
+// (the chips: a tileable noise whose height wobbles the bevels' width along an edge)
+function makeChipTex() {
+  const S = 128, h = new Float32Array(S * S);
+  let seed = 515;
   const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
-  // value noise on a cx by cy lattice that wraps, so the map tiles
-  const noise = (cx, cy) => {
-    const g = new Float32Array(cx * cy); for (let k = 0; k < g.length; k++) g[k] = rnd();
-    const out = new Float32Array(S * S);
+  for (const [cells, wt] of [[8, 0.45], [16, 0.35], [32, 0.2]]) {
+    const g = new Float32Array(cells * cells); for (let k = 0; k < g.length; k++) g[k] = rnd();
     for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-      const fx = x / S * cx, fy = y / S * cy, ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
-      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), x1 = (ix + 1) % cx, y1 = (iy + 1) % cy;
-      const a = g[iy * cx + ix], b = g[iy * cx + x1], c = g[y1 * cx + ix], d = g[y1 * cx + x1];
-      out[y * S + x] = a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+      const fx = x / S * cells, fy = y / S * cells, ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
+      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty), x1 = (ix + 1) % cells, y1 = (iy + 1) % cells;
+      const A = g[iy * cells + ix], B = g[iy * cells + x1], C2 = g[y1 * cells + ix], D = g[y1 * cells + x1];
+      h[y * S + x] += wt * (A + (B - A) * sx + (C2 - A) * sy + (A - B - C2 + D) * sx * sy);
     }
-    return out;
-  };
-  let bend = 2.2;
-  if (kind === SURF_STONE) {
-    // a rough dressed face: lumps, a pitting of small holes, a hairline crack or two
-    const n4 = noise(4, 4), n8 = noise(8, 8), n16 = noise(16, 16), n32 = noise(32, 32), n64 = noise(64, 64), cr = noise(6, 6);
-    for (let k = 0; k < S * S; k++) {
-      let v = 0.4 * n4[k] + 0.25 * n8[k] + 0.17 * n16[k] + 0.1 * n32[k] + 0.08 * n64[k];
-      const c = Math.abs(cr[k] - 0.5); if (c < 0.009 && n8[k] > 0.58) v -= (0.009 - c) * 16 * Math.min(1, (n8[k] - 0.58) * 8);
-      h[k] = v;
-    }
-    // round pits, small and a few bigger, each a soft dimple (wrapped)
-    for (let n = 0; n < 140; n++) {
-      const px = rnd() * S, py = rnd() * S, rad = 1.5 + rnd() * rnd() * 5, dep = 0.08 + rnd() * 0.1;
-      for (let y = Math.floor(py - rad); y <= py + rad; y++) for (let x = Math.floor(px - rad); x <= px + rad; x++) {
-        const d = Math.hypot(x - px, y - py) / rad;
-        if (d < 1) h[((y + S) % S) * S + ((x + S) % S)] -= dep * (1 - d * d);
-      }
-    }
-    bend = 3;
-  } else if (kind === SURF_WOOD) {
-    // grain along x: rings warped by slow noise, fine fibres, and a knot or two the grain swerves round
-    const warp = noise(3, 2), fib = noise(4, 96), fib2 = noise(8, 160), knots = [];
-    for (let n = 0; n < 3; n++) knots.push([rnd() * S, rnd() * S, 6 + rnd() * 8]);
-    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-      const k = y * S + x;
-      let yy = y / S + (warp[k] - 0.5) * 0.25;
-      let knot = 0;
-      for (const [kx, ky, kr] of knots) {
-        let dx = x - kx, dy = y - ky; dx -= Math.round(dx / S) * S; dy -= Math.round(dy / S) * S;
-        const d = Math.hypot(dx, dy * 1.6), f = Math.exp(-(d * d) / (kr * kr * 4));
-        yy += f * Math.tanh(dy / kr) * 0.03; if (d < kr) knot = Math.max(knot, 1 - d / kr);
-      }
-      const ring = Math.abs(Math.sin(yy * Math.PI * 7));
-      h[k] = 0.55 + 0.22 * Math.pow(ring, 0.6) + 0.18 * fib[k] + 0.1 * fib2[k] - knot * 0.35;
-    }
-    bend = 2.4;
-  } else {
-    // plaster: soft trowelled lumps and a few long strokes
-    const n2 = noise(2, 2), n6 = noise(6, 6), n14 = noise(14, 14), st = noise(5, 24), n40 = noise(40, 40);
-    for (let k = 0; k < S * S; k++) h[k] = 0.4 * n2[k] + 0.3 * n6[k] + 0.12 * n14[k] + 0.12 * st[k] + 0.06 * n40[k];
-    bend = 1.6;
   }
-  let lo = 1e9, hi = -1e9; for (let k = 0; k < S * S; k++) { lo = Math.min(lo, h[k]); hi = Math.max(hi, h[k]); }
-  for (let k = 0; k < S * S; k++) h[k] = (h[k] - lo) / (hi - lo || 1);
-  const out = new Uint8Array(S * S * 4), at = (x, y) => h[((y + S) % S) * S + ((x + S) % S)];
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const nx = -(at(x + 1, y) - at(x - 1, y)) * bend, ny = -(at(x, y + 1) - at(x, y - 1)) * bend, l = Math.hypot(nx, ny, 1), o = (y * S + x) * 4;
-    out[o] = Math.round((nx / l * 0.5 + 0.5) * 255); out[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255); out[o + 2] = Math.round((1 / l * 0.5 + 0.5) * 255);
-    out[o + 3] = Math.round(at(x, y) * 255);
-  }
+  const out = new Uint8Array(S * S * 4);
+  for (let k = 0; k < S * S; k++) { const v = Math.round(Math.min(1, Math.max(0, (h[k] - 0.2) / 0.6)) * 255); out[k * 4] = out[k * 4 + 1] = out[k * 4 + 2] = out[k * 4 + 3] = v; }
   const t = new GFX.DataTexture(out, S, S);
   t.wrapS = t.wrapT = GFX.RepeatWrapping;
   return t;
 }
-const DETAIL_U = { d: { value: { x: 1, y: 1, z: 1, w: 0 } }, amp: { value: new GFX.Vector3(1, 1, 0.7) },
-  tStone: { value: makeDetailTex(SURF_STONE) }, tWood: { value: makeDetailTex(SURF_WOOD) }, tPlaster: { value: makeDetailTex(SURF_PLASTER) } };
-function updateDetailU() {
-  const d = DETAIL_U.d.value, a = DETAIL_U.amp.value;
-  d.x = DETAIL.strength; d.y = DETAIL.bevel; d.z = DETAIL.shade; a.x = DETAIL.stone; a.y = DETAIL.wood; a.z = DETAIL.plaster;
-}
+const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() } };
+function updateDetailU() { const d = DETAIL_U.d.value; d.x = DETAIL.strength; d.y = DETAIL.bevel; }
 const buildMat = new GFX.ShaderMaterial({ uniforms: DETAIL_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   attributes: { dl: 'vec4f', dh: 'vec3f', dq: 'vec4f' },
   code: /* wgsl */ `
@@ -6149,22 +6094,15 @@ fn axis(k: i32) -> vec3f { return select(select(vec3f(0.0, 0.0, 1.0), vec3f(0.0,
     }
     // each piece its own patch of the map
     let off = fract(sin(vec2f(dot(centre, vec3f(12.9898, 78.233, 37.719)), dot(centre, vec3f(39.346, 11.135, 83.155)))) * 43758.5453);
-    var tex = vec4f(0.5, 0.5, 1.0, 1.0); var amp = 0.0; var bw = 0.012;
-    if (kind == 1) { tex = textureSampleLevel(tStone, tStoneS, uv * 1.7 + off, 0.0); amp = U.amp.x; bw = 0.032; }
-    else if (kind == 2) { tex = textureSampleLevel(tWood, tWoodS, uv * vec2f(0.9, 2.2) + off, 0.0); amp = U.amp.y; bw = 0.016; }
-    else if (kind == 3) { tex = textureSampleLevel(tPlaster, tPlasterS, uv * 0.8 + off, 0.0); amp = U.amp.z; bw = 0.0; }
-    else { bw = 0.01; }
-    let m = (tex.xy * 2.0 - 1.0) * U.d.x * amp;
-    // bevels, chipped: their width wobbles with the map's height
-    let w = bw * U.d.y * (0.45 + 1.1 * (1.0 - tex.a));
-    var bu = 0.0; var bv = 0.0;
+    let bw = select(select(select(0.01, 0.0, kind == 3), 0.016, kind == 2), 0.032, kind == 1);
+    let chip = textureSampleLevel(tChip, tChipS, uv * 2.5 + off, 0.0).a;
+    // bevels, chipped: their width wobbles along the edge (strength: how far they bend, 2.77 = v415's look)
+    let w = bw * U.d.y * (0.45 + 1.1 * (1.0 - chip));
     if (w > 1e-4) {
-      bu = su * pow(sat(1.0 - du / w), 1.4) * 0.9 * min(U.d.x, 1.5);
-      bv = sv * pow(sat(1.0 - dv / w), 1.4) * 0.9 * min(U.d.x, 1.5);
+      let bu = su * pow(sat(1.0 - du / w), 1.4) * 0.49 * U.d.x;
+      let bv = sv * pow(sat(1.0 - dv / w), 1.4) * 0.49 * U.d.x;
+      N = normalize(N0 + Tu * bu + Tv * bv);
     }
-    N = normalize(N0 + Tu * (m.x + bu) + Tv * (m.y + bv));
-    // grooves and pits a little darker
-    col *= mix(1.0 - 0.3 * amp * U.d.z * min(U.d.x, 2.0), 1.0, tex.a);
   }
   let c = shadeLit(col, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
@@ -10504,7 +10442,7 @@ function timberWindow(at, y, ry, k, out = 0, pick = 0) {
 // Leaded glass (v415, Jordan: diamond-pane windows): thin lead cames run corner to corner both ways across the
 // glass between a0..a1 along the wall and h0..h1 up it, each cut to where inside(a, h) holds (convex: the gothic
 // arch); LEAD.w by LEAD.h a diamond
-const LEAD = { w: 0.12, h: 0.17, color: '#34343c' };
+const LEAD = { w: 0.3, h: 0.38, color: '#34343c' };
 function leadedPanes(at, y, ry, inside, a0, a1, h0, h1) {
   const s = LEAD.h / LEAD.w, len = Math.hypot(1, s), w = Math.abs(ry) > 0.1;
   const span = (a1 - a0) + (h1 - h0) / s, ok = (a, h) => a >= a0 && a <= a1 && h >= h0 && h <= h1 && inside(a, h);
@@ -10521,7 +10459,7 @@ function leadedPanes(at, y, ry, inside, a0, a1, h0, h1) {
 }
 // Shutters (v415): a pair of plank shutters on a timber window's outer face, swung SHUTTER.open degrees out from shut,
 // painted one of SHUTTER.colors (picked a wall at a time), a ledge across top and bottom
-const SHUTTER = { on: 1, open: 100, colors: ['#3e5a3a', '#6a2e24', '#2e4660', '#5a3a22', '#7a6a3a'] };
+const SHUTTER = { on: 1, open: 133, colors: ['#3e5a3a', '#6a2e24', '#2e4660', '#5a3a22', '#7a6a3a'] };
 // which side of a wall is outdoors: +1 the tile the wall's +z faces (the tile at c, r), -1 the other, 0 can't tell
 function windowOutside(c, r, w) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), k = Math.round(PDY / WALL_H);
@@ -10574,11 +10512,10 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   for (let row = 0; row < rows; row++) {
     const off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, n, a) => a.indexOf(v) === n && v <= 1);
     const h0 = rh * row, h1 = rh * (row + 1), clear = h1 <= sill - F || h0 >= apex + F;
-    for (let n = 0; n + 1 < edges.length; n++) {
+    // (rows the window reaches are drawn below, block by block round its frame)
+    if (clear) for (let n = 0; n + 1 < edges.length; n++) {
       const kk = hs(c * 5 + row, r * 3 + n, 54 + w), col = shade(CC('#8a8694'), 0.8 + kk * 0.3);
-      // (a block crossing the window's column is drawn only either side of it, unless the window's not at this height)
-      const spans = clear ? [[edges[n], edges[n + 1]]] : [[edges[n], Math.min(edges[n + 1], X0)], [Math.max(edges[n], X1), edges[n + 1]]];
-      for (const [a0, a1] of spans) if (a1 - a0 > 0.04) box((a0 + a1) / 2, y + (h0 + h1) / 2, a1 - a0 - 0.03, rh - 0.03, 0.32, col);
+      box((edges[n] + edges[n + 1]) / 2, y + (h0 + h1) / 2, edges[n + 1] - edges[n] - 0.03, rh - 0.03, 0.32, col);
     }
   }
   // the window's column: stone below the frame and over it, and fine slices between, each stone | frame | glass |
@@ -10587,16 +10524,46 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   const halfO = h => h < sill - F || h > apexO ? 0 : h <= spring ? WO : Math.max(0, Math.sqrt(4 * WO * WO - (h - spring) ** 2) - WO);
   box(0.5, y + (sill - F) / 2, X1 - X0, sill - F, 0.3, colStone);
   box(0.5, y + (apexO + top) / 2, X1 - X0, top - apexO, 0.3, colStone);
-  const n = 28, dh = (apexO - (sill - F)) / n;
-  for (let s = 0; s < n; s++) {
-    const h = sill - F + dh * (s + 0.5), hw = half(h), fo = Math.max(hw, halfO(h));
-    for (const sgn of [-1, 1]) {
-      const a0 = 0.5 + sgn * fo, a1 = sgn > 0 ? X1 : X0, wdt = Math.abs(a1 - a0);
-      if (wdt > 0.004) box((a0 + a1) / 2, y + h, wdt, dh + 0.002, 0.3, colStone);
-      if (fo - hw > 0.004) box(0.5 + sgn * (hw + fo) / 2, y + h, fo - hw, dh + 0.002, 0.34, frame);
+  // The rows the window reaches (v415, Jordan: the slices read as lots of tiny bricks): drawn in fine slices so the
+  // stone meets the arch, but each slice coloured as the course block it's part of, with the mortar joints drawn
+  // over them where the plain wall has its gaps, and no bevel on the slices (a bevel showed every slice)
+  let rA = rows, rB = -1;
+  for (let row = 0; row < rows; row++) if (!(rh * (row + 1) <= sill - F || rh * row >= apex + F)) { rA = Math.min(rA, row); rB = row; }
+  const saveE = emitSurf; emitSurf = null; SURF = 0;
+  try {
+    if (rB >= rA) {
+      const hA = rA * rh, hB = (rB + 1) * rh, n = Math.max(24, Math.round((hB - hA) / 0.03)), dh = (hB - hA) / n, mortar = core;
+      for (let s = 0; s < n; s++) {
+        const h = hA + dh * (s + 0.5), hw = half(h), fo = Math.max(hw, halfO(h)), row = Math.min(rows - 1, Math.floor(h / rh));
+        const off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, m, a) => a.indexOf(v) === m && v <= 1);
+        for (const sgn of [-1, 1]) {
+          const lim = fo === 0 ? (sgn < 0 ? 1 : 0) : 0.5 + sgn * fo;   // (the frame's outer edge on this side)
+          for (let m = 0; m + 1 < edges.length; m++) {
+            const a0 = sgn < 0 ? edges[m] : Math.max(edges[m], lim), a1 = sgn < 0 ? Math.min(edges[m + 1], lim) : edges[m + 1];
+            if (fo > 0 && (sgn < 0 ? edges[m] >= 0.5 : edges[m + 1] <= 0.5)) continue;   // (the other side's)
+            if (fo === 0 && sgn > 0) continue;   // (no window at this height: one pass draws the whole row)
+            if (a1 - a0 < 0.003) continue;
+            const kk = hs(c * 5 + row, r * 3 + m, 54 + w), col = shade(CC('#8a8694'), 0.8 + kk * 0.3);
+            box((a0 + a1) / 2, y + h, a1 - a0, dh + 0.002, 0.32, col);
+          }
+          // the vertical joints this slice crosses (and half joints at the tile's ends), where they're clear of the frame
+          for (const e of edges) {
+            const ja = e === 0 ? 0.0075 : e === 1 ? 0.9925 : e, jw = e === 0 || e === 1 ? 0.015 : 0.03;
+            if ((sgn < 0 ? ja < 0.5 : ja >= 0.5) && Math.abs(ja - 0.5) > fo + jw / 2) box(ja, y + h, jw, dh + 0.002, 0.322, mortar);
+          }
+          if (fo - hw > 0.004) box(0.5 + sgn * (hw + fo) / 2, y + h, fo - hw, dh + 0.002, 0.34, frame);
+        }
+        if (hw > 0.004) box(0.5, y + h, hw * 2, dh + 0.002, 0.04, GLASS);
+      }
+      // the bed joints between the courses, either side of the frame
+      for (let row = rA; row <= rB + 1; row++) {
+        const hb = row * rh, fo = Math.max(half(hb), halfO(hb)), jh = row === 0 ? 0.015 : 0.03;
+        const yb = row === 0 ? 0.0075 : hb;
+        if (fo === 0) box(0.5, y + yb, 1, jh, 0.322, mortar);
+        else for (const sgn of [-1, 1]) { const wdt = 0.5 - fo; if (wdt > 0.005) box(0.5 + sgn * (fo + wdt / 2), y + yb, wdt, jh, 0.322, mortar); }
+      }
     }
-    if (hw > 0.004) box(0.5, y + h, hw * 2, dh + 0.002, 0.04, GLASS);
-  }
+  } finally { emitSurf = saveE; SURF = 0; }
   box(0.5, y + sill - 0.03, W * 2 + 0.16, 0.06, 0.38, frame);   // (the sill, standing out a little)
   box(0.5, y + (sill + apex) / 2 - 0.02, 0.03, apex - sill - 0.04, 0.07, '#2a2630');   // mullion
   // (v415) leaded diamonds, cut to the arch
@@ -20146,13 +20113,9 @@ const TUNING = [
     [SHUTTER, 'on', 'Shutters on timber windows (0 off, 1 on)', 0, 1, 1, redrawPieces],
     [SHUTTER, 'open', 'Shutters open (degrees from shut)', 0, 175, 1, redrawPieces],
   ]],
-  ['Detail maps', [
-    [DETAIL, 'strength', 'Detail normal maps on walls, floors and stairs (0 off)', 0, 3, 0.01],
-    [DETAIL, 'bevel', 'Bevelled, chipped edges (times)', 0, 4, 0.05],
-    [DETAIL, 'shade', 'Grooves and pits darker', 0, 3, 0.01],
-    [DETAIL, 'stone', 'Stone roughness', 0, 3, 0.01],
-    [DETAIL, 'wood', 'Wood grain', 0, 3, 0.01],
-    [DETAIL, 'plaster', 'Plaster lumps', 0, 3, 0.01],
+  ['Bevels', [
+    [DETAIL, 'strength', 'Chipped bevels on walls, floors and stairs: how far they bend (0 off)', 0, 5, 0.01],
+    [DETAIL, 'bevel', 'Bevel width (times)', 0, 4, 0.05],
   ]],
   ['Windows', [
     [GLASS_FX, 'transfer', 'Both faces lit as the sunward one is (0 off, 1 on)', 0, 1, 1],
@@ -20413,7 +20376,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 415, crashSeen = new Map();
+const GAME_VERSION = 416, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
