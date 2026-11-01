@@ -1072,8 +1072,11 @@ function allNames(w) {
 }
 // a fresh name for a region of biome b: half the time a compound and a noun, else the compound alone or an
 // adjective and a noun. No compound or name is used twice in a world.
+// (the last name's parts, for the points of interest named after their region: root the compound, adj the adjective)
+const nameParts = { root: null, adj: null };
 function makeRegionName(w, rand, used, fallback) {
   const pick = l => l[Math.floor(rand() * l.length)];
+  nameParts.root = nameParts.adj = null;
   for (let k = 0; k < 200; k++) {
     const u = rand(), p = pick(w.pre), r = pick(w.root), n = pick(w.noun), a = pick(w.adj);
     let name, key;
@@ -1084,6 +1087,7 @@ function makeRegionName(w, rand, used, fallback) {
     name = name.toUpperCase();
     if (used.has(key) || used.has(name) || /(.)\1\1/.test(name)) continue;   // (no Shelllee)
     used.add(key); used.add(name);
+    if (u < 0.75) nameParts.root = (p + r).toUpperCase(); else nameParts.adj = a.toUpperCase();
     return name;
   }
   return fallback;
@@ -1909,7 +1913,7 @@ function nameRegions() {
     return n;
   };
   REG.fill(-1); regions.length = 0;
-  const newRegion = b => { regions.push({ biome: b, name: makeRegionName(NAME_WORDS[b], rand, used, BIOMES[b].name), n: 0, spots: [], found: false }); return regions.length - 1; };
+  const newRegion = b => { regions.push({ biome: b, name: makeRegionName(NAME_WORDS[b], rand, used, BIOMES[b].name), root: nameParts.root, adj: nameParts.adj, n: 0, spots: [], found: false }); return regions.length - 1; };
   let cid = 0;
   // (the open sea is no region: it has a biome only as the climate left it; v385, with the continents' oceans)
   const sea = i => !LANDID[i];
@@ -1947,6 +1951,42 @@ function nameRegions() {
   labelSpots(REG, regions);
   nameFeatures(rand, used);
   nameLands(rand, used);
+  namePOIs();
+}
+// Points of interest are named after the region they stand in (v397): Greyheart Grotto, Thistlecombe Farm,
+// Sedgemere Waystone (an adjective-and-noun region gives its adjective: Hushed Grotto; never "The"). Two of a kind
+// in one region (waystones can be) take a compass word from the middle of them: North Sedgemere Waystone.
+const poiAll = [];   // { p (the POI's own record), kind, ink }
+const POI_SEE = 8;   // tiles: coming this close to one discovers it
+const poiTile = p => [p.c ?? Math.floor(p.x), p.r ?? Math.floor(p.z)];
+function namePOIs() {
+  poiAll.length = 0;
+  const same = new Map();
+  for (const [list, , ink, word] of POI_MARKS()) for (const p of list) {
+    const [c, r] = p.home !== undefined ? [p.home % N, Math.floor(p.home / N)] : poiTile(p);   // (home: a tile of the patch it was placed for)
+    let g = REG[T(c, r)];
+    for (let d = 1; g < 0 && d <= 16; d++) for (let k = 0; k < 8 * d && g < 0; k++) {   // (one in a town: the region nearest)
+      const a = k / (8 * d) * Math.PI * 2, cc = clamp(Math.round(c + Math.cos(a) * d), 0, N - 1), rr = clamp(Math.round(r + Math.sin(a) * d), 0, N - 1);
+      g = REG[T(cc, rr)];
+    }
+    const R = regions[g], base = !R ? 'WILD' : R.root || R.adj || BIOMES[R.biome].name.toUpperCase().replace(/^THE /, '');
+    p.name = base + ' ' + word; p.found = false; p.reg = g;
+    poiAll.push({ p, kind: word, ink });
+    if (!same.has(p.name)) same.set(p.name, []);
+    same.get(p.name).push(p);
+  }
+  for (const ps of same.values()) {
+    if (ps.length < 2) continue;
+    const mc = ps.reduce((t, p) => t + poiTile(p)[0], 0) / ps.length, mr = ps.reduce((t, p) => t + poiTile(p)[1], 0) / ps.length;
+    for (const p of ps) { const [c, r] = poiTile(p), dx = c - mc, dz = r - mr; p.name = (Math.abs(dx) > Math.abs(dz) ? dx > 0 ? 'EAST ' : 'WEST ' : dz > 0 ? 'SOUTH ' : 'NORTH ') + p.name; }
+  }
+}
+function discoverPOIs() {
+  for (const { p } of poiAll) {
+    if (p.found) continue;
+    const [c, r] = poiTile(p);
+    if (Math.hypot(c + 0.5 - H.x, r + 0.5 - H.z) < POI_SEE) { p.found = true; toast('Discovered ' + titleCase(p.name) + '!', 'good'); }
+  }
 }
 // Each thing's size (n) and the spots its name can go: the tiles deepest inside it (1 on its edge or the world's,
 // counting in), a few spread across it, the deepest first. ID gives each tile's thing (-1 for none).
@@ -2846,24 +2886,25 @@ function fenceGraveyards() {
 // about 5 x 5, its rows one way or the other. It all stands on one level of open meadow, cleared of what grew
 // there, and nobody can claim it as a plot or take it down.
 const farms = [];
-const FARM_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+const FARM_COUNT = n => n < 1500 ? 0 : 1;   // (one a biome patch at most, v397: each is named after its region)
 const FARM_ROOF = '#8a6a3a';
 function placeFarms() {
   const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
   const dirTo = (c, r, nc, nr) => { for (let d = 0; d < 4; d++) if (c + DC[d] === nc && r + DR[d] === nr) return d; return -1; };
   const seen = new Uint8Array(N * N);
   for (let s0 = 0; s0 < N * N; s0++) {
-    if (BI[s0] !== MEADOW || !LV[s0] || seen[s0]) continue;
+    if (BI[s0] !== MEADOW || !LANDID[s0] || seen[s0]) continue;
     const patch = [s0];
     seen[s0] = 1;
     for (let k = 0; k < patch.length; k++) for (const dd of DI) {
       const n = patch[k] + dd, c = n % N;
-      if (n < 0 || n >= N * N || Math.abs(c - patch[k] % N) > 1 || seen[n] || BI[n] !== MEADOW || !LV[n]) continue;
+      if (n < 0 || n >= N * N || Math.abs(c - patch[k] % N) > 1 || seen[n] || BI[n] !== MEADOW || !LANDID[n]) continue;   // (rivers in it too, as its region has them: v397)
       seen[n] = 1; patch.push(n);
     }
     const want = FARM_COUNT(patch.length);
     for (let k = 0, tries = 0; k < want && tries < 300; tries++) {
       const i0 = patch[Math.floor(hs(s0 % N + tries, k, 151) * patch.length)], c0 = i0 % N, r0 = (i0 - c0) / N;
+      if (!LV[i0]) continue;
       const h = q => hs(c0, r0, 152 + q);
       // the layout across (a) and deep (b) from the yard's corner, turned and mirrored one of 8 ways
       const swap = h(0) < 0.5, fa = h(1) < 0.5 ? 1 : -1, fb = h(2) < 0.5 ? 1 : -1;
@@ -2926,7 +2967,7 @@ function placeFarms() {
         for (let b = fb0; b < fb0 + hh; b++) for (let a = fa0; a < fa0 + w; a++) { const [c, r] = at(a, b); FIELD[T(c, r)] = dir; tiles.push([c, r]); }
         f.fields.push({ dir, tiles });
       }
-      farms.push(f);
+      f.home = i0; farms.push(f);
     }
   }
 }
@@ -2937,17 +2978,17 @@ function placeFarms() {
 // near a lake or river. The pool is swamp water in all but its look (WT 1, so you wade through it and the wake
 // ripples it); GROT marks it and the rock.
 const grottos = [];
-const GROTTO_COUNT = n => n < 500 ? 0 : n < 4000 ? 1 : n < 10000 ? 2 : 3;
+const GROTTO_COUNT = n => n < 500 ? 0 : 1;   // (one a biome patch at most, v397: each is named after its region)
 function placeGrottos() {
   const seen = new Uint8Array(N * N), W = 6, D = 4;
   const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
   for (let s0 = 0; s0 < N * N; s0++) {
-    if (BI[s0] !== DEEP || !LV[s0] || seen[s0]) continue;
+    if (BI[s0] !== DEEP || !LANDID[s0] || seen[s0]) continue;
     const patch = [s0];
     seen[s0] = 1;
     for (let k = 0; k < patch.length; k++) for (const dd of DI) {
       const n = patch[k] + dd;
-      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== DEEP || !LV[n]) continue;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== DEEP || !LANDID[n]) continue;   // (rivers in it too, as its region has them: v397)
       seen[n] = 1; patch.push(n);
     }
     const want = GROTTO_COUNT(patch.length);
@@ -2956,6 +2997,7 @@ function placeGrottos() {
     let got = 0;
     for (const [, i0] of order) {
       if (got >= want) break;
+      if (!LV[i0]) continue;
       const c0 = i0 % N, r0 = (i0 - c0) / N, L = LV[i0];
       for (let d = 0; d < 4 && got < want; d++) {
         // a along the cliff, b out from it into the pool; the cliff's top at b = -1 and -2
@@ -3008,7 +3050,7 @@ function placeGrottos() {
         // where along the cliff the water falls, and a smaller fall off a ledge part way down, well to one side
         const fa = 2.2 + h(2) * 1.6, fa2 = fa < 3 ? fa + 1.9 + h(4) * 0.6 : fa - 1.9 - h(4) * 0.6;
         const fall = { x: x0 + lx * fa + ox * 0.8, y: L * STEP - BOG_SURF, z: z0 + lz * fa + oz * 0.8, dx: ox, dz: oz, drop: (top - L) * STEP };
-        grottos.push({ c: mc, r: mr, x: mc + 0.5, z: mr + 0.5, L, top, d, pool, anchor: T(ac, ar), x0, z0, ox, oz, lx, lz, fa, fa2, fall, seed: h(3), fallTop: top * STEP + 0.04 });
+        grottos.push({ home: i0, c: mc, r: mr, x: mc + 0.5, z: mr + 0.5, L, top, d, pool, anchor: T(ac, ar), x0, z0, ox, oz, lx, lz, fa, fa2, fall, seed: h(3), fallTop: top * STEP + 0.04 });
       }
     }
   }
@@ -3016,22 +3058,23 @@ function placeGrottos() {
 // The desert's points of interest: ancient obelisks, one for every so much desert (up to three), each sunk a way
 // into the sand and leaning over, on a 3 x 2 patch of open flat sand (b along its lean, a across it)
 const statues = [];
-const STATUE_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+const STATUE_COUNT = n => n < 1500 ? 0 : 1;   // (one a biome patch at most, v397: each is named after its region)
 function placeStatues() {
   const seen = new Uint8Array(N * N);
   const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
   for (let s0 = 0; s0 < N * N; s0++) {
-    if (BI[s0] !== DESERT || !LV[s0] || seen[s0]) continue;
+    if (BI[s0] !== DESERT || !LANDID[s0] || seen[s0]) continue;
     const patch = [s0];
     seen[s0] = 1;
     for (let k = 0; k < patch.length; k++) for (const dd of DI) {
       const n = patch[k] + dd;
-      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== DESERT || !LV[n]) continue;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== DESERT || !LANDID[n]) continue;   // (rivers in it too, as its region has them: v397)
       seen[n] = 1; patch.push(n);
     }
     const want = STATUE_COUNT(patch.length);
     for (let k = 0, tries = 0; k < want && tries < 300; tries++) {
       const i0 = patch[Math.floor(hs(s0 % N + tries, k, 181) * patch.length)], c0 = i0 % N, r0 = (i0 - c0) / N, L = LV[i0];
+      if (!LV[i0]) continue;
       const d = Math.floor(hs(c0, r0, 182) * 4);
       const at = (a, b) => d === 0 ? [c0 + a, r0 + b] : d === 1 ? [c0 - b, r0 + a] : d === 2 ? [c0 - a, r0 - b] : [c0 + b, r0 - a];
       let ok = true;
@@ -3051,7 +3094,7 @@ function placeStatues() {
       OB[i0] = O.STATUE;
       const h = q => hs(c0, r0, 183 + q);
       // its foot sunk toward the back of the patch, leaning over toward the front, turned a little off square
-      statues.push({ anchor: i0, L, x: cx - dx * 0.55, z: cz - dz * 0.55, yaw: Math.atan2(dx, dz) + (h(0) - 0.5) * 0.3,
+      statues.push({ home: i0, anchor: i0, L, x: cx - dx * 0.55, z: cz - dz * 0.55, yaw: Math.atan2(dx, dz) + (h(0) - 0.5) * 0.3,
         tilt: 0.22 + h(1) * 0.16, roll: (h(2) - 0.5) * 0.2, size: 0.95 + h(3) * 0.15, seed: h(4) });
     }
   }
@@ -3065,7 +3108,7 @@ function placeStatues() {
 const mausoleums = [];
 const mausAt = new Map();   // tile -> its mausoleum (its 4 x 5 only)
 const pillars = new Map();  // tile -> round things standing on it that block the way: { x, z, R, col, key, y }
-const MAUS_COUNT = n => n < 1000 ? 0 : n < 3000 ? 1 : n < 5500 ? 2 : 3;
+const MAUS_COUNT = n => n < 1000 ? 0 : 1;   // (one a biome patch at most, v397: each is named after its region)
 // world x, z of a local point; the front faces +z, +x, -z or -x as d is 0 to 3
 function mausP(m, a, b) {
   const { d, X0, Z0 } = m;
@@ -3083,17 +3126,18 @@ function placeMausoleums() {
   const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !keep.has(OB[i]);
   const seen = new Uint8Array(N * N);
   for (let s0 = 0; s0 < N * N; s0++) {
-    if (BI[s0] !== GRAVE || !LV[s0] || seen[s0]) continue;
+    if (BI[s0] !== GRAVE || !LANDID[s0] || seen[s0]) continue;
     const patch = [s0];
     seen[s0] = 1;
     for (let k = 0; k < patch.length; k++) for (const dd of DI) {
       const n = patch[k] + dd;
-      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== GRAVE || !LV[n]) continue;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== GRAVE || !LANDID[n]) continue;   // (rivers in it too, as its region has them: v397)
       seen[n] = 1; patch.push(n);
     }
     const want = MAUS_COUNT(patch.length);
     for (let k = 0, tries = 0; k < want && tries < 400; tries++) {
       const i0 = patch[Math.floor(hs(s0 % N + tries, k, 191) * patch.length)], X0 = i0 % N, Z0 = (i0 - X0) / N, L = LV[i0];
+      if (!LV[i0]) continue;
       const d = Math.floor(hs(X0, Z0, 192) * 4), W = d & 1 ? 5 : 4, D = d & 1 ? 4 : 5;
       // the 4 x 5 and a tile all round it (the steps, the lions): one level of open graveyard, any graves cleared
       let ok = true;
@@ -3141,7 +3185,7 @@ function placeMausoleums() {
         if (!pillars.has(i)) pillars.set(i, []);
         pillars.get(i).push({ x, z, y, R, col: false });
       }
-      mausoleums.push(m);
+      m.home = i0; mausoleums.push(m);
     }
   }
 }
@@ -3150,23 +3194,24 @@ function placeMausoleums() {
 // leaves, about WILLOW.radius tiles round, hung all round with long curtains of leaves down nearly to the ground.
 // It stands on a dry 5 x 5 of one level; no other tall tree grows under it.
 const willows = [];
-const WILLOW_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+const WILLOW_COUNT = n => n < 1500 ? 0 : 1;   // (one a biome patch at most, v397: each is named after its region)
 function placeWillows() {
   const R = WILLOW.radius;
   const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
   const seen = new Uint8Array(N * N);
   for (let s0 = 0; s0 < N * N; s0++) {
-    if (BI[s0] !== SWAMP || !LV[s0] || seen[s0]) continue;
+    if (BI[s0] !== SWAMP || !LANDID[s0] || seen[s0]) continue;
     const patch = [s0];
     seen[s0] = 1;
     for (let k = 0; k < patch.length; k++) for (const dd of DI) {
       const n = patch[k] + dd;
-      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== SWAMP || !LV[n]) continue;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== SWAMP || !LANDID[n]) continue;   // (rivers in it too, as its region has them: v397)
       seen[n] = 1; patch.push(n);
     }
     const want = WILLOW_COUNT(patch.length);
     for (let k = 0, tries = 0; k < want && tries < 400; tries++) {
       const i0 = patch[Math.floor(hs(s0 % N + tries, k, 201) * patch.length)], c0 = i0 % N, r0 = (i0 - c0) / N, L = LV[i0];
+      if (!LV[i0]) continue;
       if (c0 < R + 4 || r0 < R + 4 || c0 >= N - R - 4 || r0 >= N - R - 4) continue;
       let ok = true;
       for (let r = r0 - 2; r <= r0 + 2 && ok; r++) for (let c = c0 - 2; c <= c0 + 2 && ok; c++) { const i = T(c, r); if (LV[i] !== L || BI[i] !== SWAMP || !open(i)) ok = false; }
@@ -3178,7 +3223,7 @@ function placeWillows() {
         if (Math.hypot(c - c0, r - r0) <= R + 0.5 && (OBJ[OB[i]].tree || OB[i] === O.DEAD || OB[i] === O.SEQUOIA)) OB[i] = 0;
       }
       OB[i0] = O.WILLOW;
-      willows.push({ anchor: i0, c: c0, r: r0, x: c0 + 0.5, z: r0 + 0.5, L, seed: hs(c0, r0, 202), mesh: null });
+      willows.push({ home: i0, anchor: i0, c: c0, r: r0, x: c0 + 0.5, z: r0 + 0.5, L, seed: hs(c0, r0, 202), mesh: null });
     }
   }
 }
@@ -3190,7 +3235,7 @@ function placeWillows() {
 // the roof goes too. In local terms a runs across the front, b from the porch's front edge back.
 const cabins = [];
 const roofOver = new Map();   // tile outside a room but under its roof (a portico, a porch) -> a tile of that room
-const CABIN_COUNT = n => n < 1500 ? 0 : n < 6000 ? 1 : n < 14000 ? 2 : 3;
+const CABIN_COUNT = n => n < 1500 ? 0 : 1;   // (one a biome patch at most, v397: each is named after its region)
 function cabP(m, a, b) {
   const { d, X0, Z0 } = m;
   return d === 0 ? [X0 + a, Z0 + 6 - b] : d === 1 ? [X0 + 6 - b, Z0 + a] : d === 2 ? [X0 + 4 - a, Z0 + b] : [X0 + b, Z0 + 4 - a];
@@ -3205,17 +3250,18 @@ function placeCabins() {
   const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !GROT[i] && !WN[i] && !WW[i] && !keep.has(OB[i]);
   const seen = new Uint8Array(N * N);
   for (let s0 = 0; s0 < N * N; s0++) {
-    if (BI[s0] !== SNOW || !LV[s0] || seen[s0]) continue;
+    if (BI[s0] !== SNOW || !LANDID[s0] || seen[s0]) continue;
     const patch = [s0];
     seen[s0] = 1;
     for (let k = 0; k < patch.length; k++) for (const dd of DI) {
       const n = patch[k] + dd;
-      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== SNOW || !LV[n]) continue;
+      if (n < 0 || n >= N * N || Math.abs(n % N - patch[k] % N) > 1 || seen[n] || BI[n] !== SNOW || !LANDID[n]) continue;   // (rivers in it too, as its region has them: v397)
       seen[n] = 1; patch.push(n);
     }
     const want = CABIN_COUNT(patch.length);
     for (let k = 0, tries = 0; k < want && tries < 400; tries++) {
       const i0 = patch[Math.floor(hs(s0 % N + tries, k, 211) * patch.length)], X0 = i0 % N, Z0 = (i0 - X0) / N, L = LV[i0];
+      if (!LV[i0]) continue;
       const d = Math.floor(hs(X0, Z0, 212) * 4), W = d & 1 ? 6 : 4, D = d & 1 ? 4 : 6;
       // the cabin and its porch and a tile all round (the steps, the chimney, the woodpile): one level of open snow
       let ok = true;
@@ -3279,7 +3325,7 @@ function placeCabins() {
       add(notchA === 0 ? -0.35 : 4.35, 2.2, 0.32, 'block'); add(notchA === 0 ? -0.35 : 4.35, 2.8, 0.32, 'block');
       m.anchor = T(...tileAt(0, 0));
       cabinAt.set(m.anchor, m);
-      cabins.push(m);
+      m.home = i0; cabins.push(m);
     }
   }
 }
@@ -16520,6 +16566,7 @@ function update(dt) {
       regionName = name; setPlace(plateName(name));
     }
     discoverFeatures();
+    discoverPOIs();
     { const m = landmasses[LANDID[i] - 1]; if (m && m.name && !m.found) { m.found = true; toast('Discovered ' + titleCase(m.name) + '!', 'good'); } }
     revealFog();
   }
@@ -17765,8 +17812,9 @@ $('bigmap').addEventListener('pointerleave', () => { if (bigHover) { bigHover = 
 // the world is paper too (markers count a place seen once its fog is under half). Over that the markers
 // and names, only where you've been, each layer only while its bookmark is lit, and your arrow.
 // the points of interest the Markers bookmark shows: [list, mark, colour]
-const POI_MARKS = () => [[waystones, 'diamond', '#8de8dc'], [farms, 'square', '#b6dc5a'], [cabins, 'house', '#b9824e'], [grottos, 'diamond', '#d59cff'],
-  [statues, 'tri', '#e2b36e'], [mausoleums, 'house', '#f1eee4'], [willows, 'circle', '#86c86e']];
+// (and the word each is named with, after its region: v397)
+const POI_MARKS = () => [[waystones, 'diamond', '#8de8dc', 'WAYSTONE'], [farms, 'square', '#b6dc5a', 'FARM'], [cabins, 'house', '#b9824e', 'CABIN'], [grottos, 'diamond', '#d59cff', 'GROTTO'],
+  [statues, 'tri', '#e2b36e', 'OBELISK'], [mausoleums, 'house', '#f1eee4', 'MAUSOLEUM'], [willows, 'circle', '#86c86e', 'WILLOW']];
 const TILE_M = 1.6;   // metres a tile, for the scale (the hero stands about 1.1 tiles tall)
 function drawBigMap() {
   const big = $('bigmap'), k = Math.max(1, Math.min(3, uiScale() * (devicePixelRatio || 1)));
@@ -17881,6 +17929,8 @@ function drawMapLabels(ctx, k, W, Hh) {
   const fits = box => box[0] >= 0 && box[1] >= 0 && box[0] + box[2] <= W && box[1] + box[3] <= Hh && !boxes.some(b => overlaps(box, b));
   const boxes = towns.map(t => { const [x, z] = at(t.c, t.r); return [x - 6 * k, z - 6 * k, 12 * k, 12 * k]; });
   { const [x, z] = at(H.x, H.z), r = 16 * k; boxes.push([x - r, z - r, r * 2, r * 2]); }   // (and off your arrow)
+  const poiPx = p => { const [c, r] = poiTile(p); return at(c + 0.5, r + 0.5); };
+  if (MAP_SHOW.markers) for (const { p } of poiAll) { const [c, r] = poiTile(p); if (!seen(c, r)) continue; const [x, z] = poiPx(p); boxes.push([x - 7 * k, z - 8 * k, 14 * k, 16 * k]); }   // (and off the markers)
   boxes.push([1042 * k, 485 * k, 166 * k, 198 * k], [0, 658 * k, W, 42 * k]);   // (and off the compass and the footer)
   // a name's lines: two when it's long, split where they come out most even
   const linesOf = name => {
@@ -17915,6 +17965,13 @@ function drawMapLabels(ctx, k, W, Hh) {
     if (!MAP_SHOW.towns || !seen(t.c, t.r)) continue;
     const [x, z] = at(t.c, t.r);
     place([cased(t.name)], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
+  }
+  // points of interest: their names with the Markers, in their marker's colour, under or over the mark (v397)
+  if (MAP_SHOW.markers) for (const { p, ink } of poiAll) {
+    const [c, r] = poiTile(p);
+    if (!p.name || !seen(c, r)) continue;
+    const [x, z] = poiPx(p);
+    place([cased(p.name)], [[x, z + lh * 0.5 + 9 * k], [x, z - lh * 0.5 - 9 * k], [x + 10 * k, z], [x - 10 * k, z]].map(([a, b], j) => j < 2 ? [a, b] : [a + (j === 2 ? 1 : -1) * ctx.measureText(cased(p.name)).width / 2, b]), ink);
   }
   for (const m of landmasses) {
     if (m.big || !shown(m) || !m.spots) continue;
@@ -19033,7 +19090,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 396, crashSeen = new Map();
+const GAME_VERSION = 397, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -19225,7 +19282,7 @@ window.GAME = {
   regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
   graveyards: () => graveyards.map(g => ({ ...g })),
-  mapLabelMiss: () => mapLabelMiss, lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
+  mapLabelMiss: () => mapLabelMiss, pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
