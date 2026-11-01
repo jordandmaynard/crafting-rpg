@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v433:** The cathedral's rose window goes right through the wall now, so it shows from inside as the other windows do, and it casts no shadow. Where the sun shines through it, the floor (and anything built in its path) is lit in the window's colours: each pane's colour, the spokes and the tracery ring dark, moving with the sun and still shaded by whatever stands in the way. The nave is open to the roof between the arcades, from the front wall to two rows short of the back, with the gallery running round it on three sides behind iron railings; standing in the open nave you see the gallery and the rose above you (the roof hides).
+
 **v432:** Cathedral front: the rose window now fills nearly its whole tile, with a moulded stone rim standing proud of the wall, and the towers are pulled in to their own two tiles (the belfry a little narrower) with the corner piers tucked in, so they no longer overlap the windows beside them.
 
 **v431:** Jordan's HUD layout is now the default: a slimmer belt (97) a touch higher (16), the centre piece 5 lower and the hotbar and action + mode buttons 20 lower.
