@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v413:** the fountain's water has no shore foam, shore line or shore ripples (FOUNT_U): in pools that small they covered it.
+
 **v412:** walk stutter (Jordan felt the speed change at each end of the walk cycle). The hero moves and the camera follows at an even pace; the legs swung as a plain sine, so the planted foot stopped at each end of a step while the body went on. legSwing(phase) now sweeps the planted foot back in a straight line and swings it forward on the other half (WALK.plant, T > Walk; 0 = the old sine).
 
 **v411:** the smooth map shader moved from a WebGL2 canvas to WebGPU (smoothMap: WGSL on the game's device, its own webgpu canvas, writeTexture for tile changes; off in headless test runs, navigator.webdriver), so the game uses one graphics API. Lamp pop-in (Jordan picked fades, more lights, halos): 12 lamp lights (LAMP_LIGHTS, was 4) with each fading out over LAMP_FADE.width tiles before a nearer lamp takes its place, MAX_POINTS 16 (FRAME_BYTES 1280), dark lamp lights hidden so shaders skip them, and a soft glow on every town lantern at night (buildHalos/haloMat, T > Lamp halos).
