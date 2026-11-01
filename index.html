@@ -358,8 +358,8 @@ body.touch #modes { display: none; }
 .mode-button:active { --modeTint: brightness(0.765); }
 .mode-button:focus-visible { --modeSkin: url("ui/button-mode-selected.webp"); }
 .mode-button:disabled { --modeTint: saturate(0.3) brightness(0.614); }
-.mode-button .glyph { position: absolute; left: 25px; top: 9px; width: 42px; height: 42px; pointer-events: none; }
-.mode-button .label { position: absolute; left: 4px; right: 4px; top: 56px; font: 600 17px/22px var(--wk); text-align: center; }
+/* v384 icons (Wanderer's Kit mode icons v1): the whole 256px canvas (its padding is part of the art), centred, no caption */
+.mode-button .glyph { position: absolute; left: 13px; top: 13px; width: 66px; height: 66px; pointer-events: none; }
 
 /* the weapon's attack, Q, E and dash, bottom right just left of the mode buttons (four 92px squares 6px apart = 386, + 6 + 18 in
    from the edge = 410): a slim frame over each painted icon, the key on a tab under it */
@@ -1121,8 +1121,9 @@ const nextFrame = () => new Promise(r => setTimeout(r, 0));
 // to them (a smooth shoulder, fading at the spine's ends and swelling and narrowing along it), with the ridged noise
 // riding on top for peaks, spurs and passes. count [least, most], length in tiles, width (half, tiles), turn
 // (radians a 16-tile step, at most), apart (tiles between spine starts), lift (height at the spine), peaks (ridged
-// noise on it), hills (the old ridged highlands, now just rolling country)
-const RANGES = { count: [3, 6], length: [260, 620], width: [42, 72], turn: 0.32, apart: 170, lift: 0.3, peaks: 0.32, hills: 0.16 };
+// noise on it), hills (the old ridged highlands, now just rolling country); landMin: tiles a landmass needs for a range,
+// inland: tiles from the sea a spine starts at least, coast: tiles from the sea it stops at
+const RANGES = { count: [3, 6], length: [260, 620], width: [42, 72], turn: 0.32, apart: 170, lift: 0.3, peaks: 0.32, hills: 0.16, landMin: 20000, inland: 40, coast: 12 };
 // The climate (v382, Jordan): temperature from latitude (north cold, south hot) and height, with a little noise;
 // moisture from the rain a prevailing wind carries in off the sea and lakes and drops climbing over the ranges (so
 // the far side of a range lies dry), plus nearness to rivers, lakes and the sea. Biomes come from a table of the two
@@ -1139,25 +1140,254 @@ const CLIMATE = { latitude: 1.4, noise: 0.28, lapse: 0.13, snow: -0.53, cool: -0
 // [least, most] besides the river; spread: radians off its line; fan: tiles of delta swamp round the arms
 const DELTA = { minLen: 70, back: [18, 34], arms: [1, 3], spread: 0.55, fan: 9 };
 let spines = [], deltaZone = null, climateWind = [1, 0], climateAt = null;
+// Continents and islands (v383, Jordan): the land is a few big continents and a scatter of islands in an open
+// ocean, not a square. Each starts as a stretched, turned oval; the ovals are bent by a slow warp and the coast
+// roughened by noise, then the whole cut where it leaves share of the map as land. Specks are dropped, small
+// enclosed seas filled, and two landmasses never come within channel tiles of each other (the smaller gives way).
+//   share: the land's share of the map; continents / islands: how many [least, most]; fill: how much of its cell a
+//   continent's oval takes [least, most]; stretchMax: long axis over short at most; isle: an island's long half-axis
+//   (share of the map) [least, most]; bays: gulfs bitten out of each continent's coast [least, most]; apart: islands
+//   grown by this don't touch anything; strait: half-width of the sea kept halfway between two continents [least,
+//   most]; warp: tiles the
+//   outlines bend by; rough: the coast's noise (in blob radii); detail: its scale (tiles); channel: tiles of sea
+//   between landmasses at least; minIsle: smallest island kept (tiles); pond: an enclosed sea smaller than this is
+//   filled; shore: tiles the land takes to rise from the beach; border: where (share of the half-map) the ocean starts
+const LANDS = { share: 0.44, continents: [2, 4], fill: [0.72, 0.9], stretchMax: 2.6, islands: [6, 14], isle: [0.03, 0.07], bays: [1, 3],
+  apart: 1.3, strait: [8, 40], warp: 110, rough: 0.2, detail: 150, channel: 8, minIsle: 300, pond: 3000, shore: 26, border: 0.9 };
+let LANDID = new Uint16Array(N * N), landmasses = [], landStats = {};
+// label the 4-connected patches where is(i): id (1 up) in out, and the tiles of each patch in order in q;
+// gives [{ id, n, at }] (at: where its tiles start in q)
+function labelPatches(is, out, q) {
+  out.fill(0);
+  const list = [];
+  let t = 0;
+  for (let s = 0; s < N * N; s++) {
+    if (out[s] || !is(s)) continue;
+    const id = list.length + 1, at = t;
+    out[s] = id; q[t++] = s;
+    for (let h = at; h < t; h++) {
+      const i = q[h], c = i % N;
+      if (c > 0 && !out[i - 1] && is(i - 1)) { out[i - 1] = id; q[t++] = i - 1; }
+      if (c < N - 1 && !out[i + 1] && is(i + 1)) { out[i + 1] = id; q[t++] = i + 1; }
+      if (i >= N && !out[i - N] && is(i - N)) { out[i - N] = id; q[t++] = i - N; }
+      if (i < N * N - N && !out[i + N] && is(i + N)) { out[i + N] = id; q[t++] = i + N; }
+    }
+    list.push({ id, n: t - at, at });
+  }
+  return list;
+}
+// tiles (8 ways) from the nearest tile where from(i), up to cap
+function tileDist(from, cap) {
+  const D = new Uint16Array(N * N).fill(cap), q = new Int32Array(N * N);
+  let t = 0;
+  for (let i = 0; i < N * N; i++) if (from(i)) { D[i] = 0; q[t++] = i; }
+  for (let h = 0; h < t; h++) {
+    const i = q[h], c = i % N, r = (i - c) / N, d = D[i] + 1;
+    if (d >= cap) continue;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const nc = c + dc, nr = r + dr;
+      if (nc < 0 || nr < 0 || nc >= N || nr >= N) continue;
+      const j = i + dr * N + dc;
+      if (D[j] > d) { D[j] = d; q[t++] = j; }
+    }
+  }
+  return D;
+}
+// the land mask: 1 on land; and how far inland each tile is (0 at sea)
+function landMask() {
+  const rand = mulberry32(SEED ^ 0x1a4d5), nA = simplex(rand), nB = simplex(rand), nK = simplex(rand), NN = N * N;
+  const pick = a => a[0] + rand() * (a[1] - a[0]), count = a => a[0] + Math.floor(rand() * (a[1] - a[0] + 1));
+  const blobs = [], bays = [], inBlob = (b, x, z) => { const dx = x - b.x, dz = z - b.z, u = (dx * b.cs + dz * b.sn) / b.a, v = (dz * b.cs - dx * b.sn) / b.b; return Math.sqrt(u * u + v * v); };
+  const blob = (a, st, kind) => { const ang = rand() * Math.PI, b = a / st, cs = Math.cos(ang), sn = Math.sin(ang); return { x: 0, z: 0, a, b, cs, sn, kind, ex: Math.hypot(a * cs, b * sn), ez: Math.hypot(a * sn, b * cs) }; };
+  // the continents: centres spread over the map (a few rounds of Lloyd's relaxation), each the biggest oval that
+  // fits inside its own cell (the ground nearer it than any other centre, within the border), turned whichever way
+  // fits best, then shrunk by fill so neighbours keep the sea between them
+  const lo = N * (1 - LANDS.border) / 2 + 12, hi = N - lo, nc = count(LANDS.continents), P = [];
+  for (let k = 0; k < nc; k++) P.push([lo + rand() * (hi - lo), lo + rand() * (hi - lo)]);
+  for (let it = 0; it < 5; it++) {
+    const sx = new Float64Array(nc), sz = new Float64Array(nc), sn = new Float64Array(nc);
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      const px = lo + (x + 0.5) / 64 * (hi - lo), pz = lo + (y + 0.5) / 64 * (hi - lo);
+      let b = 0, bd = 1e18;
+      for (let k = 0; k < nc; k++) { const d = (P[k][0] - px) ** 2 + (P[k][1] - pz) ** 2; if (d < bd) { bd = d; b = k; } }
+      sx[b] += px; sz[b] += pz; sn[b]++;
+    }
+    for (let k = 0; k < nc; k++) if (sn[k]) P[k] = [sx[k] / sn[k], sz[k] / sn[k]];
+  }
+  const reachOut = (k, t) => {
+    const ux = Math.cos(t), uz = Math.sin(t), [x, z] = P[k];
+    let r = Math.min(ux > 1e-6 ? (hi - x) / ux : ux < -1e-6 ? (lo - x) / ux : 1e9, uz > 1e-6 ? (hi - z) / uz : uz < -1e-6 ? (lo - z) / uz : 1e9);
+    for (let j = 0; j < nc; j++) {
+      if (j === k) continue;
+      const dx = P[j][0] - x, dz = P[j][1] - z, ud = ux * dx + uz * dz;
+      if (ud > 1e-6) r = Math.min(r, (dx * dx + dz * dz) / (2 * ud));
+    }
+    return r;
+  };
+  for (let k = 0; k < nc; k++) {
+    const R = [];
+    for (let j = 0; j < 72; j++) R.push(reachOut(k, j / 72 * Math.PI * 2));
+    const rAt = t => R[((Math.round(t / (Math.PI * 2) * 72) % 72) + 72) % 72];
+    let best = null;
+    for (let j = 0; j < 36; j++) {
+      const phi = j / 36 * Math.PI;
+      let a = Math.min(rAt(phi), rAt(phi + Math.PI)), b = Math.min(rAt(phi + Math.PI / 2), rAt(phi - Math.PI / 2)), sc = 1;
+      for (let m = 0; m < 72; m++) {
+        const t = m / 72 * Math.PI * 2, al = t - phi, rho = a * b / Math.hypot(b * Math.cos(al), a * Math.sin(al));
+        sc = Math.min(sc, R[m] / rho);
+      }
+      a *= sc; b *= sc;
+      if (a < b) { const tt = a; a = b; b = tt; }
+      if (!best || a * b > best.a * best.b) best = { a, b, phi: Math.min(rAt(phi), rAt(phi + Math.PI)) * sc >= Math.min(rAt(phi + Math.PI / 2), rAt(phi - Math.PI / 2)) * sc ? phi : phi + Math.PI / 2 };
+    }
+    const f = pick(LANDS.fill), b = { x: P[k][0], z: P[k][1], a: best.a * f, b: Math.max(best.b * f, best.a * f / LANDS.stretchMax), cs: Math.cos(best.phi), sn: Math.sin(best.phi), kind: 'continent' };
+    blobs.push(b);
+  }
+  // the islands: in the open sea between, clear of everything already down by apart (one that won't fit anywhere
+  // shrinks a little and tries again)
+  const clear = (b, gap) => {
+    for (let k = 0; k < 48; k++) {
+      const t = k / 48 * Math.PI * 2, u = Math.cos(t) * b.a * gap, v = Math.sin(t) * b.b * gap;
+      const x = b.x + u * b.cs - v * b.sn, z = b.z + u * b.sn + v * b.cs;
+      if (x < lo || z < lo || x > hi || z > hi || blobs.some(o => inBlob(o, x, z) < gap)) return false;
+    }
+    return blobs.every(o => inBlob(o, b.x, b.z) > gap);
+  };
+  const ni = count(LANDS.islands);
+  for (let k = 0; k < ni; k++) {
+    const b = blob(N * pick(LANDS.isle), 1 + rand() * 0.8, 'isle');
+    for (let shrink = 0, done = false; shrink < 5 && !done; shrink++) {
+      for (let t = 0; t < 120 && !done; t++) {
+        b.x = lo + rand() * (hi - lo); b.z = lo + rand() * (hi - lo);
+        if (clear(b, LANDS.apart)) { blobs.push(b); done = true; }
+      }
+      b.a *= 0.85; b.b *= 0.85;
+    }
+  }
+  // bays and gulfs bitten out of the continents' coasts
+  for (const b of blobs) {
+    if (b.kind !== 'continent') continue;
+    const nb = count(LANDS.bays);
+    for (let k = 0; k < nb; k++) {
+      const t = rand() * Math.PI * 2, u = Math.cos(t) * b.a * 0.95, v = Math.sin(t) * b.b * 0.95, r = b.b * (0.18 + rand() * 0.3);
+      const bay = blob(r * (1.2 + rand() * 0.8), 1.2 + rand() * 0.8, 'bay');
+      bay.x = b.x + u * b.cs - v * b.sn; bay.z = b.z + u * b.sn + v * b.cs;
+      bays.push(bay);
+    }
+  }
+  // the warp is slow: worked out on a coarse grid and spread between
+  const WG = 129, WS = N / (WG - 1), WX = new Float32Array(WG * WG), WZ = new Float32Array(WG * WG);
+  for (let y = 0; y < WG; y++) for (let x = 0; x < WG; x++) {
+    WX[y * WG + x] = LANDS.warp * fbm(nA, x * WS / 280, y * WS / 280, 3);
+    WZ[y * WG + x] = LANDS.warp * fbm(nB, x * WS / 280 + 40, y * WS / 280 - 40, 3);
+  }
+  const F = new Float32Array(NN);
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const fx = c / WS, fy = r / WS, x = Math.min(WG - 2, Math.floor(fx)), y = Math.min(WG - 2, Math.floor(fy)), u = fx - x, v = fy - y, g = y * WG + x;
+    const wx = c + (WX[g] * (1 - u) + WX[g + 1] * u) * (1 - v) + (WX[g + WG] * (1 - u) + WX[g + WG + 1] * u) * v;
+    const wz = r + (WZ[g] * (1 - u) + WZ[g + 1] * u) * (1 - v) + (WZ[g + WG] * (1 - u) + WZ[g + WG + 1] * u) * v;
+    let f = -9;
+    let top = null;
+    for (const b of blobs) { const q = 1 - inBlob(b, wx, wz); if (q > f) { f = q; top = b; } }
+    for (const b of bays) { const q = inBlob(b, wx, wz) - 1; if (q < f) f = q; }
+    // a strait along the line halfway between the two nearest continents, so they never run together
+    if (top && top.kind === 'continent' && nc > 1) {
+      let k1 = -1, k2 = -1, d1 = 1e18, d2 = 1e18;
+      for (let k = 0; k < nc; k++) { const d = (wx - P[k][0]) ** 2 + (wz - P[k][1]) ** 2; if (d < d1) { d2 = d1; k2 = k1; d1 = d; k1 = k; } else if (d < d2) { d2 = d; k2 = k; } }
+      const bis = (d2 - d1) / (2 * Math.hypot(P[k1][0] - P[k2][0], P[k1][1] - P[k2][1]));
+      const w = LANDS.strait[0] + (LANDS.strait[1] - LANDS.strait[0]) * (0.5 + 0.5 * fbm(nB, c / 90 + 300, r / 90, 2));
+      if (bis < w) f = Math.min(f, -0.3);
+    }
+    f += LANDS.rough * fbm(nK, c / LANDS.detail, r / LANDS.detail, 4);
+    const ex = c / N * 2 - 1, ez = r / N * 2 - 1, e = Math.pow(ex ** 4 + ez ** 4, 0.25);
+    if (e > LANDS.border) f -= (e - LANDS.border) * 6;
+    F[T(c, r)] = f;
+  }
+  const sorted = F.slice().sort(), cut = sorted[Math.floor((1 - LANDS.share) * NN)];
+  const M = new Uint8Array(NN);
+  for (let i = 0; i < NN; i++) M[i] = F[i] > cut ? 1 : 0;
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (c < 16 || r < 16 || c >= N - 16 || r >= N - 16) M[T(c, r)] = 0;
+  const ID = new Int32Array(NN), q = new Int32Array(NN);
+  const dropSpecks = () => { for (const p of labelPatches(i => M[i], ID, q)) if (p.n < LANDS.minIsle) for (let k = p.at; k < p.at + p.n; k++) M[q[k]] = 0; };
+  dropSpecks();
+  // enclosed seas: small ones become land (the lakes find their own hollows later)
+  for (const p of labelPatches(i => !M[i], ID, q)) {
+    if (p.n >= LANDS.pond || ID[0] === p.id) continue;
+    for (let k = p.at; k < p.at + p.n; k++) M[q[k]] = 1;
+  }
+  // the channels: biggest landmass first; any tile of a smaller one too near a bigger one goes under the sea
+  const CHN = LANDS.channel;
+  for (let pass = 0; pass < 2; pass++) {
+    const list = labelPatches(i => M[i], ID, q).sort((a, b) => b.n - a.n);
+    const D = new Uint8Array(NN).fill(255), bq = new Int32Array(NN);
+    for (const p of list) {
+      let t = 0;
+      for (let k = p.at; k < p.at + p.n; k++) { const i = q[k]; if (D[i] < CHN) M[i] = 0; else { D[i] = 0; bq[t++] = i; } }
+      for (let h = 0; h < t; h++) {
+        const i = bq[h], c = i % N, r = (i - c) / N, d = D[i] + 1;
+        if (d >= CHN) continue;
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+          const nc2 = c + dc, nr = r + dr;
+          if (nc2 < 0 || nr < 0 || nc2 >= N || nr >= N) continue;
+          const j = i + dr * N + dc;
+          if (D[j] > d && ID[j] !== p.id) { D[j] = d; bq[t++] = j; }
+        }
+      }
+    }
+    dropSpecks();
+  }
+  landStats = { blobs: blobs.map(b => [b.kind, Math.round(b.a), Math.round(b.b)]), bays: bays.length, cut: +cut.toFixed(3) };
+  return { M, inland: tileDist(i => !M[i], 4000) };
+}
+// the landmasses once the world is cut (land, lakes, rivers, canyons; not the sea): LANDID and landmasses
+// ({ id, n, c, r: its deepest inland tile, deep: how far that is from the sea, x0, z0, x1, z1 }), biggest first
+function labelLands() {
+  const q = new Int32Array(N * N), ID = new Int32Array(N * N), is = i => LV[i] > 0 || WT[i] > 0 || CY[i] > 0 || BR[i] > 0;
+  const list = labelPatches(is, ID, q).sort((a, b) => b.n - a.n);
+  const D = tileDist(i => !is(i), 4000);
+  LANDID.fill(0); landmasses = [];
+  list.forEach((p, k) => {
+    const id = k + 1, m = { id, n: p.n, c: 0, r: 0, deep: -1, x0: N, z0: N, x1: 0, z1: 0 };
+    for (let j = p.at; j < p.at + p.n; j++) {
+      const i = q[j], c = i % N, r = (i - c) / N;
+      LANDID[i] = id;
+      if (D[i] > m.deep && LV[i]) { m.deep = D[i]; m.c = c; m.r = r; }
+      if (c < m.x0) m.x0 = c; if (c > m.x1) m.x1 = c; if (r < m.z0) m.z0 = r; if (r > m.z1) m.z1 = r;
+    }
+    landmasses.push(m);
+  });
+}
 // the spines and the field of how much mountain each tile has (0 to 1)
-function rangeSpines() {
+function rangeSpines(LM) {
   const rand = mulberry32(SEED ^ 0x5b1e5), nS = simplex(rand), SP = new Float32Array(N * N);
   spines = [];
+  // the landmasses big enough for a range, and the way each lies (its long axis, from the spread of its tiles)
+  const ID = new Int32Array(N * N), q = new Int32Array(N * N), axis = [0];
+  for (const p of labelPatches(i => LM.M[i], ID, q)) {
+    if (p.n < RANGES.landMin) { axis.push(null); continue; }
+    let sx = 0, sz = 0, xx = 0, zz = 0, xz = 0;
+    for (let k = p.at; k < p.at + p.n; k++) { const i = q[k], c = i % N, r = (i - c) / N; sx += c; sz += r; xx += c * c; zz += r * r; xz += c * r; }
+    const n = p.n, mx = sx / n, mz = sz / n, a = xx / n - mx * mx, b = zz / n - mz * mz, cv = xz / n - mx * mz;
+    axis.push(0.5 * Math.atan2(2 * cv, a - b));
+  }
+  const inland = (x, z) => LM.inland[T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1))];
   const want = RANGES.count[0] + Math.floor(rand() * (RANGES.count[1] - RANGES.count[0] + 1));
-  for (let tries = 0; spines.length < want && tries < want * 12; tries++) {
-    const x0 = N * (0.16 + rand() * 0.68), z0 = N * (0.16 + rand() * 0.68);
+  for (let tries = 0; spines.length < want && tries < want * 40; tries++) {
+    const x0 = N * (0.08 + rand() * 0.84), z0 = N * (0.08 + rand() * 0.84), id = ID[T(Math.floor(x0), Math.floor(z0))];
+    if (!id || axis[id] === null || inland(x0, z0) < RANGES.inland) continue;
     if (spines.some(sp => sp.pts.some(([x, z]) => Math.hypot(x - x0, z - z0) < RANGES.apart))) continue;
     const len = RANGES.length[0] + rand() * (RANGES.length[1] - RANGES.length[0]), steps = Math.round(len / 16);
     const w = RANGES.width[0] + rand() * (RANGES.width[1] - RANGES.width[0]);
-    // walk both ways from the start, so it's the middle; the heading wanders by a slow noise
-    let a = rand() * Math.PI * 2;
+    // walk both ways from the start, so it's the middle, roughly along the land's long axis; the heading wanders
+    // by a slow noise, and the walk stops short of the coast
+    let a = axis[id] + (rand() - 0.5) * 0.9;
     const half = (dir) => {
       const out = [];
       let x = x0, z = z0, h = a + (dir < 0 ? Math.PI : 0);
       for (let k = 0; k < steps / 2; k++) {
         h += nS(k * 0.21 + spines.length * 13.1 + (dir < 0 ? 50 : 0), 3.3) * RANGES.turn;
         x += Math.cos(h) * 16; z += Math.sin(h) * 16;
-        if (x < 24 || z < 24 || x > N - 24 || z > N - 24) break;
+        if (x < 24 || z < 24 || x > N - 24 || z > N - 24 || inland(x, z) < RANGES.coast) break;
         out.push([x, z]);
       }
       return out;
@@ -1248,19 +1478,21 @@ async function generate(progress) {
   nX = simplex(rand);
   const HF = new Float32Array(N * N);
 
-  // 1. Elevation: rolling land, mountain ranges along the spines (ridged on top), and a ragged coast all round
-  const SP = rangeSpines();
+  // 1. Elevation: continents and islands in the ocean (the land mask), rolling land rising from the beaches,
+  // mountain ranges along the spines (ridged on top)
+  const LM = landMask();
+  const SP = rangeSpines(LM);
   for (let r = 0; r < N; r++) {
     for (let c = 0; c < N; c++) {
-      const ex = c / N * 2 - 1, ez = r / N * 2 - 1;
-      const edge = Math.max(Math.abs(ex), Math.abs(ez)) + fbm(nC, c / 70, r / 70, 3) * 0.07;
-      const land = 1 - smooth(0.84, 0.97, edge);
+      const i0 = T(c, r);
+      if (!LM.M[i0]) { HF[i0] = -0.4; continue; }
+      const land = smooth(-LANDS.shore * 0.3, LANDS.shore, LM.inland[i0]);
       const base = fbm(nH, c / 230, r / 230, 5);
       const mreg = smooth(0.12, 0.42, fbm(nM, c / 420 + 7.3, r / 420 - 3.1, 2));
       const rg = 1 - Math.abs(fbm(nR, c / 140, r / 140, 4));
       const sp = SP[T(c, r)];
       let h = 0.44 + base * 0.28 + sp * (RANGES.lift + RANGES.peaks * (0.35 + 0.65 * rg * rg)) + mreg * rg * rg * RANGES.hills;
-      HF[T(c, r)] = h * land - (1 - land) * 0.6;
+      HF[i0] = Math.max(0.205, 0.2 + (h - 0.2) * land);
     }
     if (r % 32 === 31) { progress(0.32 * r / N, 'RAISING THE LAND'); await nextFrame(); }
   }
@@ -1453,7 +1685,15 @@ async function generate(progress) {
 
   // 6. Make every stretch of land you could walk to reachable from the first town
   progress(0.62, 'JOINING THE TERRACES'); await nextFrame();
-  await connectAll(T(spawnT.c, spawnT.r + 2), lock, rand, progress);
+  // (and every landmass from a place of its own: a town on it, or its heart, since there's no walking between them)
+  labelLands();
+  const starts = [T(spawnT.c, spawnT.r + 2)];
+  for (const m of landmasses) {
+    if (m.id === LANDID[starts[0]]) continue;
+    const t = towns.find(t => LANDID[T(t.c, t.r)] === m.id);
+    starts.push(t ? T(t.c, t.r + 2) : T(m.c, m.r));
+  }
+  await connectAll(starts, lock, rand, progress);
 
   // 7. Houses, bog water, roads and scenery
   progress(0.8, 'RAISING HOUSES'); await nextFrame();
@@ -1488,6 +1728,7 @@ async function generate(progress) {
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   deepenSea();
+  labelLands();
   progress(0.93, 'MARKING OUT PLOTS'); await nextFrame();
   layPlots(rand);
   progress(0.95, 'NAMING THE LANDS'); await nextFrame();
@@ -2953,11 +3194,13 @@ async function layRoads(rand, progress) {
       nodes.push(w); waystones.push(w); got++;
     }
   }
-  // a spanning tree over every node, shortest links first
+  // a spanning tree over every node, shortest links first: one tree a landmass, as roads don't cross the sea
+  for (const n of nodes) n.land = LANDID[T(n.c, n.r)];
   const inTree = [0], out = nodes.map((_, k) => k).slice(1), links = [];
   while (out.length) {
     let best = null, bd = 1e9;
-    for (const a of inTree) for (const b of out) { const d = Math.hypot(nodes[a].c - nodes[b].c, nodes[a].r - nodes[b].r); if (d < bd) { bd = d; best = [a, b]; } }
+    for (const a of inTree) for (const b of out) { if (nodes[a].land !== nodes[b].land) continue; const d = Math.hypot(nodes[a].c - nodes[b].c, nodes[a].r - nodes[b].r); if (d < bd) { bd = d; best = [a, b]; } }
+    if (!best) { inTree.push(out.shift()); continue; }
     links.push(best); inTree.push(best[1]); out.splice(out.indexOf(best[1]), 1);
   }
   let done = 0;
@@ -2976,7 +3219,7 @@ async function layRoads(rand, progress) {
       if (PATH[T(c + DC[d], r + DR[d])]) { arm[d] = Infinity; continue; }
       let best = null, bd = 1e9;
       for (const o of nodes) {
-        if (o.town === t) continue;
+        if (o.town === t || o.land !== LANDID[T(t.c, t.r)]) continue;
         const dx = o.c - t.c, dz = o.r - t.r, l = Math.hypot(dx, dz), along = (dx * DC[d] + dz * DR[d]) / l;
         const score = l * (2 - along);
         // nothing that way (a town near the edge of the world): head for the nearest place at all
@@ -3105,6 +3348,7 @@ function pruneLevels() {
   }
 }
 
+const TOWN_LAND = 12000;   // tiles a landmass needs for a town of its own
 function placeTowns(rand) {
   const want = 7;
   const ok = (c, r) => {
@@ -3123,18 +3367,24 @@ function placeTowns(rand) {
     for (let dr = -R3; dr <= R3; dr += 2) for (let dc = -R3; dc <= R3; dc += 2) if (WT[T(c + dc, r + dr)] >= 2) return false;
     return true;
   };
-  // the first town sits nearest the middle of the map
+  // the first town sits nearest the heart of the biggest landmass (the home continent); the others only on
+  // landmasses of TOWN_LAND tiles or more, never the small islands
+  labelLands();
+  const home = landmasses[0] || { id: 0, c: N / 2, r: N / 2 };
   let best = null, bd = 1e9;
-  for (let k = 0; k < 3000; k++) {
-    const c = 300 + Math.floor(rand() * 424), r = 300 + Math.floor(rand() * 424);
-    const d = Math.hypot(c - 512, r - 512);
-    if (d < bd && ok(c, r)) { best = [c, r]; bd = d; }
+  for (const R of [160, 320, N]) {
+    for (let k = 0; k < 3000; k++) {
+      const c = clamp(home.c + Math.floor((rand() * 2 - 1) * R), 40, N - 41), r = clamp(home.r + Math.floor((rand() * 2 - 1) * R), 40, N - 41);
+      const d = Math.hypot(c - home.c, r - home.r);
+      if (d < bd && LANDID[T(c, r)] === home.id && ok(c, r)) { best = [c, r]; bd = d; }
+    }
+    if (best) break;
   }
-  if (!best) best = [512, 512];
+  if (!best) best = [home.c, home.r];
   const list = [best];
   for (let k = 0; k < 8000 && list.length < want; k++) {
-    const c = 90 + Math.floor(rand() * (N - 180)), r = 90 + Math.floor(rand() * (N - 180));
-    if (list.some(([a, b]) => Math.hypot(a - c, b - r) < 170)) continue;
+    const c = 90 + Math.floor(rand() * (N - 180)), r = 90 + Math.floor(rand() * (N - 180)), m = landmasses[LANDID[T(c, r)] - 1];
+    if (!m || m.n < TOWN_LAND || list.some(([a, b]) => Math.hypot(a - c, b - r) < 170)) continue;
     if (ok(c, r)) list.push([c, r]);
   }
   list.forEach(([c, r], k) => {
@@ -3145,7 +3395,8 @@ function placeTowns(rand) {
       const cc = c + dc, rr = r + dr, i = T(cc, rr);
       const dist = Math.hypot(dc, dr) + (hs(cc, rr, 21) - 0.5) * 1.2 - TOWN_R;
       if (dist <= 0) { LV[i] = L; SH[i] = 0; BI[i] = TOWN; TN[i] = k + 1; }
-      else { const m = Math.ceil(dist / TERRACE); LV[i] = clamp(LV[i], Math.max(1, L - m), L + m); }
+      else if (LV[i]) { const m = Math.ceil(dist / TERRACE); LV[i] = clamp(LV[i], Math.max(1, L - m), L + m); }
+      else continue;   // (the sea round a coastal town stays sea)
       WT[i] = WT[i] >= 2 ? 0 : WT[i]; WL[i] = 0; GL[i] = 0;
     }
   });
@@ -3197,7 +3448,7 @@ function setRamp(i, d, lock, len = 1) {
   SH[i] = 21 + d; SH[i - DI[d]] = 17 + d; SH[i - 2 * DI[d]] = 13 + d; lock[i - 2 * DI[d]] = lock[i - 3 * DI[d]] = 1;
 }
 
-async function connectAll(start, lock, rand, progress) {
+async function connectAll(starts, lock, rand, progress) {
   const reach = new Uint8Array(N * N), queue = new Int32Array(N * N);
   let qh = 0, qt = 0;
   const flood = () => {
@@ -3212,7 +3463,8 @@ async function connectAll(start, lock, rand, progress) {
       }
     }
   };
-  reach[start] = 1; queue[qt++] = start; flood();
+  for (const st of starts) if (!reach[st]) { reach[st] = 1; queue[qt++] = st; }
+  flood();
   // label what is still out of reach, region by region
   const comp = new Int32Array(N * N).fill(-1), cq = new Int32Array(N * N);
   let nComp = 0;
@@ -11818,7 +12070,7 @@ function renderBar() {
 }
 // Pack, Build and Map at the bottom centre (the keyboard and mouse's: a touch screen keeps its own buttons), lit
 // while open
-const MODES = [{ id: 'inv', label: 'Pack', key: 'Tab', pad: 'RB', glyph: 'pack' }, { id: 'build', label: 'Build', key: 'B', pad: 'MENU', glyph: 'build' }, { id: 'map', label: 'Map', key: 'M', pad: 'VIEW', glyph: 'map' }, { id: 'opts', label: 'Settings', key: 'O', pad: null, glyph: 'settings' }];
+const MODES = [{ id: 'inv', name: 'Inventory', key: 'Tab', pad: 'RB', glyph: 'pack' }, { id: 'build', name: 'Build', key: 'B', pad: 'MENU', glyph: 'build' }, { id: 'map', name: 'World map', key: 'M', pad: 'VIEW', glyph: 'map' }, { id: 'opts', name: 'Settings', key: 'O', pad: null, glyph: 'settings' }];
 function renderModes() {
   const nav = $('modes');
   if (!nav) return;
@@ -11826,7 +12078,7 @@ function renderModes() {
   const sig = MODES.map(m => +on[m.id]).join('') + PAD.on;
   if (nav.dataset.sig === sig) return;
   nav.dataset.sig = sig;
-  nav.innerHTML = MODES.map(m => `<div class="control-stack"><button class="mode-button${on[m.id] ? ' on' : ''}" data-mode="${m.id}" title="${m.label} (${m.key})" aria-pressed="${on[m.id]}"><img class="glyph" src="ui/icon-mode-${m.glyph}.webp" alt="" draggable="false"><span class="label">${m.label}</span></button><span class="keytab">${PAD.on && m.pad ? padGlyph(m.pad) : m.key}</span></div>`).join('');
+  nav.innerHTML = MODES.map(m => `<div class="control-stack"><button class="mode-button${on[m.id] ? ' on' : ''}" data-mode="${m.id}" title="${m.name} (${m.key})" aria-label="${m.name}" aria-pressed="${on[m.id]}"><img class="glyph" src="ui/mode-${m.glyph}.webp" alt="" draggable="false"></button><span class="keytab">${PAD.on && m.pad ? padGlyph(m.pad) : m.key}</span></div>`).join('');
 }
 $('modes').addEventListener('click', e => {
   const b = e.target.closest('.mode-button');
@@ -18203,7 +18455,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 382, crashSeen = new Map();
+const GAME_VERSION = 383, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -18394,6 +18646,7 @@ window.GAME = {
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
+  lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
