@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v374:** Tuning paste (Jordan): REFINE.time 0.5 seconds a refine (was 2); STATION_LOOK.size already 1.5.
+
 **v373:** Windowed walls (Jordan): TIMBER WINDOW (woodwindow, wall value 13: square window between two full-width beams, timberWindow) and STONE WINDOW (stonewindow, 14: equilateral gothic arch with frame, sill, mullion and transom, stoneWindowWall cutting the courses in slices round the arch). Cost = the wall + 2 glass panes; built over a plain wall of the same sort it's an upgrade (spot.upgrade, spotCost) paying only the glass, never queued. Removal refunds wall + glass. Hearths don't turn into fireplaces in window walls. Hook GAME.wallTris; test t_window.js.
 
 **v372:** Fix (Jordan): the second floor flashed on for a frame while you were under it. updateCutaway rebuilds chunks (setPieces) after the story view is applied, and a new mesh starts visible; setPieces, settleBuildings and makeDoor now hide new upper meshes, roofs and doors at once by shownStory (the last storyView).
