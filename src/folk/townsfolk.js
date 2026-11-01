@@ -151,6 +151,17 @@ export function makeFolkKit(GFX) {
       const e = 0.00037 * (nBox++ % 17);
       const m = new GFX.Mesh(new GFX.BoxGeometry(w + e, h + e, dd + e), mat(c)); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); parts.push(m); return m;
     };
+    // (v4, Jordan: angled shapes for the feminine build) a tapered block: its bottom face at y0 (width wb, depth db,
+    // centred on xb, zb) and its top at y1 (wt, dt, at xt, zt), straight sides between: a box whose top is a different
+    // size, or set off, from its bottom. The renderer shades each face flat from its own slope.
+    const taper = (parent, y0, y1, [wb, db, xb = 0, zb = 0], [wt, dt, xt = 0, zt = 0], c) => {
+      const e = 0.00037 * (nBox++ % 17), geo = new GFX.BoxGeometry(1, 1, 1);
+      geo._transform(v => {
+        const top = v.y > 0, w = (top ? wt : wb) + e, dd = (top ? dt : db) + e;
+        v.set(v.x * w + (top ? xt : xb), top ? y1 + e / 2 : y0 - e / 2, v.z * dd + (top ? zt : zb));
+      });
+      const m = new GFX.Mesh(geo, mat(c)); parent.add(m); parts.push(m); return m;
+    };
     const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
     const fem = d.body === 'fem', T = d.torso, L = d.legs, skin = d.skin;
     // the build: shoulders, waist and hips across, the chest's depth, a limb's thickness
@@ -190,30 +201,54 @@ export function makeFolkKit(GFX) {
     }
     // ---- hips and waist ----
     const hipC = skirted ? L.color : T.item === 'tunic' ? T.color : L.color;
-    box(body, B.hip, 0.09, B.dep + 0.01, 0, 0.36, 0, hipC);
+    // the feminine torso narrows from the hips to the waist and widens again to the shoulders; torsoAt(y) gives its
+    // width and depth at a height (chest pieces), hipAt(y) the hips'
+    const lerp = (a, b, u) => a + (b - a) * u, clampU = u => Math.max(0, Math.min(1, u));
+    const HIP = { y0: 0.3, y1: 0.44, w0: B.hip + 0.01, d0: B.dep + 0.02, w1: B.wa - 0.005, d1: B.dep - 0.012 };
+    const TOR = { y0: 0.41, y1: 0.67, w0: B.wa - 0.005, d0: B.dep - 0.012, w1: B.sh, d1: B.dep };
+    const at = (P, y) => { const u = clampU((y - P.y0) / (P.y1 - P.y0)); return [lerp(P.w0, P.w1, u), lerp(P.d0, P.d1, u)]; };
+    const torsoAt = y => at(TOR, y), hipAt = y => at(HIP, y);
+    if (fem) taper(body, HIP.y0, HIP.y1, [HIP.w0, HIP.d0], [HIP.w1, HIP.d1], hipC);
+    else box(body, B.hip, 0.09, B.dep + 0.01, 0, 0.36, 0, hipC);
     // skirts and the tunic's tails hang in a left and a right half, each swinging with its leg a little (so the
     // legs never come through), a little wider at the hem
     const flaps = [];
+    // (v4) each half a tapered block: from the waist, flaring out and forward to the hem, its inner edge on the middle
+    // line (the right half a touch deeper where they overlap, so the two never z-fight)
+    const SK = { top: fem ? 0.43 : 0.41 };
+    const skirtAt = (y, P) => { const u = clampU((SK.top - y) / (SK.top - P.bottom)); return [lerp(P.wt, P.wb, u), lerp(P.dt, P.db, u)]; };
+    let skirtP = null;
     const skirtHalves = (color, bottom, flare) => {
+      const wt = fem ? hipAt(SK.top)[0] / 2 + 0.012 : B.hip / 2 + 0.008, dt = fem ? hipAt(SK.top)[1] + 0.016 : B.dep + 0.03;
+      const P = skirtP = { bottom, wt, dt, wb: wt + flare * 0.5, db: dt + flare };
       for (const s of [1, -1]) {
-        const p = pivot(body, s * B.hip / 4, 0.4, 0); flaps.push(p);
-        const top = 0.4, mid = (top + bottom) / 2, w = B.hip / 2 + 0.008;
-        const h1 = (top - mid), h2 = (mid - bottom), dz = s > 0 ? 0.004 : 0;   // (v3: the halves overlap in the middle: one a touch deeper)
-        box(p, w, h1, B.dep + 0.03 + dz, s * 0.002, -(h1 / 2), 0, color);
-        box(p, w + flare * 0.5, h2 + 0.004, B.dep + 0.03 + flare + dz, s * flare * 0.25, -h1 - h2 / 2 + 0.002, 0, color);
-        // a darker hem
-        box(p, w + flare * 0.5 + 0.004, 0.025, B.dep + 0.034 + flare + dz, s * flare * 0.25, -(top - bottom) + 0.012, 0, shade(color, -0.22));
+        const off = 0.05, p = pivot(body, s * off, 0.4, 0); flaps.push(p);
+        const dz = s > 0 ? 0.004 : 0, cx = w => s * (w / 2 - off - 0.004);
+        const yt = SK.top - 0.4, yb = bottom - 0.4;
+        taper(p, yb + 0.02, yt, [P.wb, P.db + dz, cx(P.wb)], [P.wt, P.dt + dz, cx(P.wt)], color);
+        // a darker hem band, standing a hair proud of the skirt
+        const [w1, d1] = skirtAt(bottom + 0.028, P);
+        taper(p, yb, yb + 0.028, [P.wb + 0.006, P.db + 0.006 + dz, cx(P.wb + 0.006)], [w1 + 0.006, d1 + 0.006 + dz, cx(w1 + 0.006)], shade(color, -0.22));
       }
     };
-    if (skirted) skirtHalves(L.color, hem, L.item === 'skirt' ? 0.05 : 0.07);
+    if (skirted) skirtHalves(L.color, hem, L.item === 'skirt' ? 0.07 : L.item === 'dress' ? 0.12 : 0.1);
     else if (T.item === 'tunic') skirtHalves(T.color, 0.25, 0.02);
     // ---- the chest (the waist pivot) ----
     const chest = pivot(body, 0, 0.42, 0), CH = 0.42;
     const torsoC = T.item === 'vest' || T.item === 'bodice' ? T.under.color : T.color;
     // upper chest across the shoulders, the lower narrower at the waist
-    box(chest, B.sh, 0.16, B.dep, 0, 0.59 - CH, 0, torsoC);
-    box(chest, B.wa, 0.16, B.dep - 0.006, 0, 0.45 - CH, 0, torsoC);
-    if (fem) box(chest, B.sh - 0.05, 0.075, 0.04, 0, 0.565 - CH, B.dep / 2 + 0.008, torsoC);
+    if (fem) {
+      // (v4) one tapered block from the waist up to the shoulders, and the bust a wedge on its front: sloping out and
+      // down from the chest to an undercut, flat underside
+      taper(chest, TOR.y0 - CH, TOR.y1 - CH, [TOR.w0, TOR.d0], [TOR.w1, TOR.d1], torsoC);
+      const f0 = torsoAt(0.505)[1] / 2, f1 = torsoAt(0.625)[1] / 2;
+      taper(chest, 0.505 - CH, 0.625 - CH, [B.sh - 0.035, 0.07, 0, f0 + 0.03], [B.sh - 0.03, 0.02, 0, f1 - 0.006], torsoC);
+    } else {
+      box(chest, B.sh, 0.16, B.dep, 0, 0.59 - CH, 0, torsoC);
+      box(chest, B.wa, 0.16, B.dep - 0.006, 0, 0.45 - CH, 0, torsoC);
+    }
+    // the front of the chest at a height (for the pieces laid on it)
+    const frontAt = y => (fem ? torsoAt(y)[1] : y > 0.51 ? B.dep : B.dep - 0.006) / 2;
     if (T.item === 'vest') {
       // a sleeveless vest, open down the front over the shirt, with two buttons each side
       for (const s of [1, -1]) {
@@ -224,35 +259,59 @@ export function makeFolkKit(GFX) {
       }
     } else if (T.item === 'bodice') {
       // a laced bodice from the bust to the waist over a blouse
-      box(chest, B.wa + 0.012, 0.2, B.dep + 0.008, 0, 0.47 - CH, 0, T.color);
-      box(chest, B.sh - 0.04, 0.05, B.dep + 0.004, 0, 0.555 - CH, 0, T.color);
-      for (const y of [0.42, 0.47, 0.52]) for (const s of [1, -1]) box(chest, 0.05, 0.008, 0.006, 0, y - CH, B.dep / 2 + 0.011, T.trim, 0, s * 0.6);
+      if (fem) {
+        // (v4) following the torso's taper, up to just under the bust
+        const [w0, d0] = torsoAt(0.4), [w1, d1] = torsoAt(0.53);
+        taper(chest, 0.4 - CH, 0.53 - CH, [w0 + 0.014, d0 + 0.012], [w1 + 0.014, d1 + 0.012], T.color);
+      } else {
+        box(chest, B.wa + 0.012, 0.2, B.dep + 0.008, 0, 0.47 - CH, 0, T.color);
+        box(chest, B.sh - 0.04, 0.05, B.dep + 0.004, 0, 0.555 - CH, 0, T.color);
+      }
+      for (const y of [0.42, 0.47, 0.51]) for (const s of [1, -1]) box(chest, 0.05, 0.008, 0.006, 0, y - CH, frontAt(y) + 0.011, T.trim, 0, s * 0.6);
     } else if (T.item === 'dress') {
       // a square neckline in the trim
-      box(chest, 0.11, 0.02, 0.006, 0, 0.645 - CH, B.dep / 2 + 0.003, T.trim);
+      box(chest, 0.11, 0.02, 0.006, 0, 0.645 - CH, frontAt(0.645) + 0.003, T.trim);
     } else if (T.item === 'tunic' || T.item === 'shirt') {
       // a slit neck, laced
-      box(chest, 0.03, 0.07, 0.006, 0, 0.625 - CH, B.dep / 2 + 0.003, shade(T.color, -0.3));
+      box(chest, 0.03, 0.07, 0.006, 0, 0.625 - CH, frontAt(0.625) + 0.003, shade(T.color, -0.3));
     }
+    // the bust's front at a height (feminine), for what lies over it
+    const bustFront = y => lerp(torsoAt(0.505)[1] / 2 + 0.065, torsoAt(0.625)[1] / 2 + 0.004, clampU((y - 0.505) / 0.12));
+    // the skirt's front at a height, for the sash and apron over it
+    const skirtFront = y => skirtP ? skirtAt(y, skirtP)[1] / 2 + 0.004 : 0;
     if (d.belt) {
-      box(body, B.wa + 0.022, d.belt.sash ? 0.05 : 0.04, B.dep + 0.016, 0, 0.42, 0, d.belt.color);
-      if (d.belt.sash) box(body, 0.04, 0.12, 0.012, B.wa / 4, 0.36, B.dep / 2 + 0.012, d.belt.color);
-      else if (d.belt.buckle) box(body, 0.04, 0.045, 0.012, 0, 0.42, B.dep / 2 + 0.012, '#c8a048');
+      const bw = fem ? hipAt(0.4)[0] + 0.012 : B.wa + 0.022, bd = fem ? hipAt(0.4)[1] + 0.02 : B.dep + 0.016;
+      box(body, bw, d.belt.sash ? 0.05 : 0.04, bd, 0, 0.42, 0, d.belt.color);
+      if (d.belt.sash) box(body, 0.04, 0.12, 0.012, B.wa / 4, 0.36, Math.max(bd / 2, skirtFront(0.36)) + 0.008, d.belt.color, skirtP ? -0.08 : 0);
+      else if (d.belt.buckle) box(body, 0.04, 0.045, 0.012, 0, 0.42, bd / 2 + 0.006, '#c8a048');
     }
     // the apron: a skirt panel on the body that swings with the leg ahead, and maybe a bib on the chest
     let apron = null;
     if (d.apron) {
-      apron = pivot(body, 0, 0.42, B.dep / 2 + (skirted ? 0.03 : 0.012));
       const bottom = skirted ? hem + 0.06 : 0.2;
-      box(apron, B.hip - 0.06, 0.42 - bottom, 0.012, 0, -(0.42 - bottom) / 2, 0, d.apron.color);
-      box(body, B.wa + 0.026, 0.02, B.dep + 0.02, 0, 0.44, 0, shade(d.apron.color, -0.15));
-      if (d.apron.bib) box(chest, B.wa - 0.07, 0.16, 0.012, 0, 0.53 - CH, B.dep / 2 + (fem ? 0.03 : 0.008), d.apron.color);
+      if (skirted) {
+        // (v4) laid down the skirt's slope, a hair in front of it
+        apron = pivot(body, 0, 0.42, 0);
+        taper(apron, bottom - 0.42, 0, [B.hip - 0.04, 0.012, 0, skirtFront(bottom) + 0.01], [B.hip - 0.08, 0.012, 0, skirtFront(0.42) + 0.012], d.apron.color);
+      } else {
+        apron = pivot(body, 0, 0.42, B.dep / 2 + 0.012);
+        box(apron, B.hip - 0.06, 0.42 - bottom, 0.012, 0, -(0.42 - bottom) / 2, 0, d.apron.color);
+      }
+      const [aw, ad] = fem ? torsoAt(0.44) : [B.wa, B.dep];
+      box(body, aw + 0.03, 0.02, Math.max(ad + 0.03, skirted ? 2 * skirtFront(0.44) + 0.01 : 0), 0, 0.44, 0, shade(d.apron.color, -0.15));
+      if (d.apron.bib) {
+        if (fem) {
+          // over the bust: flat below it, then up its slope
+          taper(chest, 0.45 - CH, 0.505 - CH, [B.wa - 0.06, 0.012, 0, frontAt(0.45) + 0.008], [B.wa - 0.06, 0.012, 0, frontAt(0.505) + 0.008], d.apron.color);
+          taper(chest, 0.505 - CH, 0.6 - CH, [B.wa - 0.06, 0.012, 0, bustFront(0.505) + 0.008], [B.wa - 0.07, 0.012, 0, bustFront(0.6) + 0.008], d.apron.color);
+        } else box(chest, B.wa - 0.07, 0.16, 0.012, 0, 0.53 - CH, B.dep / 2 + 0.008, d.apron.color);
+      }
     }
     // the neck, and a shawl or neckerchief round it
     box(chest, 0.1, 0.06, 0.09, 0, 0.69 - CH, 0, skin);
     if (d.shawl) {
       box(chest, B.sh + 0.05, 0.06, B.dep + 0.05, 0, 0.66 - CH, 0, d.shawl.color);
-      box(chest, 0.1, 0.1, 0.012, 0, 0.6 - CH, B.dep / 2 + 0.03, d.shawl.color, 0, Math.PI / 4);
+      box(chest, 0.1, 0.1, 0.012, 0, 0.62 - CH, (fem ? bustFront(0.6) : B.dep / 2) + 0.01, d.shawl.color, 0, Math.PI / 4);
     }
     if (d.neckerchief) {
       box(chest, 0.14, 0.04, 0.12, 0, 0.67 - CH, 0.005, d.neckerchief.color);
@@ -464,5 +523,5 @@ export function pose(f, anim, t) {
   f.ankles[0].rotation.x = -(f.legL.rotation.x + f.knees[0].rotation.x) * FOLK_WALK.foot;
   f.ankles[1].rotation.x = -(f.legR.rotation.x + f.knees[1].rotation.x) * FOLK_WALK.foot;
   if (f.flaps.length) { f.flaps[0].rotation.x = f.legL.rotation.x * 0.55; f.flaps[1].rotation.x = f.legR.rotation.x * 0.55; }
-  if (f.apron) f.apron.rotation.x = Math.min(0, f.legL.rotation.x, f.legR.rotation.x) * 0.9;
+  if (f.apron) f.apron.rotation.x = Math.min(0, f.legL.rotation.x, f.legR.rotation.x) * (f.flaps.length ? 0.55 : 0.9);
 }
