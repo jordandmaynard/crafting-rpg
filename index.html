@@ -3764,7 +3764,7 @@ function chunkGI(cx, cz) {
       const roofs = [];
       for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
       const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.metal), leaks: true }, { geo: geo(ch.prism), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
-        { geo: geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs];
+        { geo: ch.buildGI || geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs];
       job.st = GFX.rasterStart(cx, cz, job.ground);
       job.runs = parts.filter(part => GFX.rasterTris(part) > 0); job.t = 0;
       job.stage = 2;
@@ -3978,6 +3978,10 @@ class Buf {
 let OUT = new Buf(), GLOW = new Buf(), METAL = new Buf(), PRISMB = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
 // (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
 const bufWeb = new Buf();
+// (window glass: a mesh of its own per story with windowMat, casting no shadow; GLASSB is where glass goes while the
+// pieces are built, else into OUT with the rest. bufGIProxy: the walls as GI sees them, see buildPieces)
+let GLASSB = null;
+const bufGlass = new Buf(), bufGIProxy = new Buf();
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new Buf(), bufBuild = new Buf(), bufTmp = new Buf(), bufTmpGlow = new Buf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
@@ -4092,7 +4096,7 @@ let partPre = null, partAll = null;   // (partAll: every piece into that one buf
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : OUT;
+  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   for (let i = 0; i < src.length; i += 3) {
@@ -8585,10 +8589,88 @@ function wallPiece(c, r, w, type) {
 }
 // The windows (v373). Glass is a pale blue-green pane behind lead or timber bars.
 const GLASS = '#8fbccc';
+// How glass is drawn (v377, Jordan: not see-through, but seeming to let light in). windowMat lights both faces as the
+// face toward the sun or moon is lit (its shadow test and GI too, so a sunlit pane glows on the inside: transfer),
+// lamps and hearths near it light it through from either side (glow: windows lit up at night with a fire in the
+// room), and it mirrors the sky more at a grazing look (sheen). The panes cast no shadow, so the sun falls through
+// onto the floor (and the lit haze makes a shaft of it). T > Windows.
+const GLASS_FX = { transfer: 1, glow: 2.5, sheen: 0.6, sky: 1.2, rough: 0.15 };
+const GLASS_U = { fx: { value: { x: 0.6, y: 0.15, z: 2.5, w: 1 } }, sky: { value: 1.2 } };
+function updateGlassU() { const u = GLASS_U.fx.value; u.x = GLASS_FX.sheen; u.y = GLASS_FX.rough; u.z = GLASS_FX.glow; u.w = GLASS_FX.transfer; GLASS_U.sky.value = GLASS_FX.sky; }
+const windowMat = new GFX.ShaderMaterial({ uniforms: GLASS_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N0 = flatNormal(i.eye);
+  // (transfer: lit as the face toward the sun or moon is, on both faces)
+  let Ns = select(-N0, N0, dot(N0, F.sunDir.xyz) >= 0.0);
+  let N = select(N0, Ns, U.fx.w > 0.5);
+  var c = shadeLit(i.color, vec3f(0.0), 0.0, U.fx.y, i.world, N, O.emissive.w > 0.5);
+  // the lamps and fires near it shine through it, from whichever side
+  let np = i32(F.cloud2.w);
+  var lamp = vec3f(0.0);
+  for (var k = 0; k < 8; k++) {
+    if (k >= np) { break; }
+    let p = F.points[k];
+    let d = p.pos.xyz - i.world; let dist = length(d);
+    var att = 1.0;
+    if (p.pos.w > 0.0 && p.color.w > 0.0) { att = pow(sat(1.0 - dist / p.pos.w), p.color.w); }
+    lamp += abs(dot(N0, d / max(dist, 1e-5))) * p.color.rgb * att;
+  }
+  c += lamp * i.color * U.fx.z;
+  // the sky mirrored in it, more the more glancing the look (Schlick)
+  let nv = abs(dot(N0, toEye(i.world)));
+  let fr = 0.04 + 0.96 * pow(1.0 - nv, 5.0);
+  c = mix(c, F.hemiSky.rgb * U.sky, sat(fr * U.fx.x));
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+function glassMesh(b) {
+  const m = b.mesh(windowMat);
+  if (m) { m.castShadow = false; m.receiveShadow = true; }
+  return m;
+}
+// The walls as GI sees them (v377). GI's height field is half a tile a texel and takes a whole texel under anything,
+// so a window's frame and the posts at a wall's ends made a window wall solid to it. Every wall of a room is given to
+// GI as plain slabs instead: a whole wall full height, a window as its sill and the wall over it (nothing between,
+// so the sky and bounced light come in), a doorway as its lintel. [bottom, top, colour] a slab.
+const WALL_GI = {
+  1: [[0, WALL_H, '#cdb894']], 3: [[0, WALL_H, '#7a5432']], 4: [[0, WALL_H, '#8a8694']], 12: [[0, MARBLE_H, MARBLE]],
+  2: [[WALL_H - 0.1, WALL_H, '#4a3020']], 10: [[WALL_H - 0.1, WALL_H, '#4a4650']], 11: [[TOMB_DOOR_H, MARBLE_H, MARBLE]],
+  13: [[0, 0.74, '#cdb894'], [1.42, WALL_H, '#cdb894']], 14: [[0, 0.55, '#8a8694'], [1.47, WALL_H, '#8a8694']],
+};
+function wallGI(c, r, w, type, cuts) {
+  const n0 = bufBuild.n;
+  wallPiece(c, r, w, type);
+  const slabs = WALL_GI[type];
+  if (!slabs) return;
+  cuts.push(n0, bufBuild.n);
+  const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP, save = OUT;
+  OUT = bufGIProxy;
+  try {
+    for (const [y0, y1, col] of slabs) part(G.box, col, w ? c : c + 0.5, y + (y0 + y1) / 2, w ? r + 0.5 : r, { sx: 0.96, sy: y1 - y0, sz: 0.1, ry: w ? Math.PI / 2 : 0 });
+  } finally { OUT = save; }
+}
+// the build buffer without the walls' own triangles (cuts: from, to pairs) and with their slabs: a geometry only GI reads
+function giGeo(b, cuts, proxy) {
+  if (!cuts.length) return null;
+  let len = b.n + proxy.n;
+  for (let k = 0; k < cuts.length; k += 2) len -= cuts[k + 1] - cuts[k];
+  const p = new Float32Array(len), col = new Float32Array(len);
+  let o = 0, from = 0;
+  const take = (B, a, z) => { p.set(B.p.subarray(a, z), o); col.set(B.c.subarray(a, z), o); o += z - a; };
+  for (let k = 0; k < cuts.length; k += 2) { take(b, from, cuts[k]); from = cuts[k + 1]; }
+  take(b, from, b.n); take(proxy, 0, proxy.n);
+  return { attributes: { position: { array: p, count: len / 3 }, color: { array: col } }, index: null };
+}
 // a timber wall with a square window: the stone foot, a beam right across under the window and another over it,
 // plaster either side and above and below, the window's own posts, four panes and the bars between them
 function timberWindow(at, y, ry, k) {
-  const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
+  const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const plaster = shade(CC('#cdb894'), k), beam = '#5a3a24', y0 = 0.74, y1 = 1.42, hw = 0.24;
   box(0.5, y + 0.25, 1, 0.5, 0.24, shade(CC('#7a7484'), k));
   box(0.5, y + (0.5 + y0) / 2, 0.98, y0 - 0.5, 0.18, plaster);
@@ -8602,7 +8684,7 @@ function timberWindow(at, y, ry, k) {
 // a stone wall with a pointed (equilateral) gothic arch window: the courses go round it, cut in fine slices where
 // they meet the arch so its curve shows; a paler stone frame and sill, glass, a mullion and a transom
 function stoneWindowWall(c, r, w, y, at, ry, k) {
-  const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
+  const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
   const W = 0.2, sill = 0.55, spring = 1.12, R = 2 * W, apex = spring + Math.sqrt(3) * W, F = 0.05;   // (F: the frame's width)
   // the opening's half-width at height h over the wall's foot (0 outside it)
@@ -8643,17 +8725,19 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, 0.34, shade(CC('#7e7a88'), k));   // (the crenels, as the plain wall)
 }
 function buildPieces(cx, cz, ch) {
-  ch.build = null;
+  ch.build = null; ch.buildGI = null; ch.glass = null;
   if (!buildCount[cz * NC + cx]) return;
-  OUT = bufBuild; bufBuild.n = 0;
+  OUT = bufBuild; bufBuild.n = 0; GLASSB = bufGlass; bufGlass.n = 0; bufGIProxy.n = 0;
+  const giCuts = [];
+  try {
   const c0 = cx * CH, r0 = cz * CH;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
     if (FL[i] === 3) marbleFloor(c, r);
     else if (FL[i] === 2) stoneFloor(c, r);
     else if (FL[i]) plankFloor(c, r);
-    if (WN[i]) wallPiece(c, r, 0, WN[i]);
-    if (WW[i]) wallPiece(c, r, 1, WW[i]);
+    if (WN[i]) wallGI(c, r, 0, WN[i], giCuts);
+    if (WW[i]) wallGI(c, r, 1, WW[i], giCuts);
     const pl = pillars.get(i);
     if (pl) for (const q of pl) if (q.col) marbleColumn(q.x, q.y, q.z, cutEdges.has(q.key)); else if (q.kind === 'post') cabinPost(q);
     const m = mausAt.get(i);
@@ -8664,11 +8748,13 @@ function buildPieces(cx, cz, ch) {
     if (st) drawStair(st);
   }
   ch.build = bufBuild.mesh(groundMat);
+  ch.buildGI = ch.build ? giGeo(bufBuild, giCuts, bufGIProxy) : null;
+  ch.glass = glassMesh(bufGlass);
   // the stories above, a mesh each, so the ones over you can be hidden (storyView)
   for (let k = 1; k <= STORY_MAX; k++) {
     if (!storyUsed(k)) continue;
     const U = UP[k];
-    bufBuild.n = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
+    bufBuild.n = 0; bufGlass.n = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
     try {
       for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
         const i = T(c, r), f = U.FL.get(i);
@@ -8685,14 +8771,19 @@ function buildPieces(cx, cz, ch) {
       }
     } finally { PDY = 0; PCUT = 0; }
     ch['up' + k] = bufBuild.mesh(groundMat);
+    ch['glass' + k] = glassMesh(bufGlass);
   }
+  } finally { GLASSB = null; }
 }
 // a chunk's pieces built again, every story's mesh swapped in
 function setPieces(ch) {
   const tmp = {};
   buildPieces(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'build', tmp.build);
-  for (let k = 1; k <= STORY_MAX; k++) if (tmp['up' + k] || ch['up' + k]) {
+  ch.buildGI = tmp.buildGI;
+  swapMesh(ch, 'build', tmp.build); swapMesh(ch, 'glass', tmp.glass || null);
+  for (let k = 1; k <= STORY_MAX; k++) if (tmp['up' + k] || ch['up' + k] || tmp['glass' + k] || ch['glass' + k]) {
+    swapMesh(ch, 'glass' + k, tmp['glass' + k] || null);
+    if (ch['glass' + k]) ch['glass' + k].visible = k <= shownStory;
     swapMesh(ch, 'up' + k, tmp['up' + k] || null);
     // (a new mesh starts out shown: hidden at once if its story is, or it flashes for a frame: v372 fix, as the
     // cutaway rebuilds chunks after the story view is applied)
@@ -9102,7 +9193,7 @@ function roomsSettled(c, r) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -15534,13 +15625,13 @@ function update(dt) {
   if (!inBld) { const j = roofOver.get(T(Math.floor(H.x), Math.floor(H.z))), b = j !== undefined && bldOf(j); if (b) inBld = b.id; }
   const view = shownStory = storyView();
   for (const b of buildings.values()) if (b.mesh) b.mesh.visible = mode !== 'build' && b.id !== inBld && b.k <= view;
-  for (const ch of chunks.values()) for (let k = 1; k <= STORY_MAX; k++) { const m = ch['up' + k]; if (m) m.visible = k <= view; }
+  for (const ch of chunks.values()) for (let k = 1; k <= STORY_MAX; k++) { const m = ch['up' + k], g = ch['glass' + k]; if (m) m.visible = k <= view; if (g) g.visible = k <= view; }
   for (const d of doors.values()) if (d.k) d.pivot.visible = d.k <= view;
   updateCutaway(inside);
 
   updateGhost();
   updatePlotWalls();
-  updateStoryGrid(); updateGrassHide();
+  updateStoryGrid(); updateGrassHide(); updateGlassU();
   updateSky();
   updateLamps();
 
@@ -17621,6 +17712,13 @@ const TUNING = [
     ...FANTASY.map(m => [WEAPON_TIER, m.k, m.name + ' weapons: damage (times)', 0.1, 8, 0.05]),
     [WEAPON_TIER, 'cost', 'Material a weapon takes', 1, 50, 1],
   ]],
+  ['Windows', [
+    [GLASS_FX, 'transfer', 'Both faces lit as the sunward one is (0 off, 1 on)', 0, 1, 1],
+    [GLASS_FX, 'glow', 'Lamps and fires shining through (times)', 0, 10, 0.05],
+    [GLASS_FX, 'sheen', 'Sky mirrored at a glancing look', 0, 1, 0.01],
+    [GLASS_FX, 'sky', 'Brightness of the mirrored sky', 0, 3, 0.01],
+    [GLASS_FX, 'rough', 'Roughness (the sun\'s glint)', 0.05, 1, 0.01],
+  ]],
   ['Stations', [
     [REFINE, 'time', 'Seconds to refine one (saw table, grinder, smelter, tanning rack)', 0.2, 30, 0.1],
     [STATION_LOOK, 'size', 'Size (walls round its 2 x 2 tiles need it under about 1.6)', 0.5, 2.2, 0.01],
@@ -17873,7 +17971,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 376, crashSeen = new Map();
+const GAME_VERSION = 377, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -17920,6 +18018,7 @@ window.GAME = {
   },
   turnStairs: () => { stairTurn = (stairTurn + 1) & 3; return stairTurn; },
   // (tests) a wall piece's triangles, drawn at (c, r) with no story: positions and colours, for a picture of it
+  glassInfo: (c, r) => { const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH)); if (!ch) return null; const n = m => m ? m.geometry.attributes.position.count : 0; return { build: n(ch.build), glass: n(ch.glass), gi: ch.buildGI ? ch.buildGI.attributes.position.count : null, glassCast: ch.glass ? ch.glass.castShadow : null, glass1: n(ch.glass1), up1: n(ch.up1), inScene: ch.glass ? !!ch.glass.parent : null }; },
   wallTris: (c, r, w, type) => { const b = new Buf(), save = OUT; OUT = b; try { wallPiece(c, r, w, type); } finally { OUT = save; } return { p: Array.from(b.p.subarray(0, b.n)), c: Array.from(b.c.subarray(0, b.n)) }; },
   storyGrid: () => ({ on: !!gridMesh, verts: gridMesh ? gridMesh.geometry.attributes.position.count : 0, y: gridMesh ? +gridMesh.geometry.attributes.position.array[1].toFixed(2) : null }),
   // (tests) put a name on the place plate and report the size it was fitted at
@@ -17951,7 +18050,7 @@ window.GAME = {
   },
   groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
-  compileShaders: () => { for (const m of [outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(LIFT.length).fill(0), ob = {};
@@ -18178,7 +18277,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
+  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW },
   rescaleObelisks: () => rescaleObelisks(),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
