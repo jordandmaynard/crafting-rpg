@@ -1005,6 +1005,39 @@ const FEATURE_WORDS = {
     noun: ['Road', 'Way', 'Trail', 'Track', 'Path', 'Highway', 'Lane'],
     adj: ['Old', 'Winding', 'Long', 'Pilgrim', 'Drovers', 'Merchants', 'Kings', 'Weary', 'Sunken', 'Crooked'] },
 };
+// Continents and islands (v387) get made-up names from syllables (Kalendor, Sylvaria), islands often with an Isle or
+// a Rock about them (the Isle of Thane, Gullmoor Isle)
+const LAND_WORDS = {
+  start: ['Al', 'Bel', 'Cor', 'Dra', 'El', 'Fen', 'Gal', 'Hal', 'Ith', 'Kal', 'Lor', 'Mor', 'Nor', 'Ost', 'Pyr', 'Quel', 'Ror', 'Syl', 'Tha', 'Ul', 'Val', 'Wyn', 'Zar', 'Aer', 'Brae', 'Cael', 'Dun', 'Esk', 'Har', 'Ven'],
+  mid: ['a', 'e', 'i', 'o', 'ar', 'en', 'or', 'an', 'ir', 'ae', 'el', '', '', ''],
+  end: ['dor', 'mar', 'thas', 'ria', 'nia', 'heim', 'gard', 'land', 'mere', 'wyn', 'vale', 'moor', 'rath', 'vor', 'dell', 'oth', 'ia', 'os', 'enne', 'rin'],
+  short: ['thane', 'mar', 'wick', 'holm', 'by', 'sey', 'ness', 'ey', 'ra', 'ka'],
+  word: ['Gull', 'Seal', 'Thorn', 'Raven', 'Mist', 'Salt', 'Storm', 'Ember', 'Cinder', 'Ash', 'Moss', 'Wolf', 'Skull', 'Lantern', 'Bramble', 'Heron', 'Pine', 'Amber'],
+  adj: ['Lonely', 'Lost', 'Drowned', 'Forgotten', 'Silent', 'Weeping', 'Burning', 'Sunken', 'Misty', 'Hidden', 'Broken', 'Green'],
+};
+function makeLandName(rand, used, big) {
+  const W = LAND_WORDS, pick = l => l[Math.floor(rand() * l.length)];
+  for (let k = 0; k < 200; k++) {
+    const st = pick(W.start), stem = st + pick(W.mid);
+    let name;
+    if (big) name = stem + pick(W.end);
+    else {
+      const u = rand(), small = st + pick(W.short), wordy = pick(W.word) + pick(['holm', 'moor', 'rock', 'skerry', 'tor', 'fell']);
+      name = u < 0.3 ? 'Isle of ' + small : u < 0.55 ? small + ' Isle' : u < 0.75 ? wordy + ' Island' : u < 0.9 ? 'The ' + pick(W.adj) + ' Isle' : pick(W.word) + ' Rock';
+    }
+    name = name.replace(/([aeiou])\1+/gi, '$1').toUpperCase();
+    if (used.has(name) || /(.)\1\1/.test(name) || name.replace(/[^A-Z]/g, '').length < 5) continue;
+    used.add(name);
+    return name;
+  }
+  return big ? 'THE CONTINENT' : 'THE ISLE';
+}
+function nameLands(rand, used) {
+  for (const m of landmasses) { m.big = m.n >= TOWN_LAND; m.name = makeLandName(rand, used, m.big); m.found = false; }
+  const ID = new Int32Array(N * N);
+  for (let i = 0; i < N * N; i++) ID[i] = LANDID[i] - 1;
+  labelSpots(ID, landmasses);
+}
 // every name a set of words can make (each pattern's combinations, less the ones that read badly)
 function allNames(w) {
   const out = [];
@@ -1850,6 +1883,7 @@ function nameRegions() {
   spread(n, j => REG[j] < 0 && BI[j] !== TOWN && !sea(j), (j, i) => { REG[j] = REG[i]; });
   labelSpots(REG, regions);
   nameFeatures(rand, used);
+  nameLands(rand, used);
 }
 // Each thing's size (n) and the spots its name can go: the tiles deepest inside it (1 on its edge or the world's,
 // counting in), a few spread across it, the deepest first. ID gives each tile's thing (-1 for none).
@@ -3500,7 +3534,7 @@ function pruneLevels() {
 
 const TOWN_LAND = 12000;   // tiles a landmass needs for a town of its own
 function placeTowns(rand) {
-  const want = 7;
+  let want = 7;
   const ok = (c, r) => {
     const L = LV[T(c, r)], b = BI[T(c, r)];
     if (L < 1 || L > 4 || b === SNOW || b === SWAMP || b === GRAVE || b === DEEP || b === WASTES) return false;
@@ -3532,6 +3566,20 @@ function placeTowns(rand) {
   }
   if (!best) best = [home.c, home.r];
   const list = [best];
+  // (v387) then one at the heart of every other landmass of TOWN_LAND tiles or more, so each continent has a town
+  for (const m of landmasses) {
+    if (m.id === home.id || m.n < TOWN_LAND) continue;
+    let got = null, gd = 1e9;
+    for (const R of [120, 260, N]) {
+      for (let k = 0; k < 2500; k++) {
+        const c = clamp(m.c + Math.floor((rand() * 2 - 1) * R), 40, N - 41), r = clamp(m.r + Math.floor((rand() * 2 - 1) * R), 40, N - 41), d = Math.hypot(c - m.c, r - m.r);
+        if (d < gd && LANDID[T(c, r)] === m.id && !list.some(([a, b]) => Math.hypot(a - c, b - r) < 170) && ok(c, r)) { got = [c, r]; gd = d; }
+      }
+      if (got) break;
+    }
+    if (got) list.push(got);
+  }
+  want = Math.max(want, list.length + 3);
   for (let k = 0; k < 8000 && list.length < want; k++) {
     const c = 90 + Math.floor(rand() * (N - 180)), r = 90 + Math.floor(rand() * (N - 180)), m = landmasses[LANDID[T(c, r)] - 1];
     if (!m || m.n < TOWN_LAND || list.some(([a, b]) => Math.hypot(a - c, b - r) < 170)) continue;
@@ -3813,27 +3861,59 @@ function placeVents() {
 const ROCK_RATE = { [FOREST]: 0.02, [MEADOW]: 0.015, [GRAVE]: 0.02, [DEEP]: 0.015, [WASTES]: 0.012, [SNOW]: 0.04, [DESERT]: 0.023 };
 const ORE_ROCKS = { copper: 1 / 3, iron: 1 / 5, verdane: 1 / 6, caerite: 1 / 7, orivane: 1 / 8, auralith: 1 / 9 };
 const ORE_ROCK_OF = [['copper', O.COPPER], ['iron', O.IRON], ...FANTASY.map(m => [m.k, m.o])];
-// Danger bands: every tile's straight-line distance to the nearest town's well, cut into BAND_N bands that each hold
+// Danger bands (v262; by landmass since v387, see computeBands): every tile's straight-line distance to the nearest town's well, cut into BAND_N bands that each hold
 // an equal share of the land (1 nearest the towns, 10 farthest out). Each metal's rocks only grow from its ORE_BAND out
 // (stone grows everywhere), and a monster's level is the band it spawns in.
 const BAND_N = 10, BAND = new Uint8Array(N * N);
 const ORE_BAND = { copper: 2, iron: 4, verdane: 6, caerite: 7, orivane: 8, auralith: 9 };
 let bandEdges = [], showBands = false, bandCv = null;   // (bandCv: the map's debug view, see bandCanvas)
+// v387 (continents step 2): bands go by landmass. The home continent (the first town's) holds bands 1 to BAND_HOME;
+// the other continents (TOWN_LAND tiles or more) share BAND_HOME to BAND_N among them, nearest home the easiest, each
+// a window of its own; an island takes a single band, one past the top of the continent nearest it over the sea.
+// Inside a continent the bands still go by an equal share of its land, nearest its towns first.
+const BAND_HOME = 4;
+let bandWin = [];   // landmass id -> [lowest band, highest]
 function computeBands() {
-  const D = new Float32Array(N * N);
-  let land = 0;
+  labelLands();
+  const NN = N * N, D = new Float32Array(NN), homeId = LANDID[T(towns[0].c, towns[0].r)] || 1, home = landmasses[homeId - 1];
+  const townsOn = new Map();
+  for (const t of towns) { const id = LANDID[T(t.c, t.r)]; if (!townsOn.has(id)) townsOn.set(id, []); townsOn.get(id).push(t); }
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r), list = townsOn.get(LANDID[i]) || towns;
     let best = 1e12;
-    for (const t of towns) { const dx = c - t.c, dz = r - t.r, d = dx * dx + dz * dz; if (d < best) best = d; }
-    const i = T(c, r);
+    for (const t of list) { const dx = c - t.c, dz = r - t.r, d = dx * dx + dz * dz; if (d < best) best = d; }
     D[i] = Math.sqrt(best);
-    if (LV[i]) land++;
   }
-  const L = new Float32Array(land);
-  for (let i = 0, k = 0; i < N * N; i++) if (LV[i]) L[k++] = D[i];
-  L.sort();
-  bandEdges = Array.from({ length: BAND_N - 1 }, (_, k) => L[Math.floor((k + 1) / BAND_N * land)] || 0);
-  for (let i = 0; i < N * N; i++) { let b = 1; while (b < BAND_N && D[i] >= bandEdges[b - 1]) b++; BAND[i] = b; }
+  bandWin = [];
+  bandWin[homeId] = [1, BAND_HOME];
+  const others = landmasses.filter(m => m.id !== homeId && m.n >= TOWN_LAND).sort((a, b) => Math.hypot(a.c - home.c, a.r - home.r) - Math.hypot(b.c - home.c, b.r - home.r));
+  others.forEach((m, k) => { bandWin[m.id] = [Math.round(BAND_HOME + k * (BAND_N - BAND_HOME) / others.length), Math.round(BAND_HOME + (k + 1) * (BAND_N - BAND_HOME) / others.length)]; });
+  // which continent each tile lies nearest, over sea and islands alike
+  const own = new Uint16Array(NN), q = new Int32Array(NN);
+  let t = 0;
+  for (let i = 0; i < NN; i++) if (bandWin[LANDID[i]]) { own[i] = LANDID[i]; q[t++] = i; }
+  for (let h = 0; h < t; h++) {
+    const i = q[h], c = i % N;
+    for (const j of [c ? i - 1 : -1, c < N - 1 ? i + 1 : -1, i - N, i + N]) if (j >= 0 && j < NN && !own[j]) { own[j] = own[i]; q[t++] = j; }
+  }
+  for (const m of landmasses) if (!bandWin[m.id]) { const w = bandWin[own[T(m.c, m.r)]] || bandWin[homeId]; const b = Math.min(BAND_N, w[1] + 1); bandWin[m.id] = [b, b]; }
+  // each landmass's land in equal shares by distance to its towns
+  const byLand = landmasses.map(() => []);
+  for (let i = 0; i < NN; i++) if (LANDID[i]) byLand[LANDID[i] - 1].push(D[i]);
+  const edges = byLand.map(v => { v.sort((a, b) => a - b); return v; });
+  bandEdges = [];
+  for (const m of landmasses) {
+    const [lo, hi] = bandWin[m.id], nb = hi - lo + 1, v = edges[m.id - 1];
+    m.bands = [lo, hi]; m.edges = Array.from({ length: nb - 1 }, (_, k) => v[Math.floor((k + 1) / nb * v.length)] || 0);
+    if (m.id === homeId) bandEdges = m.edges;
+  }
+  for (let i = 0; i < NN; i++) {
+    const id = LANDID[i];
+    if (!id) { BAND[i] = (bandWin[own[i]] || bandWin[homeId])[0]; continue; }
+    const m = landmasses[id - 1];
+    let b = 0; while (b < m.edges.length && D[i] >= m.edges[b]) b++;
+    BAND[i] = m.bands[0] + b;
+  }
   bandCv = null;
 }
 const bandAt = (x, z) => BAND[T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1))] || 1;
@@ -13074,7 +13154,7 @@ function respawn() {
   camTarget.set(H.x, surfaceY(H.x, H.z), H.z);
   toast(at ? 'You wake by your hearth.' : 'You wake by the well in ' + titleCase(towns[0].name) + '.', 'calm');
 }
-const titleCase = s => s.toLowerCase().replace(/\b\w/g, m => m.toUpperCase()).replace(/^The /, 'the ');
+const titleCase = s => s.toLowerCase().replace(/\b\w/g, m => m.toUpperCase()).replace(/^The /, 'the ').replace(/ Of /g, ' of ');
 
 // ---------- Input ----------
 const keys = new Set();
@@ -16317,6 +16397,7 @@ function update(dt) {
       regionName = name; setPlace(plateName(name));
     }
     discoverFeatures();
+    { const m = landmasses[LANDID[i] - 1]; if (m && m.name && !m.found) { m.found = true; toast('Discovered ' + titleCase(m.name) + '!', 'good'); } }
     revealFog();
   }
   updateBar();
@@ -17487,6 +17568,8 @@ const LABEL_PX = 16;
 // letters), line (line height in sizes), wrap (letters before a name takes two lines), caps (1 keeps the names in
 // capitals, 0 writes them as names: Saltcross Path)
 const MAP_FONT = { px: 22, weight: 600, stroke: 4, spacing: 0.5, line: 1.1, wrap: 16, caps: 0 };
+// continents' names on the map: big (times a name's size)
+const LAND_LABEL = { big: 1.7 };
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
 mapNamesLive.live = true;
 const mapFontLive = () => { applyOptions(); if (mapOpen) drawBigMap(); };
@@ -17522,20 +17605,30 @@ function drawMapLabels(ctx, k, W, Hh) {
     for (let m = 1; m < words.length; m++) { const d = Math.abs(words.slice(0, m).join(' ').length - words.slice(m).join(' ').length); if (d < bd) { bd = d; best = m; } }
     return [words.slice(0, best).join(' '), words.slice(best).join(' ')];
   };
-  const place = (lines, spots, ink) => {
-    const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + (book ? F.stroke + 4 : 4) * u, h = lines.length * lh;
+  const place = (lines, spots, ink, big = 1) => {
+    if (big !== 1) {
+      ctx.font = book ? `${F.weight} ${F.px * big * u}px Spectral, Georgia, serif` : `${LABEL_PX * big * u}px "Press Start 2P", monospace`;
+      if (book) ctx.letterSpacing = `${F.px * big * 0.18 * u}px`;
+    }
+    const lhh = lh * big, w = Math.max(...lines.map(l => ctx.measureText(l).width)) + (book ? F.stroke + 4 : 4) * u, h = lines.length * lhh;
     for (const [x, z] of spots) {
       const box = [x - w / 2, z - h / 2, w, h];
       if (!fits(box)) continue;
       boxes.push(box);
-      lines.forEach((l, j) => label(l, x, z + (j - (lines.length - 1) / 2) * lh, ink));
-      return;
+      lines.forEach((l, j) => label(l, x, z + (j - (lines.length - 1) / 2) * lhh, ink));
+      break;
     }
+    if (big !== 1) { ctx.font = book ? `${F.weight} ${F.px * u}px Spectral, Georgia, serif` : `${LABEL_PX * u}px "Press Start 2P", monospace`; if (book) ctx.letterSpacing = `${F.spacing * u}px`; }
   };
   for (const t of towns) {
     if (!MAP_SHOW.towns || !seen(t.c, t.r)) continue;
     const [x, z] = at(t.c, t.r);
     place([cased(t.name)], [[x, z - lh * 0.5 - 8 * u], [x, z + lh * 0.5 + 8 * u]], '#efe4c8');
+  }
+  // continents (big, spaced capitals) and islands you've set foot on, with the Terrain names (v387)
+  if (MAP_SHOW.biomes) for (const m of landmasses) {
+    if (!m.name || !(m.found || mapReveal) || !m.spots) continue;
+    place(m.big ? [cased(m.name)] : linesOf(m.name), m.spots.map(([x, z]) => at(x, z)), m.big ? '#f6e3b4' : '#ecdcb6', m.big ? LAND_LABEL.big : 1);
   }
   // regions, lakes, seas, rivers and roads you've found, biggest first
   // (each sort only if its NAMES button on the map is on)
@@ -18634,7 +18727,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 386, crashSeen = new Map();
+const GAME_VERSION = 387, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -18825,7 +18918,7 @@ window.GAME = {
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
-  lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
+  lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
