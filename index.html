@@ -890,6 +890,7 @@ const WL = new Uint8Array(N * N);   // water surface level: the water stands a l
 const CY = new Uint8Array(N * N);   // 1 = canyon: a deep, dry gorge
 const BR = new Uint8Array(N * N);   // bridge deck at LV over water or a canyon: 1 runs east-west, 2 north-south
 const DOCK = new Uint8Array(N * N); // a dock's deck (BR too, so it stands over the water like a bridge; v400)
+const DOCK_NEAR = new Uint8Array(N * N);   // within 3 tiles of a dock: kept clear of trees, rocks and plants (v401)
 const FX = new Int8Array(N * N), FZ = new Int8Array(N * N);   // river flow direction, x127
 
 const DC = [0, 1, 0, -1], DR = [-1, 0, 1, 0], DI = [-N, 1, N, -1];
@@ -2068,7 +2069,7 @@ function nameFeatures(rand, used) {
     const tiles = line.filter(i => PATH[i] && !TN[i] && FEAT[i] < 0);
     if (tiles.length < FEATURE_MIN.road) continue;
     const id = features.length;
-    features.push({ kind: 'road', name: makeRegionName(FEATURE_WORDS.road, rand, used, 'THE ROAD'), n: 0, spots: [], found: false });
+    features.push({ kind: 'road', name: makeRegionName(FEATURE_WORDS.road, rand, used, 'THE ROAD'), line: tiles, n: 0, spots: [], found: false });   // (line: its tiles in order, for its name to follow: v401)
     for (const i of tiles) FEAT[i] = id;
   }
   labelSpots(FEAT, features);
@@ -3590,7 +3591,14 @@ function layDock(site, goal, town) {
   return k;
 }
 function placeDocks() {
-  docks.length = 0; DOCK.fill(0);
+  docks.length = 0; DOCK.fill(0); DOCK_NEAR.fill(0);
+  placeDocksAll();
+  for (const k of docks) for (const t of k.tiles) {
+    const c = t % N, r = (t - c) / N;
+    for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) { const cc = c + dc, rr = r + dr; if (cc >= 0 && rr >= 0 && cc < N && rr < N) DOCK_NEAR[T(cc, rr)] = 1; }
+  }
+}
+function placeDocksAll() {
   // coastal towns: the shore nearest the town outside it, a road to the gate nearest that (the end of each street
   // out of town)
   towns.forEach((t, n) => {
@@ -4200,7 +4208,7 @@ function computeBands() {
 const bandAt = (x, z) => BAND[T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1))] || 1;
 function placeScenery(c, r) {
   const i = T(c, r);
-  if (!LV[i] || SH[i] || FL[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;
+  if (!LV[i] || SH[i] || FL[i] || BR[i] || DOCK_NEAR[i] || c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return;   // (nothing on a dock or by it: v401)
   const k = hs(c, r, 2), k2 = hs(c, r, 6), b = BI[i];
   if (PATH[i] && b !== TOWN) return;
   // keep the foot and the top of every ramp clear
@@ -9110,6 +9118,8 @@ function dockDeck(c, r, i) {
     if (n === 4) continue;
     const own = isD(X, Z) ? T(X, Z) : isD(X - 1, Z) ? T(X - 1, Z) : isD(X, Z - 1) ? T(X, Z - 1) : T(X - 1, Z - 1);
     if (own !== i || (n === 2 && (X + Z) % 2)) continue;
+    // (none where the deck meets the shore: a pile there would stand in the bank)
+    if ([[X - 1, Z - 1], [X, Z - 1], [X - 1, Z], [X, Z]].some(([x, z]) => { const t = T(clamp(x, 0, N - 1), clamp(z, 0, N - 1)); return LV[t] > 0 && !BR[t]; })) continue;
     const px = X + (c + 0.5 - X) * 0.16, pz = Z + (r + 0.5 - Z) * 0.16, bed = GL[i] * STEP, top = y + 0.32;
     part(G.cyl6, shade(CC('#4a3020'), 0.9 + hs(X, Z, 77) * 0.2), px, (bed + top) / 2, pz, { sx: 0.15, sy: top - bed, sz: 0.15 });
   }
@@ -18049,6 +18059,9 @@ const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wra
 // continents' and islands' names on the map: size (times a name's), weight (book font) and ink
 const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6' };
 let mapFontsAsked = false;
+// road names on the map (v401): 0 flat, 1 tilted to the road's run there (at most 45 degrees), 2 each letter upright
+// along the road
+const ROAD_LABEL = { style: 1, smooth: 3 };
 let mapLabelMiss = [];   // (continents and islands on the map whose names found no room, for tests)
 const mapNamesLive = () => { if (mapOpen) drawBigMap(); };
 mapNamesLive.live = true;
@@ -18115,6 +18128,69 @@ function drawMapLabels(ctx, k, W, Hh) {
   mapLabelMiss = [];
   const shown = m => MAP_SHOW.towns && m.name && (m.found || mapReveal);
   for (const m of landmasses) if (m.big && shown(m) && m.at) place([cased(m.name)], [at(m.at[0], m.at[1])], L.bigInk, { big: L.big, weight: L.bigWeight, spread: true, always: true });
+  // a road's name along it (ROAD_LABEL.style 1: tilted with it, 2: letter by letter, upright); false if it found no room
+  function placeRoad(g, ink) {
+    const text = cased(g.name), line = g.line, n = line.length, K = Math.max(0, ROAD_LABEL.smooth | 0);
+    ctx.font = fontOf({ italic: true });
+    const tw = ctx.measureText(text).width, th = lh;
+    // the road on screen, smoothed over K tiles each way (its tiles step round corners), and the length along it
+    const raw = line.map(i => at(i % N + 0.5, Math.floor(i / N) + 0.5)), P = [], Ls = [0];
+    for (let j = 0; j < n; j++) {
+      let x = 0, z = 0, m = 0;
+      for (let q = Math.max(0, j - K); q <= Math.min(n - 1, j + K); q++) { x += raw[q][0]; z += raw[q][1]; m++; }
+      P.push([x / m, z / m]);
+      if (j) Ls.push(Ls[j - 1] + Math.hypot(P[j][0] - P[j - 1][0], P[j][1] - P[j - 1][1]));
+    }
+    const total = Ls[n - 1];
+    const pointAt = sAt => {
+      sAt = clamp(sAt, 0, total);
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (Ls[mid] <= sAt) lo = mid; else hi = mid; }
+      const f = Ls[hi] > Ls[lo] ? (sAt - Ls[lo]) / (Ls[hi] - Ls[lo]) : 0;
+      return [P[lo][0] + (P[hi][0] - P[lo][0]) * f, P[lo][1] + (P[hi][1] - P[lo][1]) * f];
+    };
+    if (!g.spotIdx) g.spotIdx = g.spots.map(([x, z]) => { let b = 0, bd = 1e9; line.forEach((i, j) => { const d = Math.hypot(i % N + 0.5 - x, Math.floor(i / N) + 0.5 - z); if (d < bd) { bd = d; b = j; } }); return b; });
+    let put = false;
+    for (const j of g.spotIdx) {
+      const s0 = Ls[j];
+      if (total < tw * (ROAD_LABEL.style === 2 ? 1.05 : 0.6)) break;   // (too short on the map at this zoom)
+      const a = pointAt(s0 - tw / 2), b = pointAt(s0 + tw / 2);
+      let ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      if (ang > Math.PI / 2) ang -= Math.PI; else if (ang < -Math.PI / 2) ang += Math.PI;   // (reading left to right)
+      if (ROAD_LABEL.style === 1) {
+        ang = clamp(ang, -Math.PI / 4, Math.PI / 4);
+        const [x, z] = pointAt(s0), cs = Math.abs(Math.cos(ang)), sn = Math.abs(Math.sin(ang));
+        const bw = tw * cs + th * sn + 4 * u, bh = tw * sn + th * cs, box = [x - bw / 2, z - bh / 2, bw, bh];
+        if (!fits(box)) continue;
+        boxes.push(box);
+        ctx.save(); ctx.translate(Math.round(x), Math.round(z)); ctx.rotate(ang); label(text, 0, 0, ink); ctx.restore();
+        put = true; break;
+      }
+      // (2) letter by letter: spaced by width across and by height up or down, the road run left to right
+      // (read left to right, or top to bottom where the road runs steeply)
+      const dxr = b[0] - a[0], dzr = b[1] - a[1], flip = Math.abs(dxr) > Math.abs(dzr) ? dxr < 0 : dzr < 0, cs = Math.abs(Math.cos(ang)), sn = Math.abs(Math.sin(ang));
+      const chars = [...text], adv = chars.map(ch => ctx.measureText(ch).width), steps = adv.map(w => w * cs + th * 0.72 * sn);
+      const len = steps.reduce((t, v) => t + v, 0);
+      if (len > total) continue;
+      let at0 = clamp((flip ? total - s0 : s0) - len / 2, 0, total - len);   // (along the road as read: from its far end when flipped)
+      const pts = [], bx = [];
+      for (let k = 0; k < chars.length; k++) {
+        const sk = at0 + steps[k] / 2;
+        at0 += steps[k];
+        const [x, z] = pointAt(flip ? total - sk : sk);
+        pts.push([x, z]);
+        bx.push([x - adv[k] / 2, z - th / 2, adv[k], th]);
+      }
+      if (!bx.every(fits)) continue;
+      boxes.push(...bx);
+      const al = ctx.textAlign; ctx.textAlign = 'center';
+      chars.forEach((ch, k) => { if (ch !== ' ') label(ch, pts[k][0], pts[k][1], ink); });
+      ctx.textAlign = al;
+      put = true; break;
+    }
+    ctx.font = fontOf();
+    return put;
+  }
   for (const t of towns) {
     if (!MAP_SHOW.towns || !seen(t.c, t.r)) continue;
     const [x, z] = at(t.c, t.r);
@@ -18135,8 +18211,11 @@ function drawMapLabels(ctx, k, W, Hh) {
   // (each sort only if its NAMES button on the map is on)
   const found = regions.filter(g => MAP_SHOW.biomes && (g.found || mapReveal)).map(g => [g, REGION_INK[g.biome]])
     .concat(features.filter(f => MAP_SHOW[f.kind === 'road' ? 'roads' : 'waters'] && (f.found || mapReveal)).map(f => [f, FEATURE_INK[f.kind]]));
-  // (roads and paths in italics, v391)
-  for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink, g.kind === 'road' ? { italic: true } : null);
+  // (roads and paths in italics, v391; following the road, v401)
+  for (const [g, ink] of found.sort((a, b) => b[0].n - a[0].n)) {
+    if (g.kind === 'road' && ROAD_LABEL.style && g.line && g.line.length >= 4 && placeRoad(g, ink)) continue;
+    place(linesOf(g.name), g.spots.map(([x, z]) => at(x, z)), ink, g.kind === 'road' ? { italic: true } : null);
+  }
   if (book) ctx.letterSpacing = '0px';
 }
 // every load rolls a fresh world unless a seed is pinned in the address (?seed=123 or #seed-123) or kept (the
@@ -18979,6 +19058,8 @@ const TUNING = [
     [MAP_FONT, 'line', 'Line height (times the size)', 0.8, 1.6, 0.05, mapNamesLive],
     [MAP_FONT, 'wrap', 'Letters before a name wraps', 8, 30, 1, mapNamesLive],
     [MAP_FONT, 'caps', 'Capitals (1) or names (0)', 0, 1, 1, mapNamesLive],
+    [ROAD_LABEL, 'style', 'Road names: 0 flat, 1 tilted with the road, 2 letters along it', 0, 2, 1, mapNamesLive],
+    [ROAD_LABEL, 'smooth', 'Road names: smoothing of the road\'s line (tiles)', 0, 12, 1, mapNamesLive],
     [LAND_LABEL, 'big', 'Continent names: size (times)', 1, 4, 0.05, mapNamesLive],
     [LAND_LABEL, 'bigWeight', 'Continent names: weight', 400, 700, 100, mapNamesLive],
     [LAND_LABEL, 'bigSpacing', 'Continent names: letter spacing (px)', -1, 24, 0.5, mapNamesLive],
@@ -19244,7 +19325,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 400, crashSeen = new Map();
+const GAME_VERSION = 401, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -19553,7 +19634,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH },
+  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, ROAD_LABEL },
   rescaleObelisks: () => rescaleObelisks(),
   cabins: () => cabins.map(m => ({ x: m.x, z: m.z, L: m.L, d: m.d, house: m.house.length, porch: m.porch.length, door: (m.door[2] ? WW : WN)[T(m.door[0], m.door[1])],
     room: !!roomOf.get(m.houseI), roofShown: !!((bldOf(m.houseI) || {}).mesh || {}).visible, open: doors.get(edgeKey(...m.door)).open,
