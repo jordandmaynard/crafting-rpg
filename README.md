@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v396:** Structures stay hard pixels on the smooth map (Jordan): tileCls 5 now covers towns (BI TOWN), farms and wheat fields (FARM, FIELD), built floors, walls and fences (FL, WN/WW), bridges, and every object marked built: true in its def (houses, wells, shrines, lamps, hearths, obelisks, stations, tables, crates, chests). New structures get built: true. In the shader class 5 never spreads: the ground smooths around structures and a pixel whose nearest tile is a structure takes its exact colour. The buildings bias row is gone. Baked Jordan's paste: smoothing on, lines 0, round 1, road -0.02, river -0.11, sea 0, cliff 0.
+
 **v395:** Rivers as lines fixed (Jordan): rivers and lakes carved down to sea level (LV 0, WT 3 river / 2 lake) were counted as sea (tileCls 3), so the lines mode left them square. They're class 2 now; only open sea is class 3. Baked Jordan's paste: MAP_SMOOTH round 0, road 0.22, river 0.02, sea 0.08.
 
 **v394:** Roads and rivers as lines (Jordan prefers the square terrain): MAP_SMOOTH.on now defaults to 0 and a new MAP_SMOOTH.lines (on) runs the smooth map shader in mode 2. Only road/path and river/lake tiles (tileCls 1 and 2) get the curved edges; everything else is drawn as square tiles (the nearest tile that isn't road or river), anti-aliased where a line meets the ground. Road and river biases can go negative for thinner lines. Test t_smooth2.js.
