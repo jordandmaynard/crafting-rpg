@@ -3657,6 +3657,7 @@ function buildCobbles() {
 function finishTowns() {
   buildCobbles();
   buildFountains();
+  buildHalos();
   for (const t of towns) {
     for (const hse of t.houses) {
       makeDoor(...hse.door); makeRoom(hse.tiles, hse.color);
@@ -11777,7 +11778,9 @@ scene.add(heroShadow);
 const HERO_LIGHT = { night: 0.95, day: 0, range: 7.5, decay: 1.4, toward: 1.2, height: 1.0, color: '#ffa142', steady: 1 };
 const heroLight = addLight(new GFX.PointLight(HERO_LIGHT.color, 0, HERO_LIGHT.range, HERO_LIGHT.decay));
 // a few lamp lights shared out to whichever town lamps are nearest
-const lampLights = [0, 1, 2, 3].map(() => addLight(new GFX.PointLight('#ffb060', 0, 4.5, 2)));
+// (v411: 12 of them, was 4; each fades out as a nearer lamp is about to take its place: LAMP_FADE)
+const LAMP_LIGHTS = 12, LAMP_FADE = { width: 3 };
+const lampLights = Array.from({ length: LAMP_LIGHTS }, () => addLight(new GFX.PointLight('#ffb060', 0, 4.5, 2)));
 lights.forEach(l => l.layers.enableAll());
 
 const MAX_HP = 100;
@@ -16909,31 +16912,103 @@ function updateLamps() {
   // the fantasy ore rocks (Verdane and up) each light the ground round them in their colour
   if (!oreLightAt) { oreLightAt = []; for (let i = 0; i < N * N; i++) if (OBJ[OB[i]].metal) { const c = i % N, r = (i - c) / N; oreLightAt.push([c + 0.5, r + 0.5, 3, i]); } }
   for (const p of oreLightAt) if (OBJ[OB[p[3]]].metal && ORE_GLOW[OBJ[OB[p[3]]].metal] > 0 && Math.abs(p[0] - H.x) < 30 && Math.abs(p[1] - H.z) < 30) near.push(p);
-  near.sort((a, b) => Math.hypot(a[0] - H.x, a[1] - H.z) - Math.hypot(b[0] - H.x, b[1] - H.z));
+  const dist = p => Math.hypot(p[0] - H.x, p[1] - H.z);
+  near.sort((a, b) => dist(a) - dist(b));
   const night = 1 - daylight();
+  // the first lamp left out sets where the lit ones fade to nothing, so a light hands over to a nearer lamp
+  // smoothly instead of popping (v411)
+  const cut = near.length > LAMP_LIGHTS ? dist(near[LAMP_LIGHTS]) : Infinity;
   lampLights.forEach((l, k) => {
     const p = near[k];
     if (!p) { l.intensity = 0; return; }
-    if (p[2] === 3) {
-      const metal = OBJ[OB[p[3]]].metal;
-      if (metal === 'auralith') prismLight(l.color, time * 0.08 + p[0] * 0.13 + p[1] * 0.07); else l.color.set(ORE_LOOK[metal]);
-      l.distance = ORE_GLOW.range;
-      l.position.set(p[0], heightAt(p[0], p[1]) + 0.9, p[1]);
-      l.intensity = ORE_GLOW[metal] * (0.5 + night * 0.7);
-      return;
-    }
-    if (p[2] === 2) {
-      // a grotto's pool, glowing, a slow swell
-      l.color.set(GROTTO.lightColor); l.distance = GROTTO.lightRange;
-      l.position.set(p[0], p[3].L * STEP + 0.5, p[1]);
-      l.intensity = GROTTO.light * (0.6 + night * 0.6) * (0.9 + Math.sin(time * 0.9 + k) * 0.1);
-      return;
-    }
-    l.color.set('#ffb060'); l.distance = 4.5;
-    // a hearth's fire burns low in its pit, brighter and with more flicker than a lamp
-    l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : 1.2), p[1]);
-    l.intensity = p[2] ? (0.7 + night * 1.5) * (0.85 + Math.sin(time * 13 + k) * 0.08 + Math.sin(time * 31) * 0.05) : (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + k) * 0.06);
+    const fade = clamp((cut - dist(p)) / Math.max(0.01, LAMP_FADE.width), 0, 1);
+    lampLight(l, p, k, night);
+    l.intensity *= fade;
   });
+  for (const l of lampLights) l.visible = l.intensity > 0;   // (a dark one isn't looped over by every shader)
+  updateHalos(night);
+}
+// one of the lamp lights on a lamp, hearth, grotto pool or ore rock (p: [x, z, kind, ...]), its own brightness
+function lampLight(l, p, k, night) {
+  if (p[2] === 3) {
+    const metal = OBJ[OB[p[3]]].metal;
+    if (metal === 'auralith') prismLight(l.color, time * 0.08 + p[0] * 0.13 + p[1] * 0.07); else l.color.set(ORE_LOOK[metal]);
+    l.distance = ORE_GLOW.range;
+    l.position.set(p[0], heightAt(p[0], p[1]) + 0.9, p[1]);
+    l.intensity = ORE_GLOW[metal] * (0.5 + night * 0.7);
+    return;
+  }
+  if (p[2] === 2) {
+    // a grotto's pool, glowing, a slow swell
+    l.color.set(GROTTO.lightColor); l.distance = GROTTO.lightRange;
+    l.position.set(p[0], p[3].L * STEP + 0.5, p[1]);
+    l.intensity = GROTTO.light * (0.6 + night * 0.6) * (0.9 + Math.sin(time * 0.9 + k) * 0.1);
+    return;
+  }
+  l.color.set('#ffb060'); l.distance = 4.5;
+  // a hearth's fire burns low in its pit, brighter and with more flicker than a lamp
+  l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : 1.2), p[1]);
+  l.intensity = p[2] ? (0.7 + night * 1.5) * (0.85 + Math.sin(time * 13 + k) * 0.08 + Math.sin(time * 31) * 0.05) : (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + p[0] * 1.3 + p[1] * 0.7) * 0.06);
+}
+// A soft glow round every town lamp's lantern (v411), lit or not, so the lamps far off (that have no light of their
+// own) still read as burning at night: one camera-facing puff a lamp, added on, fading into what's behind it and into
+// the haze, flickering a little. T > Lamp halos.
+const LAMP_HALO = { amount: 0.55, size: 0.9, day: 0.06, color: '#ffb060' };
+const HALO_U = { amount: { value: 0 }, size: { value: 1 }, color: { value: new GFX.Color(LAMP_HALO.color) } };
+for (const k of ['fogNear', 'fogFar', 'tRefrD', 'refr']) HALO_U[k] = WATER_U[k];
+const haloMat = new GFX.ShaderMaterial({
+  uniforms: HALO_U, attributes: { corner: 'vec2f' }, transparent: true, depthWrite: false, side: GFX.DoubleSide,
+  blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneFactor,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32, @location(2) pix: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
+  let upv = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
+  let seed = dot(v.position.xz, vec2f(1.37, 2.71));
+  let flick = 0.92 + 0.05 * sin(F.camDir.w * 9.0 + seed) + 0.03 * sin(F.camDir.w * 23.0 + seed * 1.7);
+  let w = v.position + (right * v.corner.x + upv * v.corner.y) * U.size;
+  var o: VOut;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.uv = v.corner; o.pix = w;
+  o.a = U.amount * flick * (1.0 - sat((viewDepth(v.position) - U.fogNear) / (U.fogFar - U.fogNear)));
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let r2 = dot(i.uv, i.uv);
+  if (r2 > 1.0) { discard; }
+  var m = exp(-r2 * 4.0) * (1.0 - r2) + exp(-r2 * 40.0) * 0.6;
+  if (U.refr > 0.5) {
+    let dims = vec2i(textureDimensions(tRefrD));
+    let zb = textureLoad(tRefrD, clamp(vec2i(i.pos.xy), vec2i(0), dims - 1), 0);
+    let P = F.proj;
+    let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+    let vs = (F.view * vec4f(i.pix, 1.0)).z;
+    m *= smoothstep(0.0, 0.6, vs - vb);
+  }
+  return vec4f(U.color * m * i.a, 1.0);
+}`,
+});
+haloMat.keepAlpha = true;
+let haloMesh = null;
+function buildHalos() {
+  if (haloMesh) { scene.remove(haloMesh); haloMesh.geometry.dispose(); haloMesh = null; }
+  const pos = [], corner = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  for (const t of towns) for (const [x, z] of t.lamps) {
+    const y = groundAt(x, z) + 1.13;
+    for (const [a, b] of C) { pos.push(x, y, z); corner.push(a, b); }
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('corner', new GFX.Float32BufferAttribute(corner, 2));
+  haloMesh = new GFX.Mesh(g, haloMat);
+  haloMesh.frustumCulled = false; haloMesh.renderOrder = 10; haloMesh.layers.set(3); haloMesh.castShadow = false;
+  scene.add(haloMesh);
+}
+function updateHalos(night) {
+  const L = LAMP_HALO;
+  HALO_U.amount.value = L.amount * (L.day + (1 - L.day) * night); HALO_U.size.value = L.size; HALO_U.color.value.set(L.color);
+  if (haloMesh) haloMesh.visible = HALO_U.amount.value > 0.001;
 }
 
 // foes don't stack up on one another. Neighbours are found by tile (no two foes' reaches add up to one), so a
@@ -18135,7 +18210,7 @@ function tileRGB(i) {
   if (BI[i] === TOWN || FARM[i] || FIELD[i] || FL[i] || OBJ[o].built) tileCls = 5;
   return [R * f, Gc * f, B * f];
 }
-// The smooth map (v393, T > Map smoothing): the map's tiles drawn by a small WebGL2 shader instead of as big
+// The smooth map (v393, T > Map smoothing): the map's tiles drawn by a small shader (WebGPU since v411) instead of as big
 // squares. Each pixel looks at the four tiles around it; tiles of the same colour (mapKey) pool their bilinear
 // weights, and the pixel takes the colour with the most, so the line between two colours runs smoothly between
 // tile centres (a staircase becomes a slope, a corner a curve) but stays a hard line, anti-aliased over about a
@@ -18148,93 +18223,108 @@ function mapKeyOf(i, R, Gc, B) {
   if (tileCls === 3 && WT[i] !== 2 && WT[i] !== 3) { R = 38; Gc = 90; B = 122; }
   mapKey[i * 4] = R; mapKey[i * 4 + 1] = Gc; mapKey[i * 4 + 2] = B; mapKey[i * 4 + 3] = tileCls;
 }
+// The smooth map (v393; on WebGPU since v411, was a WebGL2 canvas): a fragment shader over the map's tile colours
+// (mapCol) and keys (mapKey), drawn into a small WebGPU canvas of its own on the game's device, which the minimap
+// and the big map then copy from (the minimap without waiting, through createImageBitmap)
 const smoothMap = (() => {
-  let cv = null, gl = null, U = null, texC, texK, failed = false, full = true, tiles = [];
-  const VS = `#version 300 es
-void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. : -1.); gl_Position = vec4(p, 0., 1.); }`;
-  const FS = `#version 300 es
-precision highp float; precision highp int;
-uniform highp sampler2D C; uniform highp usampler2D K;
-uniform vec2 org, size; uniform float ppt, edge, rnd; uniform float bias[6]; uniform int n, mode;
-out vec4 o;
-void main() {
-  vec2 p = org + vec2(gl_FragCoord.x, size.y - gl_FragCoord.y) / ppt;
-  float inside = step(0., p.x) * step(0., p.y) * step(p.x, float(n)) * step(p.y, float(n));
-  vec2 g = p - 0.5, b = floor(g), f = g - b;
-  ivec2 i0 = ivec2(b);
-  ivec2 q[4] = ivec2[4](i0, i0 + ivec2(1, 0), i0 + ivec2(0, 1), i0 + ivec2(1, 1));
-  float w[4] = float[4]((1. - f.x) * (1. - f.y), f.x * (1. - f.y), (1. - f.x) * f.y, f.x * f.y);
-  uvec4 k[4]; vec3 c[4];
-  for (int j = 0; j < 4; j++) { ivec2 t = clamp(q[j], ivec2(0), ivec2(n - 1)); k[j] = texelFetch(K, t, 0); c[j] = texelFetch(C, t, 0).rgb; }
+  let cv = null, ctx = null, dev = null, pipe = null, bind = null, ubuf = null, texC = null, texK = null, failed = false, full = true, tiles = [];
+  const ub = new Float32Array(16), ubi = new Int32Array(ub.buffer);
+  const WGSL = /* wgsl */ `
+struct SU { a: vec4f, b: vec4f, bias0: vec4f, bias1: vec4f }   // a: org, size; b: ppt, edge, rnd, mode; bias1.zw: n
+@group(0) @binding(0) var<uniform> U: SU;
+@group(0) @binding(1) var C: texture_2d<f32>;
+@group(0) @binding(2) var K: texture_2d<u32>;
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+  let p = vec2f(select(-1.0, 3.0, vi == 1u), select(-1.0, 3.0, vi == 2u));
+  return vec4f(p, 0.0, 1.0);
+}
+fn biasOf(c: u32) -> f32 {
+  switch c { case 0u: { return U.bias0.x; } case 1u: { return U.bias0.y; } case 2u: { return U.bias0.z; } case 3u: { return U.bias0.w; } case 4u: { return U.bias1.x; } default: { return U.bias1.y; } }
+}
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let n = bitcast<i32>(U.bias1.z); let ppt = U.b.x; let rnd = U.b.z; let mode = i32(U.b.w);
+  let p = U.a.xy + fc.xy / ppt;
+  let inside = step(0.0, p.x) * step(0.0, p.y) * step(p.x, f32(n)) * step(p.y, f32(n));
+  let g = p - 0.5; let bb = floor(g); let f = g - bb;
+  let i0 = vec2i(bb);
+  let hi = vec2i(n - 1);
+  var q = array<vec2i, 4>(i0, i0 + vec2i(1, 0), i0 + vec2i(0, 1), i0 + vec2i(1, 1));
+  var w = array<f32, 4>((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+  var k: array<vec4u, 4>; var c: array<vec3f, 4>;
+  for (var j = 0; j < 4; j++) { let t = clamp(q[j], vec2i(0), hi); k[j] = textureLoad(K, t, 0); c[j] = textureLoad(C, t, 0).rgb; }
   // (and the 4 by 4 tiles around, weighted by a cubic B-spline, for rounder lines over long gentle staircases)
-  vec4 bx = vec4((1. - f.x) * (1. - f.x) * (1. - f.x), 3. * f.x * f.x * f.x - 6. * f.x * f.x + 4., -3. * f.x * f.x * f.x + 3. * f.x * f.x + 3. * f.x + 1., f.x * f.x * f.x) / 6.;
-  vec4 bz = vec4((1. - f.y) * (1. - f.y) * (1. - f.y), 3. * f.y * f.y * f.y - 6. * f.y * f.y + 4., -3. * f.y * f.y * f.y + 3. * f.y * f.y + 3. * f.y + 1., f.y * f.y * f.y) / 6.;
-  uvec3 kb[16];
-  for (int zz = 0; zz < 4; zz++) for (int xx = 0; xx < 4; xx++) kb[zz * 4 + xx] = texelFetch(K, clamp(i0 + ivec2(xx - 1, zz - 1), ivec2(0), ivec2(n - 1)), 0).rgb;
-  float s[4]; vec3 col[4];
-  for (int j = 0; j < 4; j++) {
-    float sw = 0., sb = 0.; vec3 sc = vec3(0.);
-    for (int m = 0; m < 4; m++) if (k[m].rgb == k[j].rgb) { sw += w[m]; sc += c[m] * w[m]; }
-    for (int m = 0; m < 16; m++) if (kb[m] == k[j].rgb) sb += bx[m % 4] * bz[m / 4];
-    s[j] = mix(sw, sb, rnd) + bias[int(k[j].a)]; col[j] = sw > 1e-5 ? sc / sw : c[j];
+  let bx = vec4f((1.0 - f.x) * (1.0 - f.x) * (1.0 - f.x), 3.0 * f.x * f.x * f.x - 6.0 * f.x * f.x + 4.0, -3.0 * f.x * f.x * f.x + 3.0 * f.x * f.x + 3.0 * f.x + 1.0, f.x * f.x * f.x) / 6.0;
+  let bz = vec4f((1.0 - f.y) * (1.0 - f.y) * (1.0 - f.y), 3.0 * f.y * f.y * f.y - 6.0 * f.y * f.y + 4.0, -3.0 * f.y * f.y * f.y + 3.0 * f.y * f.y + 3.0 * f.y + 1.0, f.y * f.y * f.y) / 6.0;
+  var kb: array<vec3u, 16>;
+  for (var zz = 0; zz < 4; zz++) { for (var xx = 0; xx < 4; xx++) { kb[zz * 4 + xx] = textureLoad(K, clamp(i0 + vec2i(xx - 1, zz - 1), vec2i(0), hi), 0).rgb; } }
+  var s: array<f32, 4>; var col: array<vec3f, 4>;
+  for (var j = 0; j < 4; j++) {
+    var sw = 0.0; var sb = 0.0; var sc = vec3f(0.0);
+    for (var m = 0; m < 4; m++) { if (all(k[m].rgb == k[j].rgb)) { sw += w[m]; sc += c[m] * w[m]; } }
+    for (var m = 0; m < 16; m++) { if (all(kb[m] == k[j].rgb)) { sb += bx[m % 4] * bz[m / 4]; } }
+    s[j] = mix(sw, sb, rnd) + biasOf(k[j].a);
+    col[j] = select(c[j], sc / max(sw, 1e-5), sw > 1e-5);
   }
   // (structures, class 5, never spread: the ground smooths around them and they stay square)
-  int nn = 0;
-  for (int j = 1; j < 4; j++) if (w[j] > w[nn]) nn = j;
-  int a = -1;
-  for (int j = 0; j < 4; j++) if (k[j].a != 5u && (a < 0 || s[j] > s[a])) a = j;
-  if (a < 0) a = nn;
-  int e = -1;
-  for (int j = 0; j < 4; j++) if (k[j].a != 5u && k[j].rgb != k[a].rgb && (e < 0 || s[j] > s[e])) e = j;
-  float d = e < 0 ? 1. : s[a] - s[e];
-  vec3 other = e < 0 ? col[a] : col[e];
-  float fw = clamp(fwidth(d), 1e-4, 2.5 / ppt) * edge;
-  float t = clamp(0.5 + d / max(fw, 1e-4), 0., 1.);
-  vec3 res = mix(other, col[a], t);
+  var nn = 0;
+  for (var j = 1; j < 4; j++) { if (w[j] > w[nn]) { nn = j; } }
+  var a = -1;
+  for (var j = 0; j < 4; j++) { if (k[j].a != 5u && (a < 0 || s[j] > s[a])) { a = j; } }
+  if (a < 0) { a = nn; }
+  var e = -1;
+  for (var j = 0; j < 4; j++) { if (k[j].a != 5u && any(k[j].rgb != k[a].rgb) && (e < 0 || s[j] > s[e])) { e = j; } }
+  var d = 1.0; var other = col[a];
+  if (e >= 0) { d = s[a] - s[e]; other = col[e]; }
+  let fw = clamp(fwidth(d), 1e-4, 2.5 / ppt) * U.b.y;
+  let t = clamp(0.5 + d / max(fw, 1e-4), 0.0, 1.0);
+  var res = mix(other, col[a], t);
   if (mode == 2) {
     // (only roads and rivers smooth: everything else as square tiles, the nearest tile that isn't road or river)
-    int g = -1;
-    for (int j = 0; j < 4; j++) if (k[j].a != 1u && k[j].a != 2u && k[j].a != 5u && (g < 0 || w[j] > w[g])) g = j;
-    bool la = k[a].a == 1u || k[a].a == 2u, le = e >= 0 && (k[e].a == 1u || k[e].a == 2u);
-    vec3 ground = g < 0 ? col[a] : c[g];
-    if (la && !le) res = mix(ground, col[a], t);
-    else if (!la && le) res = mix(col[e], ground, t);
-    else if (!la) res = ground;
+    var gg = -1;
+    for (var j = 0; j < 4; j++) { if (k[j].a != 1u && k[j].a != 2u && k[j].a != 5u && (gg < 0 || w[j] > w[gg])) { gg = j; } }
+    let la = k[a].a == 1u || k[a].a == 2u;
+    var le = false;
+    if (e >= 0) { le = k[e].a == 1u || k[e].a == 2u; }
+    var ground = col[a];
+    if (gg >= 0) { ground = c[gg]; }
+    if (la && !le) { res = mix(ground, col[a], t); }
+    else if (!la && le) { res = mix(col[e], ground, t); }
+    else if (!la) { res = ground; }
   }
-  if (k[nn].a == 5u) res = c[nn];
-  o = vec4(res, 1.) * inside;
+  if (k[nn].a == 5u) { res = c[nn]; }
+  return vec4f(res, 1.0) * inside;
 }`;
   function init() {
-    if (gl || failed) return !!gl;
+    if (pipe || failed) return !!pipe;
     try {
+      // (headless test runs have no canvas to present to: they keep the plain pixel map)
+      if (navigator.webdriver) throw new Error('headless');
+      dev = renderer.device;
       cv = document.createElement('canvas'); cv.width = cv.height = 16;
-      gl = cv.getContext('webgl2', { antialias: false, depth: false, stencil: false, premultipliedAlpha: true, preserveDrawingBuffer: true });
-      if (!gl) throw new Error('no webgl2');
-      const sh = (type, src) => { const x = gl.createShader(type); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
-      const pr = gl.createProgram();
-      gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FS)); gl.linkProgram(pr);
-      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
-      gl.useProgram(pr);
-      U = {}; for (const nm of ['C', 'K', 'org', 'size', 'ppt', 'edge', 'rnd', 'bias', 'n', 'mode']) U[nm] = gl.getUniformLocation(pr, nm);
-      const tex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t); for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v); return t; };
-      texC = tex(0); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, N, N);
-      texK = tex(1); gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8UI, N, N);
-      gl.uniform1i(U.C, 0); gl.uniform1i(U.K, 1); gl.uniform1i(U.n, N);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      ctx = cv.getContext('webgpu');
+      if (!ctx) throw new Error('no webgpu canvas');
+      ctx.configure({ device: dev, format: 'rgba8unorm', alphaMode: 'premultiplied' });
+      const mod = dev.createShaderModule({ code: WGSL });
+      pipe = dev.createRenderPipeline({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' }, fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] }, primitive: { topology: 'triangle-list' } });
+      const T2 = format => dev.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      texC = T2('rgba8unorm'); texK = T2('rgba8uint');
+      ubuf = dev.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: texC.createView() }, { binding: 2, resource: texK.createView() }] });
       full = true;
-    } catch (err) { console.warn('smooth map off:', err); failed = true; gl = null; }
-    return !!gl;
+    } catch (err) { if (err.message !== 'headless') console.warn('smooth map off:', err); failed = true; pipe = null; }
+    return !!pipe;
   }
   function upload() {
+    const q = dev.queue;
     if (full) {
-      gl.activeTexture(gl.TEXTURE0); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, N, gl.RGBA, gl.UNSIGNED_BYTE, mapCol);
-      gl.activeTexture(gl.TEXTURE1); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, N, N, gl.RGBA_INTEGER, gl.UNSIGNED_BYTE, mapKey);
+      q.writeTexture({ texture: texC }, mapCol, { bytesPerRow: N * 4 }, [N, N]);
+      q.writeTexture({ texture: texK }, mapKey, { bytesPerRow: N * 4 }, [N, N]);
       full = false; tiles.length = 0; return;
     }
     for (const i of tiles) {
       const c = i % N, r = (i - c) / N;
-      gl.activeTexture(gl.TEXTURE0); gl.texSubImage2D(gl.TEXTURE_2D, 0, c, r, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, mapCol.subarray(i * 4, i * 4 + 4));
-      gl.activeTexture(gl.TEXTURE1); gl.texSubImage2D(gl.TEXTURE_2D, 0, c, r, 1, 1, gl.RGBA_INTEGER, gl.UNSIGNED_BYTE, mapKey.subarray(i * 4, i * 4 + 4));
+      q.writeTexture({ texture: texC, origin: [c, r] }, mapCol, { offset: i * 4, bytesPerRow: 4 }, [1, 1]);
+      q.writeTexture({ texture: texK, origin: [c, r] }, mapKey, { offset: i * 4, bytesPerRow: 4 }, [1, 1]);
     }
     tiles.length = 0;
   }
@@ -18245,14 +18335,18 @@ void main() {
     render(x0, z0, ppt, w, h) {
       const mode = MAP_SMOOTH.on ? 1 : MAP_SMOOTH.lines ? 2 : 0;
       if (!mode || !init()) return null;
-      gl.uniform1i(U.mode, mode);
       w = Math.max(1, Math.ceil(w)); h = Math.max(1, Math.ceil(h));
       if (cv.width < w || cv.height < h) { cv.width = Math.max(cv.width, w); cv.height = Math.max(cv.height, h); }
       if (full || tiles.length) upload();
-      gl.viewport(0, cv.height - h, w, h);
-      gl.uniform2f(U.org, x0, z0); gl.uniform2f(U.size, w, cv.height); gl.uniform1f(U.ppt, ppt); gl.uniform1f(U.edge, MAP_SMOOTH.edge); gl.uniform1f(U.rnd, MAP_SMOOTH.round);
-      const M = MAP_SMOOTH; gl.uniform1fv(U.bias, [0, M.road, M.river, M.sea, M.cliff, M.build]);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const M = MAP_SMOOTH;
+      ub.set([x0, z0, w, h, ppt, M.edge, M.round, mode, 0, M.road, M.river, M.sea, M.cliff, M.build, 0, 0]);
+      ubi[14] = N;
+      dev.queue.writeBuffer(ubuf, 0, ub);
+      const enc = dev.createCommandEncoder();
+      const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+      pass.setPipeline(pipe); pass.setBindGroup(0, bind); pass.setViewport(0, 0, w, h, 0, 1); pass.setScissorRect(0, 0, w, h);
+      pass.draw(3); pass.end();
+      dev.queue.submit([enc.finish()]);
       return cv;
     },
   };
@@ -18319,7 +18413,7 @@ function togglePlots() {
 let miniZoom = 2, miniHover = 0, bigHover = 0;
 const miniCv = document.createElement('canvas'), miniCvCtx = miniCv.getContext('2d');
 const miniSnap = { x: 0, z: 0, s: 0, r: 0 };
-// (v410: the smooth map comes back from its WebGL canvas as an ImageBitmap, without waiting: drawing the WebGL
+// (v410: the smooth map comes back from its canvas as an ImageBitmap, without waiting: drawing the GPU
 // canvas straight into the 2D one held the frame up to ~30 ms while the GPU caught up. The old picture stays up
 // until the new one is in; one request at a time)
 let miniWait = 0;
@@ -19740,6 +19834,13 @@ const TUNING = [
     [LAND_LABEL, 'townBig', 'City names: size (times)', 0.6, 3, 0.05, mapNamesLive],
     [LAND_LABEL, 'townBigWeight', 'City names: weight', 400, 700, 100, mapNamesLive],
   ]],
+  ['Lamp halos', [
+    [LAMP_HALO, 'amount', 'Glow round each lantern at night', 0, 3, 0.01],
+    [LAMP_HALO, 'size', 'Glow size (tiles)', 0.1, 3, 0.05],
+    [LAMP_HALO, 'day', 'Share of it by day', 0, 1, 0.01],
+    [LAMP_HALO, 'color', 'Glow colour', 'color'],
+    [LAMP_FADE, 'width', 'Lamp lights: fade before handing over (tiles)', 0, 10, 0.1],
+  ]],
   ['Windows', [
     [GLASS_FX, 'transfer', 'Both faces lit as the sunward one is (0 off, 1 on)', 0, 1, 1],
     [GLASS_FX, 'glow', 'Lamps and fires shining through (times)', 0, 10, 0.05],
@@ -19999,7 +20100,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 410, crashSeen = new Map();
+const GAME_VERSION = 411, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

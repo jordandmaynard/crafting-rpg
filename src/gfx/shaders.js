@@ -11,8 +11,8 @@
 // the sky they see, or (bounce light) all the light arriving there, the sky's and what the ground and things
 // round about give back.
 
-export const MAX_POINTS = 8;
-export const FRAME_BYTES = 1024;  // the Frame struct (816 bytes), padded to the uniform offset alignment
+export const MAX_POINTS = 16;
+export const FRAME_BYTES = 1280;  // the Frame struct (1072 bytes: 16 point lights since v411), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
 // Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
