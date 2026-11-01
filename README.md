@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v404:** map bookmarks: Places is now Land (continent and island names, MAP_SHOW.land), a new Towns tab under it (town squares and names, MAP_SHOW.towns; placeholder tab art = the Land tab, glyph ui/map/glyph-towns.webp from art/src/glyph-towns.py), and Terrain is renamed Regions.
+
 **v403:** ocean names on the map drawn near continent size (LAND_LABEL.ocean 2.6, weight 700) and sea names at island size (sea 1.25, weight 600), both upright; other waters unchanged. Where an ocean's or sea's own label spots have no room, it tries anywhere on screen over its water, nearest its middle first. Sliders in T > Map names. Road names default to letter by letter (ROAD_LABEL style 2, smooth 12, Jordan's paste).
 
 **v402:** a town's dock road now runs straight in to the nearest town street, through the yards if it has to, instead of round by the roads to a gate. Where the dock sits lower than the town, a 3-wide cutting with a ramp at each level step is dug into the bank straight inland from the dock (dockCut; shore spots where one fits come first). Town fences leave an open gap wherever a dock road crosses them (DOCK_WAY). Road names, letter-by-letter style: always read left to right (no more reversed names), never laid where the road doubles back under them, and each name follows only the unbroken run of road it's on, so it no longer cuts across between pieces of a road split by a crossing or a bridge.
