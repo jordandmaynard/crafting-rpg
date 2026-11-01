@@ -8254,7 +8254,7 @@ function wallOpen(c, r, d, k) {
   return !w || (isDoorVal(w) && openDoors.has(dKey(...edgeOf(c, r, d), k)));
 }
 // (PDY lifts the pieces being drawn to their story; PCUT is that story's offset in cutEdges' keys)
-let PDY = 0, PCUT = 0;
+let PDY = 0, PCUT = 0, shownStory = 99;   // (shownStory: the last storyView applied)
 function plankFloor(c, r) {
   const y = LV[T(c, r)] * STEP + PDY;
   // four boards over a dark bed that shows in the seams between them
@@ -8577,7 +8577,12 @@ function setPieces(ch) {
   const tmp = {};
   buildPieces(ch.cx, ch.cz, tmp);
   swapMesh(ch, 'build', tmp.build);
-  for (let k = 1; k <= STORY_MAX; k++) if (tmp['up' + k] || ch['up' + k]) swapMesh(ch, 'up' + k, tmp['up' + k] || null);
+  for (let k = 1; k <= STORY_MAX; k++) if (tmp['up' + k] || ch['up' + k]) {
+    swapMesh(ch, 'up' + k, tmp['up' + k] || null);
+    // (a new mesh starts out shown: hidden at once if its story is, or it flashes for a frame: v372 fix, as the
+    // cutaway rebuilds chunks after the story view is applied)
+    if (ch['up' + k]) ch['up' + k].visible = k <= shownStory;
+  }
 }
 // Stairs: eight steps up one story over two tiles. Wooden ones are treads and risers on two stringers with a handrail
 // each side; stone ones are solid steps with a low parapet each side.
@@ -8688,6 +8693,7 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0) {
   }
   pivot.add(leaf);
   scene.add(shadowy(pivot));
+  if (k) pivot.visible = k <= shownStory;
   const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k };
   doors.set(dKey(c, r, w, k), d);
   return d;
@@ -8774,7 +8780,7 @@ function settleBuildings() {
     buildings.set(b.id, b);
     const own = list.find(rm => rm.roof);
     b.mesh = own ? own.roof(b) : roofMesh(b);
-    if (b.mesh) scene.add(b.mesh);   // (none when a floor over it covers the whole building)
+    if (b.mesh) { scene.add(b.mesh); b.mesh.visible = mode !== 'build' && b.k <= shownStory; }   // (none when a floor over it covers the whole building)
     giTouch(b.tiles);
   }
   regroup.clear();
@@ -15404,7 +15410,7 @@ function update(dt) {
   let inBld = inside ? rooms.get(inside).bld : 0;
   // (on a mausoleum's portico or a cabin's porch, under its roof, the roof goes too)
   if (!inBld) { const j = roofOver.get(T(Math.floor(H.x), Math.floor(H.z))), b = j !== undefined && bldOf(j); if (b) inBld = b.id; }
-  const view = storyView();
+  const view = shownStory = storyView();
   for (const b of buildings.values()) if (b.mesh) b.mesh.visible = mode !== 'build' && b.id !== inBld && b.k <= view;
   for (const ch of chunks.values()) for (let k = 1; k <= STORY_MAX; k++) { const m = ch['up' + k]; if (m) m.visible = k <= view; }
   for (const d of doors.values()) if (d.k) d.pivot.visible = d.k <= view;
@@ -17745,7 +17751,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 371, crashSeen = new Map();
+const GAME_VERSION = 372, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

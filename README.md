@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v372:** Fix (Jordan): the second floor flashed on for a frame while you were under it. updateCutaway rebuilds chunks (setPieces) after the story view is applied, and a new mesh starts visible; setPieces, settleBuildings and makeDoor now hide new upper meshes, roofs and doors at once by shownStory (the last storyView).
+
 **v371:** Story grid (Jordan): in build mode on an upper story, a see-through white grid (tile-edge lines with hash marks at the quarters) lies on that story's plane over your plot, or within 8 tiles off it (updateStoryGrid, STORY_GRID, gridMat; rebuilt when the story or your tile changes). Hook GAME.storyGrid(); test t_grid.js.
 
 **v370:** Past halfway up a stair you count as on the story above for drawing (seenStory): that story shows, its room's walls cut away and its roof hides; the room below draws whole again (Jordan). Test t_stairs.js (climb steps).
