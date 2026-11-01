@@ -1112,7 +1112,7 @@ const TOWN_R = 10;   // a hamlet's radius
 // continent). R its radius; plaza its half width; ring a square street that far out (0 none); houses how many to try for
 const TOWN_TIER = [{ R: TOWN_R, plaza: 2, ring: 0, houses: 4 }, { R: 15, plaza: 2, ring: 0, houses: 8 }, { R: 21, plaza: 3, ring: 10, houses: 16 }];
 const TOWN_MEDIUM = 3;   // medium towns a world, at most
-const TSTREET = new Uint8Array(N * N);   // a medium or large town's streets (1) and plaza (2), laid out in placeTowns
+const TSTREET = new Uint8Array(N * N);   // a medium or large town's streets (1), plaza (2) and avenue side lanes (3), laid out in placeTowns
 const DEEP_IN = 10;   // tiles of ordinary forest, give or take, ringing a deep forest
 const WASTE_AT = 0.46;   // how blasted the land must be to be the wastes
 const craters = [];   // { c, r, R, lava } where the wastes were struck
@@ -1878,7 +1878,7 @@ async function generate(progress) {
   placeWillows();
   placeCabins();
   // clear the ground right around the spawn (the plaza's lamps stay)
-  for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP) OB[i] = 0; }
+  for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP && OB[i] !== O.FOUNTAIN) OB[i] = 0; }
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   deepenSea();
   labelLands();
@@ -3448,7 +3448,84 @@ function placeCabins() {
   }
 }
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
+// Cobblestones (v408) on a large town's streets, lanes and plaza: one flat mesh a town just over the ground, its
+// stones a normal map (like the obelisks' carving) from a tileable Voronoi height field two tiles across, the
+// mortar between them darker
+const COBBLE = { bump: 1.4, stones: 12, color: '#8e877c', plaza: '#a0968a' };
+function makeCobbleTex() {
+  const S = 256, n = COBBLE.stones, pts = [];
+  let seed = 11;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  for (let gy = 0; gy < n; gy++) for (let gx = 0; gx < n; gx++) pts.push([(gx + 0.5 + (gy % 2) * 0.5 + (rnd() - 0.5) * 0.55) / n * S, (gy + 0.5 + (rnd() - 0.5) * 0.45) / n * S, 0.72 + rnd() * 0.28]);
+  const h = new Float32Array(S * S), cell = S / n;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    let d1 = 1e9, d2 = 1e9, top = 1;
+    const gx = Math.floor(x / cell), gy = Math.floor(y / cell);
+    for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
+      const p = pts[((gy + oy + n) % n) * n + ((gx + ox + n) % n)];
+      // (wrapped, so the field tiles)
+      let ex = p[0] - x, ey = p[1] - y;
+      ex -= Math.round(ex / S) * S; ey -= Math.round(ey / S) * S;
+      const d = Math.hypot(ex, ey);
+      if (d < d1) { d2 = d1; d1 = d; top = p[2]; } else if (d < d2) d2 = d;
+    }
+    const edge = (d2 - d1) / 2, dome = Math.min(1, edge / 5);
+    h[y * S + x] = Math.sqrt(dome) * top * (1 - Math.min(1, d1 / (cell * 0.9)) ** 2 * 0.25);
+  }
+  const out = new Uint8Array(S * S * 4), at = (x, y) => h[((y + S) % S) * S + ((x + S) % S)];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const nx = -(at(x + 1, y) - at(x - 1, y)) * 2.4, ny = -(at(x, y + 1) - at(x, y - 1)) * 2.4, l = Math.hypot(nx, ny, 1), o = (y * S + x) * 4;
+    out[o] = Math.round((nx / l * 0.5 + 0.5) * 255); out[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255); out[o + 2] = Math.round((1 / l * 0.5 + 0.5) * 255);
+    out[o + 3] = Math.round(at(x, y) * 255);
+  }
+  return new GFX.DataTexture(out, S, S);
+}
+const COBBLE_U = { bump: { value: COBBLE.bump } };
+const cobbleMat = new GFX.ShaderMaterial({ uniforms: COBBLE_U, vertexColors: true, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N0 = vec3f(0.0, 1.0, 0.0);
+  let t = textureSample(tCobble, tCobbleS, fract(i.world.xz * 0.5));
+  let m = vec3f((t.xy * 2.0 - 1.0) * U.bump, t.z * 2.0 - 1.0);
+  let N = normalize(vec3f(1.0, 0.0, 0.0) * m.x + vec3f(0.0, 0.0, 1.0) * m.y + N0 * m.z);
+  let c = shadeLit(i.color * mix(0.42, 1.0, t.a), vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+const cobbleMeshes = [];
+function buildCobbles() {
+  for (const m of cobbleMeshes) { scene.remove(m); m.geometry.dispose(); }
+  cobbleMeshes.length = 0;
+  if (!towns.some(t => t.tier === 2)) return;
+  if (!COBBLE_U.tCobble) COBBLE_U.tCobble = { value: makeCobbleTex() };
+  towns.forEach((t, n) => {
+    if (t.tier !== 2) return;
+    const pos = [], col = [];
+    for (let r = t.r - t.R; r <= t.r + t.R; r++) for (let c = t.c - t.R; c <= t.c + t.R; c++) {
+      const i = T(c, r);
+      if (TN[i] !== n + 1 || !TSTREET[i]) continue;
+      const y = LV[i] * STEP + 0.012, k = shade(CC(TSTREET[i] === 2 ? COBBLE.plaza : COBBLE.color), 0.93 + hs(c, r, 410) * 0.1);
+      for (const [x, z] of [[c, r], [c, r + 1], [c + 1, r + 1], [c, r], [c + 1, r + 1], [c + 1, r]]) { pos.push(x, y, z); col.push(k.r, k.g, k.b); }
+    }
+    const geo = new GFX.BufferGeometry();
+    geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new GFX.Float32BufferAttribute(col, 3));
+    geo.computeVertexNormals();
+    const mesh = new GFX.Mesh(geo, cobbleMat);
+    mesh.receiveShadow = true; mesh.matrixAutoUpdate = false;
+    scene.add(mesh); cobbleMeshes.push(mesh);
+    // and the fountain in the middle: round, so a pillar on each of its tiles
+    const q = { x: t.c + 0.5, z: t.r + 0.5, R: FOUNTAIN.R + 0.08, col: false };
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) { const i = T(t.c + dc, t.r + dr); if (!pillars.has(i)) pillars.set(i, []); pillars.get(i).push(q); }
+  });
+}
 function finishTowns() {
+  buildCobbles();
   for (const t of towns) {
     for (const hse of t.houses) {
       makeDoor(...hse.door); makeRoom(hse.tiles, hse.color);
@@ -4063,7 +4140,8 @@ function placeTowns(rand) {
       const P = TT.plaza, ring = TT.ring;
       if (Math.abs(dc) <= P && Math.abs(dr) <= P) TSTREET[i] = 2;
       else if (!dc || !dr || (ring && Math.max(Math.abs(dc), Math.abs(dr)) === ring)) TSTREET[i] = 1;
-      if (TSTREET[i]) PATH[i] = 1;
+      else if (tier === 2 && (Math.abs(dc) === 1 || Math.abs(dr) === 1)) TSTREET[i] = 3;   // (a large town's avenues: a lane either side, flower boxes along them)
+      if (TSTREET[i] && TSTREET[i] < 3) PATH[i] = 1;
     }
   });
 }
@@ -4196,7 +4274,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -4243,6 +4321,10 @@ FANTASY.forEach((m, n) => def(m.o, { name: m.k + ' rock', solid: 0.3, hp: 4, giv
 def(O.TOMB, { name: 'gravestone', solid: 0.2, hp: 3, give: 'stone' });
 def(O.HOUSE, { built: true, tile: true });
 def(O.WELL, { built: true, tile: true });
+// a large town's round fountain (v408), 3 x 3 from its middle tile: round collision (a pillar on each of its tiles)
+def(O.FOUNTAIN, { built: true, name: 'fountain' });
+// a flower box along a large town's street or round its plaza (v408)
+def(O.PLANTER, { built: true, tile: true, name: 'flower box' });
 def(O.SHRINE, { built: true, tile: true });
 def(O.LAMP, { built: true, solid: 0.1 });
 def(O.HEARTH, { built: true, solid: 0.44 });
@@ -4403,8 +4485,21 @@ function placeScenery(c, r) {
   switch (b) {
     case TOWN: {
       const t = towns[TN[i] - 1], dx = c - t.c, dz = r - t.r, cell = townCell(c, r);
-      if (dx === 0 && dz === 0) { OB[i] = O.WELL; return; }
-      const ring = TOWN_TIER[t.tier].ring, lp = TOWN_TIER[t.tier].plaza + 1;
+      if (dx === 0 && dz === 0) { OB[i] = t.tier === 2 ? O.FOUNTAIN : O.WELL; return; }
+      const ring = TOWN_TIER[t.tier].ring, lp = TOWN_TIER[t.tier].plaza + 1, P = lp - 1, adx = Math.abs(dx), adz = Math.abs(dz);
+      if (t.tier === 2) {
+        if (Math.max(adx, adz) <= 1) return;   // (the fountain's ground)
+        // flower boxes (v408): round the plaza's corners, and every fourth tile down the avenues' side lanes, clear of
+        // doors, crossings, the town's edge and any road laid along a lane
+        let box = false;
+        if (TSTREET[i] === 2) box = (adx === P && adz >= 2) || (adz === P && adx >= 2);
+        else if (TSTREET[i] === 3 && !PATH[i]) {
+          const along = adx <= 1 ? adz : adx, ahead = adx <= 1 ? T(c, r + Math.sign(dz)) : T(c + Math.sign(dx), r);
+          box = along % 4 === 2 && along > P + 1 && Math.abs(along - ring) > 1 && TN[ahead] === TN[i] && TN[T(c + Math.sign(dx) * 2 * (adx <= 1 ? 0 : 1), r + Math.sign(dz) * 2 * (adx <= 1 ? 1 : 0))] === TN[i];
+        }
+        if (box) { for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2) box = false; }
+        if (box) { OB[i] = O.PLANTER; return; }
+      }
       if ((Math.abs(dx) === lp && Math.abs(dz) === lp) || (ring && Math.abs(dx) === ring + 1 && Math.abs(dz) === ring + 1)) { OB[i] = O.LAMP; t.lamps.push([c + 0.5, r + 0.5]); return; }
       if (cell !== 'yard' || PATH[i]) return;
       const d = Math.hypot(dx, dz);
@@ -5232,6 +5327,7 @@ const G = {
   cone6: new GFX.ConeGeometry(0.5, 1, 6),
   cyl6: new GFX.CylinderGeometry(0.5, 0.5, 1, 6),
   cyl8: new GFX.CylinderGeometry(0.5, 0.5, 1, 8),
+  cyl16: new GFX.CylinderGeometry(0.5, 0.5, 1, 16),
   ico: new GFX.IcosahedronGeometry(0.5, 0),
   dodec: new GFX.DodecahedronGeometry(0.5, 0),
   oct: new GFX.OctahedronGeometry(0.5, 0),
@@ -9154,6 +9250,51 @@ function well(x, z) {
   part(G.cone4, '#a8483a', x, y + 1.08, z, { sx: 1.0, sy: 0.32, sz: 0.7, ry: Math.PI / 4 });
   part(G.cyl8, '#8ad0f0', x, y + 0.44, z, { sx: 0.12, sy: 0.1, sz: 0.12, into: 'glow' });
 }
+// a large town's fountain (v408): a round stone basin three tiles across on a low step, water in it, and a pillar in
+// the middle holding a bowl that spills over, a finial on top
+const FOUNTAIN = { R: 1.42, wall: 0.46, stone: '#a49c8e', dark: '#7e776c', water: '#3f6f9e' };
+function fountain(c, r) {
+  const x = c + 0.5, z = r + 0.5, y = LV[T(c, r)] * STEP, F = FOUNTAIN, R = F.R, segs = 24;
+  part(G.cyl16, F.dark, x, y + 0.04, z, { sx: R * 2 + 0.3, sy: 0.08, sz: R * 2 + 0.3 });   // (the step)
+  part(G.cyl16, '#5a5e5a', x, y + 0.12, z, { sx: R * 2 - 0.1, sy: 0.08, sz: R * 2 - 0.1 });   // (the basin's floor)
+  for (let k = 0; k < segs; k++) {   // (its wall: stones round, a coping on top a shade lighter)
+    const a = (k + 0.5) / segs * Math.PI * 2, w = 2 * Math.PI * (R - 0.09) / segs + 0.02, cs = shade(CC(F.stone), 0.9 + hs(c + k, r, 401) * 0.14);
+    part(G.box, cs, x + Math.sin(a) * (R - 0.09), y + F.wall / 2, z + Math.cos(a) * (R - 0.09), { sx: w, sy: F.wall, sz: 0.18, ry: a });
+    part(G.box, shade(CC(F.stone), 1.08), x + Math.sin(a) * (R - 0.08), y + F.wall + 0.03, z + Math.cos(a) * (R - 0.08), { sx: w + 0.02, sy: 0.06, sz: 0.26, ry: a });
+  }
+  part(G.cyl16, F.water, x, y + F.wall - 0.1, z, { sx: R * 2 - 0.34, sy: 0.02, sz: R * 2 - 0.34 });   // (the water)
+  part(G.cyl16, F.dark, x, y + 0.34, z, { sx: 0.62, sy: 0.6, sz: 0.62 });   // (the pillar's foot)
+  part(G.cyl16, F.stone, x, y + 0.9, z, { sx: 0.3, sy: 0.7, sz: 0.3 });
+  part(G.cyl16, F.stone, x, y + 1.28, z, { sx: 1.2, sy: 0.1, sz: 1.2 });   // (the bowl)
+  part(G.cyl16, F.dark, x, y + 1.2, z, { sx: 0.9, sy: 0.1, sz: 0.9 });
+  part(G.cyl16, F.water, x, y + 1.33, z, { sx: 1.02, sy: 0.02, sz: 1.02 });
+  part(G.cyl16, F.stone, x, y + 1.56, z, { sx: 0.16, sy: 0.5, sz: 0.16 });
+  part(G.ico, shade(CC(F.stone), 1.06), x, y + 1.86, z, { s: 0.22 });
+  for (let k = 0; k < 8; k++) {   // (water spilling from the bowl's lip down into the basin)
+    const a = k / 8 * Math.PI * 2, rx = Math.sin(a), rz = Math.cos(a);
+    seg(G.cyl6, '#8fc4e8', [x + rx * 0.6, y + 1.3, z + rz * 0.6], [x + rx * 0.72, y + F.wall - 0.1, z + rz * 0.72], 0.035);
+  }
+}
+// a flower box: a planked trough as long as the street runs past it, soil, and a mound of leaves full of flowers
+const PLANTER_FLOWERS = ['#e0587a', '#f0c040', '#f4f0ea', '#b070d8', '#f08a3c', '#e83c3c'];
+function planter(c, r) {
+  const i = T(c, r), y = LV[i] * STEP, t = towns[TN[i] - 1], x = c + 0.5, z = r + 0.5;
+  // (lengthwise along the avenue it lines; round the plaza, along the plaza's edge it stands on)
+  const dx = c - t.c, dz = r - t.r, P = TOWN_TIER[t.tier].plaza;
+  const ns = TSTREET[i] === 3 ? Math.abs(dx) <= 1 : Math.abs(dx) === P && Math.abs(dz) !== P ? true : Math.abs(dz) === P && Math.abs(dx) !== P ? false : hs(c, r, 402) > 0.5;
+  const L = 0.9, W = 0.42, ry = ns ? Math.PI / 2 : 0, wood = shade(CC('#6a4a2e'), 0.92 + hs(c, r, 403) * 0.12);
+  part(G.box, wood, x, y + 0.2, z, { sx: L, sy: 0.4, sz: W, ry });
+  part(G.box, '#3e2a1a', x, y + 0.41, z, { sx: L - 0.08, sy: 0.02, sz: W - 0.08, ry });
+  for (const s of [-1, 1]) part(G.box, shade(wood, 0.8), x + (ns ? 0 : s * (L / 2 - 0.02)), y + 0.2, z + (ns ? s * (L / 2 - 0.02) : 0), { sx: 0.06, sy: 0.42, sz: W + 0.04, ry });
+  for (let k = 0; k < 5; k++) {
+    const u = -0.34 + k * 0.17, px = x + (ns ? 0 : u), pz = z + (ns ? u : 0);
+    part(G.ico, shade(CC('#4f8a36'), 0.85 + hs(c + k, r, 404) * 0.25), px, y + 0.5, pz, { sx: 0.24, sy: 0.2, sz: 0.24, ry: k });
+    for (let f = 0; f < 2; f++) {
+      const col = PLANTER_FLOWERS[Math.floor(hs(c * 3 + k, r + f, 405 + f) * PLANTER_FLOWERS.length)], o = (hs(c + k, r - f, 407) - 0.5) * 0.12;
+      part(G.ico, col, px + (ns ? (f - 0.5) * 0.14 : o), y + 0.6 + f * 0.03, pz + (ns ? o : (f - 0.5) * 0.14), { s: 0.085 });
+    }
+  }
+}
 function lamp(x, z) {
   const y = groundAt(x, z);
   part(G.box, '#2c2738', x, y + 0.6, z, { sx: 0.08, sy: 1.2, sz: 0.08 });
@@ -9196,6 +9337,8 @@ function drawObject(o, c, r) {
     case O.TOMB: return tomb(x, z, k2, Math.floor(k * 4) * Math.PI / 2);
     case O.LAMP: return lamp(x, z);
     case O.WELL: return well(x, z);
+    case O.FOUNTAIN: return fountain(c, r);
+    case O.PLANTER: return planter(c, r);
     case O.SHRINE: return shrine(x, z, k * 6);
     case O.HEARTH: return hearth(x, z, c, r);
     case O.TANTABLE: return stations.has(T(c, r)) ? stationParts(tanTable, x + 0.5, z + 0.5, c, r) : tanTable(x, z, c, r);
@@ -19588,7 +19731,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 407, crashSeen = new Map();
+const GAME_VERSION = 408, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
