@@ -1717,7 +1717,6 @@ async function generate(progress) {
     if (bl > WASTE_AT + BLAST_BIAS.overSnow) b = WASTES;
     else if (temp < CLIMATE.snow) b = SNOW;
     else if (bl > WASTE_AT) b = WASTES;
-    else if (curse > 0.36 && L <= 5) b = GRAVE;
     else if ((deltaZone && deltaZone[i] && L <= 3) || (temp > CLIMATE.cool - 0.1 && near[i] <= CLIMATE.swampNear && (
       // a wet climate's low, flat ground, in patches
       (wet > CLIMATE.swampWet && L <= CLIMATE.swampLevel && lowAvg[i] <= CLIMATE.swampFlat && fbm(nW, c / 120 + 77, r / 120 - 31, 3) > CLIMATE.swampPatch) ||
@@ -1771,6 +1770,7 @@ async function generate(progress) {
   placeTowns(rand);
   terraceLimit();
   const spawnT = towns[0];
+  placeGraveyards(rand);
 
   // 4b. Canyons, after the last levelling so their walls stay sheer
   progress(0.54, 'SPLITTING CANYONS'); await nextFrame();
@@ -3575,6 +3575,65 @@ function pruneLevels() {
   }
 }
 
+// Graveyards (v389, Jordan): no longer a noise field but places, each a warped disc of graves: one by every town (its
+// churchyard), small ones tucked into mountain valleys and along the line where two biomes meet, and a few large
+// abandoned ones far from any town. Counts go with the land (per GRAVES.per tiles of it); radii [least, most] in tiles.
+// They don't go on snow, the wastes, towns or water, keep apart (gap) from each other, and only go where room of the
+// disc could take graves.
+const GRAVES = { per: 440000, town: [8, 12], townOff: [6, 16], valley: [5, 8], valleyR: [13, 22], border: [7, 11], borderR: [12, 20],
+  abandoned: [3, 5], abandonedR: [36, 58], abandonedFar: 110, gap: 45, edge: 0.32, room: 0.8 };
+const graveyards = [];   // { c, r, R, kind }
+function placeGraveyards(rand) {
+  const G = GRAVES, NN = N * N, pick = a => a[0] + rand() * (a[1] - a[0]), count = a => Math.round(a[0] + rand() * (a[1] - a[0]));
+  let land = 0; for (let i = 0; i < NN; i++) if (LV[i]) land++;
+  const k = land / G.per;
+  graveyards.length = 0;
+  const canGrave = i => LV[i] && WT[i] < 2 && !TN[i] && BI[i] !== SNOW && BI[i] !== WASTES && BI[i] !== TOWN;
+  const nearTown = (c, r) => Math.min(...towns.map(t => Math.hypot(t.c - c, t.r - r)));
+  const clearOf = (c, r, R) => graveyards.every(g => Math.hypot(g.c - c, g.r - r) > g.R + R + G.gap * 0.5) && nearTown(c, r) > TOWN_R + R + 4;
+  const stamp = (c, r, R, kind) => {
+    const gi = graveyards.length, sc = Math.max(9, R * 0.5);   // (the edge's wobble scales with the yard)
+    graveyards.push({ c, r, R, kind });
+    const reach = Math.ceil(R * (1 + G.edge) + 2);
+    for (let dr = -reach; dr <= reach; dr++) for (let dc = -reach; dc <= reach; dc++) {
+      const cc = c + dc, rr = r + dr;
+      if (cc < 2 || rr < 2 || cc >= N - 2 || rr >= N - 2) continue;
+      const i = T(cc, rr), d = Math.hypot(dc, dr) / R + fbm(nX, cc / sc + 700 + gi * 37, rr / sc - 300, 2) * G.edge * 1.4;
+      if (d < 1 && canGrave(i)) BI[i] = GRAVE;
+    }
+  };
+  // (how much of a disc graves could cover: most of it, or the yard comes out a sliver)
+  const roomy = (c, r, R) => { let ok = 0; for (let k = 0; k < 32; k++) { const a = k * 2.4, d = R * Math.sqrt((k + 0.5) / 32), cc = Math.round(c + Math.cos(a) * d), rr = Math.round(r + Math.sin(a) * d); if (cc >= 0 && rr >= 0 && cc < N && rr < N && canGrave(T(cc, rr))) ok++; } return ok / 32; };
+  // each town's churchyard, a little way out of its gate
+  for (const t of towns) {
+    const R = pick(G.town), land0 = LANDID[T(t.c, t.r)];
+    for (let tries = 0; tries < 40; tries++) {
+      const a = rand() * Math.PI * 2, d = TOWN_R + R + pick(G.townOff), c = Math.round(t.c + Math.cos(a) * d), r = Math.round(t.r + Math.sin(a) * d), i = T(c, r);
+      if (c < 20 || r < 20 || c >= N - 20 || r >= N - 20 || !canGrave(i) || LANDID[i] !== land0 || Math.abs(LV[i] - t.L) > 1 || roomy(c, r, R) < G.room) continue;
+      if (!graveyards.every(g => Math.hypot(g.c - c, g.r - r) > g.R + R + 6)) continue;
+      stamp(c, r, R, 'town'); break;
+    }
+  }
+  // mountain valleys: ground lying well below its neighbourhood, up among the heights
+  const lvF = new Float32Array(NN); for (let i = 0; i < NN; i++) lvF[i] = LV[i];
+  const avg = boxBlur(lvF, 10);
+  const tryPlace = (want, Rr, kind, good, tries) => {
+    for (let n = 0, t = 0; n < want && t < tries; t++) {
+      const c = 30 + Math.floor(rand() * (N - 60)), r = 30 + Math.floor(rand() * (N - 60)), i = T(c, r), R = pick(Rr);
+      if (!canGrave(i) || !good(i, c, r) || !clearOf(c, r, R) || roomy(c, r, R) < G.room) continue;
+      stamp(c, r, R, kind); n++;
+    }
+  };
+  tryPlace(count(G.valley) * k, G.valleyR, 'valley', i => LV[i] >= 2 && avg[i] - LV[i] >= 1 && avg[i] >= 2.6, 60000);
+  // along the line where two biomes meet (the graves a buffer between them)
+  tryPlace(count(G.border) * k, G.borderR, 'border', (i) => {
+    const b = BI[i]; let other = -1;
+    for (const d of [-7, 7, -7 * N, 7 * N]) { const j = i + d; if (j >= 0 && j < NN && LV[j] && BI[j] !== b && BI[j] !== TOWN && BI[j] !== GRAVE) { other = BI[j]; break; } }
+    return other >= 0;
+  }, 40000);
+  // a few big abandoned ones, well away from the towns
+  tryPlace(count(G.abandoned) * k, G.abandonedR, 'abandoned', (i, c, r) => nearTown(c, r) > G.abandonedFar, 40000);
+}
 const TOWN_LAND = 12000;   // tiles a landmass needs for a town of its own
 function placeTowns(rand) {
   let want = 7;
@@ -18770,7 +18829,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 388, crashSeen = new Map();
+const GAME_VERSION = 389, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -18961,6 +19020,7 @@ window.GAME = {
   falls: () => ({ n: falls.length, first: falls[0], near: sprayMesh ? sprayMesh.geometry.attributes.position.array.length / 18 : 0 }),
   regions: () => ({ seaTiles: REG.reduce((t, v, i) => t + (v >= 0 && !LANDID[i] ? 1 : 0), 0), list: regions.map(g => ({ biome: g.biome, name: g.name, n: g.n, spots: g.spots.length, found: g.found })), unassigned: REG.reduce((t, v, i) => t + (v < 0 && BI[i] !== TOWN ? 1 : 0), 0), combos: NAME_WORDS.map(w => w ? new Set(allNames(w)).size : 0), featureCombos: Object.fromEntries(Object.entries(FEATURE_WORDS).map(([k, w]) => [k, new Set(allNames(w)).size])),
     features: features.map(f => ({ kind: f.kind, name: f.name, n: f.n, spots: f.spots.length, found: f.found })) }),
+  graveyards: () => graveyards.map(g => ({ ...g })),
   lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   raw: () => ({ connectStats, N, T, LV, SH, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop }),
