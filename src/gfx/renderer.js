@@ -167,6 +167,12 @@ class Renderer {
     this.context.configure(cfg);
     this._canvasTex = null;
   }
+  // what the browser made of the canvas: its format and tone mapping ('extended' = values over 1 reach an HDR
+  // display; 'standard' or none = the browser ignored the HDR request and clips at white)
+  hdrState() {
+    const c = this.context.getConfiguration ? this.context.getConfiguration() : null;
+    return { format: c ? c.format : this.format, toneMapping: c && c.toneMapping ? c.toneMapping.mode || 'standard' : (c ? 'none reported' : 'unknown') };
+  }
   // the WGSL every pipeline starts with, for compute passes that read the frame
   preludeCode() { return PRELUDE; }
   // record compute work into this frame, after what's been drawn so far: cb(encoder, the frame's bind group, the
@@ -454,7 +460,8 @@ class Renderer {
     for (let i = 0; i < 12; i++) d[go + i] = g ? g[i] : 0;
     const hz = !plain && this.haze && this.haze.view() ? this.haze.uniforms() : null;
     for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
-    d[go + 20] = this.eye && this.eye.on && !plain ? 1 : 0;   // (and no eye: the studio shot is the same by day and night) d[go + 21] = this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;
+    d[go + 20] = this.eye && this.eye.on && !plain ? 1 : 0;   // (and no eye: the studio shot is the same by day and night)
+    d[go + 21] = plain ? 0 : this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;   // (the character view's canvas is plain sRGB: no HDR)
     const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
     for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
     return slot * FRAME_BYTES;

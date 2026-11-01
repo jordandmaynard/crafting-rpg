@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v365:** HDR fix (Jordan: toggling HDR did nothing on his HDR monitor). Since v340 the line writing hdrPeak into the frame (F.post.y) sat inside a trailing comment in renderer._writeFrame, so postOutput always clipped at white. Restored (0 for the plain character view). Options' HDR note now says whether the browser accepted the extended canvas (renderer.hdrState()) and that only the brightest things change. Desktop render targets were never 8-bit (only MOBILE sets outlineRT.colorFormat).
+
 **v364:** queued building pieces also take from your pack while you stand on their plot (runBuildQueue: have = plot stores + pack when homePlot() === q.plot, paid via spend). Test t_qpack.js.
 
 **v363:** painted icons for every weapon in every tier (Jordan's painterly-weapons-all-tiers-256px pack: sword/bow/spear/axe/hammer x wood..auralith; wood ones unchanged), icons/paint/{weapon}_{tier}-64/128/256.webp, all in the ICON paintImg loop.
