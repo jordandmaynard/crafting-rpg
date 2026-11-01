@@ -544,8 +544,9 @@ class Renderer {
     this._setMat(d, o, cam.matrixWorldInverse); this._setMat(d, o + 16, pm); this._setMat(d, o + 32, vp);
     const fr = this._frustum.setFromProjectionMatrix(new Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     const casters = [];
+    // (castHidden: a hidden mesh that still casts, e.g. an upper story hidden while you're under it)
     const visit = o => {
-      if (!o.visible) return;
+      if (!o.visible && !o.castHidden) return;
       if (o.isMesh && o.castShadow && o.layers.test(this.shadowLayers || camera.layers) && o.material && !(o.isInstancedMesh && !o.count) && (!o.frustumCulled || this._inFrustum(o, fr))) casters.push(o);
       for (const c of o.children) visit(c);
     };
