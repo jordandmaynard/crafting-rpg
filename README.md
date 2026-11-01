@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v381:** Folio centred on its parchment (x 218, Jordan): helmet/boots squares 176, side squares 47/305, character view 118, title and armour line 54.
+
 **v380:** Hero hair cap 0.196 deep at z -0.002 (front 0.096, was flush with the face at 0.09): the bangs' lower edge z-fought on the doll and in game (Jordan). Still behind the helmet's front (0.0975).
 
 **v379:** Backpack back to the pre-delta look (Jordan: colours didn't match, pieces didn't line up): v375 and v378 reverted (ui/inventory-backpack.webp, 90x90 cells, the refine/stash/bin strip outside the bag); the delta kit's files are removed from the repo (still in git history at 2d8c51f).
