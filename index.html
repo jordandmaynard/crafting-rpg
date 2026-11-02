@@ -2985,7 +2985,15 @@ function townTables(t, n) {
   const table = (house, o, kind) => {
     const [ic, ir] = house.inside;
     let best = null, bd = -1;
-    for (const [c, r] of house.tiles) { const d = Math.hypot(c - ic, r - ir); if (OB[T(c, r)] !== O.TANTABLE && !stairAt.has(T(c, r)) && !house.clear?.has(T(c, r)) && d > bd) { bd = d; best = [c, r]; } }
+    // (v530: the farthest tile from the door that leaves every free tile, the stair's foot among them, reached)
+    for (const [c, r] of house.tiles) {
+      const i = T(c, r), d = Math.hypot(c - ic, r - ir);
+      if (OB[i] || stairAt.has(i) || house.clear?.has(i) || d <= bd) continue;
+      OB[i] = o; house.work = i;
+      const ok = bedsReachable(house, []);
+      OB[i] = 0; house.work = null;
+      if (ok) { bd = d; best = [c, r]; }
+    }
     if (!best) return;
     const cs = house.tiles.map(p => p[0]), rs = house.tiles.map(p => p[1]);
     const wide = Math.max(...cs) - Math.min(...cs) >= Math.max(...rs) - Math.min(...rs);
@@ -3154,7 +3162,7 @@ function townBedsUp(h, want, n) {
 function bedsReachable(h, beds) {
   const set = new Set(h.tiles.map(([c, r]) => T(c, r))), ins = h.inside ? T(h.inside[0], h.inside[1]) : -1;
   if (!set.has(ins)) return false;
-  const open = i => set.has(i) && (i === ins || stairAt.has(i) || OB[i] === 0);
+  const open = i => set.has(i) && !stairAt.has(i) && (i === ins || OB[i] === 0);   // (v530: not across a stair)
   const seen = new Set([ins]), q = [ins];
   while (q.length) {
     const i = q.pop(), c = i % N, r = Math.floor(i / N);
@@ -3178,8 +3186,10 @@ function bedsReachable(h, beds) {
 const PROP_AT = new Map();     // k * SNN + tile -> the prop standing there (rugs and hangings not)
 const PROP_DRAW = new Map();   // k * SNN + its first tile -> the props drawn from there
 const PROP_WOOD = ['pine', 'oak', 'darkOak'];   // (by town size)
-// (a wall's half thickness by its value, as WALL_HALF has it: a wall prop stands off a thicker wall)
-const PROP_WALL_HALF = [0, 0.11, 0.06, 0.13, 0.16, 0.06, 0.21, 0.05, 0.05, 0.05, 0.06, 0.06, 0.16, 0.11, 0.16];
+// (how far a wall's inner face stands out from its middle, by its value, posts, beams and pilasters included, and
+// a centimetre more: a wall prop's back stands that far off, never in the same plane: v530, Jordan saw a shelf
+// fight the timber wall's beams)
+const PROP_WALL_HALF = [0, 0.14, 0.06, 0.14, 0.17, 0.06, 0.21, 0.05, 0.05, 0.05, 0.06, 0.06, 0.2, 0.14, 0.17];
 const PROP_PLAIN_WALL = v => v === 1 || v === 3 || v === 4 || v === 12;
 // what each sort of building is furnished with, by town size (hamlet, medium, large): in order, each skipped if it
 // won't fit. { id } a prop; seats: chairs, benches or stools round a table; at: 'bed' one at each bed's foot; up: on
@@ -3249,7 +3259,9 @@ function propReach(h, k) {
   if (k && !U) return false;
   const set = k ? U.set : new Set(h.tiles.map(([c, r]) => T(c, r))), start = k ? U.land : R.ins;
   if (!set.has(start)) return false;
-  const open = k ? i => set.has(i) && !BEDS.has(SNN + i) && !PROP_AT.has(SNN + i) : i => set.has(i) && (i === start || stairAt.has(i) || OB[i] === 0);
+  // (v530, Jordan: a stair's foot shut in behind its flight) a stair's tiles are no way across: it's walked onto
+  // only from its foot, so the foot must be reached round it
+  const open = k ? i => set.has(i) && !BEDS.has(SNN + i) && !PROP_AT.has(SNN + i) : i => set.has(i) && !stairAt.has(i) && (i === start || OB[i] === 0);
   const seen = new Set([start]), q = [start];
   while (q.length) {
     const i = q.pop(), c = i % N, r = Math.floor(i / N);
@@ -24559,7 +24571,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 530, crashSeen = new Map();
+const GAME_VERSION = 531, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
