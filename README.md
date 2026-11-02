@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v522:** (Jordan) Speed orders at the wheel: quarter astern, stop, a quarter, half, three-quarters and full ahead (BOAT.notches 4, astern 0.25 of full speed, sails set to the order's share). W and S step one order a press, and held they go on to the next every BOAT.notchHold (0.4 s). The old hold-S-while-stopped backing is replaced by the order astern.
+
 **v521:** (Jordan) At the wheel, DROP ANCHOR (and the boat's name) shows only once the boat has stopped; F still drops the anchor any time. The stowed anchor is catted up clear of the water: the cathead is now a beam out over the bow rail (BRIG_SHAPE.hawse 1.1, 0.56), the ring hangs just under it (anchorUp 0.48) and the anchor is turned 0.9 rad about the vertical (anchorTurn) so its arms and stock stand off the hull.
 
 **v520:** (Jordan's badge) The boarding toast wears the boat badge (ui/top3/crest-board-boat.webp, lossless from board-boat-badge-96.png, kept in art/deliveries).
