@@ -37,7 +37,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .hint { position: absolute; font-family: var(--display); font-size: 10px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -100%); white-space: nowrap; }
 .fbar { position: absolute; width: var(--hb-w, 44px); height: var(--hb-h, 5px); background: var(--hb-back, #1a0e10); border: 2px solid #000; transform: translate(-50%, -100%); opacity: var(--hb-op, 1); }
 .fbar i { position: relative; display: block; height: 100%; width: 100%; background: var(--hb-fill, #e8b830); box-shadow: inset 0 -2px 0 var(--hb-fillDark, #a8781a); }
-.fbar b, #target .meter b { position: absolute; top: 0; bottom: 0; left: 0; width: 0; }
+.fbar b, #target .meter b { position: absolute; top: 0; bottom: 0; left: 0; width: 0; z-index: 1; }
 /* (v457; v4 brassbound art in v475) the top-centre banner from the Wanderer's Kit: a monster's level, name and health, or a
    townsperson's name and trade. Laid out in the kit's native pixels (both frames 1088 x 128 with 8 px clear padding; the
    enemy's level socket is in its frame) and scaled by --tcK x --ui; --topY (1080p px) moves it down from the top edge. */
@@ -59,6 +59,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 /* (v484, Jordan) the health bar settings colour it as they do the bars over heads: the empty part in Empty bar, the fill in
    Health shaded by the kit's painted fill (grey, multiplied over it), the part just lost and the hit flash from drawBar */
 #target .tc-in { position: absolute; left: 9px; top: 7px; width: calc(var(--tbW, 512) * 1px - 18px); height: calc(var(--tbH, 10) * 1px); overflow: hidden; border-radius: 4px; background: var(--hb-back, #1a0e10); }
+#target .tc-lost { position: absolute; left: 9px; top: 7px; width: calc(var(--tbW, 512) * 1px - 18px); height: calc(var(--tbH, 10) * 1px); }
 #target .meter i { position: absolute; left: 0; top: 0; height: 100%; width: 100%; overflow: hidden; background: var(--hb-fill, #e8b830); }
 #target .meter i img { display: block; width: calc(var(--tbW, 512) * 1px - 18px); height: calc(var(--tbH, 10) * 1px); filter: grayscale(1) brightness(1.2); mix-blend-mode: multiply; }
 /* a monster's level, in a ring to the left of its bar */
@@ -779,7 +780,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
   <div class="bc-xp" id="bcXp"><div class="bc-clip" id="bcXpFill"><img src="ui/belt/xp-fill.webp" alt="" draggable="false"></div><img class="bc-notch" src="ui/belt/xp-notches.webp" alt="" draggable="false"></div>
   <span class="bc-lv">Lv</span><span class="bc-lvv" id="bcLvl">1</span>
 </div>
-<div id="target" hidden><div class="tc-frame"></div><div class="tc-lv"><span></span></div><div class="tname"></div><div class="tjob" hidden></div><div class="meter"><div class="tc-back"></div><div class="tc-in"><b></b><i><img src="ui/top3/hp-fill-amber.webp" alt=""></i></div><div class="tc-rim"></div></div></div>
+<div id="target" hidden><div class="tc-frame"></div><div class="tc-lv"><span></span></div><div class="tname"></div><div class="tjob" hidden></div><div class="meter"><div class="tc-back"></div><div class="tc-in"><i><img src="ui/top3/hp-fill-amber.webp" alt=""></i></div><div class="tc-rim"></div><div class="tc-lost"><b></b></div></div></div>
 <div id="toast" hidden></div>
 <button id="showUI" title="Show the HUD again (H)">SHOW UI</button>
 <div id="padCursor" hidden></div>
@@ -17255,10 +17256,10 @@ function castJump() {
 // next, held targetHold seconds after you look away, then faded out over targetFade (v476, Jordan).
 // A hit flashes the bar and leaves the health just lost as a pale part that flares white and shrinks away,
 // as in neon-haze. All of it is in the tuning panel.
-const HPBAR = { hold: 4, targetHold: 4, folkHold: 0.5, targetFade: 0.7, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
-  width: 44, height: 5, bigWidth: 538, bigHeight: 19, bigY: 4, nameSize: 41, nameY: 9, nameStroke: 4, opacity: 1,
-  fill: '#e8b830', lost: '#901d1d', hot: '#ffffff', back: '#1a0e10' };
-const hbLost = new GFX.Color(), hbHot = new GFX.Color();
+const HPBAR = { hold: 4, targetHold: 4, folkHold: 0.5, targetFade: 0.7, delay: 0.4, trailRate: 4, flash: 2, flashFade: 6.4, lostGlow: 0, raise: 0.3,
+  width: 85, height: 7, bigWidth: 538, bigHeight: 19, bigY: 4, nameSize: 41, nameY: 9, nameStroke: 4, opacity: 1, hotCore: 0.7, hotBright: 1.5, hotBloom: 14,
+  fill: '#ffd642', lost: '#470000', hot: '#ff0000', back: '#1a0e10' };
+const hbLost = new GFX.Color(), hbHot = new GFX.Color(), hbWhite = new GFX.Color('#ffffff');
 let hbStyle = '';
 // the bars' sizes and colours, as CSS variables, whenever the tuning changes them
 function styleBars() {
@@ -17350,9 +17351,15 @@ function drawBar(fill, lost, f) {
   fill.style.filter = h > 0.01 && HPBAR.flash > 0 ? `brightness(${1 + HPBAR.flash * h})` : '';
   lost.style.left = hp * 100 + '%';
   lost.style.width = (shown - hp) * 100 + '%';
+  // (v485, Jordan: make white-hot feel overdriven) the hot part's core runs on toward white (hotCore), is brightened past
+  // its colour (hotBright) and blooms: a tight and a wide glow in the hot colour (hotBloom px), drawn over the bar's rim
   hbHot.set(HPBAR.hot);
-  lost.style.background = '#' + hbLost.set(HPBAR.lost).lerp(hbHot, h).getHexString();
-  lost.style.boxShadow = h > 0.01 && HPBAR.lostGlow > 0 ? `0 0 ${(HPBAR.lostGlow * h).toFixed(1)}px #${hbHot.getHexString()}` : '';
+  lost.style.background = '#' + hbLost.set(HPBAR.lost).lerp(hbHot, h).lerp(hbWhite, Math.min(1, HPBAR.hotCore * h)).getHexString();
+  lost.style.filter = h > 0.01 && HPBAR.hotBright > 0 ? `brightness(${(1 + HPBAR.hotBright * h).toFixed(2)})` : '';
+  const hc = '#' + hbHot.getHexString(), gl = HPBAR.lostGlow * h, bl = HPBAR.hotBloom * h, sh = [];
+  if (gl > 0.05) sh.push(`0 0 ${gl.toFixed(1)}px ${hc}`);
+  if (bl > 0.05) sh.push(`0 0 ${(bl * 0.35).toFixed(1)}px ${hc}`, `0 0 ${bl.toFixed(1)}px ${hc}`, `0 0 ${(bl * 2).toFixed(1)}px ${hc}`);
+  lost.style.boxShadow = sh.join(', ');
 }
 // (v475) the top banner for a kind ('enemy' or 'npc'): the kit's one whole frame, the name (and trade) shrunk to fit
 // the leather between the guards (enemy x 144..976, townsperson 112..976) down to 18 px, past that ellipsized.
@@ -22552,6 +22559,9 @@ const TUNING = [
     [HPBAR, 'fill', 'Health', 'color'],
     [HPBAR, 'lost', 'Health just lost', 'color'],
     [HPBAR, 'hot', 'Health just lost when hit (white-hot)', 'color'],
+    [HPBAR, 'hotCore', 'White-hot: how far its core runs toward white (0 none)', 0, 1, 0.05],
+    [HPBAR, 'hotBright', 'White-hot: brightened past its colour (0 none)', 0, 4, 0.05],
+    [HPBAR, 'hotBloom', 'White-hot: bloom round it (pixels, 0 none)', 0, 40, 0.5],
     [HPBAR, 'back', 'Empty bar', 'color'],
   ]],
   ['Aim decal', [
@@ -23148,7 +23158,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 484, crashSeen = new Map();
+const GAME_VERSION = 485, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
