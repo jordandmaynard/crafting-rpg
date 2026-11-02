@@ -34,6 +34,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .fbar b, #target .meter b { position: absolute; top: 0; bottom: 0; left: 0; width: 0; }
 #target { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translateX(-50%); width: clamp(160px, calc(100vw - 440px), var(--hb-bigW, 420px)); text-align: center; pointer-events: none; opacity: var(--hb-op, 1); }
 #target .tname { font-family: var(--display); font-size: var(--hb-name, 11px); color: var(--bone); text-shadow: 2px 2px 0 #000; margin-bottom: 6px; }
+#target .tjob { font-family: var(--display); font-size: calc(var(--hb-name, 11px) * 0.8); color: var(--dim, #a69ab3); text-shadow: 2px 2px 0 #000; margin-top: -2px; }
 #target .meter { position: relative; height: var(--hb-bigH, 12px); background: var(--hb-back, #1a0e10); border: 2px solid #000; box-shadow: 3px 3px 0 #000; }
 #target .meter i { box-shadow: inset 0 -3px 0 var(--hb-fillDark, #a8781a); }
 /* a monster's level, in a ring to the left of its bar */
@@ -734,7 +735,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
   <div class="bc-xp" id="bcXp"><div class="bc-clip" id="bcXpFill"><img src="ui/belt/xp-fill.webp" alt="" draggable="false"></div><img class="bc-notch" src="ui/belt/xp-notches.webp" alt="" draggable="false"></div>
   <span class="bc-lv">Lv</span><span class="bc-lvv" id="bcLvl">1</span>
 </div>
-<div id="target" hidden><div class="tname"></div><div class="meter"><b></b><span class="lvl"></span><i></i></div></div>
+<div id="target" hidden><div class="tname"></div><div class="tjob" hidden></div><div class="meter"><b></b><span class="lvl"></span><i></i></div></div>
 <div id="toast" hidden></div>
 <button id="showUI" title="Show the HUD again (H)">SHOW UI</button>
 <div id="padCursor" hidden></div>
@@ -883,7 +884,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 
 <script type="module">
 import * as GFX from './src/gfx/index.js';
-import { makeFolkKit } from './src/folk/townsfolk.js';
+import { makeFolkKit, jobTitle } from './src/folk/townsfolk.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
@@ -16810,6 +16811,30 @@ function pickFoe() {
   }
   return best;
 }
+// the townsperson under the mouse (or along your aim with a pad), as pickFoe finds a monster
+function pickFolk() {
+  if (!started || mapOpen || !H.alive || mode !== 'play' || !folkTowns.size) return null;
+  let best = null, bd = 1e9;
+  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  for (const t of folkTowns) {
+    if (!t.batches) continue;
+    for (const p of t.folk) {
+      if (Math.abs(p.x - H.x) > 40 || Math.abs(p.z - H.z) > 40) continue;
+      if (PAD.on) {
+        const dx = p.x - H.x, dz = p.z - H.z, along = dx * aim.x + dz * aim.z, off = Math.abs(dx * aim.z - dz * aim.x);
+        if (along > 0 && along <= 10 && off <= 0.5 + FOLK.rad + along * 0.12 && along < bd) { bd = along; best = p; }
+        continue;
+      }
+      v3.set(p.x, p.y, p.z).project(camera); const fx = sx(v3.x), fy = sy(v3.y);
+      v3.set(p.x, p.y + 0.95 * p.rig.g.scale.y, p.z).project(camera); const hy = sy(v3.y);
+      const w = Math.max(22, (fy - hy) * 0.45), dx = Math.abs(mouse.x - fx);
+      if (dx > w / 2 || mouse.y < hy - 6 || mouse.y > fy + 6) continue;
+      const d = dx + Math.abs(mouse.y - (fy + hy) / 2) * 0.5;
+      if (d < bd) { bd = d; best = p; }
+    }
+  }
+  return best;
+}
 // the fill, the health just lost behind it and the hit flash, for a bar's two parts
 function drawBar(fill, lost, f) {
   const hp = clamp(f.hp / f.maxHp, 0, 1), shown = Math.max(hp, f.shownHp ?? hp), h = f.barHeat || 0;
@@ -16851,7 +16876,15 @@ function updateFoeBars(dt) {
     drawBar(f.barEl.lastChild, f.barEl.firstChild, f);
     f.barEl.hidden = false;
   }
-  const el = $('target');
+  const el = $('target'), job = el.querySelector('.tjob'), meter = el.querySelector('.meter');
+  // (v448) a townsperson pointed at (no monster): their name and job, no health
+  const folk = hov ? null : pickFolk();
+  if (folk) {
+    el.querySelector('.tname').textContent = folk.d.name.full; job.textContent = jobTitle(folk.d);
+    job.hidden = false; meter.hidden = true; el.hidden = false; targetFoe = null;
+    return;
+  }
+  job.hidden = true; meter.hidden = false;
   if (!targetFoe || (targetFoe !== hov && targetT <= 0) || !foes.includes(targetFoe)) { el.hidden = true; return; }
   el.querySelector('.tname').textContent = targetFoe.def.name;
   el.querySelector('.lvl').textContent = targetFoe.level;
@@ -18297,7 +18330,7 @@ function spawnTick(dt) {
 
 // ---------- Townsfolk (v447) ----------
 // Every town has its own people, the same ones each time you come (each a seed for src/folk/townsfolk.js's design):
-// 1-2 to a house in a hamlet, 2 in a medium town, 2-3 in a large one, the tannery's tanner, the smithy's smith
+// 1-2 to a house in a hamlet, 2 in a medium town, 2-3 in a large one, half of them kept (FOLK.share, v448), the tannery's tanner, the smithy's smith
 // and the cathedral's clergy among them. Nothing about them runs while you're far off; a town wakes when you come
 // within FOLK.wake tiles of its edge (its people built a few a frame, each put at one of the town's places), and
 // sleeps again, letting them go, when you've gone well past that. Awake, they stroll the streets between places
@@ -18307,7 +18340,7 @@ function spawnTick(dt) {
 // Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
 // the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
 // with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
-const FOLK = { on: 1, wake: 40, speed: 1.25, stepRef: 0.75, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, show: 70 };
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1.25, stepRef: 0.75, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, show: 70 };
 const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
 const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
 const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
@@ -18371,7 +18404,7 @@ const folkStreet = i => !!(TSTREET[i] || PATH[i]);
 // job fitting the town's size (the tannery's a tanner, the smithy's a smith, the cathedral's clergy), with a seed
 // whose design gives that job.
 function folkPeople(t) {
-  if (t.folk) return t.folk;
+  if (t.folk && t.folkShare === FOLK.share) return t.folk;
   if (t.n == null) t.n = towns.indexOf(t);
   const tiers = FOLK_TIERS[t.tier] || FOLK_TIERS[0], [lo, hi] = FOLK_PER_HOUSE[t.tier] || FOLK_PER_HOUSE[0], used = new Set(), out = [];
   const smith = ['smith', 'armorer', 'masterSmith'][t.tier] || 'smith';
@@ -18389,11 +18422,16 @@ function folkPeople(t) {
       }
       if (!d) d = folkKit.design(folkSeed(t.n, hi0, k, 999));
       used.add(d.job);
-      out.push({ d, t, home: hi0, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
+      out.push({ must: !!want, keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
         moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
     }
   });
-  return t.folk = out;
+  // (v448, Jordan: half as many) FOLK.share of them kept: the tanner, smith and clergy always, the rest by lot
+  const n = Math.max(1, Math.round(out.length * FOLK.share));
+  const kept = new Set(out.filter(p => p.must).slice(0, n));
+  for (const p of out.filter(p => !p.must).sort((a, b) => a.keep - b.keep)) { if (kept.size >= n) break; kept.add(p); }
+  t.folkShare = FOLK.share;
+  return t.folk = out.filter(p => kept.has(p));
 }
 // The places townsfolk go to (tiles): every house's front, round the fountain, beside the lamps and flower boxes,
 // and some street tiles, the corners and crossings first.
@@ -20864,6 +20902,7 @@ const TUNING = [
   ]],
   ['Townsfolk', [
     [FOLK, 'on', 'Townsfolk (0 off, 1 on)', 0, 1, 1],
+    [FOLK, 'share', 'Share of the townsfolk kept (1: 1-2 a house in hamlets, 2 in medium towns, 2-3 in large; a town takes a new value when it next wakes)', 0.1, 1, 0.05],
     [FOLK, 'speed', 'Walking speed (tiles a second)', 0.3, 4, 0.05],
     [FOLK, 'stepRef', 'Walk: speed the steps are made for (lower: quicker steps)', 0.2, 3, 0.05],
     [FOLK, 'stayMin', 'Least time standing at a place (s)', 0, 60, 1],
