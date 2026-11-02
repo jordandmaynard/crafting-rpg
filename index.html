@@ -13471,6 +13471,11 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // boat: x = b.x + cos(h) u + sin(h) v, z = b.z - sin(h) u + cos(h) v (h the heading, as H.face: atan2(dx, dz)).
 const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 7, accel: 1.2, turn: 0.5, notches: 2, sailRate: 0.8,
   anchorTime: 1.6, gangV: -0.2, plank: 1.2, reach: 2, onto: 0.6, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
+  // (v496, Jordan) the helm deck: a platform behind the wheel (helmP high, from the stern to helmFront), a ramp up to
+  // it either side of the wheel (from rampV aft to helmFront, outboard of rampU); you stand at helmV on it, the
+  // wheel's hub wheelY over the deck; it turns up to wheelTurn either way as you steer (wheelRate a second), your
+  // hands on its rim following it by grip
+  helmP: 0.45, helmFront: -3.42, helmV: -3.47, rampV: -2.6, rampU: 0.42, wheelY: 0.85, wheelR: 0.26, wheelTurn: 0.9, wheelRate: 2.2, grip: 0.6,
   masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }] };
 const boats = [];
 // a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
@@ -13485,6 +13490,13 @@ function boatHB(v) {
 }
 const boatGH = v => 0.42 + 0.35 * Math.max(0, (v - 1.5) / 3.1) ** 2 + 0.18 * Math.max(0, (-v - 2.8) / 1.4);
 const boatKeel = v => -BOAT.free - 0.85 + 0.75 * Math.max(0, (v - 2.4) / 2.2) ** 2;
+// (v496) the floor's height over the deck where you stand: the helm platform, and its ramps beside the wheel
+function boatFloor(u, v) {
+  const B = BOAT;
+  if (v <= B.helmFront) return B.helmP;
+  if (Math.abs(u) >= B.rampU && v < B.rampV) return B.helmP * (B.rampV - v) / (B.rampV - B.helmFront);
+  return 0;
+}
 const boatWorld = (b, u, v) => [b.x + Math.cos(b.h) * u + Math.sin(b.h) * v, b.z - Math.sin(b.h) * u + Math.cos(b.h) * v];
 const boatLocal = (b, x, z) => { const dx = x - b.x, dz = z - b.z, c = Math.cos(b.h), s = Math.sin(b.h); return [dx * c - dz * s, dx * s + dz * c]; };
 // open water the boat may float on: water at its own level, no land, lava, bridge or dock
@@ -13552,16 +13564,43 @@ function boatShapes() {
     seg(G.cyl6, '#2a2018', [0, fore.h, fore.v], sprit, 0.014);
     seg(G.cyl6, '#2a2018', [0, fore.h * 0.62, fore.v], [0, 0.9, B.bow - 0.2], 0.014);
     seg(G.cyl6, '#2a2018', [0, main.h, main.v], [0, fore.h * 0.8, fore.v], 0.014);
-    seg(G.cyl6, '#2a2018', [0, main.h, main.v], [0, boatGH(B.stern) + 0.05, B.stern + 0.15], 0.014);
+    seg(G.cyl6, '#2a2018', [0, main.h, main.v], [0, B.helmP + 0.6, B.stern + 0.08], 0.014);
     // a pennant at the main truck
     tri([0, main.h + 0.05, main.v], [0, main.h - 0.35, main.v], [0, main.h - 0.15, main.v - 1.1], CC('#a8322a'));
-    // the wheel: a post, a rim of twelve pieces, eight spokes out past it to handles
+    // the wheel's post (the wheel itself turns: its own shape, 'wheel')
     const W0 = BOAT.wheelV;
-    part(G.box, '#5a3a22', 0, 0.45, W0, { sx: 0.14, sy: 0.9, sz: 0.14 });
-    const wy = 1.0, wz = W0 - 0.1, R = 0.36;
-    for (let k = 0; k < 12; k++) { const a = (k + 0.5) / 12 * Math.PI * 2; part(G.box, '#7a5232', Math.cos(a) * R, wy + Math.sin(a) * R, wz, { sx: 0.05, sy: 2 * Math.PI * R / 12 + 0.02, sz: 0.06, rz: a }); }
-    for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; part(G.box, '#8a6040', Math.cos(a) * 0.24, wy + Math.sin(a) * 0.24, wz, { sx: 0.035, sy: 0.48, sz: 0.035, rz: a - Math.PI / 2 }); }
-    part(G.cyl8, '#b8923a', 0, wy, wz, { sx: 0.12, sy: 0.08, sz: 0.12, rx: Math.PI / 2 });
+    part(G.box, '#5a3a22', 0, B.wheelY / 2, W0, { sx: 0.13, sy: B.wheelY, sz: 0.13 });
+    // (v496, Jordan) the helm deck behind the wheel: planked, a step face between the ramps (behind the wheel), a
+    // ramp up to it either side of the wheel, and a rail round its stern and sides
+    const P = B.helmP, F = B.helmFront, RV = B.rampV, RU = B.rampU;
+    const hvs = [B.stern, (B.stern + F) / 2, F];
+    for (let k = 0; k + 1 < hvs.length; k++) {
+      const v0 = hvs[k], v1 = hvs[k + 1], hb0 = boatHB(v0), hb1 = boatHB(v1), K = 8;
+      for (let q = 0; q < K; q++) {
+        const f0 = -1 + 2 * q / K, f1 = -1 + 2 * (q + 1) / K, col = shade(CC(q % 2 ? '#b8905e' : '#ab8352'), 0.95 + hs(q, k, 497) * 0.1);
+        quad([f0 * hb0, P, v0], [f0 * hb1, P, v1], [f1 * hb1, P, v1], [f1 * hb0, P, v0], col);
+      }
+    }
+    quad([-RU, 0, F], [RU, 0, F], [RU, P, F], [-RU, P, F], CC('#6b4528'));
+    part(G.box, '#8a5a34', 0, P - 0.015, F + 0.02, { sx: RU * 2, sy: 0.04, sz: 0.05 });
+    for (const sg of [-1, 1]) {
+      const hbF = boatHB(F), hbR = boatHB(RV);
+      // the ramp's top, cleated, and its inner side down to the deck
+      quad([sg * RU, P, F], [sg * hbF, P, F], [sg * hbR, 0, RV], [sg * RU, 0, RV], CC('#a87e4e'));
+      for (let c = 1; c < 5; c++) { const t = c / 5, v = F + (RV - F) * t, y = P * (1 - t) + 0.02, hb = boatHB(v); seg(G.box, '#7a5432', [sg * (RU + 0.04), y, v], [sg * (hb - 0.04), y, v], 0.025); }
+      tri([sg * RU, 0, RV], [sg * RU, P, F], [sg * RU, 0, F], CC('#5e3c22'));
+      part(G.box, '#8a5a34', sg * RU, P / 2, F + 0.03, { sx: 0.06, sy: P, sz: 0.06 });
+    }
+    // its rail: posts round the stern and down each side to the platform's front
+    const TR = P + 0.36, rail = [];
+    for (const sg of [-1, 1]) { rail.push([]); for (const v of [F, (F + B.stern) / 2, B.stern + 0.08]) rail[rail.length - 1].push([sg * (boatHB(v) - 0.03), v]); }
+    for (const side of rail) {
+      for (const [u, v] of side) seg(G.box, '#6b4528', [u, P, v], [u, TR, v], 0.05);
+      for (let k = 0; k + 1 < side.length; k++) seg(G.box, '#8a5a34', [side[k][0], TR, side[k][1]], [side[k + 1][0], TR, side[k + 1][1]], 0.05);
+    }
+    seg(G.box, '#8a5a34', [rail[0][2][0], TR, rail[0][2][1]], [rail[1][2][0], TR, rail[1][2][1]], 0.05);
+    // (the backstay comes down to a post at the rail's middle, clear over the head of whoever's at the wheel)
+    seg(G.box, '#6b4528', [0, P, B.stern + 0.08], [0, TR + 0.25, B.stern + 0.08], 0.06);
     // the hawse where the anchor's chain runs out, a cathead over it
     part(G.box, '#5a3a22', 0.9, 0.25, 3.4, { sx: 0.5, sy: 0.12, sz: 0.14 });
   });
@@ -13570,6 +13609,18 @@ function boatShapes() {
     const nu = 6, nv = 5;
     const pt = (i, j) => { const fu = i / nu - 0.5, fv = j / nv, w = wTop + (wBot - wTop) * fv; return [fu * w, -fv, 0.32 * (1 - 4 * fu * fu) * Math.sin(Math.PI * Math.min(1, fv * 1.05))]; };
     for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) quad(pt(i, j), pt(i + 1, j), pt(i + 1, j + 1), pt(i, j + 1), shade(CC(i % 2 ? '#e8dcc0' : '#ddd0b2'), 0.97 + j * 0.01));
+  });
+  // (v496) the wheel, its own shape so it turns: a rim of twelve pieces in the boat's upright cross plane (x across,
+  // y up), eight spokes out past it to handles, a brass hub; turned about z
+  take('wheel', () => {
+    const R = BOAT.wheelR, Rh = R + 0.1;
+    for (let k = 0; k < 12; k++) { const a = (k + 0.5) / 12 * Math.PI * 2; part(G.box, '#7a5232', Math.cos(a) * R, Math.sin(a) * R, 0, { sx: 0.045, sy: 2 * Math.PI * R / 12 + 0.02, sz: 0.055, rz: a }); }
+    for (let k = 0; k < 8; k++) {
+      const a = k / 8 * Math.PI * 2;
+      part(G.box, '#8a6040', Math.cos(a) * R / 2, Math.sin(a) * R / 2, 0, { sx: 0.03, sy: R, sz: 0.03, rz: a - Math.PI / 2 });
+      part(G.box, '#9a6c46', Math.cos(a) * (R + Rh) / 2, Math.sin(a) * (R + Rh) / 2, 0, { sx: 0.042, sy: Rh - R, sz: 0.042, rz: a - Math.PI / 2 });
+    }
+    part(G.cyl8, '#b8923a', 0, 0, 0, { sx: 0.1, sy: 0.07, sz: 0.1, rx: Math.PI / 2 });
   });
   take('furl', () => part(G.cyl8, '#d6c8a6', 0, 0, 0, { sx: 1, sy: 1, sz: 1, rz: Math.PI / 2 }));
   take('anchor', () => {
@@ -13624,6 +13675,7 @@ function buildBoats() {
     b.anchorM = mesh(S.anchor); b.anchorM.position.set(0.9, -0.4, 3.4); g.add(b.anchorM);
     b.chainM = mesh(S.chain); b.chainM.position.set(0.9, 0.2, 3.4); g.add(b.chainM);
     b.plankG = new GFX.Group(); b.plankM = mesh(S.plank); b.plankG.add(b.plankM); g.add(b.plankG);
+    b.wheelM = mesh(S.wheel); b.wheelM.position.set(0, BOAT.wheelY, BOAT.wheelV - 0.1); g.add(b.wheelM); b.wheel = 0;
     b.g = g; scene.add(g);
     boats.push(b);
     poseBoat(b, 0);
@@ -13649,6 +13701,8 @@ function poseBoat(b, dt) {
   b.plankG.position.set(b.side * (hb + 0.02), 0.03, BOAT.gangV);
   b.plankG.rotation.set(0, b.side > 0 ? 0 : Math.PI, Math.atan2(clamp(b.endY - y, -1.6, 1.6), b.len));
   b.plankM.scale.set(Math.max(0.01, L), 1, 1);
+  // (v496) the wheel turned as it's steered: its top toward the side you're turning (port is +x)
+  b.wheelM.rotation.z = -b.wheel;
 }
 // the gangplank's foot, where it can go down: ground (or a dock) out from the gangway, within BOAT.reach of the
 // hull, at about deck height; the plank runs out to it and BOAT.onto further, the nearer side first (then the one
@@ -13675,16 +13729,22 @@ function boatHelm() {
   const b = H.boat;
   if (!b) return;
   if (!H.helm) {
-    H.helm = true; b.anchorGoal = 0; b.notch = 0; b.plankGoal = 0;
+    setHelm(true); b.anchorGoal = 0; b.notch = 0; b.plankGoal = 0;
     H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null;
     toast('You take the wheel. W and S set the sails, A and D steer. F lets go and drops anchor.', 'calm');
     sfx.equip();
   } else {
-    H.helm = false; b.anchorGoal = 1; b.notch = 0;
+    setHelm(false); b.anchorGoal = 1; b.notch = 0;
     const land = boatLanding(b);
     if (land) { b.side = land.side; b.endY = land.y; b.len = land.len; b.plankGoal = 1; } else b.plankGoal = 0;
     sfx.door();
   }
+}
+// (v496, Jordan) at the wheel your weapon's put away (dressHero hides it) and the attack, ability and dash buttons
+// grey out (updateBar)
+function setHelm(on) {
+  H.helm = on;
+  dressHero(); renderStats(); renderTouchLocks();
 }
 function boatSails(dn) {
   const b = H.boat;
@@ -13703,13 +13763,16 @@ function updateBoats(dt) {
     const want = b.anchor < 0.05 ? BOAT.speed * b.sail : 0;
     b.speed += clamp(want - b.speed, -dt * BOAT.accel * 2, dt * BOAT.accel);
     b.turnRate = 0;
+    let steer = 0;
     if (mine) {
       // (v495, Jordan) A and D turn it at a fixed rate, whatever its speed (so slower is a tighter circle, and stopped
       // it turns on the spot); a heading that grows turns it to port, so A adds and D takes away
-      const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
+      steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
       const dh = steer * BOAT.turn * dt;
       if (dh && boatFits(b.x, b.z, b.h + dh, b.wl)) { b.h += dh; b.turnRate = steer; }
     }
+    // (v496) the wheel goes over as you steer and comes back amidships when you let go
+    b.wheel += clamp(steer * BOAT.wheelTurn - b.wheel, -dt * BOAT.wheelRate, dt * BOAT.wheelRate);
     if (b.speed > 0.01) {
       const nx = b.x + Math.sin(b.h) * b.speed * dt, nz = b.z + Math.cos(b.h) * b.speed * dt;
       if (boatFits(nx, nz, b.h, b.wl)) { b.x = nx; b.z = nz; }
@@ -13720,7 +13783,7 @@ function updateBoats(dt) {
   // riding: you stay where you stand on the deck as it moves
   const b = H.boat;
   if (b) {
-    if (H.helm) { H.bu = 0; H.bv = BOAT.wheelV - 0.6; H.face = b.h; }
+    if (H.helm) { H.bu = 0; H.bv = BOAT.helmV; H.face = b.h; }
     [H.x, H.z] = boatWorld(b, H.bu, H.bv);
     H.y = boatHeroY(b);
   }
@@ -13728,7 +13791,7 @@ function updateBoats(dt) {
 function boatHeroY(b) {
   const y = boatDeckY(b), hb = boatHB(BOAT.gangV), s = H.bu * b.side;
   if (b.plank > 0.5 && Math.abs(H.bv - BOAT.gangV) < 0.4 && s > hb) return y + 0.03 + (b.endY - y) * clamp((s - hb) / b.len, 0, 1);
-  return y + 0.02;
+  return y + 0.02 + boatFloor(H.bu, H.bv);
 }
 // a step on the deck (or the gangplank), kept inside the bulwarks and clear of the masts and the wheel; off the
 // gangplank's foot you step ashore
@@ -13749,9 +13812,17 @@ function boatWalk(dx, dz) {
     const lim = Math.max(0, boatHB(v) - 0.32);
     u = clamp(u, -lim, lim);
   }
-  for (const [pu, pv, R] of [[0, BOAT.masts[0].v, 0.42], [0, BOAT.masts[1].v, 0.42], [0, BOAT.wheelV, 0.5]]) {
+  for (const [pu, pv, R] of [[0, BOAT.masts[0].v, 0.42], [0, BOAT.masts[1].v, 0.42]]) {
     const eu = u - pu, ev = v - pv, l = Math.hypot(eu, ev);
     if (l < R) { const k = l > 1e-4 ? R / l : 0; u = pu + eu * k + (k ? 0 : R); v = pv + ev * k; }
+  }
+  // (v496) the wheel and the step face behind it, between the ramps: kept out of, back the way you came (onto the
+  // platform, a ramp, or the deck ahead of it)
+  const wB = BOAT.wheelV + 0.5;
+  if (Math.abs(u) < BOAT.rampU && v > BOAT.helmFront && v < wB) {
+    if (H.bv <= BOAT.helmFront) v = BOAT.helmFront - 1e-3;
+    else if (Math.abs(H.bu) >= BOAT.rampU - 1e-3) u = (H.bu < 0 ? -1 : 1) * BOAT.rampU;
+    else v = wB;
   }
   const moved = Math.hypot(u - H.bu, v - H.bv);
   H.bu = u; H.bv = v;
@@ -13771,7 +13842,7 @@ function boatBoard() {
   }
 }
 // the wheel's within reach
-const nearHelm = () => !!H.boat && Math.hypot(H.bu, H.bv - (BOAT.wheelV - 0.6)) < 1.0;
+const nearHelm = () => !!H.boat && Math.hypot(H.bu, H.bv - BOAT.helmV) < 1.0;
 
 // ---------- The hero ----------
 // The hero draws in a second pass on its own layer, so wherever scenery or walls hide it a flat
@@ -14480,6 +14551,7 @@ const hotUsable = id => !!id && !!ITEMS[id] && ITEMS[id].slot === 'weapon';
 Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') } });
 const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
 function useAbility(key) {
+  if (H.helm) { sfx.nope(); return; }
   const a = weapon()[key];
   if (a) ABILITY[a].cast();
   else if (mode === 'play' && H.alive) sfx.nope();
@@ -14496,11 +14568,11 @@ const DRESS = {
   coifChain: () => setOn('head') === 'chain', skirtChain: () => setOn('chest') === 'chain',
   crestPlate: () => plated('head'), breastPlate: () => plated('chest'), breastTrim: () => plated('chest'), kneesPlate: () => plated('legs'),
   pauldron: () => FANTASY_SET[setOn('chest')] >= 0, pauldronTop: () => FANTASY_SET[setOn('chest')] >= 2,
-  sword: () => weapon().kind === 'sword',
-  bow: () => weapon().kind === 'bow',
-  spear: () => weapon().kind === 'spear',
-  axe: () => weapon().kind === 'axe',
-  hammer: () => weapon().kind === 'hammer',
+  sword: () => !H.helm && weapon().kind === 'sword',
+  bow: () => !H.helm && weapon().kind === 'bow',
+  spear: () => !H.helm && weapon().kind === 'spear',
+  axe: () => !H.helm && weapon().kind === 'axe',
+  hammer: () => !H.helm && weapon().kind === 'hammer',
   ...Object.fromEntries(WEAPON_TIERS.map(t => ['tier_' + t, () => weapon().tier === t])),
 };
 const DRESS_MAT = {
@@ -15349,8 +15421,11 @@ function updateBar() {
       el.title = costTip(s.cat ? KIND_SLOT[cost].name : s.name, cost);
     }
     if (mode === 'build') el.classList.toggle('on', s.cat ? catOf(buildKind) === s.cat : buildKind === s.id);
+    else if (TOUCH_IDS.includes(s.id)) el.classList.toggle('locked', !!s.locked || !!H.helm);
   }
 }
+// (v496) at a boat's wheel the touch attack buttons grey out too
+function renderTouchLocks() { for (const { s, el } of touchEls) el.classList.toggle('locked', !!s.locked || !!H.helm); }
 function renderStats() {
   updateBar();
 }
@@ -16190,7 +16265,7 @@ function respawn() {
     if (stepOpen(h.c, h.r, d, false) && !OBJ[OB[n]].solid) { at = [h.c + 0.5 + DC[d] * 0.85, h.r + 0.5 + DR[d] * 0.85]; break; }
   }
   [H.x, H.z] = at || [spawn.x, spawn.z];
-  H.story = 0; H.stair = null; H.boat = null; H.helm = false;
+  H.story = 0; H.stair = null; H.boat = null; if (H.helm) setHelm(false);
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.alive = true; H.invuln = 2;
   H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
   renderHp();
@@ -16329,6 +16404,7 @@ function renderTouch() {
     touchEls.push({ s, el, cd: el.querySelector('.cd') });
     aimButton(el, id);
   }
+  renderTouchLocks();
 }
 function aimButton(el, id) {
   let st = null;
@@ -16641,6 +16717,7 @@ function updateAim() {
 // ---------- Abilities ----------
 // the sword's three-stroke combo, or with bare hands a right and a left jab
 function startSwing() {
+  if (H.helm) return;
   if (weapon().strike === 'shoot') { startShot('shot'); return; }
   if (weapon().strike === 'poke') { startSpear('poke'); return; }
   if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
@@ -17667,7 +17744,7 @@ function updateHarpoon(dt) {
   chainLinks.count = n; chainLinks.needsUpdate = true;
 }
 function castDash() {
-  if (!H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
+  if (H.helm || !H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
@@ -21010,10 +21087,10 @@ function fitText(e, base) {
 if (document.fonts) document.fonts.ready.then(() => { placeFit = false; fitPlace(); });
 const plateName = n => { const t = titleCase(n); return t.charAt(0).toUpperCase() + t.slice(1); };
 function animateHero(dt) {
-  const bowHeld = mode === 'play' && H.alive && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
+  const bowHeld = mode === 'play' && H.alive && !H.helm && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
   bowUp = H.bow || bowHeld ? Math.min(1, bowUp + dt / 0.12) : Math.max(0, bowUp - dt / 0.2);
-  hamPlan = mode === 'play' && H.alive && weapon().kind === 'hammer' && H.dash < 0 && !H.flip ? hammerPlan() : null;
-  axPlan = mode === 'play' && H.alive && weapon().kind === 'axe' && H.dash < 0 && !H.flip ? axePlan() : null;
+  hamPlan = mode === 'play' && H.alive && !H.helm && weapon().kind === 'hammer' && H.dash < 0 && !H.flip ? hammerPlan() : null;
+  axPlan = mode === 'play' && H.alive && !H.helm && weapon().kind === 'axe' && H.dash < 0 && !H.flip ? axePlan() : null;
   // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
   // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
@@ -21288,6 +21365,20 @@ function animateHero(dt) {
   else spearPlan = null;
   if (hamPlan && !tucked) hammerHands();
   if (axPlan && !tucked) weaponHands(axPlan, hero.axe);
+  if (H.helm && H.boat && !tucked) helmHands();
+}
+// (v496, Jordan) both hands on the wheel's rim, up either side of the hub (the left hand at the rim's upper left, the
+// right at its upper right), following it round by BOAT.grip as it turns; the elbows out and down
+function helmHands() {
+  const b = H.boat, B = BOAT, rz = -b.wheel * B.grip, lift = B.helmP + 0.02;
+  hero.g.updateMatrixWorld();
+  for (const [k, a, arm, out] of [[0, Math.PI / 4, hero.armL, 1], [1, Math.PI * 3 / 4, hero.armR, -1]]) {
+    const x = B.wheelR * Math.cos(a + rz) - H.bu, y = B.wheelY + B.wheelR * Math.sin(a + rz) - lift, z = B.wheelV - 0.13 - H.bv;
+    const t = heroTo(hero.chest, x, y, z).sub(arm.position), tv = [t.x, t.y, t.z];
+    const q = heroTo(hero.chest, out * 0.7, -0.6, -0.2, true);
+    armIK(arm, hero.elbows[k], ...tv, q.x, q.y, q.z, 0.1, 0.15);
+    hero.wrists[k].rotation.set(0, 0, 0);
+  }
 }
 
 function updateFoe(f, dt, night) {
@@ -23638,7 +23729,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 495, crashSeen = new Map();
+const GAME_VERSION = 496, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
