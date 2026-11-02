@@ -688,25 +688,29 @@ export function makeFolkKit(GFX) {
       box(head, 0.04, 0.032, 0.03, 0, 0.08, -0.1, shade(MC, -0.2));
       for (const s of [1, -1]) taper(head, -0.005, 0.068, [0.006, 0.008, s * 0.03, -0.11], [0.028, 0.01, s * 0.008, -0.107], shade(MC, -0.12));
     } else if (d.mask) {
-      // (v10, Jordan: less goofy, more sinister) a skull: the brow and cheeks full width, the jaw narrowing; deep sockets
-      // slanted down at their inner corners by the brow ridge, an upside-down heart of a nose hole, and only the upper
-      // teeth, long and uneven, over a dark open mouth. Eyes glow in the sockets when the hood's do.
-      const M = d.mask.color, HOLE = '#120c0e';
-      box(head, 0.2, 0.1, 0.016, 0, 0.12, 0.1, M);
-      taper(head, 0.018, 0.071, [0.13, 0.016, 0, 0.1], [0.2, 0.016, 0, 0.1], M);
+      // (v11, Jordan: a white plague doctor's mask) a pale face plate narrowing to the chin, round stitched-rimmed eye
+      // holes under brows slanting down to the nose, a seam stitched up the forehead, and a long beak from between the
+      // eyes, curving down past the chin, beaded along its ridge. Eyes glow in the holes when the hood's do.
+      const M = d.mask.color, HOLE = '#120c0e', RIM = shade(M, -0.12), BEAD = shade(M, -0.18);
+      box(head, 0.2, 0.08, 0.016, 0, 0.135, 0.1, M);
+      taper(head, 0.03, 0.095, [0.12, 0.016, 0, 0.1], [0.2, 0.016, 0, 0.1], M);
       for (const s of [1, -1]) {
-        box(head, 0.06, 0.05, 0.008, s * 0.046, 0.117, 0.107, HOLE);
-        box(head, 0.04, 0.016, 0.008, s * 0.048, 0.088, 0.107, HOLE);
-        box(head, 0.07, 0.018, 0.006, s * 0.03, 0.142, 0.111, shade(M, -0.06), 0, s * 0.42);
-        box(head, 0.03, 0.022, 0.006, s * 0.082, 0.083, 0.11, shade(M, -0.12), 0, -s * 0.5);
-        if (d.head.glow) box(head, 0.014, 0.01, 0.004, s * 0.05, 0.112, 0.112, d.head.glow);
-        box(head, 0.012, 0.032, 0.008, s * 0.008, 0.072, 0.107, HOLE, 0, s * 0.45);
+        box(head, 0.064, 0.064, 0.006, s * 0.05, 0.12, 0.109, RIM);
+        box(head, 0.064, 0.064, 0.006, s * 0.05, 0.12, 0.109, RIM, 0, Math.PI / 4);
+        box(head, 0.044, 0.044, 0.006, s * 0.05, 0.12, 0.1115, HOLE);
+        box(head, 0.044, 0.044, 0.006, s * 0.05, 0.12, 0.1115, HOLE, 0, Math.PI / 4);
+        if (d.head.glow) box(head, 0.016, 0.012, 0.004, s * 0.05, 0.117, 0.116, d.head.glow);
+        box(head, 0.075, 0.014, 0.006, s * 0.046, 0.164, 0.1125, M, 0, s * 0.38);
       }
-      box(head, 0.11, 0.032, 0.008, 0, 0.04, 0.107, HOLE);
-      [0.024, 0.016, 0.026, 0.02, 0.028, 0.017].forEach((len, i) => {
-        const x = -0.045 + i * 0.018;
-        box(head, 0.013, len, 0.006, x, 0.06 - len / 2, 0.1125, shade(M, -0.04 * (i % 2)), 0, ((i * 37) % 5 - 2) * 0.06);
-      });
+      box(head, 0.005, 0.034, 0.004, 0, 0.162, 0.109, BEAD);
+      for (const y of [0.15, 0.162, 0.174]) box(head, 0.018, 0.004, 0.004, 0, y, 0.1095, BEAD);
+      // the beak: a taper on a pivot tipped forward and down (its local +y runs out along the beak, -z up its ridge)
+      const beak = pivot(head, 0, 0.085, 0.104); beak.rotation.x = Math.PI / 2 + 0.5;
+      taper(beak, 0, 0.21, [0.078, 0.07, 0, 0], [0.01, 0.01, 0, 0.018], M);
+      for (const u of [0.04, 0.08, 0.12, 0.16]) {
+        const k = u / 0.21, dz = (0.07 + (0.01 - 0.07) * k) / 2 - 0.018 * k;
+        box(beak, 0.012, 0.012, 0.01, 0, u, -dz, BEAD);
+      }
     }
     // hair, then whatever's on the head over it
     const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif' || hat === 'cultHood';
