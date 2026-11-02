@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v460:** The toast frame's crest arch was cut short on its left (a hard step down at about x 205, Jordan): ui/top/toast-frame.webp now takes columns 172-241, rows 0-29 mirrored from the right side (about x' = 550 - x), which curves down cleanly.
+
 **v459:** The entering toast's star is four-pointed (Jordan): ui/top/icon-star.webp is the kit's compass star with its four short diagonal points trimmed away (alpha kept where min(|dx|,|dy|) < 8(1 - max/35.5)), so it no longer matches the 8-point crest discoveries show.
 
 **v458:** The framed toast's crest shows an icon (Jordan): the sun at daybreak, the moon at nightfall, the kit's four-point star (over a dark well hiding the frame's own star) when entering a place already found; discoveries keep the frame's crest. The kit's sun.png and moon.png were cut across neighbouring medallions, so ui/top/icon-sun.webp / icon-moon.webp are rebuilt by joining each with the next file at the matching column. toast(msg, tone, framed, icon).
