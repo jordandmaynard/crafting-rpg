@@ -6226,7 +6226,7 @@ function renderWorld() {
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
   // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
-  const bend = on && WATER.refraction > 0;
+  const bend = on && (WATER.refraction > 0 || SSR.on > 0.5);   // (v509: the reflections read the copy too)
   if (bend) { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
   else { WATER_U.tRefr.value = noBend.color; WATER_U.tRefrD.value = noBend.depth; }
   WATER_U.refr.value = bend ? 1 : 0;
@@ -8320,7 +8320,15 @@ const waveTex = (() => {
   t.wrapS = t.wrapT = GFX.RepeatWrapping; t.magFilter = t.minFilter = GFX.LinearFilter; t.needsUpdate = true;
   return t;
 })();
+// (v509, Jordan: a switch to try them) screen-space reflections in the water: from each water pixel a ray up along
+// the reflected view (off the waves' normal, calmed by `calm`), marched in `steps` growing steps out to `reach` tiles
+// through the copy of the picture taken before the water draws (the same copy the bed's bending reads); where it
+// passes behind something within `thick` tiles, what's there is reflected. It fades toward the screen's edges and
+// its reach. amount: how much of the sky's reflection it replaces; boost: × the water's Fresnel where it hits (the
+// view is steep, so the true reflection is faint). Needs post-processing (the copy). T > Water.
+const SSR = { on: 0, amount: 1, boost: 2.5, steps: 24, reach: 14, thick: 1.5, calm: 0.6 };
 const WATER_U = {
+  ssrA: { value: { x: 0, y: 24, z: 14, w: 1.5 } }, ssrB: { value: { x: 1, y: 2.5, z: 0.6, w: 0 } },
   tWave: { value: waveTex }, time: { value: 0 }, waveAmp: { value: 1 }, flowSpeed: { value: 1 }, glitter: { value: 1 }, rough: { value: 0.03 },
   foamAmt: { value: 1 }, shoreFoam: { value: 0.6 }, sunDir: { value: new GFX.Vector3(0, 1, 0) }, sunCol: { value: new GFX.Color() },
   skyCol: { value: new GFX.Color() }, viewDir: { value: new GFX.Vector3(0, -1, 0) }, waterCol: { value: new GFX.Vector3() },
@@ -8403,6 +8411,47 @@ fn bedPoint(wp: vec3f, fp: vec4f, d: f32) -> vec3f {
   }
   return wp + dir * (d / max(-dir.y, 0.2));
 }
+// (v509) the screen-space reflection along the reflected ray from wp: rgb what it meets, a how sure (0 none)
+fn ssrTrace(wp: vec3f, dir: vec3f) -> vec4f {
+  let dims = vec2i(textureDimensions(tRefrD));
+  let n = i32(U.ssrA.y);
+  var prev = wp; var travel = 0.0;
+  var stepL = U.ssrA.z / (U.ssrA.y * U.ssrA.y) * 2.0;
+  for (var k = 0; k < 64; k++) {
+    if (k >= n) { break; }
+    let p = prev + dir * stepL;
+    travel += stepL;
+    let c = F.viewProj * vec4f(p, 1.0);
+    let uv = c.xy / c.w * vec2f(0.5, -0.5) + 0.5;
+    if (any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) || c.w <= 0.0) { break; }
+    let px = clamp(vec2i(uv * vec2f(dims)), vec2i(0), dims - 1);
+    let zb = textureLoad(tRefrD, px, 0);
+    if (zb < 0.99999 && c.z / c.w > zb) {
+      // behind something: how far behind (view depth), and if not too far, close in on where it crossed
+      let P = F.proj;
+      let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+      let vz = (F.view * vec4f(p, 1.0)).z;
+      if (vb - vz < U.ssrA.w) {
+        var a = prev; var b = p;
+        for (var j = 0; j < 4; j++) {
+          let m = (a + b) * 0.5;
+          let cm = F.viewProj * vec4f(m, 1.0);
+          let um = cm.xy / cm.w * vec2f(0.5, -0.5) + 0.5;
+          let zm = textureLoad(tRefrD, clamp(vec2i(um * vec2f(dims)), vec2i(0), dims - 1), 0);
+          if (cm.z / cm.w > zm) { b = m; } else { a = m; }
+        }
+        let cb = F.viewProj * vec4f(b, 1.0);
+        let ub = cb.xy / cb.w * vec2f(0.5, -0.5) + 0.5;
+        let col = textureLoad(tRefr, clamp(vec2i(ub * vec2f(dims)), vec2i(0), dims - 1), 0).rgb;
+        let edge = smoothstep(0.0, 0.08, min(min(ub.x, ub.y), min(1.0 - ub.x, 1.0 - ub.y)));
+        return vec4f(col, edge * (1.0 - smoothstep(U.ssrA.z * 0.6, U.ssrA.z, travel)));
+      }
+    }
+    prev = p;
+    stepL *= 1.0 + 2.0 / U.ssrA.y;
+  }
+  return vec4f(0.0);
+}
 fn fresnelWater(c: f32) -> f32 { let x = 1.0 - sat(c); let x2 = x * x; return 0.02 + 0.98 * x2 * x2 * x; }
 const ROT_A = mat2x2f(0.8, -0.6, 0.6, 0.8);
 const ROT_B = mat2x2f(0.6, -0.8, 0.8, 0.6);
@@ -8424,8 +8473,21 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   let sunE = U.sunCol * cloudShade(xz);
   // the sky in it, Fresnel from a partly smoothed normal
   let R = reflect(-V, N);
-  let refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y)));
-  let Fr = fresnelWater(max(dot(normalize(mix(N, vec3f(0.0, 1.0, 0.0), 0.45)), V), 0.0));
+  var refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y)));
+  var Fr = fresnelWater(max(dot(normalize(mix(N, vec3f(0.0, 1.0, 0.0), 0.45)), V), 0.0));
+  // (v509) what the screen shows along the reflected ray, over the sky's reflection
+  if (U.ssrA.x > 0.5 && U.refr > 0.5 && U.passAdd > 0.5 && i.fall < 0.5) {
+    let toP = i.wpos - F.camPos.xyz;
+    let vd = select(normalize(toP), normalize(F.camDir.xyz), F.camPos.w > 0.5);
+    let Nr = normalize(mix(N, vec3f(0.0, 1.0, 0.0), U.ssrB.z));
+    let Rd = reflect(vd, Nr);
+    if (Rd.y > 0.02) {
+      let hit = ssrTrace(i.wpos + vec3f(0.0, 0.02, 0.0), Rd);
+      let a = hit.a * U.ssrB.x;
+      refl = mix(refl, hit.rgb, a);
+      Fr = min(1.0, Fr * mix(1.0, U.ssrB.y, a));
+    }
+  }
   // sun glitter: a Beckmann lobe over the wave slopes
   let Hv = normalize(V + L);
   let nh = max(dot(N, Hv), 1e-3); let t2 = (1.0 - nh * nh) / (nh * nh);
@@ -9367,6 +9429,8 @@ function updateWater(dt) {
   U.swellAmp.value = WATER.swell; U.swellLen.value = Math.max(0.2, WATER.swellSize); U.rippleLen.value = Math.max(0.2, WATER.rippleSize);
   for (const k of ['swellShade', 'crests', 'sparkle', 'caustics', 'shallows', 'shoreLine', 'shoreRipples']) U[k].value = WATER[k];
   U.refract.value = WATER.refraction;
+  Object.assign(U.ssrA.value, { x: SSR.on > 0.5 ? 1 : 0, y: clamp(Math.round(SSR.steps), 4, 64), z: Math.max(1, SSR.reach), w: Math.max(0.1, SSR.thick) });
+  Object.assign(U.ssrB.value, { x: SSR.amount, y: SSR.boost, z: SSR.calm });
   U.sunDir.value.copy(sun.position).sub(sun.target.position).normalize();
   LU.sunDir.value.copy(U.sunDir.value);
   U.sunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
@@ -23495,6 +23559,13 @@ const TUNING = [
     [WATER, 'causticFocus', 'Caustics: how hard the waves focus the sun', 0, 5, 0.05],
     [WATER, 'causticDepth', 'Caustics: depth of the bed they land on (tiles; deeper, sharper and busier)', 0.05, 3, 0.05],
     [WATER, 'refraction', 'Refraction: how far the waves bend the bed', 0, 1.5, 0.01],
+    [SSR, 'on', 'Screen-space reflections (0 off, 1 on)', 0, 1, 1],
+    [SSR, 'amount', 'Reflections: how much they replace the sky\'s', 0, 1, 0.01],
+    [SSR, 'boost', 'Reflections: strength (× the water\'s Fresnel where they hit)', 1, 10, 0.1],
+    [SSR, 'steps', 'Reflections: steps along each ray (more is slower)', 4, 64, 1],
+    [SSR, 'reach', 'Reflections: how far the rays go (tiles)', 2, 40, 0.5],
+    [SSR, 'thick', 'Reflections: how thick things are taken to be (tiles)', 0.1, 6, 0.05],
+    [SSR, 'calm', 'Reflections: how much the waves are smoothed for them (1 a mirror)', 0, 1, 0.01],
     [WATER, 'shallows', 'Turquoise shallows', 0, 3, 0.05],
     [WATER, 'shoreLine', 'Foam line at the shore', 0, 1, 0.05],
     [WATER, 'shoreRipples', 'Ripples off the shore', 0, 2, 0.05],
@@ -24318,7 +24389,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 508, crashSeen = new Map();
+const GAME_VERSION = 509, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
