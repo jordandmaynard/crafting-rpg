@@ -112,6 +112,8 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     <div class="row folkOnly" id="anims"></div>
     <h2 class="boatOnly">Sails</h2>
     <div class="row boatOnly"><button data-sails="1" class="on">Set</button><button data-sails="0.5">Reefed</button><button data-sails="0">Furled</button></div>
+    <h2 class="boatOnly">Anchor</h2>
+    <div class="row boatOnly"><button id="anchorBtn">Drop anchor</button></div>
     <div class="row" style="margin-top:6px">
       <span class="muted">Speed</span><input id="speed" type="range" min="0" max="2" step="0.05" value="1">
       <button id="pause" title="Space">Pause</button>
@@ -151,7 +153,7 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 <script type="module">
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, design as folkDesign, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
-import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat } from './src/boats/brig.js';
+import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat, hangChain } from './src/boats/brig.js';
 
 const $ = id => document.getElementById(id);
 const store = { get(k, d) { try { const v = localStorage.getItem('emberwild.folk.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -190,6 +192,8 @@ const POOL_OF = { seed: 'town', wild: 'wilds', boat: 'boats' }, LINK = { town: '
 const SEED_KEY = { town: 'seed', wilds: 'wildSeed', boats: 'boatSeed' }, TAG = { town: '', wilds: 'w', boats: 'b' };
 S.pool = hashM ? POOL_OF[hashM[1]] : store.get('pool', 'town');
 S.sails = 1;
+// (v19) the anchor: 0 stowed under the cathead .. 1 dropped, easing to anchorGoal over the game's 1.6 s
+S.anchor = 0; S.anchorGoal = 0;
 S.seed = hashM ? +hashM[2] : store.get(SEED_KEY[S.pool], 1);
 const isBoats = () => S.pool === 'boats';
 const design = s => isBoats() ? rollLivery(s) : folkDesign(s, S.pool);
@@ -236,7 +240,7 @@ function rebuildBoats() {
     scene.add(m.g);
     return m;
   });
-  boatSails();
+  boatSails(); boatAnchor();
   $('names').innerHTML = S.mode === 'one' ? '' : seeds.map(s => { const L = rollLivery(s); return `<button data-s="${s}" title="${L.name}: ${liveryName(L)}">${s}<br>${L.name}</button>`; }).join('');
   const L = rollLivery(S.seed);
   $('whoName').textContent = L.name;
@@ -250,6 +254,15 @@ function boatSails() {
     m.furls.forEach(f => { const r = 0.06 + 0.14 * (1 - S.sails); f.scale.y = f.scale.z = r; });
   }
 }
+function boatAnchor() {
+  const B = BRIG_SHAPE, ay = B.anchorUp - S.anchor * (B.anchorUp + B.free + 2.9), len = Math.round((B.hawse[1] - ay) * 200) / 200;
+  for (const m of folks) {
+    if (!m.anchorM) continue;
+    m.anchorM.position.y = ay;
+    if (m.chainLen !== len) { m.chainLen = len; hangChain(m.chainM, len); }
+  }
+}
+$('anchorBtn').onclick = () => { S.anchorGoal = S.anchorGoal > 0.5 ? 0 : 1; $('anchorBtn').textContent = S.anchorGoal ? 'Lift anchor' : 'Drop anchor'; };
 document.querySelectorAll('[data-sails]').forEach(b => b.onclick = () => {
   S.sails = +b.dataset.sails; document.querySelectorAll('[data-sails]').forEach(x => x.classList.toggle('on', x === b)); boatSails();
 });
@@ -364,6 +377,7 @@ function frame(now) {
   const yaw = S.spin ? spinYaw : -S.facing * Math.PI / 4 + yawDrag;
   for (const f of folks) { if (!f.sails) kit.pose(f, S.anim, t + f.offset); f.g.rotation.y = yaw; }
   wind.value.w = (wind.value.w + (S.paused ? 0 : dt * 2 * S.speed)) % 1e4;
+  if (S.anchor !== S.anchorGoal) { S.anchor += Math.max(-dt / 1.6, Math.min(dt / 1.6, S.anchorGoal - S.anchor)); boatAnchor(); }
   // frame the figure (or the lineup) whatever the canvas's shape, from DOLL_VIEW's height and aim (a boat: its
   // length and its masts)
   const boatsOn = isBoats();
