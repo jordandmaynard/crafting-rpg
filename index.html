@@ -5780,7 +5780,8 @@ const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 
   windSpeed: 0, settle: 1.19, swirl: 28.5, smooth: 0.15, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 100, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
   arrowWake: 0.22, arrowClear: 2.5, arrowPush: 2, arrowDrag: 6, landRadius: 0.35, landClear: 3, landPush: 5,
-  swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400'};
+  swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400',
+  lake: 0.44, lakeColor: '#ababab'};   // (v499, Jordan: mist over lakes and ponds, not seas or rivers; the graveyards' for now)
 const hazeStirs = [];   // arrows passing through it this frame (stirHaze)
 // on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T),
 // and no black point, which is there to take back the lit haze's washout
@@ -5827,20 +5828,22 @@ function groundHazeSite(cx, cz) { const job = groundHazeSiteJob(cx, cz); while (
 function* groundHazeSiteJob(cx, cz) {
   const G = GROUND_HAZE, c0 = cx - GH_TILES / 2, r0 = cz - GH_TILES / 2, W = GH_TILES + 2 * GH_BLUR + 2;
   const col = {}, share = b => b === SWAMP ? G.swamp : b === GRAVE ? G.grave : b === WASTES ? G.wastes : 0;
-  for (const [b, k] of [[SWAMP, 'swampColor'], [GRAVE, 'graveColor'], [WASTES, 'wastesColor']]) { tmpC2.set(G[k]); col[b] = [tmpC2.r, tmpC2.g, tmpC2.b]; }
+  for (const [b, k] of [[SWAMP, 'swampColor'], [GRAVE, 'graveColor'], [WASTES, 'wastesColor'], ['lake', 'lakeColor']]) { tmpC2.set(G[k]); col[b] = [tmpC2.r, tmpC2.g, tmpC2.b]; }
   // each tile's share and colour (times its share), from one tile before the window to one after, then blurred
   const m = new Float32Array(W * W * 4), t = new Float32Array(W * W * 4), at = (c, r) => (r * W + c) * 4, land = new Float32Array(W * W);
   for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
     const tc = c0 - GH_BLUR - 1 + c, tr = r0 - GH_BLUR - 1 + r;
     if (tc < 0 || tr < 0 || tc >= N || tr >= N) continue;
     const b = BI[T(tc, tr)], k = at(c, r);
-    let s = Math.max(0, share(b));
+    let s = Math.max(0, share(b)), cb = b;
     // in swamps and the Wastes, thickest by the water and over lava, thinning away from them
     if (s > 0 && (b === SWAMP || b === WASTES)) s *= poolNear(tc, tr, b === WASTES);
-    // none over lakes and rivers (lava and swamp pools keep their haze), nor inside a closed-in building
-    const wi = T(tc, tr);
-    if ((WT[wi] >= 2 && !LAVA[wi]) || roomOf.has(wi)) s = 0; else land[c + r * W] = 1;
-    if (s > 0) { m[k] = s; m[k + 1] = col[b][0] * s; m[k + 2] = col[b][1] * s; m[k + 3] = col[b][2] * s; }
+    // none over rivers or the sea (lava and swamp pools keep their haze), nor inside a closed-in building; lakes and
+    // ponds have their own mist (v499)
+    const wi = T(tc, tr), lake = WT[wi] === 2 && !LAVA[wi] && !SEA[wi] && !LV[wi];
+    if (lake) { s = Math.max(0, G.lake); cb = 'lake'; land[c + r * W] = 1; }
+    else if ((WT[wi] >= 2 && !LAVA[wi]) || roomOf.has(wi)) s = 0; else land[c + r * W] = 1;
+    if (s > 0) { m[k] = s; m[k + 1] = col[cb][0] * s; m[k + 2] = col[cb][1] * s; m[k + 3] = col[cb][2] * s; }
     if (c === W - 1 && (r & 1) === 1) yield;
   }
   for (const [dc, dr] of [[1, 0], [0, 1]]) {
@@ -6832,7 +6835,7 @@ function* groundSteps(cx, cz, ch) {
 // surface of the water tiles round it (so where a river steps down a level, the lower tile's upper half is a
 // rapid), and carries how deep the water is there (negative where the bank rises over it: the shoreline),
 // the way it flows, and whether it falls.
-const wPos = [], wDepth = [], wFlow = [], wFall = [];
+const wPos = [], wDepth = [], wFlow = [], wFall = [], wOpen = [];
 function waterPoint(x2, z2, out) {
   const ca = x2 & 1 ? x2 >> 1 : (x2 >> 1) - 1, cb = x2 >> 1, ra = z2 & 1 ? z2 >> 1 : (z2 >> 1) - 1, rb = z2 >> 1;
   let hi = -1, lo = 99, fx = 0, fz = 0, n = 0;
@@ -6846,12 +6849,13 @@ function waterPoint(x2, z2, out) {
   out[0] = hi * STEP - 0.16; out[1] = n ? fx / n / 127 : 0; out[2] = n ? fz / n / 127 : 0; out[3] = hi - lo;
 }
 function buildWater(c0, r0, grid, GW, ch) {
-  wPos.length = wDepth.length = wFlow.length = wFall.length = 0;
+  wPos.length = wDepth.length = wFlow.length = wFall.length = wOpen.length = 0;
   const pts = new Float32Array(GW * GW * 4), o = [0, 0, 0, 0];
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) { waterPoint(c0 * 2 + k, r0 * 2 + j, o); pts.set(o, (j * GW + k) * 4); }
   const vert = (j, k) => {
     const q = (j * GW + k) * 4, y = pts[q];
     wPos.push(c0 + k / 2, y, r0 + j / 2); wDepth.push(y - grid[j * GW + k]); wFlow.push(pts[q + 1], pts[q + 2]); wFall.push(pts[q + 3]);
+    wOpen.push(openAt(c0 + k / 2, r0 + j / 2));
   };
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
@@ -6868,6 +6872,7 @@ function buildWater(c0, r0, grid, GW, ch) {
   g.setAttribute('wDepth', new GFX.Float32BufferAttribute(wDepth, 1));
   g.setAttribute('wFlow', new GFX.Float32BufferAttribute(wFlow, 2));
   g.setAttribute('wFall', new GFX.Float32BufferAttribute(wFall, 1));
+  g.setAttribute('wOpen', new GFX.Float32BufferAttribute(wOpen, 1));
   ch.water = new GFX.Mesh(g, waterMulMat); ch.water.renderOrder = 2;
   ch.water2 = new GFX.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
   ch.water.layers.set(2); ch.water2.layers.set(2);   // drawn after the world, over a copy of it
@@ -8267,7 +8272,7 @@ const WATER_U = {
   foamAmt: { value: 1 }, shoreFoam: { value: 0.6 }, sunDir: { value: new GFX.Vector3(0, 1, 0) }, sunCol: { value: new GFX.Color() },
   skyCol: { value: new GFX.Color() }, viewDir: { value: new GFX.Vector3(0, -1, 0) }, waterCol: { value: new GFX.Vector3() },
   absorb: { value: new GFX.Vector3() }, lampPos: { value: new GFX.Vector3() }, lampCol: { value: new GFX.Color() }, lampRange: { value: 9 },
-  fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
+  fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 }, seaAmp: { value: 0.25 }, seaLen: { value: 1 },
   swellAmp: { value: 0.11 }, swellLen: { value: 1.5 }, rippleLen: { value: 1 }, swellShade: { value: 0 }, crests: { value: 1 }, sparkle: { value: 1 },
   caustics: { value: 1 }, shallows: { value: 1 }, shoreLine: { value: 1 }, shoreRipples: { value: 1 }, ripReach: { value: 1 },
   tCaus: { value: null }, causTile: { value: 11.25 }, tRefr: { value: null }, tRefrD: { value: null }, refr: { value: 0 }, refract: { value: 0.25 },
@@ -8292,18 +8297,29 @@ fn swell(p: vec2f) -> vec3f {
   let slope = 0.5 * k0 * cos(a0) * d0 + 0.3 * k1 * cos(a1) * d1 + 0.2 * k2 * cos(a2) * d2;
   return vec3f(0.5 * sin(a0) + 0.3 * sin(a1) + 0.2 * sin(a2), slope);
 }
+// (v499) the sea's two long swells (13 and 8.5 tiles a wave, times seaLen), out where it's open (wOpen): height
+// -1 .. 1 and its slope in xz
+fn seaSwell(p: vec2f) -> vec3f {
+  let TAU = 6.2832;
+  let d3 = vec2f(0.31, 0.95); let d4 = vec2f(0.92, -0.39);
+  let k3 = TAU / (13.0 * U.seaLen); let k4 = TAU / (8.5 * U.seaLen);
+  let a3 = dot(p, d3) * k3 + U.time * 0.55; let a4 = dot(p, d4) * k4 + U.time * 0.7 + 2.3;
+  return vec3f(0.6 * sin(a3) + 0.4 * sin(a4), 0.6 * k3 * cos(a3) * d3 + 0.4 * k4 * cos(a4) * d4);
+}
 @vertex fn vs(v: VIn) -> VOut {
   var w = O.model * vec4f(v.position, 1.0);
   // running water and falls don't swell
   let sw = swell(w.xz);
   let amp = U.swellAmp * (1.0 - clamp(length(v.wFlow) * 1.4, 0.0, 0.85)) * (1.0 - sat(v.wFall));
-  let h = amp * sw.x;
+  let ss = seaSwell(w.xz);
+  let seaA = U.seaAmp * v.wOpen;
+  let h = amp * sw.x + seaA * ss.x;
   w.y += h;
   var o: VOut;
   o.pos = F.viewProj * w;
   o.wpos = w.xyz;
   // smooth shaded: the swells' own normal, from their slope
-  o.swellN = normalize(vec3f(-sw.y * amp, 1.0, -sw.z * amp));
+  o.swellN = normalize(vec3f(-sw.y * amp - ss.y * seaA, 1.0, -sw.z * amp - ss.z * seaA));
   o.depth = v.wDepth + h; o.fall = v.wFall; o.flow = v.wFlow; o.swellH = sw.x;
   o.fogZ = viewDepth(w.xyz);
   return o;
@@ -8424,7 +8440,7 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   return vec4f(mix(vec3f(1.0), mul, f), 1.0);
 }`;
 const makeWaterMat = add => new GFX.ShaderMaterial({
-  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32' }, code: WATER_WGSL,
+  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32', wOpen: 'f32' }, code: WATER_WGSL,
   transparent: true, depthWrite: add, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
   blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
 });
@@ -9294,6 +9310,7 @@ function updateWater(dt) {
   for (const k of ['glow', 'crust', 'cracks', 'shoreCrust', 'bubbles']) LU[k].value = LAVA_FX[k];
   U.waveAmp.value = WATER.waves; U.flowSpeed.value = WATER.flow; U.glitter.value = WATER.glitter; U.rough.value = Math.max(0.004, WATER.roughness);
   U.foamAmt.value = WATER.foam; U.shoreFoam.value = WATER.shoreFoam;
+  U.seaAmp.value = SEA_SWELL.height / 2; U.seaLen.value = Math.max(0.2, SEA_SWELL.length);
   U.swellAmp.value = WATER.swell; U.swellLen.value = Math.max(0.2, WATER.swellSize); U.rippleLen.value = Math.max(0.2, WATER.rippleSize);
   for (const k of ['swellShade', 'crests', 'sparkle', 'caustics', 'shallows', 'shoreLine', 'shoreRipples']) U[k].value = WATER[k];
   U.refract.value = WATER.refraction;
@@ -10629,7 +10646,7 @@ function fountain(c, r) {
 // spilling over the bowl's rim in the falling-water shader the grotto falls use (streaks running down them), and
 // spray and mist where they land (fountainFalls: small falls for buildSpray)
 const FOUNT = { basinY: 0.36, basinD: 0.2, bowlY: 1.385, bowlD: 0.06, streams: 8, lip: 0.6, out: 0.22, width: 0.085, fall: 0.85, fallSpeed: 1.6, fallColor: '#d8f0ff' };
-const FOUNT_U = { swellAmp: { value: 0 }, shoreFoam: { value: 0 }, shoreLine: { value: 0 }, shoreRipples: { value: 0 } };   // (still, and no shore foam, line or ripples: in a pool this small they were all of it, v413)
+const FOUNT_U = { swellAmp: { value: 0 }, seaAmp: { value: 0 }, shoreFoam: { value: 0 }, shoreLine: { value: 0 }, shoreRipples: { value: 0 } };   // (still, and no shore foam, line or ripples: in a pool this small they were all of it, v413)
 const fountMats = [false, true].map(add => { const m = makeWaterMat(add); m.uniforms = Object.assign({}, m.uniforms, FOUNT_U); m.keepAlpha = true; return m; });
 const FOUNT_FALL_U = Object.assign({}, FALL_U, { amount: { value: FOUNT.fall }, speed: { value: FOUNT.fallSpeed }, color: { value: new GFX.Color(FOUNT.fallColor) }, glowK: { value: 0 }, glowCol: { value: new GFX.Color('#000000') } });
 const fountFallMat = makeFallMat(FOUNT_FALL_U);
@@ -10684,6 +10701,7 @@ function buildFountains() {
   g.setAttribute('wDepth', new GFX.Float32BufferAttribute(dep, 1));
   g.setAttribute('wFlow', new GFX.Float32BufferAttribute(flow, 2));
   g.setAttribute('wFall', new GFX.Float32BufferAttribute(fall, 1));
+  g.setAttribute('wOpen', new GFX.Float32BufferAttribute(new Float32Array(fall.length), 1));
   fountMats.forEach((mat, n) => { const m = new GFX.Mesh(g, mat); m.renderOrder = 2 + n; m.layers.set(2); m.matrixAutoUpdate = false; m.castShadow = false; scene.add(m); fountMeshes.push(m); });
   const fg = new GFX.BufferGeometry();
   fg.setAttribute('position', new GFX.Float32BufferAttribute(fpos, 3));
@@ -13481,9 +13499,71 @@ const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 
   helmP: 0.45, helmFront: -3.42, helmV: -3.47, rampV: -2.6, rampU: 0.42, wheelY: 0.85, wheelR: 0.26, wheelTurn: 0.9, wheelRate: 2.2, grip: 0.6,
   masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }], style: 1 };
 const boats = [];
+// (v499, Jordan) Seas and oceans (still water in bodies of SEA_AT tiles or more) swell up to SEA_SWELL.height (a half
+// tile, crest to trough) away from their coasts, easing down to the water's usual swell within `reach` tiles of any
+// land; the boats ride them. Two long waves crossing (tiles per wave: 13 and 8.5, times length), in the water's
+// shader and here (seaSwell) alike. OPEN: each tile's 0..1 (smooth over reach); SEA: still water that's sea.
+const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 1 };
+const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N);
+function computeOpenSea() {
+  const NN = N * N, q = new Int32Array(NN), seen = new Uint8Array(NN), d = new Uint16Array(NN).fill(65535);
+  SEA.fill(0); OPEN.fill(0);
+  const still = i => WT[i] === 2 && !LAVA[i] && (!LV[i] || BR[i]);
+  for (let s = 0; s < NN; s++) {
+    if (!still(s) || seen[s]) continue;
+    let n = 1; q[0] = s; seen[s] = 1;
+    for (let h = 0; h < n; h++) {
+      const i = q[h], c = i % N, r = (i - c) / N;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const cc = c + dc, rr = r + dr, j = rr * N + cc;
+        if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && still(j) && !seen[j]) { seen[j] = 1; q[n++] = j; }
+      }
+    }
+    if (n >= SEA_AT) for (let h = 0; h < n; h++) SEA[q[h]] = 1;
+  }
+  // how far each sea tile is from anything that isn't sea (land, a lake, a river, a dock), step by step outward
+  let n = 0;
+  for (let i = 0; i < NN; i++) if (!SEA[i] || BR[i]) { d[i] = 0; q[n++] = i; }
+  const R = Math.max(1, Math.ceil(SEA_SWELL.reach)) + 1;
+  for (let h = 0; h < n; h++) {
+    const i = q[h], c = i % N, r = (i - c) / N, di = d[i];
+    if (di >= R) continue;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const cc = c + dc, rr = r + dr, j = rr * N + cc;
+      if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && d[j] === 65535) { d[j] = di + 1; q[n++] = j; }
+    }
+  }
+  const reach = Math.max(0.5, SEA_SWELL.reach);
+  for (let i = 0; i < NN; i++) if (SEA[i]) OPEN[i] = smooth(0, reach, Math.min(d[i], R) - 0.5);
+}
+// OPEN at a point, between the tile middles
+function openAt(x, z) {
+  const u = x - 0.5, v = z - 0.5, c = Math.floor(u), r = Math.floor(v), fu = u - c, fv = v - r;
+  const at = (cc, rr) => cc < 0 || rr < 0 || cc >= N || rr >= N ? 0 : OPEN[T(cc, rr)];
+  return (at(c, r) * (1 - fu) + at(c + 1, r) * fu) * (1 - fv) + (at(c, r + 1) * (1 - fu) + at(c + 1, r + 1) * fu) * fv;
+}
+// the water's height off its rest at (x, z), as its shader swells it: the usual three short swells, and the sea's
+// two long ones out where it's open (the same sums as WATER_WGSL's swell and seaSwell)
+function waterSwell(x, z) {
+  const U = WATER_U, t = U.time.value, TAU = 6.2832, L = U.swellLen.value;
+  const k0 = TAU / (6 * L), k1 = TAU / (3.9 * L), k2 = TAU / (2.7 * L);
+  const h = 0.5 * Math.sin((x * 0.83 + z * 0.56) * k0 + t * 0.9) + 0.3 * Math.sin((-x * 0.45 + z * 0.89) * k1 + t * 1.15 + 1.7) + 0.2 * Math.sin((x * 0.98 - z * 0.2) * k2 + t * 1.4 + 4.1);
+  const op = openAt(x, z);
+  if (op <= 0) return U.swellAmp.value * h;
+  const SL = U.seaLen.value, k3 = TAU / (13 * SL), k4 = TAU / (8.5 * SL);
+  const sh = 0.6 * Math.sin((x * 0.31 + z * 0.95) * k3 + t * 0.55) + 0.4 * Math.sin((x * 0.92 - z * 0.39) * k4 + t * 0.7 + 2.3);
+  return U.swellAmp.value * h + U.seaAmp.value * op * sh;
+}
 // a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
 const boatYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.74, m.h * 0.32 - 0.3]];
 const boatMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
+// (v499) the brig's stern lanterns, lit while you're at its wheel: the glass glows (BOAT_LAMP.color, eased in and out
+// over fade seconds) and one warm light hangs between them (strength, range, falloff). T > Boats.
+const BOAT_LAMP = { color: '#ffc46a', light: 1.4, range: 6, decay: 2, fade: 0.5 };
+const boatGlowMat = new GFX.MeshBasicMaterial({ color: '#3a2a18' });
+const boatLight = addLight(new GFX.PointLight(BOAT_LAMP.color, 0, BOAT_LAMP.range, BOAT_LAMP.decay));
+boatLight.layers.enableAll(); boatLight.visible = false;
+const _glowOff = new GFX.Color('#5a4224'), _glowOn = new GFX.Color();
 // the deck's half width along the boat (to the bulwarks' inner face), and the bulwarks' height over the deck
 function boatHB(v) {
   const B = BOAT;
@@ -13675,6 +13755,20 @@ function boatShapesBrig() {
     }
     return 0;
   };
+  // (v499, Jordan) the decks' boards as the wood floor's: a quarter tile apart, 0.215 wide over a dark bed 0.02
+  // under them (so the seams outline as the floor's do), in the floor's two browns; boards along the boat, from v a
+  // to b, at heights ya to yb, between lo(v) and hi(v) across
+  const boards = (a, b, ya, yb, lo, hi) => {
+    quad([lo(a), ya - 0.02, a], [lo(b), yb - 0.02, b], [hi(b), yb - 0.02, b], [hi(a), ya - 0.02, a], CC('#3e2c1e'));
+    for (let q = -7; q < 7; q++) {
+      const l = q * 0.25 + 0.0175, r = (q + 1) * 0.25 - 0.0175;
+      const al = Math.max(lo(a), l), ar = Math.min(hi(a), r), bl = Math.max(lo(b), l), br = Math.min(hi(b), r);
+      if (ar - al < 1e-4 && br - bl < 1e-4) continue;
+      const w0 = Math.max(0, ar - al), w1 = Math.max(0, br - bl);
+      quad([al, ya, a], [bl, yb, b], [bl + w1, yb, b], [al + w0, ya, a],
+        shade(CC(q & 1 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(q, Math.floor(Math.min(a, b) - B.stern), 499) * 0.14));
+    }
+  };
   take('hull', () => {
     // Exact gangway stations make both 0.7 m rail openings explicit.
     const vs = Array.from({ length: 25 }, (_, k) => B.stern + (B.bow - B.stern) * k / 24);
@@ -13713,17 +13807,8 @@ function boatShapesBrig() {
             [s * (sidePoint(a, ga - 0.12) + 0.004), ga - 0.12, a], CC(C.gold));
         }
       }
-      // Fixed-width, parallel deck planks, clipped to the hull at each station.
-      quad([-boatHB(a), -0.012, a], [-boatHB(b), -0.012, b],
-        [boatHB(b), -0.012, b], [boatHB(a), -0.012, a], CC(C.dark));
-      for (let q = -7; q < 7; q++) {
-        const left = q * 0.2 + 0.007, right = (q + 1) * 0.2 - 0.007;
-        const clip = (x, v) => Math.max(-boatHB(v), Math.min(boatHB(v), x));
-        const al = clip(left, a), ar = clip(right, a), bl = clip(left, b), br = clip(right, b);
-        if (ar - al + br - bl < 1e-6) continue;
-        quad([al, 0, a], [bl, 0, b], [br, 0, b], [ar, 0, a],
-          shade(CC(q % 3 === 0 ? '#b48a58' : '#a77e50'), 0.96 + hs(q, Math.floor((a + 4.2) / 1.5), 496) * 0.07));
-      }
+      // the deck's boards, as the wood floor's (v499)
+      boards(a, b, 0, 0, v => -boatHB(v), v => boatHB(v));
     }
     // Close rail ends without putting a threshold across either gangway.
     for (const v of [B.gangV - 0.35, B.gangV + 0.35]) for (const s of [-1, 1]) {
@@ -13791,19 +13876,13 @@ function boatShapesBrig() {
     // ramp up to it either side of the wheel, and a rail round its stern and sides
     const P = B.helmP, F = B.helmFront, RV = B.rampV, RU = B.rampU;
     const hvs = [B.stern, (B.stern + F) / 2, F];
-    for (let k = 0; k + 1 < hvs.length; k++) {
-      const v0 = hvs[k], v1 = hvs[k + 1], hb0 = boatHB(v0), hb1 = boatHB(v1), K = 8;
-      for (let q = 0; q < K; q++) {
-        const f0 = -1 + 2 * q / K, f1 = -1 + 2 * (q + 1) / K, col = shade(CC(q % 2 ? '#b8905e' : '#ab8352'), 0.95 + hs(q, k, 497) * 0.1);
-        quad([f0 * hb0, P, v0], [f0 * hb1, P, v1], [f1 * hb1, P, v1], [f1 * hb0, P, v0], col);
-      }
-    }
+    for (let k = 0; k + 1 < hvs.length; k++) boards(hvs[k], hvs[k + 1], P, P, v => -boatHB(v), v => boatHB(v));
     quad([-RU, 0, F], [RU, 0, F], [RU, P, F], [-RU, P, F], CC('#6b4528'));
     part(G.box, '#8a5a34', 0, P - 0.015, F + 0.02, { sx: RU * 2, sy: 0.04, sz: 0.05 });
     for (const sg of [-1, 1]) {
       const hbF = boatHB(F), hbR = boatHB(RV);
-      // the ramp's top, cleated, and its inner side down to the deck
-      quad([sg * RU, P, F], [sg * hbF, P, F], [sg * hbR, 0, RV], [sg * RU, 0, RV], CC('#a87e4e'));
+      // the ramp's top, boarded as the deck (v499) and cleated, and its inner side down to the deck
+      boards(F, RV, P, 0, sg > 0 ? () => RU : v => -boatHB(v), sg > 0 ? v => boatHB(v) : () => -RU);
       for (let c = 1; c < 5; c++) { const t = c / 5, v = F + (RV - F) * t, y = P * (1 - t) + 0.02, hb = boatHB(v); seg(G.box, '#7a5432', [sg * (RU + 0.04), y, v], [sg * (hb - 0.04), y, v], 0.025); }
       tri([sg * RU, 0, RV], [sg * RU, P, F], [sg * RU, 0, F], CC('#5e3c22'));
       part(G.box, '#8a5a34', sg * RU, P / 2, F + 0.03, { sx: 0.06, sy: P, sz: 0.06 });
@@ -13827,6 +13906,11 @@ function boatShapesBrig() {
       part(G.cone4, C.iron, x, y + 0.18, z, { sx: 0.23, sy: 0.12, sz: 0.23, ry: Math.PI / 4 });
     }
     part(G.box, C.dark, 0.9, 0.25, 3.4, { sx: 0.5, sy: 0.12, sz: 0.14 });
+  });
+  // (v499, Jordan) the stern lanterns' glass, lit while you're at the wheel: drawn over the glass in its own glowing
+  // material (boatGlowMat)
+  take('glow', () => {
+    for (const s of [-1, 1]) part(G.box, '#ffffff', s * 0.86, boatGH(B.stern) + 0.25, B.stern - 0.025, { sx: 0.15, sy: 0.2, sz: 0.15 });
   });
   take('sail', () => {
     const nu = 10, nv = 8;
@@ -13934,6 +14018,7 @@ function placeBoat(k) {
   return null;
 }
 function buildBoats() {
+  computeOpenSea();
   for (const b of boats) if (b.g) scene.remove(b.g);
   boats.length = 0;
   for (const k of docks) {
@@ -13960,6 +14045,8 @@ function boatGroup(b) {
     b.chainM = mesh(S.chain); b.chainM.position.set(0.9, 0.2, 3.4); g.add(b.chainM);
     b.plankG = new GFX.Group(); b.plankM = mesh(S.plank); b.plankG.add(b.plankM); g.add(b.plankG);
     b.wheelM = mesh(S.wheel); b.wheelM.position.set(0, BOAT.wheelY, BOAT.wheelV - 0.1); g.add(b.wheelM);
+    b.glowM = S.glow ? new GFX.Mesh(S.glow, boatGlowMat) : null;
+    if (b.glowM) { b.glowM.visible = false; g.add(b.glowM); }
     b.g = g; scene.add(g);
   }
 }
@@ -13968,13 +14055,25 @@ function restyleBoats() {
   for (const b of boats) { if (b.g) scene.remove(b.g); boatGroup(b); poseBoat(b, 0); }
 }
 // the deck's height in the world, bobbing on the swell
-const boatDeckY = b => b.wl * STEP - 0.16 + BOAT.free + Math.sin(time * 1.3 + b.phase) * 0.04;
+// (v499: on the water's swell, the sea's long swells too, pitching and rolling with them; boatTilt sets b.pitch and
+// b.roll, the deck's slope along and across, from the water under the bow and stern and either side)
+const boatDeckY = b => b.wl * STEP - 0.16 + BOAT.free + (b.swell || 0);
+function boatTilt(b) {
+  const L = 3.2, W = 1.1, K = SEA_SWELL.pitch;
+  const at = (u, v) => { const [x, z] = boatWorld(b, u, v); return waterSwell(x, z); };
+  const fwd = at(0, L), aft = at(0, -L), port = at(W, 0), stbd = at(-W, 0);
+  b.swell = (fwd + aft + port + stbd) / 4;
+  b.pitch = -Math.atan2(fwd - aft, 2 * L) * K;
+  b.rollW = Math.atan2(port - stbd, 2 * W) * K;
+}
+// a point (u, v) of the deck's height over boatDeckY, tilted as the boat is
+const boatTiltY = (b, u, v) => u * Math.sin(b.rollW || 0) - v * Math.sin(b.pitch || 0);
 function poseBoat(b, dt) {
   const g = b.g, y = boatDeckY(b);
   g.visible = Math.hypot(b.x - H.x, b.z - H.z) < BOAT.see;
   if (!g.visible && H.boat !== b) return;
   g.position.set(b.x, y, b.z);
-  g.rotation.set(0, b.h, Math.sin(time * 0.9 + b.phase) * 0.012 + clamp(b.turnRate || 0, -0.5, 0.5) * 0.06);
+  g.rotation.set(b.pitch || 0, b.h, (b.rollW || 0) + clamp(b.turnRate || 0, -0.5, 0.5) * 0.06, 'YXZ');
   b.sails.forEach((s, j) => { const k = b.sail; s.visible = k > 0.02; s.scale.y = Math.max(0.02, k) * s.userData.h0; });
   b.furls.forEach(f => { const r = 0.06 + 0.14 * (1 - b.sail); f.scale.y = f.scale.z = r; });
   // the anchor: hung under the cathead when up, down out of sight under the water when dropped
@@ -14064,7 +14163,20 @@ function updateBoats(dt) {
       if (boatFits(nx, nz, b.h, b.wl)) { b.x = nx; b.z = nz; }
       else { if (b.speed > 1.5) sfx.thunk(); b.speed = 0; }
     }
+    if (H.boat === b || Math.hypot(b.x - H.x, b.z - H.z) < BOAT.see) boatTilt(b);
+    // (v499) the lanterns lit while you're at this boat's wheel
+    b.lamp = clamp((b.lamp || 0) + (mine ? dt : -dt) / Math.max(0.05, BOAT_LAMP.fade), 0, 1);
+    if (b.glowM) b.glowM.visible = b.lamp > 0.01;
     poseBoat(b, dt);
+  }
+  // the lantern light, on the lit boat (only one's lit: yours)
+  const lit = boats.find(q => q.lamp > 0.01 && q.glowM);
+  boatLight.visible = !!lit;
+  if (lit) {
+    const k = lit.lamp, [lx, lz] = boatWorld(lit, 0, BOAT.stern + 0.3);
+    boatLight.position.set(lx, boatDeckY(lit) + boatTiltY(lit, 0, BOAT.stern + 0.3) + 0.9, lz);
+    boatLight.color.set(BOAT_LAMP.color); boatLight.intensity = BOAT_LAMP.light * k; boatLight.distance = BOAT_LAMP.range; boatLight.decay = BOAT_LAMP.decay;
+    _glowOn.set(BOAT_LAMP.color); boatGlowMat.color.copy(_glowOff).lerp(_glowOn, k);
   }
   // riding: you stay where you stand on the deck as it moves
   const b = H.boat;
@@ -14077,7 +14189,7 @@ function updateBoats(dt) {
 function boatHeroY(b) {
   const y = boatDeckY(b), hb = boatHB(BOAT.gangV), s = H.bu * b.side;
   if (b.plank > 0.5 && Math.abs(H.bv - BOAT.gangV) < 0.4 && s > hb) return y + 0.03 + (b.endY - y) * clamp((s - hb) / b.len, 0, 1);
-  return y + 0.02 + boatFloor(H.bu, H.bv);
+  return y + 0.02 + boatFloor(H.bu, H.bv) + boatTiltY(b, H.bu, H.bv);
 }
 // a step on the deck (or the gangplank), kept inside the bulwarks and clear of the masts and the wheel; off the
 // gangplank's foot you step ashore
@@ -22842,6 +22954,13 @@ const TUNING = [
   ]],
   ['Boats', [
     [BOAT, 'style', 'Boat model: 0 first build, 1 Kinghaven merchant brig', 0, 1, 1, restyleBoats],
+    [SEA_SWELL, 'height', 'Sea swells: height out at sea (tiles, crest to trough)', 0, 2, 0.01],
+    [SEA_SWELL, 'reach', 'Sea swells: grow to full over this many tiles from the coast (on a new world)', 1, 20, 0.5],
+    [SEA_SWELL, 'length', 'Sea swells: length (× 13 and 8.5 tiles a wave)', 0.3, 4, 0.05],
+    [SEA_SWELL, 'pitch', 'How much the boats pitch and roll with the water', 0, 2, 0.05],
+    [BOAT_LAMP, 'light', 'Brig lanterns at the wheel: light strength', 0, 6, 0.05],
+    [BOAT_LAMP, 'range', 'Brig lanterns: light reach (tiles)', 1, 20, 0.5],
+    [BOAT_LAMP, 'color', 'Brig lanterns: colour', 'color'],
   ]],
   ['Hero light', [
     [HERO_LIGHT, 'night', 'Strength at night', 0, 6, 0.05],
@@ -23004,6 +23123,8 @@ const TUNING = [
     [GROUND_HAZE, 'graveColor', 'Graveyards: colour', 'color'],
     [GROUND_HAZE, 'wastes', 'Blasted Wastes: how much', 0, 2, 0.01],
     [GROUND_HAZE, 'wastesColor', 'Blasted Wastes: colour', 'color'],
+    [GROUND_HAZE, 'lake', 'Lakes and ponds: how much', 0, 2, 0.01],
+    [GROUND_HAZE, 'lakeColor', 'Lakes and ponds: colour', 'color'],
     [GROUND_HAZE, 'poolAway', 'Swamps and Wastes: share left away from water and lava', 0, 1, 0.01],
     [GROUND_HAZE, 'poolReach', 'Swamps and Wastes: thins over this many tiles off them', 0.5, 12, 0.5],
     [GROUND_HAZE, 'amount', 'Amount everywhere', 0, 3, 0.01],
@@ -24034,7 +24155,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 498, crashSeen = new Map();
+const GAME_VERSION = 499, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
