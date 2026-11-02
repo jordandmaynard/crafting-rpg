@@ -177,6 +177,22 @@ export const WILDS = {
     dye: { torso: ['black', 'crimson', 'plum'], head: ['black', 'crimson', 'plum'], trim: ['gold', 'bone'], stole: ['crimson', 'gold', 'bone'], mask: ['bone'] },
     x: { sigil: 1, stole: 1, chain: 0.6, mask: 1 }, maskKind: 'skull', prop: [['cultStaff', 1]], pre: 'Hierophant' }),
 };
+// (v12, Jordan) where each kind is met, for the game to read when it spawns them: biomes and points of interest,
+// the danger bands (1-10, distance from town), the time of day, and how many come together (a camp's chief brings
+// its bandits, a coven's hierophant its acolytes and zealots)
+export const WILD_WHERE = {
+  footpad: { biomes: ['meadow', 'forest'], pois: ['road near town'], bands: [1, 3], time: 'any', group: [1, 1] },
+  bandit: { biomes: ['forest', 'meadow'], pois: ['road', 'crossroads', 'bridge', 'bandit camp'], bands: [2, 6], time: 'any', group: [2, 4] },
+  banditChief: { biomes: ['forest', 'meadow'], pois: ['bandit camp'], bands: [4, 8], time: 'any', group: [1, 1], leads: ['bandit'] },
+  highwayman: { biomes: ['meadow', 'desert'], pois: ['long open road'], bands: [3, 7], time: 'dusk/night', group: [1, 1] },
+  deserter: { biomes: ['snow', 'forest'], pois: ['road', 'snow log cabin'], bands: [3, 6], time: 'any', group: [1, 3] },
+  poacher: { biomes: ['forest', 'deep forest'], pois: ['wolf and boar ground', 'fairy grotto'], bands: [2, 6], time: 'any', group: [1, 2] },
+  raider: { biomes: ['snow', 'coast'], pois: ['shoreline landing'], bands: [6, 10], time: 'any', group: [3, 5] },
+  graveRobber: { biomes: ['graveyard'], pois: ['mausoleum', 'graves'], bands: [2, 7], time: 'night', group: [1, 2] },
+  cultAcolyte: { biomes: ['swamp', 'desert', 'blasted wastes'], pois: ['great willow', 'sunken obelisk', 'coven'], bands: [3, 8], time: 'night', group: [2, 4] },
+  cultist: { biomes: ['swamp', 'desert', 'blasted wastes'], pois: ['great willow', 'sunken obelisk', 'coven'], bands: [4, 9], time: 'night', group: [1, 3] },
+  cultPriest: { biomes: ['swamp', 'desert', 'blasted wastes'], pois: ['great willow', 'sunken obelisk'], bands: [6, 10], time: 'night', group: [1, 1], leads: ['cultAcolyte', 'cultist'] },
+};
 const WILD_LIST = Object.keys(WILDS).map(k => [k, 1]);
 Object.assign(JOBS, WILDS);
 export const TIERS = { hamlet: 'Hamlet', medium: 'Medium town', large: 'Large town', road: 'On the road', wilds: 'In the wilds', cult: 'Cults' };
@@ -308,6 +324,8 @@ export function describe(d) {
     d.sigil && 'cult sigil', d.warpaint && 'war paint', d.head.glow && 'glowing eyes', d.belt && (d.belt.sash ? 'sash' : d.belt.cord ? 'cord belt' : 'belt')].filter(Boolean);
   if (extra.length) rows.push(['Extras', extra.join(', ')]);
   if (d.prop !== 'none') rows.push(['Holding', nice(d.prop)]);
+  const W = WILD_WHERE[d.job];
+  if (W) rows.push(['Found', `${W.biomes.join(', ')}; ${W.pois.join(', ')}; bands ${W.bands[0]}-${W.bands[1]}; ${W.time === 'any' ? 'day or night' : W.time}; ${W.group[0] === W.group[1] ? W.group[0] : W.group.join('-')} at a time${W.leads ? ', leading ' + W.leads.map(k => JOBS[k].title.toLowerCase() + 's').join(' and ') : ''}`]);
   return rows;
 }
 
@@ -688,28 +706,21 @@ export function makeFolkKit(GFX) {
       box(head, 0.04, 0.032, 0.03, 0, 0.08, -0.1, shade(MC, -0.2));
       for (const s of [1, -1]) taper(head, -0.005, 0.068, [0.006, 0.008, s * 0.03, -0.11], [0.028, 0.01, s * 0.008, -0.107], shade(MC, -0.12));
     } else if (d.mask) {
-      // (v11, Jordan: a white plague doctor's mask) a pale face plate narrowing to the chin, round stitched-rimmed eye
-      // holes under brows slanting down to the nose, a seam stitched up the forehead, and a long beak from between the
-      // eyes, curving down past the chin, beaded along its ridge. Eyes glow in the holes when the hood's do.
-      const M = d.mask.color, HOLE = '#120c0e', RIM = shade(M, -0.12), BEAD = shade(M, -0.18);
-      box(head, 0.2, 0.08, 0.016, 0, 0.135, 0.1, M);
-      taper(head, 0.03, 0.095, [0.12, 0.016, 0, 0.1], [0.2, 0.016, 0, 0.1], M);
+      // (v12, Jordan: an animal skull, kept simple) a stag's skull worn over the face: one long tapered face from a wide
+      // brow down to a narrow muzzle below the chin, leaning out at the bottom; two dark sockets high at the sides, two
+      // nostril slits at the muzzle, and antlers out through the hood, each a beam with two tines
+      const M = d.mask.color, HOLE = '#120c0e', ANTLER = shade(M, -0.2);
+      taper(head, -0.075, 0.175, [0.05, 0.03, 0, 0.13], [0.2, 0.026, 0, 0.1], M);
       for (const s of [1, -1]) {
-        box(head, 0.064, 0.064, 0.006, s * 0.05, 0.12, 0.109, RIM);
-        box(head, 0.064, 0.064, 0.006, s * 0.05, 0.12, 0.109, RIM, 0, Math.PI / 4);
-        box(head, 0.044, 0.044, 0.006, s * 0.05, 0.12, 0.1115, HOLE);
-        box(head, 0.044, 0.044, 0.006, s * 0.05, 0.12, 0.1115, HOLE, 0, Math.PI / 4);
-        if (d.head.glow) box(head, 0.016, 0.012, 0.004, s * 0.05, 0.117, 0.116, d.head.glow);
-        box(head, 0.075, 0.014, 0.006, s * 0.046, 0.164, 0.1125, M, 0, s * 0.38);
-      }
-      box(head, 0.005, 0.034, 0.004, 0, 0.162, 0.109, BEAD);
-      for (const y of [0.15, 0.162, 0.174]) box(head, 0.018, 0.004, 0.004, 0, y, 0.1095, BEAD);
-      // the beak: a taper on a pivot tipped forward and down (its local +y runs out along the beak, -z up its ridge)
-      const beak = pivot(head, 0, 0.085, 0.104); beak.rotation.x = Math.PI / 2 + 0.5;
-      taper(beak, 0, 0.21, [0.078, 0.07, 0, 0], [0.01, 0.01, 0, 0.018], M);
-      for (const u of [0.04, 0.08, 0.12, 0.16]) {
-        const k = u / 0.21, dz = (0.07 + (0.01 - 0.07) * k) / 2 - 0.018 * k;
-        box(beak, 0.012, 0.012, 0.01, 0, u, -dz, BEAD);
+        box(head, 0.044, 0.03, 0.008, s * 0.062, 0.125, 0.1196, HOLE, 0, s * 0.35);
+        if (d.head.glow) box(head, 0.014, 0.01, 0.004, s * 0.062, 0.123, 0.1256, d.head.glow);
+        box(head, 0.008, 0.04, 0.006, s * 0.011, -0.035, 0.142, HOLE, 0, -s * 0.12);
+        const a = pivot(head, s * 0.07, 0.205, 0.035); a.rotation.z = -s * 0.75;
+        taper(a, 0, 0.22, [0.032, 0.032], [0.012, 0.012, 0, -0.03], ANTLER);
+        const t1 = pivot(a, 0, 0.08, -0.008); t1.rotation.z = s * 0.95;
+        taper(t1, 0, 0.1, [0.02, 0.02], [0.008, 0.008], ANTLER);
+        const t2 = pivot(a, 0, 0.15, -0.018); t2.rotation.z = s * 0.7;
+        taper(t2, 0, 0.08, [0.016, 0.016], [0.006, 0.006], ANTLER);
       }
     }
     // hair, then whatever's on the head over it
