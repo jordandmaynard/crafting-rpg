@@ -299,6 +299,8 @@ export class HeightProbes {
     const ccx = Math.floor(f.target[0] / GI_CHUNK), ccz = Math.floor(f.target[1] / GI_CHUNK), h = Math.floor(GI_WIN / 2);
     this.hfOrigin = [(ccx - h) * GI_BLOCK, (ccz - h) * GI_BLOCK];
     const q = this.device.queue, reach = Math.ceil(f.reach) + 1;
+    // (calm: frames since a block last changed, so the game can tell when the light round the camera has settled)
+    const dirty0 = this.dirty.length;
     for (let cz = ccz - h; cz <= ccz + h; cz++) for (let cx = ccx - h; cx <= ccx + h; cx++) {
       const sx = ((cx % GI_WIN) + GI_WIN) % GI_WIN, sz = ((cz % GI_WIN) + GI_WIN) % GI_WIN, slot = sz * GI_WIN + sx;
       const data = f.chunk(cx, cz) || this.empty, had = this.blocks.get(slot);
@@ -310,6 +312,7 @@ export class HeightProbes {
       q.writeTexture({ texture: this.bcol, origin: at }, data.b, { bytesPerRow: GI_BLOCK * 4 }, size);
       this.dirty.push([cx * GI_CHUNK - reach, cz * GI_CHUNK - reach, (cx + 1) * GI_CHUNK + reach, (cz + 1) * GI_CHUNK + reach]);
     }
+    this.calm = this.dirty.length > dirty0 ? 0 : (this.calm || 0) + 1;
     if (!mode) { this.dirty.length = 0; return; }
     // the grid: grown (never shrunk) to reach the widest view
     const want = Math.min(120, 2 * Math.ceil(f.radius) + 2);
@@ -318,6 +321,7 @@ export class HeightProbes {
     const key = [mode, Math.round(f.rays), f.reach, f.leaves, Math.round(f.bounceRays)].join();
     if (key !== this.cfgKey) { this.cfgKey = key; this.gen++; }
     const L = GI_LAYERS.length, slices = Math.max(1, Math.ceil(this.N * this.N * L / Math.max(100, f.perFrame)));
+    this.slices = slices;
     this.frame++;
     const d = new ArrayBuffer(PARAM_BYTES), I = new Int32Array(d), F = new Float32Array(d);
     I.set([this.grid[0], this.grid[1], this.N, L], 0);

@@ -25,6 +25,7 @@ html, body { height: 100%; }
 [hidden] { display: none !important; }
 body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); background: var(--void); color: var(--bone); font-family: var(--body); font-size: 20px; overflow: hidden; -webkit-user-select: none; user-select: none; }
 #stage { position: fixed; inset: 0; overflow: hidden; }
+#veil { position: absolute; inset: 0; background: #000; pointer-events: none; }
 #stage canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; cursor: crosshair; }
 .nogpu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; white-space: pre-line; color: #e8dcc8; font: 15px/1.6 sans-serif; }
 #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
@@ -6605,14 +6606,22 @@ function updateGI() {
   const lights = [heroLight, ...lampLights].filter(l => l.intensity > 0).map(l => ({
     pos: [l.position.x, l.position.y, l.position.z], color: [l.color.r * l.intensity, l.color.g * l.intensity, l.color.b * l.intensity], distance: l.distance, decay: l.decay }));
   const sd = giRay.copy(sun.position).sub(sun.target.position).normalize();
-  giUntil = performance.now() + GI_BUDGET; giStepped = false;
+  // (v540: more time while the veil is down, so the world's ready sooner)
+  giUntil = performance.now() + (veilBusy() ? VEIL.budget : GI_BUDGET); giStepped = false; giPending = 0;
   gi.update(Object.assign({}, GI, {
     mode: GI.on, target: [camTarget.x, camTarget.z], radius, view: v, top: MAXL * STEP + 30,
     sun: { dir: [sd.x, sd.y, sd.z], color: [sun.color.r * sun.intensity, sun.color.g * sun.intensity, sun.color.b * sun.intensity], shadow: sun.castShadow ? CLOUD_U.shadowAmt.value : 0 },
     sky: [hemi.color.r * hemi.intensity, hemi.color.g * hemi.intensity, hemi.color.b * hemi.intensity],
     ground: [hemi.groundColor.r * hemi.intensity, hemi.groundColor.g * hemi.intensity, hemi.groundColor.b * hemi.intensity],
-    points: lights, chunk: chunkGI,
+    points: lights, chunk: chunkGIWatch,
   }));
+}
+// (v540) chunkGI, counting the chunks whose block is still to be worked out (giPending), for the veil
+let giPending = 0;
+function chunkGIWatch(cx, cz) {
+  const g = chunkGI(cx, cz);
+  if (cx >= 0 && cz >= 0 && cx < NC && cz < NC) { const ch = chunks.get(cz * NC + cx); if (ch && (!ch.gi || ch.giStale)) giPending++; }
+  return g;
 }
 // the shadow map's casters: the world's (layer 0) and the ground's (5)
 const shadowLayers = new GFX.Layers(); shadowLayers.enable(5);
@@ -12008,7 +12017,9 @@ function wallPieceRaw(c, r, w, type, cut) {
         part(G.box, shade(CC('#8a8694'), 0.8 + kk * 0.3), p[0], p[1], p[2], { sx: a1 - a0 - 0.03, sy: rh - 0.03, sz: 0.32, ry });
       }
     }
-    if (!cut) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC('#7e7a88'), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
+    // (v539: none on a wall inside a building, rooms on both sides, which would poke up through a flat stone roof)
+    const sk = PCUT / (2 * SNN) * SNN, inner = roomOf.has(sk + i) && roomOf.has(sk + j);
+    if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC('#7e7a88'), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
     return;
   }
   if (cut) {
@@ -12858,6 +12869,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
   const base = top * STEP + k * WALL_H + WALL_H - 0.02;
+  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H - 0.14);
   // Chebyshev distance from a point to the nearest outside tile: 45° hips everywhere
   const f = (x, z) => {
     let m = 1e9;
@@ -12905,6 +12917,41 @@ function roofMesh(rm, o = {}) {   // rm: a building
   }
   if (o.extra) o.extra(base);
   const m = bufTmp.mesh(slate ? slateMat : roofMat);
+  OUT = save;
+  return m;
+}
+// (v539, Jordan) a building walled only in stone (stone walls and windows; doors don't count either way) gets a flat
+// roof of flagstones in place of the hipped one, laid just under the walls' tops (1.88) so their crenels stand round
+// it as a parapet
+function stoneBuilding(rm) {
+  const k = rm.k || 0, set = rm.set;
+  let stone = 0;
+  for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
+    if (set.has(T(c + DC[d], r + DR[d]))) continue;
+    const v = roomWall(c, r, d, k);
+    if (!v || isDoorVal(v)) continue;
+    if (v === 4 || v === 14) stone++; else return false;
+  }
+  return stone > 0;
+}
+// (fy: the flagstones' top. Tiles under a floor or a stair are left out, as the hipped roof does)
+function flatStoneRoof(rm, open, fy) {
+  const save = OUT; OUT = bufTmp; bufTmp.n = 0;
+  const y0 = fy - 0.06;
+  for (const [c, r] of open) {
+    part(G.box, '#3e3a44', c + 0.5, y0 + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+    for (let j = 0; j < 2; j++) {
+      const off = (r * 2 + j) % 2 ? 0.25 : 0;
+      for (let q = -1; q < 2; q++) {
+        const x0 = Math.max(0, q * 0.5 + off), x1 = Math.min(1, (q + 1) * 0.5 + off);
+        if (x1 - x0 < 0.05) continue;
+        const col = shade(CC('#86828e'), 0.82 + hs(c, r, 90 + j * 3 + q) * 0.26);
+        part(G.box, col, c + (x0 + x1) / 2, y0 + 0.035, r + 0.25 + j * 0.5, { sx: x1 - x0 - 0.04, sy: 0.05, sz: 0.46 });
+      }
+    }
+  }
+  rm.roofY = () => fy;
+  const m = bufTmp.mesh(roofMat);
   OUT = save;
   return m;
 }
@@ -22942,16 +22989,54 @@ function pickTravel(t) {
   b.textContent = t ? 'Fast travel to ' + titleCase(t.name) : 'Click a town to travel';
   drawBigMap();
 }
+// (v540, Jordan) the world fades to black, you travel while it's dark, and it fades back in once the place is ready
 function fastTravel() {
   const t = travelTo;
-  if (!t || !H.alive) return;
+  if (!t || !H.alive || veilBusy()) return;
   if (mapOpen) toggleMap();
-  [H.x, H.z] = [t.c + 0.5, t.r + 2.5]; H.story = 0; H.stair = null; H.y = surfaceY(H.x, H.z);
-  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
-  H.invuln = 2;
-  camTarget.set(H.x, H.y, H.z);
-  miniT = 0;
-  toast('You travel to ' + titleCase(t.name) + '.', 'calm');
+  veilTo(() => {
+    [H.x, H.z] = [t.c + 0.5, t.r + 2.5]; H.story = 0; H.stair = null; H.y = surfaceY(H.x, H.z);
+    H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
+    H.invuln = 2;
+    camTarget.set(H.x, H.y, H.z);
+    miniT = 0;
+    toast('You travel to ' + titleCase(t.name) + '.', 'calm');
+  });
+}
+// ---------- The veil (v540, Jordan) ----------
+// Black over the world while it isn't ready to be seen: at first load, and on fast travel (it fades out, you travel,
+// it holds while the chunks round you are built and their GI worked out, then fades back in), so the light and
+// shadows never pop in where you can see them. The game stands still under it (no update); the HUD stays over it.
+// (out/in: fade times, s; wait: the longest it holds, s; settle: frames in a row the world must be ready;
+// budget: ms a frame for chunk streaming and GI while it's down, against 6 and GI_BUDGET)
+const VEIL = { out: 0.25, in: 0.5, wait: 4, settle: 3, budget: 24 };
+const veil = { a: 1, phase: 'wait', t: 0, calm: 0, then: null, shown: -1 };
+const veilEl = document.createElement('div'); veilEl.id = 'veil'; stage.appendChild(veilEl);
+let streamBusy = 1;
+function veilBusy() { return veil.phase === 'out' || veil.phase === 'wait'; }
+function veilTo(then) {
+  if (veilBusy()) return false;
+  veil.phase = 'out'; veil.t = 0; veil.then = then;
+  return true;
+}
+// the world round the camera all there: no chunk still streaming in or being built, no GI block under way, and
+// the probes left alone long enough since the last block changed for every one of them to have had its turn
+function worldSettled() { return !streamBusy && !giPending && (gi.calm || 0) > Math.min(40, gi.slices || 1) + 2; }
+function updateVeil(real) {
+  const dt = Math.min(real, 0.1);
+  if (veil.phase === 'out') {
+    veil.a = Math.min(1, veil.a + dt / VEIL.out);
+    if (veil.a >= 1) { const f = veil.then; veil.then = null; veil.phase = 'wait'; veil.t = 0; veil.calm = 0; if (f) f(); }
+  } else if (veil.phase === 'wait') {
+    veil.t += dt;
+    veil.calm = worldSettled() ? veil.calm + 1 : 0;
+    if (veil.calm >= VEIL.settle || veil.t > VEIL.wait) veil.phase = 'in';
+  } else if (veil.phase === 'in') {
+    veil.a = Math.max(0, veil.a - dt / VEIL.in);
+    if (!veil.a) veil.phase = 'idle';
+  }
+  const a = Math.round(veil.a * 1000) / 1000;
+  if (a !== veil.shown) { veil.shown = a; veilEl.style.opacity = String(a); veilEl.hidden = !a; }
 }
 $('travelBtn').onclick = fastTravel;
 // the map's NAMES buttons: biome regions, waters (lakes, seas, rivers), roads and towns, each on or off (kept)
@@ -24674,7 +24759,7 @@ function frameBody(now) {
   }
   pollPad(dt);
   prof.lap('input');
-  if (started && !mapOpen && !optsOpen && !spikes.holding) update(dt);
+  if (started && !mapOpen && !optsOpen && !spikes.holding && !veilBusy()) update(dt);
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
   prof.lap('game update (hero, foes, effects)');
   updateCamera(dt);
@@ -24699,7 +24784,7 @@ function frameBody(now) {
   runBuildQueue(dt);
   ventSmoke(dt);
   prof.lap('clouds, water, hearths, smoke');
-  streamChunks(6);
+  streamBusy = streamChunks(veilBusy() ? VEIL.budget : 6);
   prof.lap('chunk streaming');
   drawMini(dt);
   prof.lap('minimap');
@@ -24714,6 +24799,7 @@ function frameBody(now) {
   prof.lapSplit('render (encode)', 'waiting for screen image', renderer.info.texWait);
   renderer.endFrame();
   prof.lap('submit');
+  updateVeil(real);
   CROWD_READ.foes = foes.length; CROWD_READ.draws = renderer.info.draws; CROWD_READ.fps = fps;
   // (how many draws the frame made, and how many meshes the scene holds, counted twice a second: one that climbs
   // while you stand still is a leak)
@@ -24726,7 +24812,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 538, crashSeen = new Map();
+const GAME_VERSION = 540, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
