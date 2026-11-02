@@ -17549,7 +17549,7 @@ cv.addEventListener('contextmenu', e => e.preventDefault());
 // held arrives as a move, not a pointerdown (attacking while turning the camera)
 function syncButtons(e) {
   const was = mouse.mask, m = mouse.mask = e.buttons, on = m & ~was, off = was & ~m;
-  if (on & 1) { mouse.down = true; if (mode === 'build') pressBuild(); }
+  if (on & 1) { if (e.pointerType === 'mouse' && clickActs()) useAction(); else { mouse.down = true; if (mode === 'build') pressBuild(); } }
   if (on & 2) { mouse.right = true; mouse.turned = false; mouse.downX = mouse.lastX = e.clientX; }
   if (on & 4) { mouse.mid = true; mouse.lastX = e.clientX; }
   if (off & 1) { mouse.down = false; if (drag || moving) releaseBuild(); }
@@ -19243,6 +19243,40 @@ function actionHere() {
   const score = o => { const l = dist(o); return (l < 0.25 ? 0 : Math.abs(angDiff(Math.atan2(o.x - H.x, o.z - H.z), H.face))) + l * 0.4; };
   return opts.reduce((a, b) => score(b) < score(a) ? b : a);
 }
+// (v561, Jordan) is the mouse over the thing F would use? Each kind's upright box in the world (middle x, z, from y0 up to
+// y1, hw either side), projected: the cursor within its screen width (at least 12 px either side) and between its foot
+// and top (6 px slack). Loot is any of the drops F would pick up. Never with a pad or touch (no mouse there).
+function actBoxes(a) {
+  const fl = (c, r) => LV[T(c, r)] * STEP;
+  if (a.kind === 'loot') return a.drops.map(d => { const y = surfaceY(d.x, d.z); return [d.x, d.z, y, y + 0.5, 0.4]; });
+  if (a.kind === 'bones') { const y = LV[a.pile.i] * STEP; return [[a.pile.x, a.pile.z, y, y + 0.5, 0.55]]; }
+  if (a.kind === 'table') { const y = fl(a.table.c, a.table.r); return [[a.table.x, a.table.z, y, y + 1.1, 0.9]]; }
+  if (a.kind === 'station') { const y = fl(a.st.c, a.st.r), [x, z] = stMid(a.st); return [[x, z, y, y + 1.3, 0.8]]; }
+  if (a.kind === 'folk') return [[a.p.x, a.p.z, a.p.y, a.p.y + 1.05 * a.p.rig.g.scale.y + 0.1, 0.4]];
+  if (a.kind === 'sit') return [[a.seat.c + 0.5, a.seat.r + 0.5, H.y, H.y + 0.9, 0.5]];
+  if (a.kind === 'helm') return [[a.x, a.z, H.y, H.y + 1.6, 0.5]];
+  if (a.kind === 'door') {
+    const d = a.door, mx = d.w ? d.c : d.c + 0.5, mz = d.w ? d.r + 0.5 : d.r;
+    const y = Math.max(LV[T(d.c, d.r)], LV[d.w ? T(d.c - 1, d.r) : T(d.c, d.r - 1)]) * STEP + d.k * WALL_H;
+    return [[mx, mz, y, y + (d.gate ? FENCE_H : WALL_H), 0.55]];
+  }
+  return [];
+}
+function mouseOverAct(a) {
+  if (PAD.on || TOUCH.on || mapOpen) return false;
+  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  for (const [x, z, y0, y1, hw] of actBoxes(a)) {
+    v3.set(x, y0, z).project(camera); if (v3.z > 1 || v3.z < -1) continue;
+    const bx = sx(v3.x), by = sy(v3.y);
+    v3.set(x, y1, z).project(camera); const ty = sy(v3.y);
+    v3.set(x + hw, y0, z).project(camera); let w = Math.hypot(sx(v3.x) - bx, sy(v3.y) - by);
+    v3.set(x, y0, z + hw).project(camera); w = Math.max(12, w, Math.hypot(sx(v3.x) - bx, sy(v3.y) - by));
+    if (Math.abs(mouse.x - bx) <= w && mouse.y >= Math.min(ty, by) - 6 && mouse.y <= Math.max(ty, by) + 6) return true;
+  }
+  return false;
+}
+// (v561) a left click while the cursor's the hand or the speech bubble does what F does, and doesn't attack
+const clickActs = () => mode === 'play' && (cursorKind === 'hand' || cursorKind === 'talk');
 function useAction() {
   const a = actionHere();
   if (!a) return;
@@ -22048,7 +22082,7 @@ function update(dt) {
   const pr = $('prompt');
   // (v521, Jordan) at the wheel, DROP ANCHOR shows only once the boat has stopped (F drops it any time)
   const underway = act && act.kind === 'helm' && H.helm && H.boat && Math.abs(H.boat.speed || 0) > 0.05;
-  cursorAct = act && !underway ? act.kind : '';
+  cursorAct = act && !underway && mouseOverAct(act) ? act.kind : '';
   if (act && !underway) {
     const key = PAD.on ? padGlyph('A') : TOUCH.on ? '<b>TAP</b>' : '<b>F</b>';
     if (act.kind === 'loot') {
@@ -25201,7 +25235,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 560, crashSeen = new Map();
+const GAME_VERSION = 561, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
