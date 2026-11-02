@@ -34,6 +34,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .fbar b, #target .meter b { position: absolute; top: 0; bottom: 0; left: 0; width: 0; }
 #target { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 14px); transform: translateX(-50%); width: clamp(160px, calc(100vw - 440px), var(--hb-bigW, 420px)); text-align: center; pointer-events: none; opacity: var(--hb-op, 1); }
 #target .tname { font-family: var(--display); font-size: var(--hb-name, 11px); color: var(--bone); text-shadow: 2px 2px 0 #000; margin-bottom: 6px; }
+#target .tjob { font-family: var(--display); font-size: calc(var(--hb-name, 11px) * 0.8); color: var(--dim, #a69ab3); text-shadow: 2px 2px 0 #000; margin-top: -2px; }
 #target .meter { position: relative; height: var(--hb-bigH, 12px); background: var(--hb-back, #1a0e10); border: 2px solid #000; box-shadow: 3px 3px 0 #000; }
 #target .meter i { box-shadow: inset 0 -3px 0 var(--hb-fillDark, #a8781a); }
 /* a monster's level, in a ring to the left of its bar */
@@ -739,7 +740,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
   <div class="bc-xp" id="bcXp"><div class="bc-clip" id="bcXpFill"><img src="ui/belt/xp-fill.webp" alt="" draggable="false"></div><img class="bc-notch" src="ui/belt/xp-notches.webp" alt="" draggable="false"></div>
   <span class="bc-lv">Lv</span><span class="bc-lvv" id="bcLvl">1</span>
 </div>
-<div id="target" hidden><div class="tname"></div><div class="meter"><b></b><span class="lvl"></span><i></i></div></div>
+<div id="target" hidden><div class="tname"></div><div class="tjob" hidden></div><div class="meter"><b></b><span class="lvl"></span><i></i></div></div>
 <div id="toast" hidden></div>
 <button id="showUI" title="Show the HUD again (H)">SHOW UI</button>
 <div id="padCursor" hidden></div>
@@ -888,6 +889,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 
 <script type="module">
 import * as GFX from './src/gfx/index.js';
+import { makeFolkKit, jobTitle } from './src/folk/townsfolk.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
@@ -5784,6 +5786,7 @@ function renderWorld() {
   // (the ground casts too unless SHADOWS.ground is off: phones, where its ~350k triangles were half the shadow map)
   if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
   drawCrowds();
+  drawFolk();
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
   const on = depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
@@ -16814,6 +16817,30 @@ function pickFoe() {
   }
   return best;
 }
+// the townsperson under the mouse (or along your aim with a pad), as pickFoe finds a monster
+function pickFolk() {
+  if (!started || mapOpen || !H.alive || mode !== 'play' || !folkTowns.size) return null;
+  let best = null, bd = 1e9;
+  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  for (const t of folkTowns) {
+    if (!t.batches) continue;
+    for (const p of t.folk) {
+      if (Math.abs(p.x - H.x) > 40 || Math.abs(p.z - H.z) > 40) continue;
+      if (PAD.on) {
+        const dx = p.x - H.x, dz = p.z - H.z, along = dx * aim.x + dz * aim.z, off = Math.abs(dx * aim.z - dz * aim.x);
+        if (along > 0 && along <= 10 && off <= 0.5 + FOLK.rad + along * 0.12 && along < bd) { bd = along; best = p; }
+        continue;
+      }
+      v3.set(p.x, p.y, p.z).project(camera); const fx = sx(v3.x), fy = sy(v3.y);
+      v3.set(p.x, p.y + 0.95 * p.rig.g.scale.y, p.z).project(camera); const hy = sy(v3.y);
+      const w = Math.max(22, (fy - hy) * 0.45), dx = Math.abs(mouse.x - fx);
+      if (dx > w / 2 || mouse.y < hy - 6 || mouse.y > fy + 6) continue;
+      const d = dx + Math.abs(mouse.y - (fy + hy) / 2) * 0.5;
+      if (d < bd) { bd = d; best = p; }
+    }
+  }
+  return best;
+}
 // the fill, the health just lost behind it and the hit flash, for a bar's two parts
 function drawBar(fill, lost, f) {
   const hp = clamp(f.hp / f.maxHp, 0, 1), shown = Math.max(hp, f.shownHp ?? hp), h = f.barHeat || 0;
@@ -16855,7 +16882,15 @@ function updateFoeBars(dt) {
     drawBar(f.barEl.lastChild, f.barEl.firstChild, f);
     f.barEl.hidden = false;
   }
-  const el = $('target');
+  const el = $('target'), job = el.querySelector('.tjob'), meter = el.querySelector('.meter');
+  // (v448) a townsperson pointed at (no monster): their name and job, no health
+  const folk = hov ? null : pickFolk();
+  if (folk) {
+    el.querySelector('.tname').textContent = folk.d.name.full; job.textContent = jobTitle(folk.d);
+    job.hidden = false; meter.hidden = true; el.hidden = false; targetFoe = null;
+    return;
+  }
+  job.hidden = true; meter.hidden = false;
   if (!targetFoe || (targetFoe !== hov && targetT <= 0) || !foes.includes(targetFoe)) { el.hidden = true; return; }
   el.querySelector('.tname').textContent = targetFoe.def.name;
   el.querySelector('.lvl').textContent = targetFoe.level;
@@ -18299,6 +18334,425 @@ function spawnTick(dt) {
   }
 }
 
+// ---------- Townsfolk (v447) ----------
+// Every town has its own people, the same ones each time you come (each a seed for src/folk/townsfolk.js's design):
+// 1-2 to a house in a hamlet, 2 in a medium town, 2-3 in a large one, half of them kept (FOLK.share, v448), the tannery's tanner, the smithy's smith
+// and the cathedral's clergy among them. Nothing about them runs while you're far off; a town wakes when you come
+// within FOLK.wake tiles of its edge (its people built a few a frame, each put at one of the town's places), and
+// sleeps again, letting them go, when you've gone well past that. Awake, they stroll the streets between places
+// (house fronts, the fountain, lamps, flower boxes, street corners) along routes found once over the town's tiles
+// and kept (streets cheaper than yards, so they keep to them), stand about there a while, talk when someone's
+// beside them, keep apart from one another, and step aside out of your way (you never bump into them).
+// Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
+// the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
+// with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1.25, stepRef: 0.75, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70 };
+const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
+const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
+const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
+const FOLK_ONE = ['elder', 'bishop', 'captain', 'crier', 'banker', 'merchant', 'masterSmith', 'lamplighter', 'busker'];   // (one to a town)
+const FOLK_BONES = 768;                                    // (joints a batch: 48 KB of matrices, under the 64 KB a uniform block holds)
+const folkKit = makeFolkKit(GFX);
+const folkTowns = new Set();                               // towns awake
+const folkBatches = [];
+const folkMats = [];                                       // (a batch's material, kept for the next batch: each has its own matrices)
+const FOLK_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+fn boneOf(b: f32) -> mat4x4f {
+  let k = u32(b + 0.5) * 4u;
+  return mat4x4f(U.bones[k], U.bones[k + 1u], U.bones[k + 2u], U.bones[k + 3u]);
+}
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (boneOf(v.bone) * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N = flatNormal(i.eye);
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`;
+const FOLK_SHADOW_WGSL = /* wgsl */ `
+@vertex fn vs(v: VIn) -> @builtin(position) vec4f {
+  let k = u32(v.bone + 0.5) * 4u;
+  let m = mat4x4f(U.bones[k], U.bones[k + 1u], U.bones[k + 2u], U.bones[k + 3u]);
+  return F.viewProj * (m * vec4f(v.position, 1.0));
+}`;
+function folkMat() {
+  return folkMats.pop() || new GFX.ShaderMaterial({ uniforms: { bones: { value: new Float32Array(FOLK_BONES * 16) } }, vertexColors: true, attributes: { bone: 'f32' }, lit: true,
+    code: FOLK_WGSL, shadowCode: FOLK_SHADOW_WGSL });
+}
+// every person's blob shadow, in one draw
+const folkShadows = new GFX.InstancedMesh(shadowGeo, shadowMat, 64);
+scene.add(folkShadows);
+
+// a whole-number seed from a few numbers (the world's seed among them)
+function folkSeed(...k) {
+  let h = (SEED ^ 0x9e3779b9) >>> 0;
+  for (const v of k) { h = Math.imul(h ^ (v >>> 0), 0x85ebca6b); h = (h ^ (h >>> 13)) >>> 0; h = Math.imul(h, 0xc2b2ae35); h = (h ^ (h >>> 16)) >>> 0; }
+  return h || 1;
+}
+// a house's door: the tile in front of it, outside
+function doorFront(h) {
+  if (!h.door || !h.inside) return -1;
+  const [ec, er, ew] = h.door, a = T(ec, er), b = ew ? T(ec - 1, er) : T(ec, er - 1), inside = T(h.inside[0], h.inside[1]);
+  return a === inside ? b : a;
+}
+// can townsfolk stand on tile i of town t?
+function folkOpen(t, i) {
+  const c = i % N, r = Math.floor(i / N);
+  if (TN[i] !== t.n + 1 || !LV[i] || WT[i] || LAVA[i] || stairAt.has(i)) return false;
+  const o = OBJ[OB[i]];
+  if (o.tile || o.solid >= 0.1) return false;
+  return !(t.fount && Math.abs(c - t.c) <= 1 && Math.abs(r - t.r) <= 1);
+}
+const folkStreet = i => !!(TSTREET[i] || PATH[i]);
+// The town's people (made the first time it wakes; the same every time, from the world's seed): each house's, its
+// job fitting the town's size (the tannery's a tanner, the smithy's a smith, the cathedral's clergy), with a seed
+// whose design gives that job.
+function folkPeople(t) {
+  if (t.folk && t.folkShare === FOLK.share) return t.folk;
+  if (t.n == null) t.n = towns.indexOf(t);
+  const tiers = FOLK_TIERS[t.tier] || FOLK_TIERS[0], [lo, hi] = FOLK_PER_HOUSE[t.tier] || FOLK_PER_HOUSE[0], used = new Set(), out = [];
+  const smith = ['smith', 'armorer', 'masterSmith'][t.tier] || 'smith';
+  t.houses.forEach((h, hi0) => {
+    if (doorFront(h) < 0) return;
+    const n = lo + Math.floor(folkSeed(t.n, hi0, 7) / 4294967296 * (hi - lo + 1));
+    for (let k = 0; k < n; k++) {
+      const want = h.tannery && !k ? ['tanner'] : h.smithy && !k ? [smith] : h.cathedral ? (k ? ['priest', 'choir'] : ['bishop', 'priest']) : null;
+      let d = null;
+      for (let a = 0; a < 800; a++) {
+        const e = folkKit.design(folkSeed(t.n, hi0, k, a));
+        if (want ? !want.includes(e.job) : !tiers.includes(e.tier)) continue;
+        if (FOLK_ONE.includes(e.job) && used.has(e.job)) continue;
+        d = e; break;
+      }
+      if (!d) d = folkKit.design(folkSeed(t.n, hi0, k, 999));
+      // (v449, Jordan) anyone known as "of" a place is of this town
+      if (d.name.last.startsWith('of ')) { const of = 'of ' + titleCase(t.name); d.name.full = d.name.full.slice(0, -d.name.last.length) + of; d.name.last = of; }
+      used.add(d.job);
+      out.push({ must: !!want, keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
+        moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
+    }
+  });
+  // (v448, Jordan: half as many) FOLK.share of them kept: the tanner, smith and clergy always, the rest by lot
+  const n = Math.max(1, Math.round(out.length * FOLK.share));
+  const kept = new Set(out.filter(p => p.must).slice(0, n));
+  for (const p of out.filter(p => !p.must).sort((a, b) => a.keep - b.keep)) { if (kept.size >= n) break; kept.add(p); }
+  t.folkShare = FOLK.share;
+  return t.folk = out.filter(p => kept.has(p));
+}
+// The places townsfolk go to (tiles): every house's front, round the fountain, beside the lamps and flower boxes,
+// and some street tiles, the corners and crossings first.
+function folkPlaces(t) {
+  if (t.places) return t.places;
+  if (t.n == null) t.n = towns.indexOf(t);
+  const own = t.n + 1, R = t.R, set = new Set(), P = [];
+  t.fount = OB[T(t.c, t.r)] === O.FOUNTAIN;
+  const add = (i, kind) => { if (i >= 0 && !set.has(i) && folkOpen(t, i)) { set.add(i); P.push({ i, kind }); } };
+  t.houses.forEach((h, k) => { const i = doorFront(h); if (i >= 0) { add(i, 'door'); h.front = i; } });
+  if (t.fount) for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) if (Math.max(Math.abs(dc), Math.abs(dr)) === 2 && (dc === 0 || dr === 0 || Math.abs(dc) === Math.abs(dr))) add(T(t.c + dc, t.r + dr), 'fountain');
+  const beside = (c, r, kind) => { for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (folkStreet(j)) { add(j, kind); return; } } };
+  for (const i of t.lampAt || []) beside(i % N, Math.floor(i / N), 'lamp');
+  for (let r = t.r - R; r <= t.r + R; r++) for (let c = t.c - R; c <= t.c + R; c++) {
+    const i = T(c, r);
+    if (TN[i] !== own) continue;
+    if (OB[i] === O.PLANTER || OB[i] === O.WELL) beside(c, r, 'planter');
+    else if (folkStreet(i)) {
+      let ways = 0; for (let d = 0; d < 4; d++) if (folkStreet(T(c + DC[d], r + DR[d]))) ways++;
+      if (ways >= 3 || hs(c, r, 451) < 0.06) add(i, 'street');
+    }
+  }
+  return t.places = P;
+}
+// A route over the town's tiles from tile a to b: A* eight ways (a diagonal only where both ways round its corner are
+// open), street tiles cheaper than yards. Kept for next time (the town never changes: nothing's built in town).
+function folkRoute(t, a, b) {
+  if (!t.routes) t.routes = new Map();
+  const key = a + '>' + b;
+  if (t.routes.has(key)) return t.routes.get(key);
+  const R = t.R + 2, W = R * 2 + 1, ox = t.c - R, oz = t.r - R, own = t.n + 1;
+  const loc = i => { const c = i % N - ox, r = Math.floor(i / N) - oz; return c < 0 || r < 0 || c >= W || r >= W ? -1 : r * W + c; };
+  const g = new Float32Array(W * W).fill(Infinity), from = new Int32Array(W * W).fill(-1), shut = new Uint8Array(W * W), heap = [];
+  const gc = b % N, gr = Math.floor(b / N);
+  const est = (c, r) => { const ax = Math.abs(c - gc), az = Math.abs(r - gr); return Math.max(ax, az) + 0.414 * Math.min(ax, az); };
+  const push = (k, f) => { const h = heap; let i = h.length; h.push([f, k]); while (i > 0) { const p = (i - 1) >> 1; if (h[p][0] <= h[i][0]) break; [h[p], h[i]] = [h[i], h[p]]; i = p; } };
+  const pop = () => { const h = heap, top = h[0], last = h.pop(); if (h.length) { h[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, rr = l + 1; let m = i; if (l < h.length && h[l][0] < h[m][0]) m = l; if (rr < h.length && h[rr][0] < h[m][0]) m = rr; if (m === i) break; [h[m], h[i]] = [h[i], h[m]]; i = m; } } return top; };
+  const s = loc(a), goal = loc(b);
+  let out = null;
+  if (s >= 0 && goal >= 0) {
+    g[s] = 0; push(s, est(a % N, Math.floor(a / N)));
+    const open = (c, r, d) => groundStep(c, r, d, true) && folkOpen(t, T(c + DC[d], r + DR[d]));
+    while (heap.length) {
+      const [, k] = pop();
+      if (shut[k]) continue;
+      shut[k] = 1;
+      if (k === goal) { out = []; for (let q = k; q !== s; q = from[q]) out.push(T(q % W + ox, Math.floor(q / W) + oz)); out.reverse(); break; }
+      const c = k % W + ox, r = Math.floor(k / W) + oz, op = [0, 1, 2, 3].map(d => open(c, r, d));
+      const step = (nc, nr, len) => {
+        const q = loc(T(nc, nr)); if (q < 0 || shut[q]) return;
+        const cost = g[k] + len * (folkStreet(T(nc, nr)) ? 1 : 1.8);
+        if (cost < g[q]) { g[q] = cost; from[q] = k; push(q, cost + est(nc, nr)); }
+      };
+      for (let d = 0; d < 4; d++) if (op[d]) step(c + DC[d], r + DR[d], 1);
+      for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+        const dH = dx > 0 ? 1 : 3, dV = dz > 0 ? 2 : 0;
+        if (op[dH] && op[dV] && open(c + dx, r, dV) && open(c, r + dz, dH)) step(c + dx, r + dz, 1.414);
+      }
+    }
+  }
+  t.routes.set(key, out);
+  return out;
+}
+
+// ----- building and drawing them -----
+// one person's build, baked: every part laid where it sits on the joint it hangs from, in its own colour, and the
+// parts taken off the rig (what's left is bare joints for the pose to turn)
+function bakeFolk(p) {
+  const f = folkKit.build(p.d), g = f.g;
+  g.updateMatrixWorld();
+  const bones = [], idxOf = new Map(), parts = [], inv = new GFX.Matrix4();
+  g.traverse(o => {
+    if (!o.isMesh || o === f.shadow) return;
+    let b = idxOf.get(o.parent);
+    if (b === undefined) { b = bones.length; bones.push(o.parent); idxOf.set(o.parent, b); }
+    parts.push([o, b, new GFX.Matrix4().multiplyMatrices(inv.copy(o.parent.matrixWorld).invert(), o.matrixWorld)]);
+  });
+  let nv = 0, ni = 0;
+  for (const [o] of parts) { const pa = o.geometry.attributes.position; nv += pa.count; ni += o.geometry.index ? o.geometry.index.count : pa.count; }
+  const pos = new Float32Array(nv * 3), col = new Float32Array(nv * 3), bone = new Float32Array(nv), idx = new Uint32Array(ni), v = new GFX.Vector3();
+  let ov = 0, oi = 0;
+  for (const [o, b, m] of parts) {
+    const a = o.geometry.attributes.position.array, n = a.length / 3, ix = o.geometry.index && o.geometry.index.array, cc = o.material.color;
+    for (let k = 0; k < n; k++) {
+      v.set(a[k * 3], a[k * 3 + 1], a[k * 3 + 2]).applyMatrix4(m);
+      const q = (ov + k) * 3;
+      pos[q] = v.x; pos[q + 1] = v.y; pos[q + 2] = v.z; col[q] = cc.r; col[q + 1] = cc.g; col[q + 2] = cc.b; bone[ov + k] = b;
+    }
+    if (ix) for (let k = 0; k < ix.length; k++) idx[oi++] = ix[k] + ov;
+    else for (let k = 0; k < n; k++) idx[oi++] = k + ov;
+    ov += n;
+  }
+  for (const [o] of parts) o.parent.remove(o);
+  if (f.shadow && f.shadow.parent) f.shadow.parent.remove(f.shadow);
+  // (each joint's chain up to the rig, for whether it's shown: the broom and crate come and go with the pose)
+  p.rig = f; p.bones = bones; p.chains = bones.map(o => { const c = []; for (let q = o; q && q !== g; q = q.parent) c.push(q); return c; });
+  p.mesh = { pos, col, bone, idx };
+}
+// the town's batches: its people's baked meshes laid end to end, as many to a batch as its joints allow
+function batchTown(t) {
+  const list = [];
+  let cur = null;
+  for (const p of t.folk) {
+    const nb = p.bones.length;
+    if (!cur || cur.nb + nb > FOLK_BONES) { cur = { people: [], nb: 0, nv: 0, ni: 0 }; list.push(cur); }
+    p.base = cur.nb; cur.nb += nb; cur.nv += p.mesh.pos.length / 3; cur.ni += p.mesh.idx.length; cur.people.push(p);
+  }
+  t.batches = list.map(B => {
+    const pos = new Float32Array(B.nv * 3), col = new Float32Array(B.nv * 3), bone = new Float32Array(B.nv), idx = new Uint32Array(B.ni);
+    let ov = 0, oi = 0;
+    for (const p of B.people) {
+      const M = p.mesh, n = M.bone.length;
+      pos.set(M.pos, ov * 3); col.set(M.col, ov * 3);
+      for (let k = 0; k < n; k++) bone[ov + k] = M.bone[k] + p.base;
+      for (let k = 0; k < M.idx.length; k++) idx[oi + k] = M.idx[k] + ov;
+      ov += n; oi += M.idx.length;
+    }
+    const geo = new GFX.BufferGeometry();
+    geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new GFX.BufferAttribute(col, 3));
+    geo.setAttribute('bone', new GFX.BufferAttribute(bone, 1));
+    geo.setIndex(new GFX.BufferAttribute(idx, 1));
+    const mat = folkMat(), mesh = new GFX.Mesh(geo, mat);
+    mesh.frustumCulled = false; mesh.castShadow = mesh.receiveShadow = true; mesh.matrixAutoUpdate = false;
+    scene.add(mesh);
+    const b = { mesh, mat, people: B.people, t };
+    for (const p of B.people) p.batch = b;
+    folkBatches.push(b);
+    return b;
+  });
+}
+function freeTown(t) {
+  for (const b of t.batches || []) {
+    scene.remove(b.mesh); b.mesh.geometry.dispose(); folkMats.push(b.mat);
+    folkBatches.splice(folkBatches.indexOf(b), 1);
+  }
+  t.batches = null; t.building = 0;
+  for (const p of t.folk || []) { p.rig = p.bones = p.chains = p.mesh = p.batch = null; }
+  folkTowns.delete(t);
+}
+
+// ----- waking and sleeping -----
+function wakeTown(t) {
+  folkPlaces(t); folkPeople(t);
+  t.building = 0; t.batches = null;
+  folkTowns.add(t);
+  // everyone where they'd be: standing at one of the town's places, a while into their stay
+  const P = t.places.length ? t.places : null;
+  for (const p of t.folk) {
+    const home = t.houses[p.home].front;
+    const i = !P || Math.random() < 0.3 ? home : P[Math.floor(Math.random() * P.length)].i;
+    p.at = i; p.goal = -1; p.route = null; p.state = 'stay'; p.stayT = Math.random() * FOLK.stayMax;
+    p.x = i % N + 0.2 + Math.random() * 0.6; p.z = Math.floor(i / N) + 0.2 + Math.random() * 0.6; p.y = surfaceY(p.x, p.z);
+    p.face = Math.random() * 6.28; p.anim = 'idle'; p.stuckT = 0;
+  }
+}
+// towns wake when you come near and sleep when you've gone; the waking ones' people are built a few ms a frame
+function folkTowns_tick() {
+  for (const t of towns) {
+    if (!t.houses || !t.houses.length) continue;
+    const d = Math.max(Math.abs(H.x - t.c), Math.abs(H.z - t.r)) - t.R;
+    const awake = folkTowns.has(t);
+    if (!awake && FOLK.on > 0.5 && d < FOLK.wake) wakeTown(t);
+    else if (awake && (d > FOLK.wake + 12 || FOLK.on <= 0.5)) freeTown(t);
+  }
+  const t0 = performance.now();
+  for (const t of folkTowns) {
+    if (t.batches) continue;
+    while (t.building < t.folk.length && performance.now() - t0 < 2.5) bakeFolk(t.folk[t.building++]);
+    if (t.building >= t.folk.length) batchTown(t);
+    else break;
+  }
+}
+
+// ----- what they do -----
+function folkNext(p) {
+  const t = p.t, P = t.places, home = t.houses[p.home].front;
+  let goal = home;
+  const u = Math.random();
+  if (u > 0.25 && P.length) {
+    // (a sweeper keeps to the streets; the busker, the crier and the flower seller to the fountain if there is one)
+    const busk = ['busker', 'crier', 'flowerSeller'].includes(p.d.job) && t.fount, sweep = p.d.job === 'sweeper';
+    const pool = busk && Math.random() < 0.7 ? P.filter(q => q.kind === 'fountain') : sweep ? P.filter(q => q.kind === 'street' || q.kind === 'planter') : P;
+    goal = (pool.length ? pool : P)[Math.floor(Math.random() * (pool.length || P.length))].i;
+  }
+  const here = T(Math.floor(p.x), Math.floor(p.z));
+  if (goal === here) { p.state = 'stay'; p.stayT = FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin); return; }
+  const route = folkRoute(t, here, goal);
+  if (!route || !route.length) { p.state = 'stay'; p.stayT = 2 + Math.random() * 3; return; }
+  p.state = 'walk'; p.route = route; p.ri = 0; p.goal = goal; p.stuckT = 0;
+  p.carry = p.d.job === 'carter' ? Math.random() < 0.7 : p.d.prop === 'none' && Math.random() < 0.08;
+  p.gx = goal % N + 0.25 + Math.random() * 0.5; p.gz = Math.floor(goal / N) + 0.25 + Math.random() * 0.5;
+}
+const folkCells = new Map();
+let heroLastX = 0, heroLastZ = 0;
+function updateFolk(dt) {
+  folkTowns_tick();
+  const hvx = (H.x - heroLastX) / Math.max(dt, 1e-3), hvz = (H.z - heroLastZ) / Math.max(dt, 1e-3);
+  heroLastX = H.x; heroLastZ = H.z;
+  const heroMoving = Math.hypot(hvx, hvz) > 0.5;
+  let people = 0;
+  for (const t of folkTowns) {
+    if (!t.batches) continue;
+    for (const p of t.folk) {
+      people++;
+      p.animT += dt;
+      let vx = 0, vz = 0, want = 0;
+      if (p.state === 'walk') {
+        const fc = Math.floor(p.x), fr = Math.floor(p.z), R = p.route;
+        // past tiles on the route dropped, then the farthest of the next few that's in a straight line
+        for (let j = Math.min(R.length, p.ri + 4) - 1; j >= p.ri; j--) if (R[j] === T(fc, fr)) { p.ri = j + 1; break; }
+        let tx = p.gx, tz = p.gz;
+        if (p.ri < R.length) {
+          tx = R[p.ri] % N + 0.5; tz = Math.floor(R[p.ri] / N) + 0.5;
+          for (let j = Math.min(R.length, p.ri + 4) - 1; j > p.ri; j--) {
+            const cx = j === R.length - 1 ? p.gx : R[j] % N + 0.5, cz = j === R.length - 1 ? p.gz : Math.floor(R[j] / N) + 0.5;
+            if (walkLine(p.x, p.z, cx, cz)) { tx = cx; tz = cz; break; }
+          }
+        }
+        const ex = tx - p.x, ez = tz - p.z, el = Math.hypot(ex, ez);
+        if (p.ri >= R.length && el < 0.15) {
+          p.state = 'stay'; p.at = p.goal; p.route = null;
+          p.stayT = FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin);
+        } else {
+          const sp = FOLK.speed * (p.carry ? 0.85 : 1);
+          vx = ex / (el || 1) * sp; vz = ez / (el || 1) * sp; want = sp * dt;
+          p.face += angDiff(Math.atan2(ex, ez), p.face) * (1 - Math.exp(-dt * 7));
+        }
+      } else {
+        p.stayT -= dt;
+        if (p.stayT <= 0) folkNext(p);
+      }
+      // out of your way: off to the side you're not heading (straight away if you're standing still)
+      const hx = p.x - H.x, hz = p.z - H.z, hd = Math.hypot(hx, hz);
+      if (H.alive && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
+        let ax = hx / (hd || 1), az = hz / (hd || 1);
+        if (heroMoving) {
+          const l = Math.hypot(hvx, hvz), mx = hvx / l, mz = hvz / l, side = (-mz * hx + mx * hz) >= 0 ? 1 : -1;
+          ax = -mz * side * 0.8 + ax * 0.6; az = mx * side * 0.8 + az * 0.6; const al = Math.hypot(ax, az) || 1; ax /= al; az /= al;
+        }
+        const k = FOLK.asideSpeed * (1 - hd / FOLK.aside);
+        vx += ax * k; vz += az * k;
+        if (p.state === 'stay') p.face += angDiff(Math.atan2(-hx, -hz), p.face) * (1 - Math.exp(-dt * 4));
+      }
+      const got = moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
+      // stuck (someone in the way round a corner, say): after a while, off somewhere else
+      if (p.state === 'walk') { if (want > 0 && got < want * 0.3) { p.stuckT += dt; if (p.stuckT > 2.5) folkNext(p); } else p.stuckT = 0; }
+      p.y = surfaceY(p.x, p.z);
+      p.moving = p.state === 'walk' || Math.hypot(vx, vz) > 0.4;
+      if (p.moving) p.walkT += dt * Math.max(0.5, Math.hypot(vx, vz)) / FOLK.stepRef;
+    }
+  }
+  // keeping apart from one another (by tile, as the foes do)
+  folkCells.clear();
+  const all = [];
+  for (const t of folkTowns) if (t.batches) for (const p of t.folk) { p.sepI = all.length; all.push(p); const k = Math.floor(p.x) * 8192 + Math.floor(p.z); let l = folkCells.get(k); if (!l) folkCells.set(k, l = []); l.push(p); }
+  for (const A of all) {
+    const c0 = Math.floor(A.x), r0 = Math.floor(A.z);
+    for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
+      const l = folkCells.get((c0 + dc) * 8192 + r0 + dr);
+      if (l) for (const B of l) {
+        if (B.sepI <= A.sepI) continue;
+        const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = FOLK.rad * 2 + 0.08;
+        if (d < m && d > 1e-4) { const push = (m - d) / 2; moveEntity(A, -dx / d * push, -dz / d * push, FOLK.rad, true); moveEntity(B, dx / d * push, dz / d * push, FOLK.rad, true); }
+        // two standing side by side talk to each other
+        if (d < FOLK.talkR && A.state === 'stay' && B.state === 'stay') { A.talkTo = B; B.talkTo = A; }
+      }
+    }
+  }
+  // what each is doing, for the pose
+  for (const p of all) {
+    const near = p.talkTo && p.talkTo.state === 'stay' && Math.hypot(p.talkTo.x - p.x, p.talkTo.z - p.z) < FOLK.talkR ? p.talkTo : null;
+    p.talkTo = null;
+    const hd = Math.hypot(H.x - p.x, H.z - p.z);
+    if (hd > FOLK.waveR + 1) p.waved = 0;
+    if (p.state === 'walk') p.anim = p.carry ? 'carry' : 'walk';
+    else if (p.moving) p.anim = 'walk';
+    else if (p.d.job === 'sweeper' && p.at >= 0 && folkStreet(p.at)) p.anim = 'sweep';
+    else if (hd < FOLK.waveR && p.waved === 0 && H.alive) { p.waved = Math.random() < FOLK.wave ? 1 : 2; if (p.waved === 1) p.waveT = p.animT; p.anim = p.waved === 1 ? 'wave' : 'idle'; }
+    else if (p.waved === 1 && p.animT - p.waveT < FOLK.waveTime) p.anim = 'wave';
+    else if (near) { p.anim = 'talk'; if (!p.moving) p.face += angDiff(Math.atan2(near.x - p.x, near.z - p.z), p.face) * (1 - Math.exp(-dt * 3)); }
+    else p.anim = p.d.job === 'crier' ? 'talk' : 'idle';
+    if (p.waved === 1 && p.anim === 'wave') p.face += angDiff(Math.atan2(H.x - p.x, H.z - p.z), p.face) * (1 - Math.exp(-dt * 4));
+  }
+  FOLK_READ.towns = folkTowns.size; FOLK_READ.people = people;
+}
+// before each frame is drawn: every person posed and their joints into their batch's matrices, and their shadows
+const ZERO16 = new Float32Array(16);
+function drawFolk() {
+  let shown = 0;
+  const cx = camTarget.x, cz = camTarget.z;
+  for (const b of folkBatches) {
+    const M = b.mat.uniforms.bones.value;
+    for (const p of b.people) {
+      const f = p.rig, far = Math.max(Math.abs(p.x - cx), Math.abs(p.z - cz)) > FOLK.show;
+      if (far) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); continue; }
+      f.g.position.set(p.x, p.y, p.z); f.g.rotation.set(0, p.face, 0);
+      folkKit.pose(f, p.anim, p.anim === 'walk' || p.anim === 'carry' ? p.walkT : p.animT);
+      f.g.updateMatrixWorld();
+      p.bones.forEach((o, j) => {
+        const vis = p.chains[j].every(q => q.visible);
+        M.set(vis ? o.matrixWorld.elements : ZERO16, (p.base + j) * 16);
+      });
+      folkShadows.reserve(shown + 1);
+      const sm = folkShadows.instanceMatrix, q = shown * 16;
+      sm.fill(0, q, q + 16); sm[q] = sm[q + 5] = sm[q + 10] = sm[q + 15] = 1; sm[q + 12] = p.x; sm[q + 13] = p.y + 0.02; sm[q + 14] = p.z;
+      shown++;
+    }
+  }
+  folkShadows.count = shown; folkShadows.needsUpdate = true;
+  FOLK_READ.shown = shown; FOLK_READ.draws = folkBatches.length;
+}
+
 // ---------- Update ----------
 // a leg's swing over the walk cycle, -1 .. 1 (v411, Jordan felt the walk speed change at each end of the cycle):
 // with WALK.plant 1 the half where the foot is down sweeps back at an even pace, as the body goes on at an even pace,
@@ -18467,6 +18921,9 @@ function update(dt) {
   updateAimDecal();
   separateFoes();
   if (H.alive) spawnTick(dt);
+
+  spikes.exit(); spikes.enter('update: townsfolk');
+  updateFolk(dt);
 
   spikes.exit(); spikes.enter('update: props, doors, effects');
   // ----- props, doors, effects -----
@@ -20451,6 +20908,26 @@ const TUNING = [
     [GFX.SPIKE_TUNING, 'pause', 'Stop the game on a spike (1), or carry on (0)', 0, 1, 1],
     [GFX.SPIKE_TUNING, 'minMs', 'Calls under this many ms (all together) left out of a spike', 0, 2, 0.01],
   ]],
+  ['Townsfolk', [
+    [FOLK, 'on', 'Townsfolk (0 off, 1 on)', 0, 1, 1],
+    [FOLK, 'share', 'Share of the townsfolk kept (1: 1-2 a house in hamlets, 2 in medium towns, 2-3 in large; a town takes a new value when it next wakes)', 0.1, 1, 0.05],
+    [FOLK, 'speed', 'Walking speed (tiles a second)', 0.3, 4, 0.05],
+    [FOLK, 'stepRef', 'Walk: speed the steps are made for (lower: quicker steps)', 0.2, 3, 0.05],
+    [FOLK, 'stayMin', 'Least time standing at a place (s)', 0, 60, 1],
+    [FOLK, 'stayMax', 'Most time standing at a place (s)', 1, 120, 1],
+    [FOLK, 'talkR', 'Talk to anyone standing within (tiles)', 0, 4, 0.1],
+    [FOLK, 'aside', 'Step aside when you come within (tiles)', 0, 3, 0.05],
+    [FOLK, 'asideSpeed', 'How quickly they step aside', 0, 8, 0.1],
+    [FOLK, 'wave', 'Share who wave as you pass (standing ones; each decides once as you come near)', 0, 1, 0.05],
+    [FOLK, 'waveR', 'Wave when you come within (tiles)', 0, 10, 0.25],
+    [FOLK, 'waveTime', 'How long they wave (s)', 0, 15, 0.5],
+    [FOLK, 'wake', 'A town wakes when you come within this many tiles of its edge', 10, 120, 1],
+    [FOLK, 'show', 'Shown within this many tiles of the view', 10, 200, 5],
+    [FOLK_READ, 'towns', 'Towns awake', 'readout', 0, 1],
+    [FOLK_READ, 'people', 'Townsfolk about', 'readout', 0, 1],
+    [FOLK_READ, 'shown', 'Townsfolk shown', 'readout', 0, 1],
+    [FOLK_READ, 'draws', 'Draw calls for them', 'readout', 0, 1],
+  ]],
   ['Crowd test', [
     [CROWD, 'extra', 'Extra foes kept round you, over the usual 10 by day and 18 by night', 0, 1000, 10],
     [CROWD_READ, 'foes', 'Foes about', 'readout', 0, 1],
@@ -21470,7 +21947,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 447, crashSeen = new Map();
+const GAME_VERSION = 450, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -21506,6 +21983,11 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
+  // (tests) townsfolk: towns awake, people, places and routes; folkTown(n) wakes town n's people at once
+  folk: () => ({ ...FOLK_READ, batches: folkBatches.map(b => ({ people: b.people.length, verts: b.mesh.geometry.attributes.position.count, bones: b.people.reduce((s, p) => s + p.bones.length, 0) })),
+    awake: [...folkTowns].map(t => ({ name: t.name, tier: t.tier, people: t.folk.length, places: t.places.length, routes: t.routes ? t.routes.size : 0, built: t.building, jobs: t.folk.map(p => p.d.job) })) }),
+  folkTown: n => { const t = towns[n]; if (!folkTowns.has(t)) wakeTown(t); if (!t.batches) { while (t.building < t.folk.length) bakeFolk(t.folk[t.building++]); batchTown(t); } return { people: t.folk.length, places: t.places.length, kinds: t.places.reduce((o, q) => (o[q.kind] = (o[q.kind] || 0) + 1, o), {}) }; },
+  folkPlan: () => towns.map((t, n) => { const P = folkPeople(t), Q = folkPlaces(t), a = Q[0], b = Q[Q.length - 1]; return { n, tier: t.tier, houses: t.houses.length, people: P.length, places: Q.length, route: a && b ? (folkRoute(t, a.i, b.i) || []).length : -1, jobs: P.map(p => p.d.job).join(' ') }; }),
   // (tests) the stories: pick the one to build on, read what's up there and where the hero stands
   story: k => { if (k != null) setStory(k); return buildStory; },
   stories: (near = [H.x, H.z]) => {
