@@ -4478,6 +4478,7 @@ function finishTowns() {
   buildFountains();
   buildHalos();
   buildBoats();
+  buildDockProxies();
   for (const t of towns) {
     for (const hse of t.houses) {
       makeDoor(...hse.door); makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
@@ -5632,6 +5633,89 @@ if (MOBILE) outlineRT.colorFormat = 'rgba8unorm';
 // the heat shimmer's offsets, in mosaic pixels, for the outline pass to read the whole picture shifted by (see HEAT)
 const heatRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
 outlineRT.depthTexture.type = GFX.UnsignedIntType;
+// (v525, Jordan) mirrored proxy reflections: the docks and boats drawn again from a camera mirrored under the water
+// (layer 9: the boats, and a copy of every dock's deck that only this pass sees) into proxyRT, the water's plane
+// cutting away whatever lies below it (an oblique near plane). The water reads that picture for them, bent by its
+// ripples, in place of the screen-space reflections, which skip any ray that meets a dock or boat (maskRT: their
+// depth from the real camera, to tell where the screen shows them). See SSR.proxy.
+const proxyRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
+const maskRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
+maskRT.depthTexture = new GFX.DepthTexture(1, 1); maskRT.depthTexture.type = GFX.UnsignedIntType;
+maskRT.colorFormat = 'rgba8unorm';
+if (MOBILE) proxyRT.colorFormat = 'rgba8unorm';
+const reflCam = new GFX.PerspectiveCamera(VIEW.fov, 1, 1, 400);
+// the camera's projection cut by the plane y = h (kept above it) in place of its near plane: Lengyel's oblique near
+// plane, in the GL convention the cameras use (the renderer turns the depth to 0..1 after)
+function obliqueClip(cam, h) {
+  const M = cam.projectionMatrix.elements, W = cam.matrixWorld.elements;
+  // the plane in the camera's own space: (the camera's world matrix, transposed) × (0, 1, 0, -h)
+  const cx = W[1], cy = W[5], cz = W[9], cw = W[13] - h;
+  const sg = v => v > 0 ? 1 : v < 0 ? -1 : 0;
+  const qx = (sg(cx) + M[8]) / M[0], qy = (sg(cy) + M[9]) / M[5], qz = -1, qw = (1 + M[10]) / M[14];
+  const s = 2 / (cx * qx + cy * qy + cz * qz + cw * qw);
+  M[2] = cx * s; M[6] = cy * s; M[10] = cz * s + 1; M[14] = cw * s;
+  cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+}
+// the water level to mirror in: the boat you're on, else the boat or dock nearest the camera's target (within
+// PROXY_NEAR tiles); null when there's none
+const PROXY_NEAR = 70;
+const dockWater = k => {
+  if (k.wy === undefined) { k.wy = 0; for (const t of k.tiles) if (WL[t]) { k.wy = WL[t]; break; } }
+  return k.wy;
+};
+function proxyLevel() {
+  if (H.boat) return H.boat.wl * STEP - 0.16;
+  let best = 0, bd = PROXY_NEAR;
+  for (const b of boats) { const d = Math.hypot(b.x - camTarget.x, b.z - camTarget.z); if (d < bd) { bd = d; best = b.wl; } }
+  for (const k of docks) {
+    const wl = dockWater(k), c = k.base % N, r = (k.base - c) / N, d = Math.hypot(c + 0.5 - camTarget.x, r + 0.5 - camTarget.z);
+    if (wl && d < bd) { bd = d; best = wl; }
+  }
+  return best ? best * STEP - 0.16 : null;
+}
+// draw the proxies' mirrored picture and their mask (before the water's copy of the picture is taken); says whether
+// it did
+function renderProxies() {
+  const h = camera === perspCam ? proxyLevel() : null;
+  if (h === null) return false;
+  const cam = camera, e = cam.matrixWorld.elements;
+  reflCam.fov = cam.fov; reflCam.aspect = cam.aspect; reflCam.near = cam.near; reflCam.far = cam.far; reflCam.zoom = cam.zoom;
+  reflCam.updateProjectionMatrix();
+  // mirrored in the water, up kept up: the picture comes out upside down on the screen (the water reads it so)
+  const py = 2 * h - e[13];
+  reflCam.position.set(e[12], py, e[14]);
+  reflCam.up.set(0, 1, 0);
+  reflCam.lookAt(e[12] - e[8], py + e[9], e[14] - e[10]);
+  reflCam.updateMatrixWorld();
+  obliqueClip(reflCam, h - 0.02);
+  WATER_U.ssrD.value.x = h;
+  reflCam.layers.set(9);
+  renderer.setClearColor(0x000000, 0);
+  renderer.setRenderTarget(proxyRT); renderer.clear();
+  renderer.passName = 'proxy reflections';
+  renderer.render(scene, reflCam);
+  renderer.setRenderTarget(maskRT); renderer.clear();
+  renderer.passName = 'proxy mask';
+  cam.layers.set(9); renderer.render(scene, cam);
+  renderer.setClearColor('#0b0912', 1);
+  renderer.setRenderTarget(outlineRT);
+  return true;
+}
+// a copy of every dock's deck, joists and piles (as dockDeck draws them into the world), seen by the mirror alone
+let dockProxies = [];
+function buildDockProxies() {
+  for (const m of dockProxies) { scene.remove(m); m.geometry.dispose(); }
+  dockProxies = [];
+  for (const k of docks) {
+    const B = new Buf();
+    partAll = B;
+    try { for (const t of k.tiles) if (DOCK[t] > 0 && BR[t]) dockDeck(t % N, (t - t % N) / N, t); } finally { partAll = null; SURF = 0; }
+    const m = B.mesh(groundMat);
+    if (!m) continue;
+    m.layers.set(9); m.castShadow = false; m.receiveShadow = true;
+    scene.add(m); dockProxies.push(m);
+  }
+}
 // (v506, Jordan) the edge of the world: a fog that thickens from `start` tiles in from the edge to opaque at `end`
 // (in the distance fog's colour, × bright), billowing over `billow` tiles as it drifts, so the edge itself is never
 // seen. Laid over the finished picture in the outline pass, from each pixel's place in the world (where nothing was
@@ -6229,7 +6313,9 @@ function renderWorld() {
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
   // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
-  const bend = on && (WATER.refraction > 0 || SSR.on > 0.5);   // (v509: the reflections read the copy too)
+  const bend = on && (WATER.refraction > 0 || SSR.on > 0.5 || SSR.proxy > 0.5);   // (v509: the reflections read the copy too)
+  // (v525) the docks' and boats' mirrored picture, for the water
+  WATER_U.ssrC.value.z = bend && SSR.proxy > 0.5 && renderProxies() ? 1 : 0;
   if (bend) { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
   else { WATER_U.tRefr.value = noBend.color; WATER_U.tRefrD.value = noBend.depth; }
   WATER_U.refr.value = bend ? 1 : 0;
@@ -8329,7 +8415,9 @@ const waveTex = (() => {
 // passes behind something within `thick` tiles, what's there is reflected. It fades toward the screen's edges and
 // its reach. amount: how much of the sky's reflection it replaces; boost: × the water's Fresnel where it hits (the
 // view is steep, so the true reflection is faint). Needs post-processing (the copy). T > Water.
-const SSR = { on: 1, amount: 1, boost: 20, steps: 32, reach: 47.5, thick: 0.75, calm: 0.72, jitter: 0, underside: 0.3, backCut: 0.15 };
+// (v525, Jordan) proxy: the docks and boats reflected by a mirrored picture of them instead (see proxyRT), bent by the
+// ripples as if what it shows stood proxyBend tiles out along the reflected ray (0: a flat mirror)
+const SSR = { on: 1, amount: 1, boost: 20, steps: 32, reach: 47.5, thick: 0.75, calm: 0.72, jitter: 0, underside: 0.3, backCut: 0.15, proxy: 1, proxyBend: 3 };
 const WATER_U = {
   ssrA: { value: { x: 0, y: 24, z: 14, w: 1.5 } }, ssrB: { value: { x: 1, y: 2.5, z: 0.6, w: 0 } }, ssrC: { value: { x: 0.3, y: 0.15, z: 0, w: 0 } },
   tWave: { value: waveTex }, time: { value: 0 }, waveAmp: { value: 1 }, flowSpeed: { value: 1 }, glitter: { value: 1 }, rough: { value: 0.03 },
@@ -8340,6 +8428,8 @@ const WATER_U = {
   swellAmp: { value: 0.11 }, swellLen: { value: 1.5 }, rippleLen: { value: 1 }, swellShade: { value: 0 }, crests: { value: 1 }, sparkle: { value: 1 },
   caustics: { value: 1 }, shallows: { value: 1 }, shoreLine: { value: 1 }, shoreRipples: { value: 1 }, ripReach: { value: 1 },
   tCaus: { value: null }, causTile: { value: 11.25 }, tRefr: { value: null }, tRefrD: { value: null }, refr: { value: 0 }, refract: { value: 0.25 },
+  // (v525) the docks' and boats' mirrored picture and their depth from the camera (see proxyRT)
+  tProxy: { value: proxyRT.texture }, tProxyM: { value: maskRT.depthTexture }, ssrD: { value: { x: 0, y: 0, z: 0, w: 0 } },
 };
 const WATER_WGSL = /* wgsl */ `
 struct VOut {
@@ -8441,6 +8531,8 @@ fn ssrFacingAway(px: vec2i, dims: vec2i, dir: vec3f) -> f32 {
   if (dot(n, -c) < 0.0) { n = -n; }
   return dot(n, normalize((F.view * vec4f(dir, 0.0)).xyz));
 }
+// a depth's view-space z (negative, away from the eye; perspective)
+fn ssrLinZ(zb: f32) -> f32 { let P = F.proj; return (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]); }
 fn ssrTrace(wp: vec3f, dir: vec3f, frag: vec2f) -> vec4f {
   let dims = vec2i(textureDimensions(tRefrD));
   let n = i32(U.ssrA.y);
@@ -8474,6 +8566,11 @@ fn ssrTrace(wp: vec3f, dir: vec3f, frag: vec2f) -> vec4f {
         let cb = F.viewProj * vec4f(b, 1.0);
         let ub = cb.xy / cb.w * vec2f(0.5, -0.5) + 0.5;
         let hp = clamp(vec2i(ub * vec2f(dims)), vec2i(0), dims - 1);
+        // (v525) a dock or boat the screen shows here is reflected by its mirrored proxy instead: no hit
+        if (U.ssrC.z > 0.5) {
+          let md = textureLoad(tProxyM, hp, 0);
+          if (md < 0.99999 && ssrLinZ(md) >= ssrLinZ(textureLoad(tRefrD, hp, 0)) - 0.08) { return vec4f(0.0); }
+        }
         var col = textureLoad(tRefr, hp, 0).rgb;
         let edge = smoothstep(0.0, 0.08, min(min(ub.x, ub.y), min(1.0 - ub.x, 1.0 - ub.y)));
         // (v523, Jordan: a dock's reflection smeared its sunlit planks down the water) a ray going up meets a flat
@@ -8526,6 +8623,7 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   var refl = mix(U.skyCol * 1.3, U.skyCol * 0.9, smoothstep(0.0, 0.9, abs(R.y)));
   var Fr = fresnelWater(max(dot(normalize(mix(N, vec3f(0.0, 1.0, 0.0), 0.45)), V), 0.0));
   // (v509) what the screen shows along the reflected ray, over the sky's reflection
+  var ra = 0.0;   // (how much of the sky's reflection was replaced, for the Fresnel boost)
   if (U.ssrA.x > 0.5 && U.refr > 0.5 && U.passAdd > 0.5 && i.fall < 0.5) {
     let toP = i.wpos - F.camPos.xyz;
     let vd = select(normalize(toP), normalize(F.camDir.xyz), F.camPos.w > 0.5);
@@ -8535,9 +8633,27 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
       let hit = ssrTrace(i.wpos + vec3f(0.0, 0.02, 0.0), Rd, i.pos.xy);
       let a = hit.a * U.ssrB.x;
       refl = mix(refl, hit.rgb, a);
-      Fr = min(1.0, Fr * mix(1.0, U.ssrB.y, a));
+      ra = a;
     }
   }
+  // (v525, Jordan) the docks and boats: their mirrored picture (drawn from a camera under the water, so upside down),
+  // looked up where the rippled reflection's ray, ssrC.w tiles out, lands against the flat water's (that one lands on
+  // this very pixel). Only water at the mirror's level (ssrD.x) shows it.
+  if (U.ssrC.z > 0.5 && U.refr > 0.5 && U.passAdd > 0.5 && i.fall < 0.5 && F.camPos.w < 0.5 && abs(i.wpos.y - U.ssrD.x) < 0.6) {
+    let dims = vec2i(textureDimensions(tProxy));
+    let vd = normalize(i.wpos - F.camPos.xyz);
+    let Rd = reflect(vd, normalize(mix(N, vec3f(0.0, 1.0, 0.0), U.ssrB.z)));
+    // (a point along the reflected ray seen in the mirror: the same way off the water, turned down under it)
+    let c0 = F.viewProj * vec4f(i.wpos + vd * U.ssrC.w, 1.0);
+    let c1 = F.viewProj * vec4f(i.wpos + vec3f(Rd.x, -Rd.y, Rd.z) * U.ssrC.w, 1.0);
+    var uv = i.pos.xy / vec2f(dims);
+    if (c0.w > 0.0 && c1.w > 0.0) { uv += (c1.xy / c1.w - c0.xy / c0.w) * vec2f(0.5, -0.5); }
+    if (all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0))) {
+      let pr = textureLoad(tProxy, clamp(vec2i(vec2f(uv.x, 1.0 - uv.y) * vec2f(dims)), vec2i(0), dims - 1), 0);
+      if (pr.a > 0.5) { refl = mix(refl, pr.rgb, U.ssrB.x); ra = max(ra, U.ssrB.x); }
+    }
+  }
+  Fr = min(1.0, Fr * mix(1.0, U.ssrB.y, ra));
   // sun glitter: a Beckmann lobe over the wave slopes
   let Hv = normalize(V + L);
   let nh = max(dot(N, Hv), 1e-3); let t2 = (1.0 - nh * nh) / (nh * nh);
@@ -9481,7 +9597,7 @@ function updateWater(dt) {
   U.refract.value = WATER.refraction;
   Object.assign(U.ssrA.value, { x: SSR.on > 0.5 ? 1 : 0, y: clamp(Math.round(SSR.steps), 4, 64), z: Math.max(1, SSR.reach), w: Math.max(0.1, SSR.thick) });
   Object.assign(U.ssrB.value, { x: SSR.amount, y: SSR.boost, z: SSR.calm, w: SSR.jitter });
-  Object.assign(U.ssrC.value, { x: SSR.underside, y: SSR.backCut });
+  Object.assign(U.ssrC.value, { x: SSR.underside, y: SSR.backCut, w: Math.max(0, SSR.proxyBend) });
   U.sunDir.value.copy(sun.position).sub(sun.target.position).normalize();
   LU.sunDir.value.copy(U.sunDir.value);
   U.sunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
@@ -13959,6 +14075,7 @@ function buildBoats() {
 function boatGroup(b) {
   const m = brigModel(boatShapes(b), BOAT, { boat: boatMat, sail: sailMat, glow: boatGlowMat });
   Object.assign(b, m);
+  b.g.traverse(o => o.layers.enable(9));   // (v525: seen by the water's mirror too, see proxyRT)
   scene.add(b.g);
 }
 // (v498) T > Boats: every boat made again in the model picked, where it is and as it's set (sails, anchor, plank)
@@ -21890,7 +22007,7 @@ function resize() {
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   ssNow = Math.max(1, Math.min(4, Math.round(PIXEL.antiAlias)));
   renderer.setSize(rw, rh, false);
-  outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
+  outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); proxyRT.setSize(rw * ssNow, rh * ssNow); maskRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
   { const sw = rw * px + 'px', sh = rh * px + 'px'; if (cv.style.width !== sw) cv.style.width = sw; if (cv.style.height !== sh) cv.style.height = sh; }
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
@@ -23306,6 +23423,8 @@ const TUNING = [
     [SSR, 'underside', 'Reflections: surfaces hit from behind (a dock\'s top) show as their shaded underside, this bright (0: not reflected)', 0, 1, 0.01],
     [SSR, 'backCut', 'Reflections: how squarely a surface must face away from the ray to count as hit from behind', -0.5, 1, 0.01],
     [SSR, 'calm', 'Reflections: how much the waves are smoothed for them (1 a mirror)', 0, 1, 0.01],
+    [SSR, 'proxy', 'Reflections: docks and boats as mirrored proxies, not screen-space (0 off, 1 on)', 0, 1, 1],
+    [SSR, 'proxyBend', 'Reflections: how far the ripples bend the proxies (tiles out along the ray; 0 a flat mirror)', 0, 12, 0.1],
     [WATER, 'shallows', 'Turquoise shallows', 0, 3, 0.05],
     [WATER, 'shoreLine', 'Foam line at the shore', 0, 1, 0.05],
     [WATER, 'shoreRipples', 'Ripples off the shore', 0, 2, 0.05],
@@ -24129,7 +24248,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 524, crashSeen = new Map();
+const GAME_VERSION = 525, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

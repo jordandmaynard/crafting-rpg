@@ -497,8 +497,12 @@ class Renderer {
   // material is walked for each render, as before.)
   _collect(scene, camera) {
     if (scene.overrideMaterial) return this._walk(scene, camera, true);
-    let c = this._seen;
-    if (!c || c.frame !== this._frameNo || c.scene !== scene || c.camera !== camera) c = this._seen = { frame: this._frameNo, scene, camera, list: this._walk(scene, camera, false) };
+    // (kept for each camera drawn this frame, so a second camera's render between two of the first's, such as the
+    // game's mirrored water camera, doesn't make the scene be walked again for the first)
+    let S = this._seen;
+    if (!S || S.frame !== this._frameNo || S.scene !== scene) S = this._seen = { frame: this._frameNo, scene, by: new Map() };
+    let c = S.by.get(camera);
+    if (!c) { c = { list: this._walk(scene, camera, false) }; S.by.set(camera, c); }
     const out = [], L = camera.layers;
     // (drawFilter: when set, only what it passes is drawn: the profiler's split of one render into parts)
     const f = this.drawFilter;
