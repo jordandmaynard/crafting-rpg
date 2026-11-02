@@ -14,7 +14,9 @@ export const WALL_IN = 0.13;   // a wall's half thickness: a wall prop's back st
 export const CEIL = 2;
 // (Jordan) tables stand as low as the crafting tables you build (their top 0.46 over the floor: (0.53 - TABLE_LOW
 // 0.26 + 0.035) x STATION_LOOK.size 1.5), and seats are lowered to suit
-export const TABLE_TOP = 0.46, SEAT = 0.28;         // a story's height (the game's WALL_H): where a hanging prop hangs from
+export const TABLE_TOP = 0.46, SEAT = 0.28;
+// (the bar counter's top and a bar stool's seat: as much over a table's and a chair's as a real bar is)
+export const BAR_TOP = 0.66, BAR_SEAT = 0.44;         // a story's height (the game's WALL_H): where a hanging prop hangs from
 export const WOODS = {
   pine: { name: 'Pine', tier: 'Hamlet', wood: '#9a7048', dark: '#5e4028', light: '#b88a5a' },
   oak: { name: 'Oak', tier: 'Medium town', wood: '#6a4a30', dark: '#43301f', light: '#8a6440' },
@@ -147,7 +149,7 @@ const heater = (w, h0, h1) => { const c = [[-w, h0], [-w, 0], [-w * 0.9, h1 * 0.
 // group: where it's listed; tiles [w, d]; wall: backs onto a wall; hang: hangs from the ceiling (no floor tile);
 // use and goes: from the doc; roll(r) -> the seeded look (null: none); build(L, C) draws it (C: the wood's colours);
 // describe(L) -> rows [label, value, colour]
-export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights'];
+export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern'];
 export const PROPS = {
   bed: { name: 'Bed', group: 'Beds', tiles: [1, 2], wall: true, use: 'Sit, sleep', goes: 'Every house; inn rooms', inGame: true,
     roll: r => ({ blanket: pick(r, BLANKETS) }),
@@ -591,6 +593,102 @@ export const PROPS = {
         candle(p[0], ringY + 0.025, p[2], 0.12, 0.02);
       }
     } },
+  // ---------- (2026-11-02, Jordan) the tavern and inn set ----------
+  barCounter: { name: 'Bar counter', group: 'Tavern', tiles: [2, 1], use: 'Work: the innkeeper serves from behind it', goes: 'Tavern (medium town)', bar: true,
+    roll: r => barRoll(r, 2), describe: barDescribe, build(L, C) { barCounter(1.9, L, C); } },
+  barCounterLong: { name: 'Long bar counter', group: 'Tavern', tiles: [3, 1], use: 'Work: the innkeeper serves from behind it', goes: 'Tavern (large town)', bar: true,
+    roll: r => barRoll(r, 3), describe: barDescribe, build(L, C) { barCounter(2.9, L, C); } },
+  barStool: { name: 'Bar stool', group: 'Tavern', tiles: [1, 1], use: 'Sit at the bar', goes: 'Tavern',
+    build(L, C) {
+      const y = BAR_SEAT;
+      part(G.cyl12, C.wood, 0, y - 0.03, 0, { sx: 0.38, sy: 0.06, sz: 0.38 });
+      part(G.cyl12, C.dark, 0, y - 0.07, 0, { sx: 0.3, sy: 0.03, sz: 0.3 });
+      for (let k = 0; k < 4; k++) {
+        const a = k * Math.PI / 2 + Math.PI / 4;
+        seg(G.cyl6, C.dark, [Math.cos(a) * 0.1, y - 0.08, Math.sin(a) * 0.1], [Math.cos(a) * 0.17, 0, Math.sin(a) * 0.17], 0.022);
+      }
+      // the foot ring
+      for (let k = 0; k < 4; k++) {
+        const a = k * Math.PI / 2 + Math.PI / 4, b = a + Math.PI / 2, R = 0.155;
+        seg(G.cyl6, C.light, [Math.cos(a) * R, 0.17, Math.sin(a) * R], [Math.cos(b) * R, 0.17, Math.sin(b) * R], 0.014);
+      }
+    } },
+  mugShelf: { name: 'Mug and plate shelf', group: 'Tavern', tiles: [1, 1], wall: true, use: 'Show', goes: 'Tavern, behind the bar',
+    roll: r => ({ glaze: pick(r, GLAZES), mugs: 3 + Math.floor(r() * 3), gone: Math.floor(r() * 4) }),
+    describe: L => [['Crockery', L.glaze[1], L.glaze[0]], ['Tankards', String(L.mugs)]],
+    build(L, C) {
+      const W = 0.9, zb = backZ(1), D = 0.2, zs = zb + D / 2, g = CC(L.glaze[0]), rim = shade(g, 0.8);
+      part(G.box, C.wood, 0, 1.3, zb + 0.01, { sx: W - 0.04, sy: 0.9, sz: 0.02 });
+      for (const s of [-1, 1]) part(G.box, C.dark, s * (W / 2 - 0.02), 1.3, zs, { sx: 0.04, sy: 0.9, sz: D });
+      part(G.box, C.dark, 0, 1.76, zs + 0.01, { sx: W + 0.04, sy: 0.04, sz: D + 0.04 });
+      // plates stood up along the two shelves, behind a rail
+      for (const y of [1.12, 1.45]) {
+        part(G.box, C.wood, 0, y, zs, { sx: W - 0.06, sy: 0.025, sz: D });
+        part(G.box, C.dark, 0, y + 0.07, zs + D / 2 - 0.01, { sx: W - 0.06, sy: 0.015, sz: 0.015 });
+        for (let k = 0; k < 4; k++) {
+          if (y > 1.3 && k === L.gone) continue;
+          const x = -0.3 + k * 0.2;
+          part(G.cyl12, g, x, y + 0.12, zb + 0.06, { sx: 0.2, sy: 0.018, sz: 0.2, rx: Math.PI / 2 - 0.22 });
+          part(G.cyl12, rim, x, y + 0.12, zb + 0.067, { sx: 0.12, sy: 0.012, sz: 0.12, rx: Math.PI / 2 - 0.22 });
+        }
+      }
+      // a peg rail under them with tankards hung by their handles
+      part(G.box, C.dark, 0, 0.92, zb + 0.03, { sx: W - 0.04, sy: 0.07, sz: 0.04 });
+      for (let k = 0; k < L.mugs; k++) {
+        const x = -0.34 + k * (0.68 / Math.max(1, L.mugs - 1));
+        seg(G.cyl6, C.light, [x, 0.92, zb + 0.05], [x, 0.94, zb + 0.13], 0.012);
+        tankard(x, 0.69, zb + 0.13, g, rim, Math.PI);
+      }
+    } },
+  keg: { name: 'Keg on a cradle', group: 'Tavern', tiles: [1, 1], use: 'Show; the innkeeper draws from it', goes: 'Tavern, cellars',
+    build(L, C) {
+      const y = 0.38;
+      for (const z of [-0.2, 0.2]) {
+        part(G.box, C.dark, 0, 0.09, z, { sx: 0.62, sy: 0.18, sz: 0.1 });
+        for (const s of [-1, 1]) part(G.box, C.dark, s * 0.2, 0.2, z, { sx: 0.12, sy: 0.12, sz: 0.1, rz: s * 0.6 });
+      }
+      barrel([0, y, -0.32], [0, y, 0.32], 0.2, 0.24, shade(C.light, 1.05), { hoops: [0.08, 0.3, 0.7, 0.92] });
+      part(G.box, '#b8903a', 0, y - 0.08, 0.35, { sx: 0.04, sy: 0.04, sz: 0.07 });
+      part(G.box, '#b8903a', 0, y - 0.13, 0.38, { sx: 0.03, sy: 0.09, sz: 0.03 });
+      // a drip bucket under the tap
+      barrel([0, 0, 0.4], [0, 0.14, 0.4], 0.07, 0.075, shade(C.wood, 1.1), { hoops: [0.3], n: 1, head: false });
+      part(G.cyl8, '#5a3a1e', 0, 0.12, 0.4, { sx: 0.12, sy: 0.01, sz: 0.12 });
+    } },
+  kegStack: { name: 'Stack of kegs', group: 'Tavern', tiles: [1, 1], use: 'Show (out by the door)', goes: 'Tavern front, dock, cellars',
+    roll: r => ({ top: r() < 0.75, turn: (r() - 0.5) * 0.2 }),
+    describe: L => [['Kegs', L.top ? 'Three, one on top' : 'Two']],
+    build(L, C) {
+      const R0 = 0.17, R1 = 0.2, len = 0.64, s = L.turn;
+      for (const x of [-0.21, 0.21]) {
+        barrel([x + s * 0.1, R1, -len / 2], [x - s * 0.1, R1, len / 2], R0, R1, shade(C.light, x < 0 ? 1.05 : 0.97), { hoops: [0.1, 0.32, 0.68, 0.9] });
+        for (const z of [-0.2, 0.2]) part(G.box, C.dark, x + (x < 0 ? -1 : 1) * 0.16, 0.04, z, { sx: 0.06, sy: 0.08, sz: 0.08 });
+      }
+      part(G.box, C.dark, 0, 0.04, 0, { sx: 0.08, sy: 0.08, sz: 0.5 });
+      if (L.top) barrel([0, R1 * 2 + 0.16, -len / 2 + 0.02], [0, R1 * 2 + 0.16, len / 2 - 0.02], R0, R1, shade(C.light, 1.1), { hoops: [0.1, 0.32, 0.68, 0.9] });
+    } },
+  washstand: { name: 'Washstand', group: 'Tavern', tiles: [1, 1], wall: true, use: 'Show', goes: 'Inn rooms, houses upstairs',
+    roll: r => ({ glaze: pick(r, GLAZES), towel: pick(r, DYES) }),
+    describe: L => [['Basin and jug', L.glaze[1], L.glaze[0]], ['Towel', L.towel[1], L.towel[0]]],
+    build(L, C) {
+      const W = 0.62, D = 0.42, z = midZ(1, D), top = 0.52, g = CC(L.glaze[0]);
+      part(G.box, C.wood, 0, top - 0.02, z, { sx: W, sy: 0.04, sz: D });
+      for (const sa of [-1, 1]) for (const sb of [-1, 1]) part(G.box, C.dark, sa * (W / 2 - 0.04), (top - 0.04) / 2, z + sb * (D / 2 - 0.04), { sx: 0.05, sy: top - 0.04, sz: 0.05 });
+      part(G.box, C.wood, 0, 0.12, z, { sx: W - 0.08, sy: 0.03, sz: D - 0.08 });
+      part(G.box, C.dark, 0, top + 0.12, backZ(1) + 0.015, { sx: W, sy: 0.22, sz: 0.03 });
+      // the basin, the jug stood in it, a towel over the rail at the side
+      part(G.cyl12, g, -0.05, top + 0.05, z + 0.02, { sx: 0.34, sy: 0.07, sz: 0.34 });
+      part(G.cyl12, '#6a8a9a', -0.05, top + 0.087, z + 0.02, { sx: 0.28, sy: 0.01, sz: 0.28 });
+      part(G.cyl8, g, -0.05, top + 0.2, z + 0.02, { sx: 0.13, sy: 0.22, sz: 0.13 });
+      part(G.cyl8, g, -0.05, top + 0.33, z + 0.02, { sx: 0.09, sy: 0.05, sz: 0.09 });
+      part(G.box, g, -0.05 + 0.08, top + 0.22, z + 0.02, { sx: 0.03, sy: 0.12, sz: 0.02 });
+      seg(G.cyl6, C.dark, [W / 2 + 0.02, top - 0.04, z - 0.12], [W / 2 + 0.02, top - 0.04, z + 0.12], 0.012);
+      part(G.box, CC(L.towel[0]), W / 2 + 0.025, top - 0.16, z, { sx: 0.02, sy: 0.26, sz: 0.2 });
+    } },
+  tavernSign: { name: 'Tavern sign', group: 'Tavern', tiles: [1, 1], wall: true, hang: true, outside: true, use: 'Show (outside, by or over the door)', goes: 'Tavern front',
+    roll: r => ({ board: pick(r, [['#a07848', 'Weathered oak'], ['#8a6440', 'Old oak'], ['#b08a58', 'Pale pine']]), paint: pick(r, [['#2a1c12', 'Black'], ['#5a2a1a', 'Ox-blood'], ['#3a2a1a', 'Brown'], ['#2a3a24', 'Dark green']]),
+      scroll: r() < 0.7, chains: r() < 0.4 }),
+    describe: L => [['Board', L.board[1], L.board[0]], ['Keg painted in', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
+    build(L, C) { tavernSign(L, C); } },
 };
 // a plain long table: boards along the top, legs at each end and every tile between, an apron and a stretcher
 function table(W, D, tiles, C) {
@@ -613,6 +711,108 @@ function good(g, y, z) {
   else if (g.k === 'box') { const h = 0.12 + g.h * 0.12; part(G.box, '#8a6a4a', x, y + h / 2, z, { sx: w, sy: h, sz: 0.24 }); part(G.box, '#6a4a30', x, y + h + 0.006, z, { sx: w + 0.01, sy: 0.02, sz: 0.25 }); }
   else if (g.k === 'bowls') { for (let k = 0; k < 3 + Math.floor(g.h * 3); k++) part(G.cyl12, shade(g.c, k % 2 ? 0.9 : 1), x, y + 0.02 + k * 0.035, z, { sx: w - k * 0.005, sy: 0.035, sz: w - k * 0.005 }); }
   else { part(G.cyl12, '#d8b050', x, y + 0.05, z, { sx: w, sy: 0.1, sz: w }); part(G.cyl12, '#a88030', x, y + 0.1, z, { sx: w * 0.92, sy: 0.006, sz: w * 0.92 }); }
+}
+// a tankard at (x, y, z) (its foot), its handle toward ry
+function tankard(x, y, z, g, rim, ry = 0) {
+  part(G.cyl8, g, x, y + 0.065, z, { sx: 0.09, sy: 0.13, sz: 0.09 });
+  part(G.cyl8, rim, x, y + 0.128, z, { sx: 0.095, sy: 0.012, sz: 0.095 });
+  part(G.box, rim, x + Math.cos(ry) * 0.058, y + 0.07, z - Math.sin(ry) * 0.058, { sx: 0.025, sy: 0.08, sz: 0.018, ry });
+}
+// the bar: what stands on it and on the shelf behind
+function barRoll(r, tiles) {
+  const n = 1 + Math.floor(r() * (tiles + 1)), mugs = [];
+  for (let k = 0; k < n; k++) mugs.push({ x: (tiles - 0.4) * ((k + 0.5) / n - 0.5) + (r() - 0.5) * 0.12, z: (r() - 0.5) * 0.18, full: r() < 0.6 });
+  return { glaze: pick(r, GLAZES), mugs, jug: r() < 0.6 ? (r() - 0.5) * (tiles - 0.6) : null, cloth: r() < 0.5 ? (r() - 0.5) * (tiles - 0.6) : null, bottles: 2 + Math.floor(r() * 4) };
+}
+function barDescribe(L) { return [['Crockery', L.glaze[1], L.glaze[0]], ['On the bar', `${L.mugs.length} tankard${L.mugs.length > 1 ? 's' : ''}${L.jug != null ? ', a jug' : ''}${L.cloth != null ? ', a cloth' : ''}`]]; }
+// a bar counter W long: its front (+z, toward the drinkers) boarded floor to top, a kick board, the top a thick slab
+// overhanging the front; behind (-z, the innkeeper's side) open, a shelf of bottles and mugs under the top
+function barCounter(W, L, C) {
+  const zc = 0.08, D = 0.5, H = BAR_TOP - 0.05, f = zc + D / 2, g = CC(L.glaze[0]), rim = shade(g, 0.8);
+  // the carcass: ends, a back rail, the shelf and the floor of it
+  for (const s of [-1, 1]) part(G.box, C.dark, s * (W / 2 - 0.03), H / 2, zc, { sx: 0.06, sy: H, sz: D });
+  part(G.box, C.wood, 0, H / 2, f - 0.03, { sx: W - 0.1, sy: H, sz: 0.04 });
+  part(G.box, C.dark, 0, 0.04, zc - 0.02, { sx: W - 0.08, sy: 0.08, sz: D - 0.06 });
+  part(G.box, C.wood, 0, 0.34, zc - 0.03, { sx: W - 0.1, sy: 0.03, sz: D - 0.1 });
+  part(G.box, C.dark, 0, H - 0.04, zc - D / 2 + 0.03, { sx: W - 0.06, sy: 0.08, sz: 0.06 });
+  // the front: upright boards, each its own shade, framed by a kick board and a rail under the top
+  const nb = Math.round(W / 0.19);
+  for (let k = 0; k < nb; k++) part(G.box, shade(C.light, 0.86 + 0.16 * ((k * 7) % 5) / 4), -W / 2 + 0.06 + (k + 0.5) * (W - 0.12) / nb, H / 2 + 0.03, f + 0.004, { sx: (W - 0.12) / nb - 0.012, sy: H - 0.16, sz: 0.012 });
+  part(G.box, C.dark, 0, 0.06, f + 0.012, { sx: W - 0.04, sy: 0.12, sz: 0.024 });
+  part(G.box, C.dark, 0, H - 0.04, f + 0.012, { sx: W - 0.04, sy: 0.07, sz: 0.024 });
+  // the top
+  part(G.box, C.light, 0, BAR_TOP - 0.025, zc + 0.02, { sx: W + 0.06, sy: 0.05, sz: D + 0.12 });
+  // on the shelf behind: bottles and stacked mugs
+  for (let k = 0; k < L.bottles; k++) {
+    const x = -W / 2 + 0.2 + k * (W - 0.4) / Math.max(1, L.bottles - 1), c = ['#4a6a3a', '#6a4a2a', '#3a4a5a', '#7a6a4a'][k % 4];
+    part(G.cyl8, c, x, 0.355 + 0.09, zc - 0.05, { sx: 0.08, sy: 0.18, sz: 0.08 });
+    part(G.cyl8, c, x, 0.355 + 0.215, zc - 0.05, { sx: 0.03, sy: 0.07, sz: 0.03 });
+  }
+  for (const x of [-W / 4, W / 4]) tankard(x + 0.1, 0.355, zc - 0.12, g, rim, Math.PI / 2);
+  // on top: tankards (some full, a head of froth), a jug, a cloth
+  for (const m of L.mugs) {
+    tankard(m.x, BAR_TOP, zc + 0.02 + m.z, g, rim, 0.4);
+    if (m.full) part(G.cyl8, '#efe6cc', m.x, BAR_TOP + 0.128, zc + 0.02 + m.z, { sx: 0.075, sy: 0.016, sz: 0.075 });
+  }
+  if (L.jug != null) { part(G.cyl8, g, L.jug, BAR_TOP + 0.12, zc - 0.08, { sx: 0.16, sy: 0.24, sz: 0.16 }); part(G.cyl8, rim, L.jug, BAR_TOP + 0.26, zc - 0.08, { sx: 0.1, sy: 0.05, sz: 0.1 }); }
+  if (L.cloth != null) part(G.box, '#d8ccb0', L.cloth, BAR_TOP + 0.005, zc + 0.1, { sx: 0.3, sy: 0.01, sz: 0.2, ry: 0.3 });
+}
+// a flat piece standing across the wall (in the y-z plane, from x0 to x1): pts are (z, y) round its edge, fanned
+// about (cz, cy); both faces and its edge, laid each way round (it's seen from both sides)
+function plateX(pts, cz, cy, x0, x1, color, oz = 0, oy = 0) {
+  const P = (p, x) => [x, oy + p[1], oz + p[0]], m0 = [x0, oy + cy, oz + cz], m1 = [x1, oy + cy, oz + cz];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    tri(m1, P(b, x1), P(a, x1), color); tri(m0, P(a, x0), P(b, x0), color);
+    tri(P(a, x0), P(b, x1), P(b, x0), color); tri(P(a, x0), P(a, x1), P(b, x1), color);
+    tri(P(a, x0), P(b, x0), P(b, x1), color); tri(P(a, x0), P(b, x1), P(a, x1), color);
+  }
+}
+// the tavern sign: an iron bracket out from the wall (its plate on the wall's outer face at -z, the arm along +z), a
+// board hung from it across the wall, a keg painted on both faces in a painted border. L.up: hung over the door on
+// the story above (lower on its wall), else on the wall beside the door, high
+function tavernSign(L, C) {
+  const z0 = backZ(1), Ya = L.up ? 0.9 : 1.9, arm = 0.86, B = CC(L.board[0]), K = CC(L.paint[0]);
+  // the wall plate, the arm and its brace
+  part(G.box, IRON, 0, Ya - 0.18, z0 + 0.015, { sx: 0.09, sy: 0.5, sz: 0.03 });
+  for (const y of [Ya + 0.02, Ya - 0.38]) part(G.box, IRON_LT, 0, y, z0 + 0.035, { sx: 0.05, sy: 0.035, sz: 0.02 });
+  part(G.box, IRON, 0, Ya, z0 + arm / 2, { sx: 0.035, sy: 0.04, sz: arm });
+  part(G.oct, IRON, 0, Ya, z0 + arm + 0.03, { sx: 0.06, sy: 0.08, sz: 0.06 });
+  seg(G.box, IRON, [0, Ya - 0.4, z0 + 0.03], [0, Ya - 0.02, z0 + arm * 0.62], 0.016);
+  if (L.scroll) {
+    // two curls in the bracket's corner and one riding the arm
+    const curl = (cz, cy, R, a0, turns) => {
+      let p = null;
+      for (let k = 0; k <= 10 * turns; k++) {
+        const t = k / 10, a = a0 + t * Math.PI * 2, rr = R * (1 - t / (turns + 0.4)), q = [0, cy + Math.sin(a) * rr, cz + Math.cos(a) * rr];
+        if (p) seg(G.box, IRON, p, q, 0.009);
+        p = q;
+      }
+    };
+    curl(z0 + 0.15, Ya - 0.14, 0.1, Math.PI / 2, 1);
+    curl(z0 + 0.36, Ya - 0.08, 0.07, -Math.PI / 2, 1);
+    curl(z0 + arm - 0.2, Ya + 0.08, 0.07, -Math.PI / 2, 1);
+  }
+  // the board hung under the arm, its border and the keg
+  const bt = 0.045, bh = 0.46, bw = 0.62, bz = z0 + 0.15 + bw / 2, by = Ya - 0.14 - bh / 2;
+  for (const z of [bz - bw / 2 + 0.1, bz + bw / 2 - 0.1]) {
+    if (L.chains) for (let k = 0; k < 3; k++) part(G.box, IRON, 0, Ya - 0.03 - k * 0.04, z, { sx: k % 2 ? 0.02 : 0.008, sy: 0.04, sz: k % 2 ? 0.008 : 0.02 });
+    else seg(G.cyl6, '#b8a47a', [0, Ya - 0.02, z], [0, by + bh / 2, z], 0.008);
+    part(G.box, IRON_LT, 0, by + bh / 2 - 0.015, z, { sx: bt + 0.01, sy: 0.04, sz: 0.03 });
+  }
+  part(G.box, B, 0, by, bz, { sx: bt, sy: bh, sz: bw });
+  for (const s of [-1, 1]) {
+    const x = s * (bt / 2 + 0.002), x1 = s * (bt / 2 + 0.006), x2 = s * (bt / 2 + 0.01);
+    // the painted border
+    for (const [dz, dy, lz, ly] of [[0, bh / 2 - 0.04, bw - 0.08, 0.018], [0, -bh / 2 + 0.04, bw - 0.08, 0.018], [bw / 2 - 0.04, 0, 0.018, bh - 0.08], [-bw / 2 + 0.04, 0, 0.018, bh - 0.08]])
+      part(G.box, K, (x + x1) / 2, by + dy, bz + dz, { sx: Math.abs(x1 - x), sy: ly, sz: lz });
+    // the keg on its side: a bellied outline, darker hoops and stave lines over it, the tap at one end
+    plateX([[-0.17, -0.085], [-0.09, -0.115], [0.09, -0.115], [0.17, -0.085], [0.17, 0.085], [0.09, 0.115], [-0.09, 0.115], [-0.17, 0.085]], 0, 0, s < 0 ? x1 : x, s < 0 ? x : x1, K, bz, by - 0.01);
+    for (const hz of [-0.12, -0.05, 0.05, 0.12]) part(G.box, IRON, (x1 + x2) / 2 - s * 0.001, by - 0.01, bz + hz, { sx: Math.abs(x2 - x1) + 0.002, sy: Math.abs(hz) > 0.1 ? 0.19 : 0.225, sz: 0.018 });
+    for (const sy of [-0.04, 0.04]) part(G.box, shade(B, 0.8), x1, by - 0.01 + sy, bz, { sx: 0.004, sy: 0.008, sz: 0.3 });   // (2 mm proud: the hoops 4)
+    part(G.box, '#b8903a', (x + x2) / 2, by - 0.04, bz - 0.19, { sx: Math.abs(x2 - x), sy: 0.03, sz: 0.05 });
+    part(G.box, '#b8903a', (x + x2) / 2, by - 0.07, bz - 0.205, { sx: Math.abs(x2 - x), sy: 0.05, sz: 0.02 });
+  }
 }
 // the rugs: a field inside a border, a pattern on the field, fringes on the short ends
 function rugRoll(r) {

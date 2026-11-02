@@ -3080,6 +3080,7 @@ function townTrades(t, n) {
     if (!h.role || h.trade) continue;
     h.trade = ROLE_TRADE[h.role];
     const id = PROP_WORK[h.role], ctx = { wood: PROP_WOOD[t.tier] || 'pine', n: n * 31 + 7 };
+    if (h.role === 'tavern' && propBar(h, t.tier > 1 ? 'barCounterLong' : 'barCounter', ctx)) continue;
     const q = propTryList(h, 0, id, propCands(h, 0, id, ctx), ctx);
     if (q) h.work = q.tiles[Math.floor(q.tiles.length / 2)];
   }
@@ -3221,10 +3222,14 @@ const PROP_KITS = {
     [{ id: 'hearth' }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'shelf', n: 2 }, { id: 'crate' }, { id: 'barrel' }],
     [{ id: 'hearth' }, { id: 'roundTable', seats: 'chair', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'shelf', n: 2 }, { id: 'crate' }, { id: 'rug', up: true }, { hang: 'shield' }],
   ],
+  // (v555, Jordan: the tavern and inn set) the bar (counter, the barrel rack behind it, stools before it: propBar) goes
+  // in first as the innkeeper's work; guest rooms upstairs; the sign and kegs outside (tavernFront)
   tavern: [null,
-    [{ id: 'hearth' }, { id: 'longTable', seats: 'bench', n: 2 }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'barrel', n: 2 }, { id: 'cupboard' }, { id: 'chest', at: 'bed' }, { hang: 'antlers' }, { hang: 'shield' }],
-    [{ id: 'hearth' }, { id: 'feastTable', seats: 'chair' }, { id: 'longTable', seats: 'bench' }, { id: 'roundTable', seats: 'stool', n: 3 }, { id: 'barrel', n: 2 }, { id: 'cupboard' },
-      { id: 'chandelier' }, { id: 'candleStand' }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'antlers' }, { hang: 'shield', n: 2 }, { hang: 'tapestry', up: true }],
+    [{ id: 'hearth' }, { id: 'longTable', seats: 'bench', n: 2 }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'mugShelf' }, { id: 'keg' }, { id: 'barrel' },
+      { id: 'chest', at: 'bed' }, { id: 'bed', up: true, n: 2 }, { id: 'washstand', up: true, n: 2 }, { id: 'chest', up: true }, { hang: 'antlers' }, { hang: 'shield' }],
+    [{ id: 'hearth' }, { id: 'feastTable', seats: 'chair' }, { id: 'longTable', seats: 'bench' }, { id: 'roundTable', seats: 'stool', n: 3 }, { id: 'roundTable', seats: 'stool', n: 2 },
+      { id: 'mugShelf', n: 2 }, { id: 'keg', n: 2 }, { id: 'cupboard' }, { id: 'chandelier' }, { id: 'candleStand' }, { id: 'chest', at: 'bed' },
+      { id: 'bed', up: true, n: 3 }, { id: 'washstand', up: true, n: 2 }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'antlers' }, { hang: 'shield', n: 2 }, { hang: 'tapestry', up: true }],
   ],
   bank: [null, null,
     [{ id: 'bookcase', n: 2 }, { id: 'chest', n: 2 }, { id: 'chair', n: 1 }, { id: 'bench' }, { id: 'shelf' }, { id: 'candleStand', n: 2 }, { id: 'chandelier' }, { id: 'runner' }, { id: 'rug' },
@@ -3320,9 +3325,11 @@ function propPut(h, k, id, tiles, f, wallV, ctx, opts = {}) {
   const seed = 1 + Math.floor(hs(c + k * 7, r, 600 + propHash(id)) * 99998), look = rollProp(id, seed);
   let x = c + 0.5 + DC[g] * (w - 1) / 2 + DC[f] * (d - 1) / 2, z = r + 0.5 + DR[g] * (w - 1) / 2 + DR[f] * (d - 1) / 2;
   if (wallV) { const off = (PROP_WALL_HALF[wallV] ?? 0.16) - WALL_IN; x += DC[f] * off; z += DR[f] * off; }
-  const y = (k ? storyY(k, i0) : LV[i0] * STEP) + 0.06 + (P.rug ? 0.002 : 0);
-  const q = { id, look, wood: ctx.wood, key: `${id}:${look ? seed : 0}:${ctx.wood}`, k, x, y, z, ry: Math.atan2(DC[f], DR[f]), f, tiles: tiles.map(([a, b]) => k * SNN + T(a, b)), house: h, hang: !!P.hang, rug: !!P.rug };
+  if (opts.slide) { x += DC[g] * opts.slide; z += DR[g] * opts.slide; }   // (along its wall, its +x)
+  const y = (opts.y0 ?? (k ? storyY(k, i0) : LV[i0] * STEP)) + 0.06 + (P.rug ? 0.002 : 0);
+  const q = { id, look: opts.look ? { ...look, ...opts.look } : look, wood: ctx.wood, key: `${id}:${look ? seed : 0}:${ctx.wood}`, k, x, y, z, ry: Math.atan2(DC[f], DR[f]), f, tiles: tiles.map(([a, b]) => k * SNN + T(a, b)), house: h, hang: !!P.hang, rug: !!P.rug };
   if (opts.cut != null) q.cut = opts.cut;
+  if (opts.look) q.key += ':' + JSON.stringify(opts.look);
   if (P.hang && !P.wall) for (const t of q.tiles) PROP_OVER.add(t);
   if (!P.hang) for (const t of q.tiles) {
     if (P.rug) PROP_RUG.add(t);
@@ -3474,7 +3481,84 @@ function townProps(t, n) {
     const kind = h.role || (h.clergy ? 'clergy' : h.trade ? 'trade' : 'home');
     const kit = PROP_KITS[kind] && PROP_KITS[kind][t.tier];
     furnish(h, kit || PROP_KITS.home[t.tier], { wood, n: n * 31 + j });
+    if (h.role === 'tavern') tavernFront(t, n, h, { wood, n: n * 31 + j });
   });
+}
+// (v555, Jordan) the tavern's bar: the barrel rack against a wall, a free row before it for the innkeeper (kept
+// clear), the counter across in front of that facing the room, and bar stools before the counter; tried along each
+// wall till the house stays walkable (the row behind the counter reached round one of its ends)
+function propBar(h, cid, ctx) {
+  const C0 = PROPS[cid], cw = C0.tiles[0];
+  h.clear = h.clear || new Set();
+  for (const cd of propCands(h, 0, 'barrelRack', ctx).slice(0, 40)) {
+    const rack = propPut(h, 0, 'barrelRack', cd.foot, cd.f, cd.wallV, ctx);
+    const f = cd.f, g = (f + 3) & 3, [c0, r0] = cd.foot[0];
+    for (const o of cw > 2 ? [0, -1] : [0]) {
+      // the innkeeper's row (the rack's front and the tiles beside it the counter covers) must be free floor
+      const row = [];
+      for (let a = Math.min(0, o); a < Math.max(2, o + cw); a++) row.push(T(c0 + DC[g] * a + DC[f], r0 + DR[g] * a + DR[f]));
+      if (!row.every(i => houseFree(h, i) && bedClear(h, 0, i))) continue;
+      const foot = propFoot(h, 0, C0, c0 + DC[g] * o + DC[f] * 2, r0 + DR[g] * o + DR[f] * 2, f, false);
+      if (!foot) continue;
+      for (const i of row) h.clear.add(i);
+      const bar = propPut(h, 0, cid, foot, f, 0, ctx);
+      if (propReach(h, 0)) {
+        // the innkeeper stands behind the counter, before the rack, facing the room
+        const back = T(c0 + DC[f], r0 + DR[f]);
+        h.work = T(c0 + DC[f] * 2, r0 + DR[f] * 2); h.workFrom = back;
+        if (!bar.tiles.includes(h.work)) h.work = bar.tiles[0];
+        // stools before the counter
+        for (const [tc, tr] of foot) {
+          const sc = tc + DC[f], sr = tr + DR[f], sf = propFoot(h, 0, PROPS.barStool, sc, sr, (f + 2) & 3, false);
+          if (sf) propTryList(h, 0, 'barStool', [{ foot: sf, f: (f + 2) & 3, wallV: 0 }], ctx);
+        }
+        return true;
+      }
+      propTake(bar);
+      for (const i of row) h.clear.delete(i);
+    }
+    propTake(rack);
+  }
+  return false;
+}
+// (v555, Jordan) the tavern's front: a hanging sign with a keg on it, on a plain stretch of wall beside the door
+// (high on the ground floor) or over the door (low on the story above), and a stack of kegs or two out beside the house
+function tavernFront(t, n, h, ctx) {
+  if (!h.door || !h.inside) return;
+  const [ic, ir] = h.inside, ins = T(ic, ir), set = new Set(h.tiles.map(([c, r]) => T(c, r)));
+  let out = -1;
+  for (let d = 0; d < 4; d++) { const [ec, er, ew] = edgeOf(ic, ir, d); if (ec === h.door[0] && er === h.door[1] && ew === h.door[2]) out = d; }
+  if (out < 0) return;
+  const spots = [];
+  for (const p of [(out + 1) & 3, (out + 3) & 3]) {
+    const nc = ic + DC[p], nr = ir + DR[p];
+    const v = set.has(T(nc, nr)) ? wallOn(nc, nr, out) : 0;
+    // (on a window's wall it goes on the post at that stretch's far end, a tile from the door, clear of the glass)
+    if (v === 1 || v === 13) spots.push({ c: nc, r: nr, k: 0, slide: v === 13 ? 0.47 * (p === ((out + 3) & 3) ? 1 : -1) : 0 });
+  }
+  if (upWallOn(ic, ir, out, 1) === 1) spots.push({ c: ic, r: ir, k: 1, slide: 0 });
+  if (spots.length) {
+    const s = spots[Math.floor(hs(ic, ir, 553) * spots.length)], oc = s.c + DC[out], or = s.r + DR[out], [ec, er, ew] = edgeOf(s.c, s.r, out);
+    propPut(h, s.k, 'tavernSign', [[oc, or]], out, 1, ctx, { cut: dKey(ec, er, ew, s.k) + 1, y0: storyY(s.k, ins), look: { up: !!s.k }, slide: s.slide });
+    buildCount[Math.floor(or / CH) * NC + Math.floor(oc / CH)]++;   // (drawn with the pieces of the chunk it hangs over)
+  }
+  // the kegs: on yard tiles beside the house's outside walls, near the door, never on a street or the door's step
+  const own = n + 1, step = T(ic + DC[out], ir + DR[out]), near = [];
+  const taken = o => { const b = OB[o]; return !!b && (OBJ[b].tile || OBJ[b].solid >= 0.1 || b === O.LAMP || b === O.PLANTER || b === O.FOUNTAIN); };   // (flowers and grass give way)
+  for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
+    const oc = c + DC[d], or = r + DR[d], o = T(oc, or);
+    if (set.has(o) || o === step || TN[o] !== own || TSTREET[o] || taken(o) || FL[o] || WT[o] || BR[o] || LV[o] !== LV[ins] || pillars.has(o) || stairAt.has(o) || PROP_AT.has(o)) continue;
+    if (Math.abs(oc - (ic + DC[out])) + Math.abs(or - (ir + DR[out])) < 2) continue;
+    { const v = wallOn(c, r, d); if (v !== 1 && v !== 13) continue; }   // (against its timber wall, under a window or not)
+    near.push({ o, c: oc, r: or, d, score: Math.hypot(oc - ic - DC[out], or - ir - DR[out]) + hs(oc, or, 554) * 0.5 });
+  }
+  near.sort((a, b) => a.score - b.score);
+  let put = 0;
+  for (const k of near) {
+    if (put >= (t.tier > 1 ? 2 : 1) || k.score > 4) break;
+    if (PROP_AT.has(k.o) || taken(k.o)) continue;
+    propPut(h, 0, 'kegStack', [[k.c, k.r]], k.d, 0, ctx); put++;
+  }
 }
 // a farmhouse or a cabin: one room, no beds of the town's
 function furnishLone(tiles, inside, kind, wood, n) {
@@ -3607,6 +3691,8 @@ function raiseTownHouses(t, n) {
     let two = style.endsWith('2');
     const stone = style.startsWith('stone');
     let plan = townPlan(w, dep, o0, two, c0 * 7 + r0 * 13 + d);
+    // (v555, Jordan: a tavern is always two stories of timber, rooms over the bar) one that can't be, here, goes elsewhere
+    if (role === 'tavern' && (!plan || plan.low.size < 20)) continue;   // (and roomy: the bar, tables and the hearth)
     if (!plan) { two = false; style = style.replace('2', '1'); plan = townPlan(w, dep, o0, false, c0 * 7 + r0 * 13 + d); }
     const { low, upp, stair } = plan, K = (a, b) => (a - o0) + b * 64, cellOf = k => [(k & 63) + o0, k >> 6];
     const tiles = [], set = new Set(), a2b = new Map();
@@ -20742,7 +20828,8 @@ function folkPlaces(t) {
     h.inTiles = h.tiles.map(([c, r]) => T(c, r)).filter(i => folkOpen(t, i) && !BALCONY.has(i));
     if (h.inTiles.length > 1) h.inTiles = h.inTiles.filter(i => i !== ins);
     h.workSpot = -1;
-    if (h.work != null) {
+    if (h.workFrom != null && h.inTiles.includes(h.workFrom)) h.workSpot = h.workFrom;   // (v555: behind the bar)
+    else if (h.work != null) {
       const wc = h.work % N, wr = Math.floor(h.work / N);
       for (let d = 0; d < 4; d++) {
         const i = T(wc + DC[d], wr + DR[d]);
@@ -25084,7 +25171,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 554, crashSeen = new Map();
+const GAME_VERSION = 555, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -25124,7 +25211,7 @@ window.GAME = {
   // foot and every free tile; landing to every upstairs door), and the farms' and cabins' rooms
   props: () => {
     const walk = h => { const R = propRooms(h); return { down: propReach(h, 0), up: R.up ? propReach(h, 1) : null }; };
-    const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), beds: (h.beds || []).length, work: h.work != null, ...walk(h) });
+    const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), grid: walk(h).down ? undefined : (() => { const cs = h.tiles.map(p => p[0]), rs = h.tiles.map(p => p[1]), ins = h.inside ? T(...h.inside) : -1, set = new Set(h.tiles.map(([c, r]) => T(c, r))); const L = []; for (let r = Math.min(...rs) - 1; r <= Math.max(...rs) + 1; r++) { let line = ''; for (let c = Math.min(...cs) - 1; c <= Math.max(...cs) + 1; c++) { const i = T(c, r); line += !set.has(i) ? (WN[i] || WW[i] ? '#' : ' ') : i === ins ? 'D' : stairAt.has(i) ? 'S' : BEDS.has(i) ? 'B' : PROP_AT.has(i) ? PROP_AT.get(i).id[0] : OB[i] ? 'o' : h.clear?.has(i) ? ',' : '.'; } L.push(line); } return L.join('/'); })(), beds: (h.beds || []).length, work: h.work != null, ...walk(h) });
     return { towns: towns.map(t => ({ tier: t.tier, houses: t.houses.filter(h => !h.cathedral).map(one) })),
       farms: farms.map(f => f.room ? one(f.room) : null), cabins: cabins.map(m => m.room ? one(m.room) : null), total: [...PROP_DRAW.values()].reduce((s, l) => s + l.length, 0) };
   },
