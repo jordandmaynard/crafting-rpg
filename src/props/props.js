@@ -11,7 +11,10 @@
 import * as GFX from '../gfx/index.js';
 
 export const WALL_IN = 0.13;   // a wall's half thickness: a wall prop's back stands this far in from its tile edge
-export const CEIL = 2;         // a story's height (the game's WALL_H): where a hanging prop hangs from
+export const CEIL = 2;
+// (Jordan) tables stand as low as the crafting tables you build (their top 0.46 over the floor: (0.53 - TABLE_LOW
+// 0.26 + 0.035) x STATION_LOOK.size 1.5), and seats are lowered to suit
+export const TABLE_TOP = 0.46, SEAT = 0.28;         // a story's height (the game's WALL_H): where a hanging prop hangs from
 export const WOODS = {
   pine: { name: 'Pine', tier: 'Hamlet', wood: '#9a7048', dark: '#5e4028', light: '#b88a5a' },
   oak: { name: 'Oak', tier: 'Medium town', wood: '#6a4a30', dark: '#43301f', light: '#8a6440' },
@@ -116,7 +119,7 @@ const backZ = d => -d / 2 + WALL_IN;
 const midZ = (d, depth) => backZ(d) + depth / 2;
 // a box carcass (bookcase, shelf, cupboard top): sides, top, bottom, back; shelves at the heights given
 function carcass(W, D, H, z, C, shelves) {
-  part(G.box, C.wood, 0, H / 2, z - D / 2 + 0.01, { sx: W - 0.04, sy: H, sz: 0.02 });
+  part(G.box, C.wood, 0, H / 2, z - D / 2 + 0.01, { sx: W - 0.04, sy: H - 0.06, sz: 0.02 });
   for (const s of [-1, 1]) part(G.box, C.dark, s * (W / 2 - 0.02), H / 2, z, { sx: 0.04, sy: H, sz: D });
   part(G.box, C.dark, 0, H - 0.02, z, { sx: W + 0.04, sy: 0.04, sz: D + 0.03 });
   part(G.box, C.dark, 0, 0.04, z, { sx: W, sy: 0.08, sz: D });
@@ -185,43 +188,44 @@ export const PROPS = {
     } },
   stool: { name: 'Stool', group: 'Seating', tiles: [1, 1], use: 'Sit', goes: 'Houses, tavern bar, workshops',
     build(L, C) {
-      part(G.cyl8, C.wood, 0, 0.43, 0, { sx: 0.36, sy: 0.05, sz: 0.36 });
+      part(G.cyl8, C.wood, 0, SEAT - 0.025, 0, { sx: 0.36, sy: 0.05, sz: 0.36 });
       for (let k = 0; k < 3; k++) {
         const a = k * Math.PI * 2 / 3 + 0.3;
-        seg(G.cyl6, C.dark, [Math.cos(a) * 0.1, 0.41, Math.sin(a) * 0.1], [Math.cos(a) * 0.17, 0, Math.sin(a) * 0.17], 0.022);
+        seg(G.cyl6, C.dark, [Math.cos(a) * 0.1, SEAT - 0.05, Math.sin(a) * 0.1], [Math.cos(a) * 0.16, 0, Math.sin(a) * 0.16], 0.022);
       }
       for (let k = 0; k < 3; k++) {
         const a = k * Math.PI * 2 / 3 + 0.3, b = a + Math.PI * 2 / 3, R = 0.14;
-        seg(G.cyl6, C.dark, [Math.cos(a) * R, 0.16, Math.sin(a) * R], [Math.cos(b) * R, 0.16, Math.sin(b) * R], 0.012);
+        seg(G.cyl6, C.dark, [Math.cos(a) * R, 0.1, Math.sin(a) * R], [Math.cos(b) * R, 0.1, Math.sin(b) * R], 0.012);
       }
     } },
   chair: { name: 'Chair', group: 'Seating', tiles: [1, 1], use: 'Sit', goes: 'Houses, tavern, bank, cartographer',
     build(L, C) {
-      const sx = 0.2, sz = 0.19, seatY = 0.45;
+      // (the seat's top at SEAT; the back's top rail about as far again above it)
+      const sx = 0.2, sz = 0.19, seatY = SEAT - 0.025, backH = SEAT + 0.42;
       part(G.box, C.wood, 0, seatY, 0, { sx: 0.46, sy: 0.05, sz: 0.44 });
       for (const a of [-1, 1]) {
-        part(G.box, C.dark, a * sx, seatY / 2, sz, { sx: 0.05, sy: seatY, sz: 0.05 });
-        part(G.box, C.dark, a * sx, 0.52, -sz, { sx: 0.05, sy: 1.04, sz: 0.05 });
-        part(G.box, C.dark, a * sx, 0.14, 0, { sx: 0.03, sy: 0.03, sz: sz * 2 });
+        part(G.box, C.dark, a * sx, (seatY - 0.025) / 2, sz, { sx: 0.05, sy: seatY - 0.025, sz: 0.05 });
+        part(G.box, C.dark, a * sx, backH / 2, -sz, { sx: 0.05, sy: backH, sz: 0.05 });
+        part(G.box, C.dark, a * sx, 0.09, 0, { sx: 0.03, sy: 0.03, sz: sz * 2 - 0.05 });
       }
-      part(G.box, C.dark, 0, 0.14, sz, { sx: sx * 2, sy: 0.03, sz: 0.03 });
-      for (const y of [0.64, 0.79]) part(G.box, C.wood, 0, y, -sz, { sx: sx * 2, sy: 0.07, sz: 0.03 });
-      part(G.box, C.dark, 0, 0.98, -sz, { sx: sx * 2 + 0.08, sy: 0.08, sz: 0.06 });
+      part(G.box, C.dark, 0, 0.09, sz, { sx: sx * 2 - 0.05, sy: 0.03, sz: 0.03 });
+      for (const y of [SEAT + 0.13, SEAT + 0.25]) part(G.box, C.wood, 0, y, -sz, { sx: sx * 2 - 0.05, sy: 0.07, sz: 0.03 });
+      part(G.box, C.dark, 0, backH - 0.03, -sz, { sx: sx * 2 + 0.08, sy: 0.08, sz: 0.06 });
     } },
   bench: { name: 'Long bench', group: 'Seating', tiles: [2, 1], use: 'Sit (two)', goes: 'Tavern, chapel, guard house mess, houses',
     build(L, C) {
-      part(G.box, C.wood, 0, 0.44, 0, { sx: 1.7, sy: 0.06, sz: 0.32 });
+      part(G.box, C.wood, 0, SEAT - 0.03, 0, { sx: 1.7, sy: 0.06, sz: 0.32 });
       for (const s of [-1, 1]) {
-        part(G.box, C.dark, s * 0.64, 0.21, 0, { sx: 0.06, sy: 0.42, sz: 0.26 });
+        part(G.box, C.dark, s * 0.64, (SEAT - 0.06) / 2 + 0.03, 0, { sx: 0.06, sy: SEAT - 0.12, sz: 0.26 });
         part(G.box, C.dark, s * 0.64, 0.03, 0, { sx: 0.1, sy: 0.06, sz: 0.34 });
       }
-      part(G.box, C.dark, 0, 0.16, 0, { sx: 1.28, sy: 0.06, sz: 0.04 });
+      part(G.box, C.dark, 0, 0.12, 0, { sx: 1.22, sy: 0.05, sz: 0.04 });
     } },
   roundTable: { name: 'Round table', group: 'Tables', tiles: [1, 1], use: 'Sit, eat', goes: 'Houses, tavern corners',
     build(L, C) {
-      part(G.cyl12, C.wood, 0, 0.72, 0, { sx: 0.82, sy: 0.05, sz: 0.82 });
-      part(G.cyl12, C.dark, 0, 0.68, 0, { sx: 0.7, sy: 0.04, sz: 0.7 });
-      part(G.cyl8, C.dark, 0, 0.35, 0, { sx: 0.12, sy: 0.68, sz: 0.12 });
+      part(G.cyl12, C.wood, 0, TABLE_TOP - 0.025, 0, { sx: 0.82, sy: 0.05, sz: 0.82 });
+      part(G.cyl12, C.dark, 0, TABLE_TOP - 0.07, 0, { sx: 0.7, sy: 0.04, sz: 0.7 });
+      part(G.cyl8, C.dark, 0, (TABLE_TOP - 0.09) / 2 + 0.04, 0, { sx: 0.12, sy: TABLE_TOP - 0.09, sz: 0.12 });
       for (const ry of [Math.PI / 4, -Math.PI / 4]) part(G.box, C.dark, 0, 0.04, 0, { sx: 0.62, sy: 0.07, sz: 0.08, ry });
     } },
   longTable: { name: 'Long table', group: 'Tables', tiles: [2, 1], use: 'Sit, eat (four)', goes: 'Houses, tavern, guard house mess',
@@ -233,25 +237,25 @@ export const PROPS = {
       table(2.76, 0.9, 3, C);
       if (L.runner) {
         const k = CC(L.runner[0]);
-        part(G.box, k, 0, 0.778, 0, { sx: 2.4, sy: 0.008, sz: 0.36 });
-        for (const s of [-1, 1]) part(G.box, shade(k, 0.8), s * 1.2, 0.74, 0, { sx: 0.008, sy: 0.08, sz: 0.36 });
+        part(G.box, k, 0, TABLE_TOP + 0.004, 0, { sx: 2.4, sy: 0.008, sz: 0.36 });
+        for (const s of [-1, 1]) part(G.box, shade(k, 0.8), s * 1.204, TABLE_TOP - 0.032, 0, { sx: 0.008, sy: 0.08, sz: 0.36 });
       }
     } },
   desk: { name: 'Desk with ledger', group: 'Tables', tiles: [2, 1], wall: true, use: 'Work', goes: 'Bank, cartographer, merchant, captain',
     roll: r => ({ cover: pick(r, BOOKS) }),
     describe: L => [['Ledger', 'Leather cover', L.cover]],
     build(L, C) {
-      const D = 0.62, z = midZ(1, D), top = 0.76;
+      const D = 0.62, z = midZ(1, D), top = TABLE_TOP;
       part(G.box, C.wood, 0, top - 0.025, z, { sx: 1.5, sy: 0.05, sz: D });
       // drawers on the left, two legs on the right
       part(G.box, C.dark, -0.5, (top - 0.05) / 2, z, { sx: 0.46, sy: top - 0.05, sz: D - 0.04 });
-      for (let k = 0; k < 3; k++) {
-        const y = 0.12 + k * 0.22;
-        part(G.box, C.wood, -0.5, y + 0.08, z + D / 2 - 0.01, { sx: 0.4, sy: 0.18, sz: 0.02 });
-        part(G.box, '#b8903a', -0.5, y + 0.08, z + D / 2 + 0.005, { sx: 0.06, sy: 0.025, sz: 0.02 });
+      for (let k = 0; k < 2; k++) {
+        const y = 0.06 + k * 0.18;
+        part(G.box, C.wood, -0.5, y + 0.08, z + D / 2 - 0.005, { sx: 0.4, sy: 0.15, sz: 0.02 });
+        part(G.box, '#b8903a', -0.5, y + 0.08, z + D / 2 + 0.01, { sx: 0.06, sy: 0.025, sz: 0.02 });
       }
       for (const dz of [-1, 1]) part(G.box, C.dark, 0.68, (top - 0.05) / 2, z + dz * (D / 2 - 0.04), { sx: 0.06, sy: top - 0.05, sz: 0.06 });
-      part(G.box, C.dark, 0.68, 0.12, z, { sx: 0.04, sy: 0.04, sz: D - 0.1 });
+      part(G.box, C.dark, 0.68, 0.1, z, { sx: 0.04, sy: 0.04, sz: D - 0.13 });
       // the open ledger, ink and a quill, a candle
       part(G.box, L.cover, 0.05, top + 0.01, z + 0.05, { sx: 0.5, sy: 0.02, sz: 0.34 });
       for (const s of [-1, 1]) part(G.box, '#e4d8b8', 0.05 + s * 0.12, top + 0.03, z + 0.05, { sx: 0.23, sy: 0.02, sz: 0.31, rz: s * 0.06 });
@@ -590,14 +594,14 @@ export const PROPS = {
 };
 // a plain long table: boards along the top, legs at each end and every tile between, an apron and a stretcher
 function table(W, D, tiles, C) {
-  const top = 0.74, n = 3;
+  const top = TABLE_TOP - 0.025, n = 3;
   for (let k = 0; k < n; k++) part(G.box, k % 2 ? C.light : C.wood, 0, top, (k - (n - 1) / 2) * D / n, { sx: W, sy: 0.05, sz: D / n - 0.008 });
   const xs = tiles > 2 ? [-(W / 2 - 0.1), 0, W / 2 - 0.1] : [-(W / 2 - 0.1), W / 2 - 0.1];
   for (const x of xs) for (const s of [-1, 1]) part(G.box, C.dark, x, (top - 0.025) / 2, s * (D / 2 - 0.08), { sx: 0.08, sy: top - 0.025, sz: 0.08 });
-  for (const s of [-1, 1]) part(G.box, C.dark, 0, top - 0.08, s * (D / 2 - 0.08), { sx: W - 0.2, sy: 0.08, sz: 0.04 });
-  for (const s of [-1, 1]) part(G.box, C.dark, s * (W / 2 - 0.1), top - 0.08, 0, { sx: 0.04, sy: 0.08, sz: D - 0.2 });
-  part(G.box, C.dark, 0, 0.14, 0, { sx: W - 0.2, sy: 0.05, sz: 0.05 });
-  for (const x of xs) part(G.box, C.dark, x, 0.14, 0, { sx: 0.05, sy: 0.05, sz: D - 0.16 });
+  for (const s of [-1, 1]) part(G.box, C.dark, 0, top - 0.065, s * (D / 2 - 0.08), { sx: W - 0.28, sy: 0.08, sz: 0.04 });
+  for (const s of [-1, 1]) part(G.box, C.dark, s * (W / 2 - 0.1), top - 0.065, 0, { sx: 0.04, sy: 0.08, sz: D - 0.24 });
+  part(G.box, C.dark, 0, 0.1, 0, { sx: W - 0.28, sy: 0.05, sz: 0.05 });
+  for (const x of xs) part(G.box, C.dark, x, 0.1, 0, { sx: 0.05, sy: 0.05, sz: D - 0.24 });
 }
 // one of the shelf's goods standing on y, the shelf's middle at z
 function good(g, y, z) {
@@ -606,7 +610,7 @@ function good(g, y, z) {
   else if (g.k === 'crock') { const h = 0.16 + g.h * 0.08; part(G.cyl8, g.c, x, y + h / 2, z, { sx: w, sy: h, sz: w }); part(G.cyl8, shade(g.c, 0.8), x, y + h, z, { sx: w * 0.7, sy: 0.03, sz: w * 0.7 }); }
   else if (g.k === 'sack') { const h = 0.22 + g.h * 0.1; part(G.box, '#b8a47a', x, y + h * 0.45, z, { sx: w, sy: h * 0.9, sz: 0.22 }); part(G.box, '#a8946a', x, y + h * 0.95, z, { sx: w * 0.5, sy: h * 0.18, sz: 0.12 }); }
   else if (g.k === 'bottle') { const h = 0.18 + g.h * 0.06; part(G.cyl8, g.c, x, y + h * 0.35, z, { sx: w, sy: h * 0.7, sz: w }); part(G.cyl8, g.c, x, y + h * 0.82, z, { sx: w * 0.35, sy: h * 0.3, sz: w * 0.35 }); part(G.cyl8, '#8a6a4a', x, y + h, z, { sx: w * 0.3, sy: 0.03, sz: w * 0.3 }); }
-  else if (g.k === 'box') { const h = 0.12 + g.h * 0.12; part(G.box, '#8a6a4a', x, y + h / 2, z, { sx: w, sy: h, sz: 0.24 }); part(G.box, '#6a4a30', x, y + h - 0.01, z, { sx: w + 0.01, sy: 0.02, sz: 0.25 }); }
+  else if (g.k === 'box') { const h = 0.12 + g.h * 0.12; part(G.box, '#8a6a4a', x, y + h / 2, z, { sx: w, sy: h, sz: 0.24 }); part(G.box, '#6a4a30', x, y + h + 0.006, z, { sx: w + 0.01, sy: 0.02, sz: 0.25 }); }
   else if (g.k === 'bowls') { for (let k = 0; k < 3 + Math.floor(g.h * 3); k++) part(G.cyl12, shade(g.c, k % 2 ? 0.9 : 1), x, y + 0.02 + k * 0.035, z, { sx: w - k * 0.005, sy: 0.035, sz: w - k * 0.005 }); }
   else { part(G.cyl12, '#d8b050', x, y + 0.05, z, { sx: w, sy: 0.1, sz: w }); part(G.cyl12, '#a88030', x, y + 0.1, z, { sx: w * 0.92, sy: 0.006, sz: w * 0.92 }); }
 }
@@ -620,15 +624,15 @@ function rugRoll(r) {
 function rugDescribe(L) { return [['Pattern', L.pattern[1]], ['Field', L.field[1], L.field[0]], ['Border', L.border[1], L.border[0]], ['Pattern colour', L.accent[1], L.accent[0]]]; }
 function rug(W, D, L) {
   const F = CC(L.field[0]), B = CC(L.border[0]), A = CC(L.accent[0]), p = L.pattern[0];
+  // (each layer's top 4 mm over the one under it, so none fight)
   part(G.box, B, 0, 0.008, 0, { sx: W, sy: 0.016, sz: D });
-  part(G.box, F, 0, 0.012, 0, { sx: W - 0.24, sy: 0.016, sz: D - 0.24 });
-  part(G.box, A, 0, 0.011, 0, { sx: W - 0.16, sy: 0.016, sz: D - 0.16 });
-  part(G.box, F, 0, 0.0125, 0, { sx: W - 0.24, sy: 0.016, sz: D - 0.24 });
-  const y = 0.021;
+  part(G.box, A, 0, 0.01, 0, { sx: W - 0.16, sy: 0.02, sz: D - 0.16 });
+  part(G.box, F, 0, 0.012, 0, { sx: W - 0.24, sy: 0.024, sz: D - 0.24 });
+  const y = 0.026;
   if (p === 'medallion') {
     part(G.box, A, 0, y, 0, { sx: 0.6, sy: 0.004, sz: 0.6, ry: Math.PI / 4 });
-    part(G.box, B, 0, y + 0.002, 0, { sx: 0.36, sy: 0.004, sz: 0.36, ry: Math.PI / 4 });
-    part(G.box, A, 0, y + 0.004, 0, { sx: 0.14, sy: 0.004, sz: 0.14, ry: Math.PI / 4 });
+    part(G.box, B, 0, y + 0.004, 0, { sx: 0.36, sy: 0.004, sz: 0.36, ry: Math.PI / 4 });
+    part(G.box, A, 0, y + 0.008, 0, { sx: 0.14, sy: 0.004, sz: 0.14, ry: Math.PI / 4 });
     for (const sa of [-1, 1]) for (const sb of [-1, 1]) part(G.box, A, sa * (W / 2 - 0.3), y, sb * (D / 2 - 0.3), { sx: 0.16, sy: 0.004, sz: 0.16, ry: Math.PI / 4 });
   } else if (p === 'stripes') {
     const n = Math.round((D - 0.3) / 0.3);
