@@ -140,7 +140,9 @@ fn roseHaze(p: vec3f) -> vec4f {
     let u = dot(d, vec3f(-nn.z, 0.0, nn.x));
     let Rs = a.w * max(H.rose[5].x + H.rose[5].y * t, 0.05);
     if (length(vec2f(u, d.y)) > Rs * (1.0 + H.rose[4].x + H.rose[4].y * t)) { continue; }
-    let tx = textureSampleLevel(roseTex, roseSamp, vec2f(0.5 + u / (2.0 * Rs), 0.5 - d.y / (2.0 * Rs)), 0.0);
+    // (the game's rose texture holds two designs side by side: b.w 1 the left, 2 the right)
+    let ruv = vec2f(0.5 + u / (2.0 * Rs), 0.5 - d.y / (2.0 * Rs));
+    let tx = textureSampleLevel(roseTex, roseSamp, vec2f((clamp(ruv.x, 0.002, 0.998) + select(0.0, 1.0, b.w > 1.5)) * 0.5, ruv.y), 0.0);
     let mx = max(tx.r, max(tx.g, tx.b));
     let col = mix(vec3f(0.18), tx.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
     return vec4f(col, tx.a * b.z * H.rose[4].z);

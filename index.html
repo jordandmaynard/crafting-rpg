@@ -3776,17 +3776,20 @@ const chapels = [];   // (v493: medium towns' chapels, drawn and lit as a cathed
 // the gallery's front, a whole story high (bigHole its hole's radius, bigY its centre up the wall); the one-wall rose
 // (y, hole, glass) is kept for if players may build them. size and grow scaled by 0.44 / 0.81 so the light falls as
 // big as Jordan had it)
-const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, bigHole: 0.82, bigY: 0.98, bigOut: 0.05, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, style: 2, size: 2.17, grow: 0.073, fill: 2 };
+const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, bigHole: 0.82, bigY: 0.98, bigOut: 0.05, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, size: 2.17, grow: 0.073, fill: 2 };
 const roseDims = q => q && q.big ? { y: ROSE.bigY, hole: ROSE.bigHole, glass: ROSE.bigHole - 0.01, out: ROSE.bigOut } : { y: ROSE.y, hole: ROSE.hole, glass: ROSE.glass, out: ROSE.out };
 // (v442, Jordan's cathedral-stained-glass-v1 kit, art/deliveries) The rose's design: one of four 256 x 256 lossless
 // paintings beside the page (rose/*.webp; the circle r 125 round the middle opaque, outside clear), copied into the
 // texture its glass shows (windowMat), its light on the floor takes its colours from (buildMat roseApply) and the
 // lit haze's beams too. Dark glass and lead let little light through, so a figure in dark glass falls on the floor
-// as a silhouette. Until one has loaded the texture is clear and no light comes through. ROSE.style: ROSE_STYLES.
+// as a silhouette. Until one has loaded the texture is clear and no light comes through.
+// (v542, Jordan: no more picking: a cathedral always has the geometric rose, a chapel the praying priestess. The
+// texture holds both side by side, 512 x 256: the geometric left, the priestess right; a rose's slot in U.roses says
+// which half (its 'on' 1 left, 2 right) and roseUV maps its design's uv into that half)
 const ROSE_STYLES = ['Grail with god rays', 'Knight with raised sword', 'Praying priestess', 'Geometric rose'];
 const ROSE_FILES = ['01-grail-god-rays', '02-knight-sun-rays', '03-praying-priestess', '04-geometric'];
-const ROSE_TEX_S = 256;
-const roseTex = new GFX.DataTexture(new Uint8Array(ROSE_TEX_S * ROSE_TEX_S * 4), ROSE_TEX_S, ROSE_TEX_S);
+const ROSE_TEX_S = 256, ROSE_HALVES = [3, 2];   // (the styles in the texture's left and right halves)
+const roseTex = new GFX.DataTexture(new Uint8Array(ROSE_TEX_S * 2 * ROSE_TEX_S * 4), ROSE_TEX_S * 2, ROSE_TEX_S);
 const roseArt = new Map();   // style -> its pixels (Uint8ClampedArray), once loaded
 function roseLoad(style) {
   if (roseArt.has(style)) return Promise.resolve(roseArt.get(style));
@@ -3802,14 +3805,15 @@ function roseLoad(style) {
     img.src = 'rose/' + ROSE_FILES[style] + '.webp';
   });
 }
-function paintRose(style) {
-  style = clamp(Math.round(style), 0, ROSE_FILES.length - 1);
-  return roseLoad(style).then(d => {
-    if (!d || clamp(Math.round(ROSE.style), 0, ROSE_FILES.length - 1) !== style) return;
-    roseTex.image.data.set(d); roseTex.needsUpdate = true;
+function paintRose(half) {
+  return roseLoad(ROSE_HALVES[half]).then(d => {
+    if (!d) return;
+    const S = ROSE_TEX_S, out = roseTex.image.data;
+    for (let y = 0; y < S; y++) out.set(d.subarray(y * S * 4, (y + 1) * S * 4), (y * S * 2 + half * S) * 4);
+    roseTex.needsUpdate = true;
   });
 }
-paintRose(ROSE.style);
+paintRose(0); paintRose(1);
 function placeCathedral(t, n, house, cands, piece) {
   const own = n + 1, inTown = (c, r) => TN[T(c, r)] === own;
   // (v427, Jordan: always fronting one of the four avenues, never a lane or the ring: the street tile in front is on
@@ -6509,7 +6513,7 @@ function updateHaze() {
     sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky * lightFade, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wispsOn > 0.5 ? HAZE.wisps : 0, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
     tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10],
-    rose: DETAIL_U.roses.value, roseTex: renderer.textureView(roseTex) });
+    rose: DETAIL_U.roses.value, roseTex: renderer.textureView(roseTex) });   // (two designs side by side, see ROSE_HALVES)
 }
 let giVersion = 0;
 // A chunk's block of the height field is worked out when it's first wanted, and again after its meshes change,
@@ -7463,12 +7467,19 @@ const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: ma
 // sun is followed back to the nearest two roses' glass, and where it passes through one, the sunlight there (the
 // shadow map's say, so whatever stands in the way still shades it) takes the colour of the pane it came through,
 // spokes and tracery ring dark. U.roses: per rose [glass centre xyz, glass radius], [outward normal xz, tint, on]
-const ROSE_WGSL = /* wgsl */ `
+// (v542) a design's uv (0-1 over its square) into its half of the two-design texture (h: the rose's 'on', 1 left,
+// 2 right), kept a texel inside it so the other design never bleeds in
+const ROSE_UV_WGSL = /* wgsl */ `
+fn roseUV(uv: vec2f, h: f32) -> vec2f {
+  return vec2f((clamp(uv.x, 0.002, 0.998) + select(0.0, 1.0, h > 1.5)) * 0.5, uv.y);
+}
+`;
+const ROSE_WGSL = ROSE_UV_WGSL + /* wgsl */ `
 // the light through the rose's design at (u, v) on its glass (metres from its middle), as a tint: the glass's colour
 // at full strength, dark glass and lead letting little through; w: how much of it is the rose (0 outside)
-fn roseLight(u: f32, v: f32, R: f32) -> vec4f {
+fn roseLight(u: f32, v: f32, R: f32, h: f32) -> vec4f {
   let uv = vec2f(0.5 + u / (2.0 * R), 0.5 - v / (2.0 * R));
-  let t = textureSampleLevel(tRose, tRoseS, uv, 0.0);
+  let t = textureSampleLevel(tRose, tRoseS, roseUV(uv, h), 0.0);
   let mx = max(t.r, max(t.g, t.b));
   let col = mix(vec3f(0.18), t.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
   return vec4f(col * t.a, t.a);
@@ -7490,11 +7501,11 @@ fn roseAt(w: vec3f, j: i32, taps: i32) -> vec4f {
   let Rs = a.w * max(U.roses[5].x + U.roses[5].y * t, 0.05);
   let br = Rs * (g.x + g.y * t);
   if (length(vec2f(u, v)) > Rs + br) { return vec4f(0.0); }
-  var sum = roseLight(u, v, Rs);
+  var sum = roseLight(u, v, Rs, b.w);
   for (var k = 0; k < taps; k++) {
     let ang = f32(k) * 6.2831853 / f32(taps);
-    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, Rs);
-    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, Rs);
+    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, Rs, b.w);
+    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, Rs, b.w);
   }
   sum /= f32(1 + taps * 2);
   return vec4f(sum.rgb / max(sum.w, 1e-3), sum.w);
@@ -7525,7 +7536,7 @@ function updateRoses() {
     const ca = near[j][1], q = ca.rose, nx = DC[q.e], nz = DR[q.e], o = j * 8;
     const dm = roseDims(q);
     a[o] = q.x + nx * dm.out; a[o + 1] = ca.y + (ca.chapel ? 0 : WALL_H) + dm.y; a[o + 2] = q.z + nz * dm.out; a[o + 3] = dm.glass;
-    a[o + 4] = nx; a[o + 5] = nz; a[o + 6] = ROSE.tint; a[o + 7] = 1;
+    a[o + 4] = nx; a[o + 5] = nz; a[o + 6] = ROSE.tint; a[o + 7] = ca.chapel ? 2 : 1;   // (v542: the texture's half, see ROSE_HALVES)
   }
 }
 function updateDetailU() { const d = DETAIL_U.d.value; d.x = DETAIL.strength; d.y = DETAIL.bevel; }
@@ -12074,7 +12085,7 @@ const GLASS_U = { fx: { value: { x: 0.6, y: 0.15, z: 2.5, w: 1 } }, sky: { value
 function updateGlassU() { const u = GLASS_U.fx.value; u.x = GLASS_FX.sheen; u.y = GLASS_FX.rough; u.z = GLASS_FX.glow; u.w = GLASS_FX.transfer; GLASS_U.sky.value = GLASS_FX.sky; }
 const windowMat = new GFX.ShaderMaterial({ uniforms: GLASS_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   attributes: { ct: 'vec2f' },
-  code: CUT_WGSL + /* wgsl */ `
+  code: CUT_WGSL + ROSE_UV_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 // (v434) a rose window's glass (drawn in the marker colour): its design, from whichever of the nearest roses it's on
 fn roseGlass(w: vec3f) -> vec4f {
@@ -12085,7 +12096,7 @@ fn roseGlass(w: vec3f) -> vec4f {
     let d = w - a.xyz;
     if (abs(dot(d, nn)) > 0.06 || length(d) > a.w + 0.1) { continue; }
     let u = dot(d, vec3f(-nn.z, 0.0, nn.x));
-    let t = textureSampleLevel(tRose, tRoseS, vec2f(0.5 + u / (2.0 * a.w), 0.5 - d.y / (2.0 * a.w)), 0.0);
+    let t = textureSampleLevel(tRose, tRoseS, roseUV(vec2f(0.5 + u / (2.0 * a.w), 0.5 - d.y / (2.0 * a.w)), b.w), 0.0);
     return vec4f(select(vec3f(0.09, 0.07, 0.1), t.rgb, t.a > 0.5), 1.0);
   }
   return vec4f(0.0);
@@ -24487,7 +24498,6 @@ const TUNING = [
     [GLASS_FX, 'rough', 'Roughness (the sun\'s glint)', 0.05, 1, 0.01],
   ]],
   ['Stained glass', [
-    [ROSE, 'style', 'Rose window design (0 grail with god rays, 1 knight with raised sword, 2 praying priestess, 3 geometric rose)', 0, 3, 1, v => paintRose(v)],
     [ROSE, 'tint', 'How strongly its light takes the glass\'s colours', 0, 1, 0.01],
     [ROSE, 'blur', 'How much its light spreads on the way down (a tile)', 0, 0.3, 0.005],
     [ROSE, 'blur0', 'Its light\'s softness at the glass', 0, 0.2, 0.005],
@@ -24824,7 +24834,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 541, crashSeen = new Map();
+const GAME_VERSION = 542, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
