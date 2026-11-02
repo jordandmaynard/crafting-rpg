@@ -3173,7 +3173,7 @@ function raiseTownHouses(t, n) {
   cands.sort((a, b) => a[3] - b[3]);
   const sizes = big ? [[7, 6], [6, 6], [7, 5], [6, 5], [5, 5]] : [[6, 5], [5, 5], [6, 4], [5, 4], [4, 4]];
   // (v426) a large town's cathedral takes the best place first, on the plaza if it can
-  const cath = big ? placeCathedral(t, n, house, cands, piece) : null;
+  const cath = big ? placeCathedral(t, n, house, cands, piece) : t.tier === 1 ? placeChapel(t, n, house, cands, piece) : null;
   for (const [c0, r0, d] of cands) {
     if (t.houses.length >= TT.houses) break;
     const p = (d + 1) & 3, back = (d + 2) & 3;
@@ -3262,7 +3262,7 @@ function raiseTownHouses(t, n) {
     }
     t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up });
   }
-  if (cath) t.houses.push(cath);   // (last, so the tannery and smithy stay the first two houses)
+  if (cath) t.houses.push(cath);   // (last, so the tannery and smithy stay the first two houses; a medium town's chapel likewise)
   townLamps(t, own);
 }
 // A large town's cathedral (v426, Jordan: stone on every floor, square towers like Notre Dame's that needn't be
@@ -3275,7 +3275,7 @@ const CATH = { roof: '#4a5060', stone: '#8a8694', band: '#76727e', dark: '#1e1a2
 // (its heights: the walls' top, the nave's eaves and ridge, the towers' lower stage and belfry tops, so the
 // towers always stand CATH.above over the ridge)
 function cathDims(ca) {
-  const base = ca.y + 2 * WALL_H - 0.02, hw = (ca.W - 4) / 2, eave = base - 0.06 + ROOF_SLOPE * (ca.W / 2 + 0.12 - hw), ridge = eave + hw * CATH.pitch;
+  const base = ca.y + (ca.chapel ? 1 : 2) * WALL_H - 0.02, hw = ca.chapel ? ca.W / 2 : (ca.W - 4) / 2, eave = base - 0.06 + ROOF_SLOPE * (ca.W / 2 + 0.12 - hw), ridge = eave + hw * CATH.pitch;
   const H1 = 2 * WALL_H + 0.6, H2 = Math.max(H1 + 2.6, ridge - ca.y + CATH.above);
   return { base, hw, outer: ca.W / 2, eave, ridge, H1, H2 };
 }
@@ -3294,10 +3294,10 @@ function cathRoof(ca) {
       OUT = nave;
       for (const sg of [-1, 1]) quad(at(sg * (hw + 0.1), eave - 0.06, B0), at(0, ridge, B0), at(0, ridge, B1), at(sg * (hw + 0.1), eave - 0.06, B1), lead);
       OUT = aisle;
-      for (const sg of [-1, 1]) quad(at(sg * hw, eave, 2.5), at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.06, B1), at(sg * hw, eave, B1), lead);
+      if (!ca.chapel) for (const sg of [-1, 1]) quad(at(sg * hw, eave, 2.5), at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.06, B1), at(sg * hw, eave, B1), lead);
       OUT = bufTmp;
       part(G.box, dark, ...at(0, ridge + 0.04, (B0 + B1) / 2), DC[ca.p] ? { sx: 0.16, sy: 0.1, sz: B1 - B0 } : { sx: B1 - B0, sy: 0.1, sz: 0.16 });
-      for (const sg of [-1, 1]) quad(at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.2, 2.5), at(sg * (outer + 0.12), base - 0.2, B1), at(sg * (outer + 0.12), base - 0.06, B1), dark);
+      if (!ca.chapel) for (const sg of [-1, 1]) quad(at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.2, 2.5), at(sg * (outer + 0.12), base - 0.2, B1), at(sg * (outer + 0.12), base - 0.06, B1), dark);
       // the stone gables: over the door between the towers, and across the whole back. A mortar backing, then (v428,
       // Jordan: they were plain) coursed blocks as the walls are laid, cut to the gable's outline row by row, a moulded
       // band along the walls' top and the eaves', a blind arcade of lancets and a quatrefoil under the peak
@@ -3365,11 +3365,14 @@ function cathRoof(ca) {
         }
       }
       // a pinnacle on each gable's peak and the spire over the crossing
-      for (const B of [0.38, ca.dep + 0.62]) part(G.cone4, shade(stone, 1.05), ...at(0, ridge + 0.4, B), { sx: 0.2, sy: 0.6, sz: 0.2, ry: Math.PI / 4 });
-      const Bs = Math.max(3, ca.dep * 0.62);
-      part(G.cyl8, dark, ...at(0, ridge + 0.35, Bs), { sx: 0.5, sy: 0.7, sz: 0.5 });
-      part(G.cone6, shade(lead, 0.85), ...at(0, ridge + 0.7 + 1.4, Bs), { sx: 0.48, sy: 2.8, sz: 0.48 });
-      part(G.cone4, '#b8923a', ...at(0, ridge + 3.6, Bs), { sx: 0.08, sy: 0.3, sz: 0.08 });
+      for (const B of ca.chapel ? [ca.dep + 0.62] : [0.38, ca.dep + 0.62]) part(G.cone4, shade(stone, 1.05), ...at(0, ridge + 0.4, B), { sx: 0.2, sy: 0.6, sz: 0.2, ry: Math.PI / 4 });
+      if (ca.chapel) chapelSteeple(ca, at, ridge, stone, lead, darkC, bandC);
+      else {
+        const Bs = Math.max(3, ca.dep * 0.62);
+        part(G.cyl8, dark, ...at(0, ridge + 0.35, Bs), { sx: 0.5, sy: 0.7, sz: 0.5 });
+        part(G.cone6, shade(lead, 0.85), ...at(0, ridge + 0.7 + 1.4, Bs), { sx: 0.48, sy: 2.8, sz: 0.48 });
+        part(G.cone4, '#b8923a', ...at(0, ridge + 3.6, Bs), { sx: 0.08, sy: 0.3, sz: 0.08 });
+      }
       const m = bufTmp.mesh(roofMat);
       for (const kid of [nave.mesh(slateSteep), aisle.mesh(slateMat)]) if (kid) { kid.matrixAutoUpdate = false; m.add(kid); }
       // (v434: hidden while you're inside, it still shades the inside: a stand-in that only casts, always there, so
@@ -3381,7 +3384,34 @@ function cathRoof(ca) {
     } finally { OUT = save; }
   };
 }
-const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Map();   // (ROSE_WALLS: wall key -> the rose it's cut for)
+// (v493, Jordan) a medium town's chapel's steeple: a square stone bell-cote astride the ridge just behind the front
+// gable, a louvred opening in each face, a moulded cap, a slate spire and a gilt cross
+function chapelSteeple(ca, at, ridge, stone, lead, darkC, bandC) {
+  const B = CHAPEL.steepleB, w = CHAPEL.steepleW, y0 = ridge - 0.7, y1 = ridge + CHAPEL.steepleH, ax = DC[ca.p] !== 0;
+  const box = (A, yy, Bb, sA, sy, sB, col) => part(G.box, col, ...at(A, yy, Bb), ax ? { sx: sA, sy, sz: sB } : { sx: sB, sy, sz: sA });
+  const rows = Math.max(2, Math.round((y1 - y0) / 0.28)), rh = (y1 - y0) / rows;
+  box(0, (y0 + y1) / 2, B, w - 0.04, y1 - y0, w - 0.04, CC('#4a4652'));
+  for (let row = 0; row < rows; row++) box(0, y0 + rh * (row + 0.5), B, w + (row % 2 ? 0.02 : 0), rh - 0.03, w + (row % 2 ? 0 : 0.02), shade(stone, 0.8 + hs(Math.floor(ca.c0), Math.floor(ca.r0) + row, 493) * 0.3));
+  // a louvred opening in each face, a band under it and the cap over it
+  const ym = y1 - 0.5, oh = 0.6, f = w / 2 + 0.015;
+  for (const [dA, dB] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const across = (u, yy, sU, sy, th, col) => dA ? box(dA * f, yy, B + u, th, sy, sU, col) : box(u, yy, B + dB * f, sU, sy, th, col);
+    across(0, ym, 0.3, oh, 0.06, darkC);
+    for (let l = 0; l < 4; l++) across(0, ym - oh / 2 + 0.1 + l * (oh - 0.2) / 3, 0.28, 0.04, 0.08, '#4a3a2c');
+    for (const sd of [-0.19, 0.19]) across(sd, ym, 0.07, oh + 0.08, 0.08, shade(bandC, 1.05));
+    across(0, ym + oh / 2 + 0.04, 0.46, 0.07, 0.08, shade(bandC, 1.05));
+  }
+  box(0, ridge + 0.05, B, w + 0.1, 0.1, w + 0.1, shade(bandC, 1.02));
+  box(0, y1 + 0.05, B, w + 0.16, 0.12, w + 0.16, shade(bandC, 1.02));
+  const [sx, , sz] = at(0, 0, B);
+  part(G.cone4, shade(lead, 0.85), sx, y1 + 0.11 + CHAPEL.spireH / 2, sz, { sx: (w + 0.06) * Math.SQRT2, sy: CHAPEL.spireH, sz: (w + 0.06) * Math.SQRT2, ry: Math.PI / 4 });
+  // the cross on top
+  const yc = y1 + 0.11 + CHAPEL.spireH;
+  box(0, yc + 0.22, B, 0.05, 0.44, 0.05, '#c9a24a');
+  box(0, yc + 0.3, B, 0.24, 0.05, 0.05, '#c9a24a');
+}
+const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Map();
+const chapels = [];   // (v493: medium towns' chapels, drawn and lit as a cathedral is, cathAt keyed by their door tile too)   // (ROSE_WALLS: wall key -> the rose it's cut for)
 // (v433) the rose window: its centre this far up its story's wall, the hole through the wall round it
 // (v434) out: where the glass stands across the wall (the inside face, so the hole's own lip takes none of its light);
 // blur: how much the light spreads (glass radii a tile it travels) and blur0 at the glass; haze: the beams' colour in
@@ -3522,6 +3552,64 @@ function raiseCathedral(t, c0, r0, d, W, dep, house, piece) {
   ca.anchor = doorT; cathAt.set(doorT, ca); cathedrals.push(ca); t.cathedral = ca;
   return { tiles, door, inside: at(0, 1), clear: new Set([doorT, t0, t1, st.land]), color: CATH.roof, style: 'cathedral', cathedral: ca, up: { doors: [], tiles: tiles.slice() } };
 }
+// A medium town's chapel (v493, Jordan: the cathedral's pieces, small: no belfries, but a steeple and the stained
+// glass, one story inside): a stone box W wide and dep deep fronting a street, the door in the middle of its front,
+// a marble floor, stone windows down the sides, the big rose window across the back wall over the altar, buttresses
+// (with a pinnacle each) down the sides and either side of the front and back, and the cathedral's steep slate roof
+// with its stone gables and a steeple astride the ridge behind the front. Like the cathedral it faces east or west
+// if it can, so the low sun comes through the rose.
+const CHAPEL = { sizes: [[5, 8], [5, 7], [5, 6]], steepleB: 1.25, steepleW: 0.9, steepleH: 1.1, spireH: 2.4 };
+function placeChapel(t, n, house, cands, piece) {
+  const own = n + 1, inTown = (c, r) => TN[T(c, r)] === own;
+  const order = cands.map(([c, r, d]) => [c, r, d, Math.hypot(c - t.c, r - t.r) + hs(c, r, 493 + d) * 0.5]).sort((a, b) => a[3] - b[3]);
+  for (const ew of [1, 0]) for (const [W, dep] of CHAPEL.sizes) for (const [c0, r0, d] of order) {
+    if ((d & 1) !== ew) continue;
+    const p = (d + 1) & 3, at = (a, b) => [c0 + DC[p] * a + DC[d] * b, r0 + DR[p] * a + DR[d] * b];
+    const lv = LV[T(...at(0, 1))], o0 = -(W - 1) / 2, a1 = -o0;
+    let ok = true;
+    for (let a = o0 - 1; a <= a1 + 1 && ok; a++) for (let b = 0; b <= dep + 1 && ok; b++) {
+      const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep;
+      if (inside ? !inTown(c, r) || TSTREET[i] || house.has(i) || LV[i] !== lv : (b > 0 && (!inTown(c, r) || house.has(i)))) ok = false;
+    }
+    if (ok) return raiseChapel(t, c0, r0, d, W, dep, house, piece);
+  }
+  return null;
+}
+function raiseChapel(t, c0, r0, d, W, dep, house, piece) {
+  const p = (d + 1) & 3, back = (d + 2) & 3, o0 = -(W - 1) / 2, a1 = -o0;
+  const at = (a, b) => [c0 + DC[p] * a + DC[d] * b, r0 + DR[p] * a + DR[d] * b];
+  const P = (A, B) => [c0 + 0.5 + DC[p] * A + DC[d] * B, r0 + 0.5 + DR[p] * A + DR[d] * B];
+  const y = LV[T(...at(0, 1))] * STEP;
+  const ca = { c0, r0, d, p, W, dep, o0, a1, y, P, cols: [], towers: [], buttress: [], rose: null, chapel: true };
+  const tiles = [], set = new Set(), a2b = new Map();
+  for (let a = o0; a <= a1; a++) for (let b = 1; b <= dep; b++) {
+    const [c, r] = at(a, b), i = T(c, r);
+    house.add(i); OB[i] = 0; FL[i] = 3; piece(c, r); tiles.push([c, r]); set.add(i); a2b.set(i, [a, b]);
+  }
+  const doorT = T(...at(0, 1));
+  let door = null;
+  for (const [c, r] of tiles) {
+    const i = T(c, r), [a, b] = a2b.get(i);
+    for (let e = 0; e < 4; e++) {
+      if (set.has(T(c + DC[e], r + DR[e]))) continue;
+      const [ec, er, ew] = edgeOf(c, r, e), side = e === p || e === ((p + 2) & 3);
+      const isDoor = i === doorT && e === back, win = side && b % 2 === 0 && b >= 2 && b < dep;
+      (ew ? WW : WN)[T(ec, er)] = isDoor ? 2 : win ? 14 : 4;
+      piece(ec, er);
+      if (isDoor) door = [ec, er, ew];
+      // buttresses: down the sides between the windows, and either side of the front and the back
+      if (side ? b % 2 === 1 && b > 1 && b < dep : Math.abs(a) === a1)
+        ca.buttress.push({ e, x: c + 0.5 + DC[e] * 0.5, z: r + 0.5 + DR[e] * 0.5, key: edgeKey(ec, er, ew) });
+      // the rose: across the back wall's middle three walls, a story high (the big rose; story 0, so no story offset)
+      if (e === d && a === 0) ca.rose = { e, x: c + 0.5 + DC[e] * 0.5, z: r + 0.5 + DR[e] * 0.5, key: edgeKey(ec, er, ew), big: true };
+    }
+  }
+  if (ca.rose) for (const a of [-1, 0, 1]) { const [c, r] = at(a, dep), [ec, er, ew] = edgeOf(c, r, d); (ew ? WW : WN)[T(ec, er)] = 4; ROSE_WALLS.set(edgeKey(ec, er, ew), ca.rose); }
+  // the altar, a tile out from the rose
+  { const [x, z] = P(0, dep - 0.5), i = T(Math.floor(x), Math.floor(z)); if (!pillars.has(i)) pillars.set(i, []); pillars.get(i).push({ x, z, y, R: 0.42, col: false }); ca.altar = [x, z]; }
+  ca.anchor = doorT; cathAt.set(doorT, ca); chapels.push(ca); t.chapel = ca;
+  return { tiles, door, inside: at(0, 1), clear: new Set([doorT]), color: CATH.roof, style: 'chapel', cathedral: ca, chapel: ca, up: null };
+}
 // what a cathedral has besides its walls, floors and stairs, drawn with its door's chunk: on the ground story's mesh
 // the towers (each whole and as a waist-high stump, the cutaway picking: see cutTag), the buttresses' lower halves,
 // the altar; on the gallery's, the buttresses' upper halves and the rose window (each keyed by its wall)
@@ -3620,6 +3708,8 @@ function cathExtras(ca) {
       };
       stack(WALL_H - 0.08);
       bx(0.3, y + WALL_H - 0.04, 0.44, 0.1, 0.66, shade(band, k));
+      // (v493: a chapel's, one story, end in a pinnacle)
+      if (ca.chapel) part(G.cone4, shade(stone, k * 1.05), q.x + DC[q.e] * 0.3, y + WALL_H + 0.36, q.z + DR[q.e] * 0.3, { sx: 0.34, sy: 0.72, sz: 0.34, ry: Math.PI / 4 });
       cutTag(OUT, n0, q.key + 1, 1);
       const n1 = OUT.n;
       stack(CUT_H);
@@ -3637,6 +3727,8 @@ function cathExtras(ca) {
         part(G.cyl8, '#efe6c8', cx, y + 1.17, cz, { sx: 0.05, sy: 0.2, sz: 0.05 });
       }
     }
+    // (v493: a chapel's rose is on its one story)
+    if (ca.chapel && ca.rose) roseParts(ca.rose, y);
   } finally { emitSurf = save; SURF = 0; }
 }
 function cathUpper(ca) {
@@ -3652,9 +3744,14 @@ function cathUpper(ca) {
       bx(0.2, y + WALL_H + 0.16, 0.24, 0.72, 0.24, shade(stone, k * 1.05), G.cone4, Math.PI / 4);
       cutTag(OUT, n0, q.key + 2 * SNN + 1, 1);
     }
-    // the rose window: a stone ring, glass, eight spokes and a boss, standing just out from the wall over the door
-    const q = ca.rose;
-    if (q) {
+    if (ca.rose) roseParts(ca.rose, y);
+  } finally { emitSurf = save; SURF = 0; }
+}
+// the rose window: a stone ring, glass, eight spokes and a boss, standing just out from the wall over the door (a
+// cathedral's, on its gallery story: y its floor; v493 a chapel's on its back wall, its one story)
+function roseParts(q, y) {
+  const band = CC(CATH.band);
+    {
       const dm = roseDims(q), RH = dm.hole, nk = RH / 0.45;
       const ax = DC[q.e] !== 0, n0 = OUT.n, g0 = GLASSB ? GLASSB.n : 0, ry = y + dm.y;
       const at = out => [q.x + DC[q.e] * out, q.z + DR[q.e] * out];
@@ -3687,7 +3784,6 @@ function cathUpper(ca) {
       }
       cutTag(OUT, n0, q.key + 1, 1); if (GLASSB) cutTag(GLASSB, g0, q.key + 1, 1);
     }
-  } finally { emitSurf = save; SURF = 0; }
 }
 // A town house's plan (v410) in its box (a o0..o0+w-1 across the front, b 1..dep back from the street; the door
 // at a 0, b 1): the ground footprint (a box, or an L, T or front-notched box), the upper story's (all of it, or
@@ -4379,7 +4475,7 @@ function finishTowns() {
   buildHalos();
   for (const t of towns) {
     for (const hse of t.houses) {
-      makeDoor(...hse.door); makeRoom(hse.tiles, hse.color);
+      makeDoor(...hse.door); makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
       if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.up.tiles, hse.color, hse.cathedral ? cathRoof(hse.cathedral) : null, 1); }
     }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
@@ -6924,12 +7020,12 @@ function updateRoses() {
   const a = DETAIL_U.roses.value; a.fill(0);
   a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow; a[20] = ROSE.size; a[21] = ROSE.grow; a[22] = ROSE.fill; a[23] = BUILD_TEST.shade;
   const near = [];
-  for (const ca of cathedrals) { const q = ca.rose; if (!q) continue; const d = Math.hypot(q.x - H.x, q.z - H.z); if (d < 48) near.push([d, ca]); }
+  for (const list of [cathedrals, chapels]) for (const ca of list) { const q = ca.rose; if (!q) continue; const d = Math.hypot(q.x - H.x, q.z - H.z); if (d < 48) near.push([d, ca]); }
   near.sort((x, y) => x[0] - y[0]);
   for (let j = 0; j < Math.min(2, near.length); j++) {
     const ca = near[j][1], q = ca.rose, nx = DC[q.e], nz = DR[q.e], o = j * 8;
     const dm = roseDims(q);
-    a[o] = q.x + nx * dm.out; a[o + 1] = ca.y + WALL_H + dm.y; a[o + 2] = q.z + nz * dm.out; a[o + 3] = dm.glass;
+    a[o] = q.x + nx * dm.out; a[o + 1] = ca.y + (ca.chapel ? 0 : WALL_H) + dm.y; a[o + 2] = q.z + nz * dm.out; a[o + 3] = dm.glass;
     a[o + 4] = nx; a[o + 5] = nz; a[o + 6] = ROSE.tint; a[o + 7] = 1;
   }
 }
@@ -11742,7 +11838,7 @@ function buildPieces(cx, cz, ch, only = null) {
         if (ww) wallPiece(c, r, 1, ww);
         const st = stairs.get(k * SNN + i);
         if (st) drawStair(st);
-        if (k === 1) { const ca = cathAt.get(i); if (ca) cathUpper(ca); }
+        if (k === 1) { const ca = cathAt.get(i); if (ca && !ca.chapel) cathUpper(ca); }
         const bd = BEDS.get(k * SNN + i);   // (v454: a town bed upstairs, drawn at its head)
         if (bd && bd.i === i) townBed(bd);
       }
@@ -19029,7 +19125,7 @@ function folkPeople(t) {
     for (let k = 0; k < n; k++) {
       // (a workshop's first is its trade, the cathedral's all clergy)
       const extra = k === 1 && extras.length ? extras.shift() : null;
-      const want = h.cathedral ? (k ? ['priest', 'choir'] : ['bishop', 'priest']) : !k && h.trade ? [h.trade] : extra ? [extra] : null;
+      const want = h.cathedral ? (h.chapel ? (k ? ['priest', 'choir'] : ['priest']) : k ? ['priest', 'choir'] : ['bishop', 'priest']) : !k && h.trade ? [h.trade] : extra ? [extra] : null;
       let d = null;
       for (let a = 0; a < 800; a++) {
         const e = folkKit.design(folkSeed(t.n, hi0, k, a));
@@ -23216,7 +23312,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 492, crashSeen = new Map();
+const GAME_VERSION = 493, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
