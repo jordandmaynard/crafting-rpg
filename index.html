@@ -3673,7 +3673,31 @@ function townLamps(t, own) {
   cand.sort((x, y) => x[2] - y[2]);
   const gap = TOWN_LAMP_GAP[t.tier], got = [];
   for (const [c, r] of cand) if (got.every(([gc, gr]) => Math.hypot(gc - c, gr - r) >= gap)) { got.push([c, r]); t.lampAt.add(T(c, r)); }
+  // (v455, Jordan: beside the streets like the lamps, never on them) a large town's flower boxes, on the same yard
+  // tiles along the streets, TOWN_PLANTER_GAP apart, never next to a lamp or on a door's step; each lies lengthwise
+  // along the street it borders (t.planterAt: tile -> true when it runs north-south)
+  t.planterAt = new Map();
+  if (t.tier !== 2) return;
+  const boxes = [], TT = TOWN_TIER[t.tier], lp = TT.plaza + 1, ring = TT.ring;
+  // (the lamps placeScenery stands at the plaza's corners and the ring's)
+  const cornerLamp = (c, r) => { const ax = Math.abs(c - t.c), az = Math.abs(r - t.r); return (ax === lp && az === lp) || (ring && ax === ring + 1 && az === ring + 1); };
+  for (const [c, r] of cand) {
+    const i = T(c, r);
+    if (t.lampAt.has(i) || got.some(([gc, gr]) => Math.max(Math.abs(gc - c), Math.abs(gr - r)) <= 1)) continue;
+    let nearCorner = false;
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (cornerLamp(c + a, r + b)) nearCorner = true;
+    if (nearCorner) continue;
+    let door = false, ns = null;
+    for (let e = 0; e < 4; e++) {
+      if (wallOn(c, r, e) === 2) door = true;
+      const j = T(c + DC[e], r + DR[e]);
+      if (ns === null && TSTREET[j] && TN[j] === own) ns = e === 1 || e === 3;
+    }
+    if (door || !boxes.every(([bc, br]) => Math.hypot(bc - c, br - r) >= TOWN_PLANTER_GAP)) continue;
+    boxes.push([c, r]); t.planterAt.set(i, ns);
+  }
 }
+const TOWN_PLANTER_GAP = 4;
 const TABLES = [];
 const TOWN_PROP = new Map();   // (v452) town workbench tile -> what it's drawn as: 'saw' | 'grinder' | 'smelter' | 'alchemy' | 'crate'
 const BEDS = new Map();        // (v452) both tiles of every town bed -> { c, r (head), d (head to foot), i, j, color, house, town }
@@ -5310,16 +5334,8 @@ function placeScenery(c, r) {
       const ring = TOWN_TIER[t.tier].ring, lp = TOWN_TIER[t.tier].plaza + 1, P = lp - 1, adx = Math.abs(dx), adz = Math.abs(dz);
       if (t.tier === 2) {
         if (Math.max(adx, adz) <= 1) return;   // (the fountain's ground)
-        // flower boxes (v408): round the plaza's corners, and every fourth tile down the avenues' side lanes, clear of
-        // doors, crossings, the town's edge and any road laid along a lane
-        let box = false;
-        if (TSTREET[i] === 2) box = (adx === P && adz >= 2) || (adz === P && adx >= 2);
-        else if (TSTREET[i] === 3 && !PATH[i]) {
-          const along = adx <= 1 ? adz : adx, ahead = adx <= 1 ? T(c, r + Math.sign(dz)) : T(c + Math.sign(dx), r);
-          box = along % 4 === 2 && along > P + 1 && Math.abs(along - ring) > 1 && TN[ahead] === TN[i] && TN[T(c + Math.sign(dx) * 2 * (adx <= 1 ? 0 : 1), r + Math.sign(dz) * 2 * (adx <= 1 ? 1 : 0))] === TN[i];
-        }
-        if (box) { for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2) box = false; }
-        if (box) { OB[i] = O.PLANTER; return; }
+        // flower boxes (v455): beside the streets, picked with the lamps (townLamps: t.planterAt)
+        if (t.planterAt?.has(i)) { OB[i] = O.PLANTER; return; }
       }
       if ((Math.abs(dx) === lp && Math.abs(dz) === lp) || (ring && Math.abs(dx) === ring + 1 && Math.abs(dz) === ring + 1) || t.lampAt?.has(i)) { OB[i] = O.LAMP; t.lamps.push([c + 0.5, r + 0.5]); return; }
       if (cell !== 'yard' || PATH[i]) return;
@@ -10513,7 +10529,7 @@ function planter(c, r) {
   const i = T(c, r), y = LV[i] * STEP, t = towns[TN[i] - 1], x = c + 0.5, z = r + 0.5;
   // (lengthwise along the avenue it lines; round the plaza, along the plaza's edge it stands on)
   const dx = c - t.c, dz = r - t.r, P = TOWN_TIER[t.tier].plaza;
-  const ns = TSTREET[i] === 3 ? Math.abs(dx) <= 1 : Math.abs(dx) === P && Math.abs(dz) !== P ? true : Math.abs(dz) === P && Math.abs(dx) !== P ? false : hs(c, r, 402) > 0.5;
+  const ns = t.planterAt?.has(i) ? t.planterAt.get(i) : TSTREET[i] === 3 ? Math.abs(dx) <= 1 : Math.abs(dx) === P && Math.abs(dz) !== P ? true : Math.abs(dz) === P && Math.abs(dx) !== P ? false : hs(c, r, 402) > 0.5;
   const L = 0.9, W = 0.42, ry = ns ? Math.PI / 2 : 0, wood = shade(CC('#6a4a2e'), 0.92 + hs(c, r, 403) * 0.12);
   part(G.box, wood, x, y + 0.2, z, { sx: L, sy: 0.4, sz: W, ry });
   part(G.box, '#3e2a1a', x, y + 0.41, z, { sx: L - 0.08, sy: 0.02, sz: W - 0.08, ry });
@@ -22633,7 +22649,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 455, crashSeen = new Map();
+const GAME_VERSION = 456, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -22847,7 +22863,7 @@ window.GAME = {
   graveyards: () => graveyards.map(g => ({ ...g })),
   mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, cut: k.cut, why: k.why, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
-  raw: () => ({ connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
+  raw: () => ({ TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
