@@ -28,6 +28,12 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #stage canvas { display: block; position: absolute; top: 0; left: 0; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; cursor: crosshair; }
 .nogpu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; white-space: pre-line; color: #e8dcc8; font: 15px/1.6 sans-serif; }
 #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+/* (v452) what a townsperson says when you talk to them, over their head */
+#folkSay { position: fixed; transform: translate(-50%, -100%); max-width: 300px; padding: 8px 12px 10px; background: rgba(20, 14, 24, 0.88); border: 1px solid #000; outline: 1px solid rgba(232, 220, 196, 0.35); color: var(--bone, #e8dcc4); text-shadow: 2px 2px 0 #000; text-align: center; pointer-events: none; }
+#folkSay[hidden] { display: none; }
+#folkSay::after { content: ''; position: absolute; left: 50%; bottom: -7px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: rgba(20, 14, 24, 0.88); }
+#folkSay .who { font-family: var(--display); font-size: 11px; color: var(--dim, #a69ab3); margin-bottom: 3px; }
+#folkSay .say { font-size: 14px; line-height: 1.3; white-space: normal; }
 .hint { position: absolute; font-family: var(--display); font-size: 10px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -100%); white-space: nowrap; }
 .fbar { position: absolute; width: var(--hb-w, 44px); height: var(--hb-h, 5px); background: var(--hb-back, #1a0e10); border: 2px solid #000; transform: translate(-50%, -100%); opacity: var(--hb-op, 1); }
 .fbar i, #target .meter i { position: relative; display: block; height: 100%; width: 100%; background: var(--hb-fill, #e8b830); box-shadow: inset 0 -2px 0 var(--hb-fillDark, #a8781a); }
@@ -699,7 +705,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 </style>
 
 <div id="stage"></div>
-<div id="fx"><div id="jumpHint" class="hint" hidden></div></div>
+<div id="fx"><div id="jumpHint" class="hint" hidden></div><div id="folkSay" hidden><div class="who"></div><div class="say"></div></div></div>
 
 <div class="hud tl">
   <div class="wk health" id="hpPlate">
@@ -2925,7 +2931,7 @@ function townTables(t, n) {
     if (!best) return;
     const cs = house.tiles.map(p => p[0]), rs = house.tiles.map(p => p[1]);
     const wide = Math.max(...cs) - Math.min(...cs) >= Math.max(...rs) - Math.min(...rs);
-    OB[T(best[0], best[1])] = o;
+    OB[T(best[0], best[1])] = o; house.work = T(best[0], best[1]);
     TABLES.push({ c: best[0], r: best[1], x: best[0] + 0.5, z: best[1] + 0.5, ry: wide ? 0 : Math.PI / 2, town: n, kind });
   };
   const tan = t.houses[0], smithy = t.houses[1] || tan;
@@ -2936,6 +2942,92 @@ function townTables(t, n) {
     if (smithy !== tan) smithy.color = '#5a5664';
     smithy.smithy = true; t.smithy = smithy;
   }
+  townTrades(t, n);
+  townBeds(t, n);
+}
+// (v452) The towns' other trades: after the tannery and smithy, each plain house in turn takes the next of its town
+// size's trades, with a workbench for its keeper to stand at (TOWN_PROP: a saw table, grinder, smelter, alchemy
+// table or crate, drawn as the station would be but only for show: nothing's refined at them).
+const TOWN_TRADES = [
+  [['woodcutter', 'saw'], ['goodfolk', 'grinder']],
+  [['ironmonger', 'smelter'], ['herbalist', 'alchemy'], ['innkeeper', 'crate'], ['glazier', 'smelter'], ['mason', 'grinder'], ['woodcutter', 'saw'], ['carter', 'crate']],
+  [['innkeeper', 'crate'], ['herbalist', 'alchemy'], ['jeweller', 'crate'], ['merchant', 'crate'], ['glazier', 'smelter'], ['ironmonger', 'smelter'], ['mason', 'grinder'], ['banker', 'crate'], ['cartographer', 'crate'], ['goodfolk', 'grinder'], ['woodcutter', 'saw']],
+];
+// a free ground-floor tile of a house: not its stair, its doorway's inside or kept clear, nothing on it
+function houseFree(h, i) {
+  const ins = h.inside ? T(h.inside[0], h.inside[1]) : -1;
+  return OB[i] === 0 && i !== ins && !stairAt.has(i) && !h.clear?.has(i) && !BALCONY.has(i);
+}
+function townTrades(t, n) {
+  const list = [...TOWN_TRADES[t.tier] || TOWN_TRADES[0]];
+  if (t.tannery) t.tannery.trade = 'tanner';
+  if (t.smithy && t.smithy !== t.tannery) t.smithy.trade = ['smith', 'armorer', 'masterSmith'][t.tier] || 'smith';
+  else if (t.smithy) t.smithy.trade = 'tanner';
+  for (const h of t.houses) {
+    if (h.trade || h.cathedral || !list.length) continue;
+    const [trade, kind] = list.shift();
+    h.trade = trade;
+    // the bench: the free tile farthest from the door
+    const [ic, ir] = h.inside || h.tiles[0];
+    let best = -1, bd = -1;
+    for (const [c, r] of h.tiles) {
+      const i = T(c, r), d = Math.hypot(c - ic, r - ir) + hs(c, r, 451) * 0.01;
+      if (!houseFree(h, i) || d <= bd) continue;
+      OB[i] = O.WORKPROP; h.work = i;
+      const ok = bedsReachable(h, []);
+      OB[i] = 0; h.work = null;
+      if (ok) { bd = d; best = i; }
+    }
+    if (best < 0) continue;
+    OB[best] = O.WORKPROP; TOWN_PROP.set(best, kind); h.work = best;
+  }
+}
+// (v452, Jordan) Beds: 2 x 1, along the house's walls (the head against one), as many as the house's people (by
+// town size, FOLK_PER_HOUSE's most), each with a blanket of its own colour, so that everyone has one to sleep in.
+const BLANKETS = ['#8a2f2f', '#2f4f8a', '#3f6a3a', '#7a5a2a', '#6a3a6a', '#2f6a6a', '#9a6a3a', '#5a5a7a', '#8a7a4a', '#4a3a5a', '#a04a3a', '#3a5a3a'];
+function townBeds(t, n) {
+  const want = [2, 2, 3][t.tier] || 2;
+  for (const h of t.houses) {
+    h.beds = [];
+    if (h.cathedral) continue;
+    const [ic, ir] = h.inside || h.tiles[0];
+    for (let b = 0; b < want; b++) {
+      let best = null, bd = -1;
+      for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
+        // head at (c, r) against the wall behind it, foot a tile on toward d
+        const i = T(c, r), j = T(c + DC[d], r + DR[d]);
+        if (!houseFree(h, i) || !houseFree(h, j) || !h.tiles.some(([a, e]) => T(a, e) === j)) continue;
+        if (!wallOn(c, r, (d + 2) & 3) || wallOn(c, r, d)) continue;
+        if (isDoorVal(wallOn(c, r, (d + 2) & 3))) continue;
+        const score = Math.hypot(c - ic, r - ir) + hs(c, r, 460 + d) * 0.5;
+        if (score <= bd) continue;
+        OB[i] = O.BED; OB[j] = O.BEDX;
+        const ok = bedsReachable(h, [...h.beds, { i, j }]);
+        OB[i] = 0; OB[j] = 0;
+        if (ok) { bd = score; best = { c, r, d, i, j }; }
+      }
+      if (!best) break;
+      OB[best.i] = O.BED; OB[best.j] = O.BEDX;
+      const bed = { ...best, color: BLANKETS[Math.floor(hs(best.c, best.r, 470) * BLANKETS.length)], house: h, town: n };
+      BEDS.set(best.i, bed); BEDS.set(best.j, bed); h.beds.push(bed);
+    }
+  }
+}
+// with these beds down, can the house still be got about (every free tile reached from inside the door), and has
+// each bed and the bench a free tile beside it?
+function bedsReachable(h, beds) {
+  const set = new Set(h.tiles.map(([c, r]) => T(c, r))), ins = h.inside ? T(h.inside[0], h.inside[1]) : -1;
+  if (!set.has(ins)) return false;
+  const open = i => set.has(i) && (i === ins || stairAt.has(i) || OB[i] === 0);
+  const seen = new Set([ins]), q = [ins];
+  while (q.length) {
+    const i = q.pop(), c = i % N, r = Math.floor(i / N);
+    for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (!seen.has(j) && open(j) && !wallOn(c, r, d)) { seen.add(j); q.push(j); } }
+  }
+  for (const i of set) if (open(i) && !seen.has(i)) return false;
+  const beside = list => list.some(i => { const c = i % N, r = Math.floor(i / N); for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (seen.has(j) && !stairAt.has(j) && !wallOn(c, r, d)) return true; } return false; });
+  if (h.work != null && !beside([h.work])) return false;
+  return beds.every(b => beside([b.i, b.j]));
 }
 // Houses of the medium and large towns (v407), from the same tileset as the player's: each fronts a street (or
 // the plaza) with its door on it, a tile of yard round it clear of the next. Styles: stone (stone walls, stone
@@ -3531,6 +3623,8 @@ function townLamps(t, own) {
   for (const [c, r] of cand) if (got.every(([gc, gr]) => Math.hypot(gc - c, gr - r) >= gap)) { got.push([c, r]); t.lampAt.add(T(c, r)); }
 }
 const TABLES = [];
+const TOWN_PROP = new Map();   // (v452) town workbench tile -> what it's drawn as: 'saw' | 'grinder' | 'smelter' | 'alchemy' | 'crate'
+const BEDS = new Map();        // (v452) both tiles of every town bed -> { c, r (head), d (head to foot), i, j, color, house, town }
 // Every town is fenced round wherever its edge can be walked across (in wood, or in dry stone), with a gate
 // where each street runs out into a road. A town no road reaches still gets a gate at a street's end.
 function fenceTowns() {
@@ -4946,7 +5040,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60, WORKPROP: 61, BED: 62, BEDX: 63,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -5011,6 +5105,9 @@ def(O.STATIONX, { built: true, name: 'station', tile: true });
 def(O.CRATE, { built: true, name: 'wooden crate', tile: true });
 def(O.CHEST, { built: true, name: 'iron chest', tile: true });
 def(O.ALCHEMY, { built: true, name: 'alchemy table', tile: true });
+def(O.WORKPROP, { built: true, name: 'workbench', tile: true });   // (v452: a town workshop's, for show)
+def(O.BED, { built: true, name: 'bed', tile: true });
+def(O.BEDX, { built: true, name: 'bed', tile: true });
 // the stations you build to refine raw materials (see Stations), what each takes in and what it makes of it
 const STATION_KIND = {
   sawtable: { o: O.SAWTABLE, name: 'SAW TABLE', refine: { wood: 'planks' } },
@@ -10077,6 +10174,28 @@ const TABLE_LOW = 0.26;
 const stMid = st => { const h = stFoot(st.kind) / 2; return [st.c + h, st.r + h]; };
 const stationTile = new Map();   // each of its 4 tiles -> the station
 const partShrink = new GFX.Matrix4();
+// (v452, Jordan) a town bed, 2 x 1: a wooden frame on short legs, a tall headboard against the wall and a low
+// footboard, the mattress, a pillow at the head, and a blanket of the bed's own colour over the rest, its top
+// turned down in a band and its sides hanging over the frame
+function townBed(b) {
+  const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5, y = surfaceY(mx, mz);
+  const at = stationAt(mx, mz, ry), wood = '#6a4a30', dark = '#43301f', sheet = '#e8e2d2', pillow = '#f4f0e6';
+  const W = 0.86, L = 1.9, legH = 0.16, frameY = y + legH;
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * (W / 2 - 0.05), sb * (L / 2 - 0.05)); part(G.box, dark, px, y + legH / 2, pz, { sx: 0.08, sy: legH, sz: 0.08, ry }); }
+  part(G.box, wood, mx, frameY + 0.06, mz, { sx: W, sy: 0.12, sz: L, ry });
+  // headboard (at the head: -b along the bed) and footboard
+  { const [px, pz] = at(0, -L / 2 + 0.04); part(G.box, wood, px, y + 0.47, pz, { sx: W + 0.04, sy: 0.94, sz: 0.08, ry }); }
+  { const [px, pz] = at(0, -L / 2 + 0.04); part(G.box, dark, px, y + 0.96, pz, { sx: W + 0.1, sy: 0.06, sz: 0.12, ry }); }
+  { const [px, pz] = at(0, L / 2 - 0.04); part(G.box, wood, px, y + 0.34, pz, { sx: W + 0.04, sy: 0.4, sz: 0.08, ry }); }
+  const top = frameY + 0.12;
+  part(G.box, sheet, mx, top + 0.07, mz, { sx: W - 0.06, sy: 0.14, sz: L - 0.14, ry });
+  { const [px, pz] = at(0, -L / 2 + 0.3); part(G.box, pillow, px, top + 0.18, pz, { sx: W - 0.24, sy: 0.1, sz: 0.3, ry }); }
+  // the blanket: over the foot two thirds, a lighter band where it's turned down, the sides hanging
+  const blanket = CC(b.color), bl = L * 0.64, bc = L / 2 - 0.07 - bl / 2;
+  { const [px, pz] = at(0, bc); part(G.box, blanket, px, top + 0.155, pz, { sx: W + 0.02, sy: 0.03, sz: bl, ry }); }
+  for (const sa of [-1, 1]) { const [px, pz] = at(sa * (W / 2 + 0.005), bc); part(G.box, shade(blanket, 0.85), px, top + 0.04, pz, { sx: 0.025, sy: 0.24, sz: bl, ry }); }
+  { const [px, pz] = at(0, bc - bl / 2 + 0.07); part(G.box, shade(blanket, 1.25), px, top + 0.175, pz, { sx: W + 0.03, sy: 0.03, sz: 0.14, ry }); }
+}
 function stationParts(draw, x, z, c, r) {
   const y = surfaceY(x, z), s = STATION_LOOK.size;
   partPre = partShrink.set(s, 0, 0, x * (1 - s), 0, s, 0, y * (1 - s), 0, 0, s, z * (1 - s), 0, 0, 0, 1);
@@ -10409,6 +10528,12 @@ function drawObject(o, c, r) {
     case O.SMELTER: return stationParts(smelter, x + 0.5, z + 0.5, c, r);
     case O.TANRACK: return stationParts(tanRack, x + 0.5, z + 0.5, c, r);
     case O.STATIONX: return;
+    case O.WORKPROP: {
+      const kind = TOWN_PROP.get(T(c, r));
+      return kind === 'crate' ? crate(c, r) : ({ saw: sawTable, grinder, smelter, rack: tanRack, alchemy: alchemyTable }[kind] || sawTable)(x, z, c, r);
+    }
+    case O.BED: return BEDS.has(T(c, r)) && townBed(BEDS.get(T(c, r)));
+    case O.BEDX: return;
     case O.CRATE: return storeBody(c, r, () => crate(c, r));
     case O.CHEST: return storeBody(c, r, () => ironChest(x + 0.5, z + 0.5, c, r));
     case O.HOUSE: {
@@ -17007,7 +17132,7 @@ function pickFolk() {
   for (const t of folkTowns) {
     if (!t.batches) continue;
     for (const p of t.folk) {
-      if (Math.abs(p.x - H.x) > 40 || Math.abs(p.z - H.z) > 40) continue;
+      if (p.asleep || Math.abs(p.x - H.x) > 40 || Math.abs(p.z - H.z) > 40) continue;
       if (PAD.on) {
         const dx = p.x - H.x, dz = p.z - H.z, along = dx * aim.x + dz * aim.z, off = Math.abs(dx * aim.z - dz * aim.x);
         if (along > 0 && along <= 10 && off <= 0.5 + FOLK.rad + along * 0.12 && along < bd) { bd = along; best = p; }
@@ -17140,6 +17265,9 @@ function actionHere() {
   for (const t of tablesNear()) opts.push({ kind: 'table', table: t, x: t.x, z: t.z });
   for (const st of stationsNear()) { const [x, z] = stMid(st); opts.push({ kind: 'station', st, x, z }); }
   for (const [d, x, z] of doorsNear()) opts.push({ kind: 'door', door: d, x, z });
+  // (v452) someone to talk to (not while they're still answering you)
+  const fp = folkNear();
+  if (fp && !(folkTalk && folkTalk.p === fp && folkTalk.t > 0)) opts.push({ kind: 'folk', p: fp, x: fp.x, z: fp.z });
   if (opts.length < 2) return opts[0] || null;
   const score = o => { const l = dist(o); return (l < 0.25 ? 0 : Math.abs(angDiff(Math.atan2(o.x - H.x, o.z - H.z), H.face))) + l * 0.4; };
   return opts.reduce((a, b) => score(b) < score(a) ? b : a);
@@ -17151,6 +17279,7 @@ function useAction() {
   else if (a.kind === 'bones') pickUpBonePile(a.pile);
   else if (a.kind === 'table') toggleCraft(craftAt ? null : a.table);
   else if (a.kind === 'station') { if (openSt === a.st && invOpen) toggleInv(false); else openStation(a.st); }
+  else if (a.kind === 'folk') talkFolk(a.p);
   else useDoor(a.door);
 }
 function useDoor(d = nearDoor()) {
@@ -17159,7 +17288,7 @@ function useDoor(d = nearDoor()) {
   const both = d.pair ? [d, d.pair] : [d];
   if (d.open) {
     // don't shut it on anyone standing in the doorway
-    const inWay = [H, ...foes].some(e => both.some(q => Math.hypot(e.x - (q.w ? q.c : q.c + 0.5), e.z - (q.w ? q.r + 0.5 : q.r)) < 0.45));
+    const inWay = [H, ...foes, ...[...folkTowns].flatMap(t => t.batches ? t.folk : [])].some(e => both.some(q => Math.hypot(e.x - (q.w ? q.c : q.c + 0.5), e.z - (q.w ? q.r + 0.5 : q.r)) < 0.45));
     if (inWay) { sfx.nope(); return; }
     for (const q of both) { q.open = false; openDoors.delete(dKey(q.c, q.r, q.w, q.k)); }
   } else {
@@ -18516,7 +18645,14 @@ function spawnTick(dt) {
   }
 }
 
-// ---------- Townsfolk (v447) ----------
+// ---------- Townsfolk (v447; v452 days, doors, work and talk) ----------
+// (v452) Each keeps a day by the clock (folkActivity): asleep at home at night (in their own bed, lying down and getting up), up between
+// about 5:30 and 7, at work 8 to 5 with an hour off at noon (in their workshop at its bench, the clergy in the
+// cathedral, the sweeper on the streets, the crier and busker by the fountain), on errands (strolling, calling in
+// at a shop, visiting) the rest, home again a little before bed. At night the streets are empty but for the watch
+// (guards, the captain: asleep through the day) and the lamplighter going round the lamps at dusk and dawn. They
+// open a shut door to go through it and shut it behind them, and stand inside houses; a town that wakes puts
+// everyone where the clock says they'd be. Press F by one to hear what they have to say.
 // Every town has its own people, the same ones each time you come (each a seed for src/folk/townsfolk.js's design):
 // 1-2 to a house in a hamlet, 2 in a medium town, 2-3 in a large one, half of them kept (FOLK.share, v448), the tannery's tanner, the smithy's smith
 // and the cathedral's clergy among them. Nothing about them runs while you're far off; a town wakes when you come
@@ -18528,10 +18664,11 @@ function spawnTick(dt) {
 // Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
 // the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
 // with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
-const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70 };
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70, workMin: 25, workMax: 60, sayTime: 4.5, lieTime: 1.4, coverTime: 0.6, breathe: 0.05 };
 const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
 const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
 const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
+const FOLK_EXTRAS = [['lamplighter'], ['guard', 'lamplighter', 'sweeper'], ['captain', 'guard', 'lamplighter', 'crier', 'busker', 'sweeper']];   // (v452: the watch and street trades)
 const FOLK_ONE = ['elder', 'bishop', 'captain', 'crier', 'banker', 'merchant', 'masterSmith', 'lamplighter', 'busker'];   // (one to a town)
 const FOLK_BONES = 768;                                    // (joints a batch: 48 KB of matrices, under the 64 KB a uniform block holds)
 const folkKit = makeFolkKit(GFX);
@@ -18595,12 +18732,15 @@ function folkPeople(t) {
   if (t.folk && t.folkShare === FOLK.share) return t.folk;
   if (t.n == null) t.n = towns.indexOf(t);
   const tiers = FOLK_TIERS[t.tier] || FOLK_TIERS[0], [lo, hi] = FOLK_PER_HOUSE[t.tier] || FOLK_PER_HOUSE[0], used = new Set(), out = [];
-  const smith = ['smith', 'armorer', 'masterSmith'][t.tier] || 'smith';
+  // (v452) the night's watch, the lamplighter and the town's street trades: one each, in the plain houses' second places
+  const extras = [...(FOLK_EXTRAS[t.tier] || FOLK_EXTRAS[0])];
   t.houses.forEach((h, hi0) => {
     if (doorFront(h) < 0) return;
-    const n = lo + Math.floor(folkSeed(t.n, hi0, 7) / 4294967296 * (hi - lo + 1));
+    const n = Math.max(lo + Math.floor(folkSeed(t.n, hi0, 7) / 4294967296 * (hi - lo + 1)), h.trade && !h.cathedral && extras.length ? 2 : 1);
     for (let k = 0; k < n; k++) {
-      const want = h.tannery && !k ? ['tanner'] : h.smithy && !k ? [smith] : h.cathedral ? (k ? ['priest', 'choir'] : ['bishop', 'priest']) : null;
+      // (a workshop's first is its trade, the cathedral's all clergy)
+      const extra = k === 1 && extras.length ? extras.shift() : null;
+      const want = h.cathedral ? (k ? ['priest', 'choir'] : ['bishop', 'priest']) : !k && h.trade ? [h.trade] : extra ? [extra] : null;
       let d = null;
       for (let a = 0; a < 800; a++) {
         const e = folkKit.design(folkSeed(t.n, hi0, k, a));
@@ -18612,16 +18752,40 @@ function folkPeople(t) {
       // (v449, Jordan) anyone known as "of" a place is of this town
       if (d.name.last.startsWith('of ')) { const of = 'of ' + titleCase(t.name); d.name.full = d.name.full.slice(0, -d.name.last.length) + of; d.name.last = of; }
       used.add(d.job);
-      out.push({ must: !!want, keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
+      out.push({ must: want ? (extra ? 1 : 2) : 0, worker: !!want && !extra && !!(h.trade || h.cathedral), keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, slot: k, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
         moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
     }
   });
   // (v448, Jordan: half as many) FOLK.share of them kept: the tanner, smith and clergy always, the rest by lot
   const n = Math.max(1, Math.round(out.length * FOLK.share));
-  const kept = new Set(out.filter(p => p.must).slice(0, n));
+  const kept = new Set(out.filter(p => p.must).sort((a, b) => b.must - a.must).slice(0, Math.max(n, out.filter(p => p.must === 2).length)));
   for (const p of out.filter(p => !p.must).sort((a, b) => a.keep - b.keep)) { if (kept.size >= n) break; kept.add(p); }
   t.folkShare = FOLK.share;
   return t.folk = out.filter(p => kept.has(p));
+}
+// can townsfolk go from (c, r) over side d? As a monster could, but through a shut door too (they open it)
+function folkStep(c, r, d) {
+  const w = wallOn(c, r, d);
+  if (!w || !isDoorVal(w)) return groundStep(c, r, d, true);
+  const k = edgeKey(...edgeOf(c, r, d));
+  if (openDoors.has(k)) return groundStep(c, r, d, true);
+  openDoors.add(k);
+  try { return groundStep(c, r, d, true); } finally { openDoors.delete(k); }
+}
+// the door across side d of tile (c, r), if there's one there (ground floor)
+function doorAcross(c, r, d) {
+  const w = wallOn(c, r, d);
+  if (!w || !isDoorVal(w)) return null;
+  const [ec, er, ew] = edgeOf(c, r, d);
+  return doors.get(dKey(ec, er, ew, 0)) || null;
+}
+const doorMid = q => [q.w ? q.c : q.c + 0.5, q.w ? q.r + 0.5 : q.r];
+function setDoor(q, open, x, z) {
+  for (const e of q.pair ? [q, q.pair] : [q]) {
+    e.open = open;
+    if (open) { openDoors.add(dKey(e.c, e.r, e.w, e.k)); e.side = e.w ? (x < e.c ? 1 : -1) : (z < e.r ? 1 : -1); }
+    else openDoors.delete(dKey(e.c, e.r, e.w, e.k));
+  }
 }
 // The places townsfolk go to (tiles): every house's front, round the fountain, beside the lamps and flower boxes,
 // and some street tiles, the corners and crossings first.
@@ -18632,6 +18796,33 @@ function folkPlaces(t) {
   t.fount = OB[T(t.c, t.r)] === O.FOUNTAIN;
   const add = (i, kind) => { if (i >= 0 && !set.has(i) && folkOpen(t, i)) { set.add(i); P.push({ i, kind }); } };
   t.houses.forEach((h, k) => { const i = doorFront(h); if (i >= 0) { add(i, 'door'); h.front = i; } });
+  // (v452) inside each house: the ground floor's open tiles (not its stair, the tile inside the door kept for last),
+  // and where its worker stands at the bench, facing it
+  for (const h of t.houses) {
+    const ins = h.inside ? T(h.inside[0], h.inside[1]) : -1;
+    h.inTiles = h.tiles.map(([c, r]) => T(c, r)).filter(i => folkOpen(t, i) && !BALCONY.has(i));
+    if (h.inTiles.length > 1) h.inTiles = h.inTiles.filter(i => i !== ins);
+    h.workSpot = -1;
+    if (h.work != null) {
+      const wc = h.work % N, wr = Math.floor(h.work / N);
+      for (let d = 0; d < 4; d++) {
+        const i = T(wc + DC[d], wr + DR[d]);
+        if (h.inTiles.includes(i) && !wallOn(wc, wr, d)) { h.workSpot = i; break; }
+      }
+    }
+  }
+  // (v452) beside each bed, where its sleeper gets in and out: along its side, nearer the head
+  for (const h of t.houses) for (const b of h.beds || []) {
+    const hs0 = new Set(h.tiles.map(([c, r]) => T(c, r)));
+    b.side = -1;
+    for (const e of [b.i, b.j]) {
+      const c = e % N, r = Math.floor(e / N);
+      for (const d of [(b.d + 1) & 3, (b.d + 3) & 3, (b.d + 2) & 3, b.d]) {
+        const k = T(c + DC[d], r + DR[d]);
+        if (b.side < 0 && hs0.has(k) && folkOpen(t, k) && !wallOn(c, r, d)) b.side = k;
+      }
+    }
+  }
   if (t.fount) for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) if (Math.max(Math.abs(dc), Math.abs(dr)) === 2 && (dc === 0 || dr === 0 || Math.abs(dc) === Math.abs(dr))) add(T(t.c + dc, t.r + dr), 'fountain');
   const beside = (c, r, kind) => { for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (folkStreet(j)) { add(j, kind); return; } } };
   for (const i of t.lampAt || []) beside(i % N, Math.floor(i / N), 'lamp');
@@ -18663,7 +18854,7 @@ function folkRoute(t, a, b) {
   let out = null;
   if (s >= 0 && goal >= 0) {
     g[s] = 0; push(s, est(a % N, Math.floor(a / N)));
-    const open = (c, r, d) => groundStep(c, r, d, true) && folkOpen(t, T(c + DC[d], r + DR[d]));
+    const open = (c, r, d) => folkStep(c, r, d) && folkOpen(t, T(c + DC[d], r + DR[d]));
     while (heap.length) {
       const [, k] = pop();
       if (shut[k]) continue;
@@ -18716,6 +18907,20 @@ function bakeFolk(p) {
   }
   for (const [o] of parts) o.parent.remove(o);
   if (f.shadow && f.shadow.parent) f.shadow.parent.remove(f.shadow);
+  // (v452) the blanket over them in bed: a box of the bed's colour on a joint of its own, drawn only then
+  if (p.bedRec) {
+    const box = new GFX.BoxGeometry(1, 1, 1), ba = box.attributes.position.array, bi = box.index ? box.index.array : null, n = ba.length / 3, cc = shade(CC(p.bedRec.color), 0.95);
+    const pos2 = new Float32Array(pos.length + ba.length), col2 = new Float32Array(col.length + ba.length), bone2 = new Float32Array(bone.length + n), idx2 = new Uint32Array(idx.length + (bi ? bi.length : n));
+    pos2.set(pos); col2.set(col); bone2.set(bone); idx2.set(idx);
+    pos2.set(ba, pos.length);
+    for (let k = 0; k < n; k++) { col2[col.length + k * 3] = cc.r; col2[col.length + k * 3 + 1] = cc.g; col2[col.length + k * 3 + 2] = cc.b; bone2[bone.length + k] = bones.length; }
+    if (bi) for (let k = 0; k < bi.length; k++) idx2[idx.length + k] = bi[k] + nv; else for (let k = 0; k < n; k++) idx2[idx.length + k] = k + nv;
+    p.cover = bones.length; bones.push(null);
+    p.rig = f; p.bones = bones; p.chains = bones.map(o => { const c = []; for (let q = o; q && q !== g; q = q.parent) c.push(q); return c; });
+    p.mesh = { pos: pos2, col: col2, bone: bone2, idx: idx2 };
+    return;
+  }
+  p.cover = -1;
   // (each joint's chain up to the rig, for whether it's shown: the broom and crate come and go with the pose)
   p.rig = f; p.bones = bones; p.chains = bones.map(o => { const c = []; for (let q = o; q && q !== g; q = q.parent) c.push(q); return c; });
   p.mesh = { pos, col, bone, idx };
@@ -18768,14 +18973,19 @@ function wakeTown(t) {
   folkPlaces(t); folkPeople(t);
   t.building = 0; t.batches = null;
   folkTowns.add(t);
-  // everyone where they'd be: standing at one of the town's places, a while into their stay
-  const P = t.places.length ? t.places : null;
+  // everyone where the clock says they'd be (v452): at home, at work, asleep, or out at one of the town's places
   for (const p of t.folk) {
-    const home = t.houses[p.home].front;
-    const i = !P || Math.random() < 0.3 ? home : P[Math.floor(Math.random() * P.length)].i;
-    p.at = i; p.goal = -1; p.route = null; p.state = 'stay'; p.stayT = Math.random() * FOLK.stayMax;
-    p.x = i % N + 0.2 + Math.random() * 0.6; p.z = Math.floor(i / N) + 0.2 + Math.random() * 0.6; p.y = surfaceY(p.x, p.z);
-    p.face = Math.random() * 6.28; p.anim = 'idle'; p.stuckT = 0;
+    const u = folkSeed(t.n, p.home, p.d.seed & 0xffff, 77) / 4294967296, v = folkSeed(t.n, p.home, p.d.seed & 0xffff, 78) / 4294967296;
+    p.up = 5.5 + u * 1.5; p.bed = 20.5 + v * 1.5; p.sh = (u + v) % 1;
+    const H0 = t.houses[p.home];
+    p.workHouse = p.worker ? H0 : null;
+    p.bedTile = H0.inTiles && H0.inTiles.length ? H0.inTiles[Math.floor(u * H0.inTiles.length)] : H0.front;
+    // (a bed of their own if the house has one for them: else asleep out of sight, as before)
+    p.bedRec = H0.beds && H0.beds[p.slot] && H0.beds[p.slot].side >= 0 ? H0.beds[p.slot] : null;
+    if (p.bedRec) p.bedTile = p.bedRec.side;
+    p.bedPh = null; p.bedK = 0; p.coverK = 0;
+    p.route = null; p.opened = null; p.stuckT = 0; p.anim = 'idle'; p.face = Math.random() * 6.28;
+    folkNext(p, true);
   }
 }
 // towns wake when you come near and sleep when you've gone; the waking ones' people are built a few ms a frame
@@ -18797,28 +19007,157 @@ function folkTowns_tick() {
 }
 
 // ----- what they do -----
-function folkNext(p) {
-  const t = p.t, P = t.places, home = t.houses[p.home].front;
-  let goal = home;
-  const u = Math.random();
-  if (u > 0.25 && P.length) {
-    // (a sweeper keeps to the streets; the busker, the crier and the flower seller to the fountain if there is one)
-    const busk = ['busker', 'crier', 'flowerSeller'].includes(p.d.job) && t.fount, sweep = p.d.job === 'sweeper';
-    const pool = busk && Math.random() < 0.7 ? P.filter(q => q.kind === 'fountain') : sweep ? P.filter(q => q.kind === 'street' || q.kind === 'planter') : P;
-    goal = (pool.length ? pool : P)[Math.floor(Math.random() * (pool.length || P.length))].i;
+// what someone's doing at this hour (v452): sleep, home, work, errand, watch (the guards) or lamps (the lamplighter)
+const inHours = (h, a, b) => { a = (a + 24) % 24; b = (b + 24) % 24; return a <= b ? h >= a && h < b : h >= a || h < b; };
+const FOLK_OUT_WORK = { sweeper: 'street', crier: 'fountain', busker: 'fountain', flowerSeller: 'fountain', gossip: 'door', pickpocket: 'street', carter: 'door', elder: 'fountain' };
+function folkActivity(p) {
+  const h = SKY.timeOfDay, j = p.d.job;
+  if (j === 'guard' || j === 'captain') return inHours(h, 8 + p.sh, 15 + p.sh) ? 'sleep' : 'watch';
+  if (j === 'lamplighter') return inHours(h, 18, 24) || inHours(h, 4.5, 6.5) ? 'lamps' : inHours(h, 0, 4.5) || inHours(h, 6.5, 11) ? 'sleep' : 'errand';
+  if (!inHours(h, p.up, p.bed)) return 'sleep';
+  const work = inHours(h, 8 + p.sh * 0.5, 17 + p.sh * 0.5) && !inHours(h, 12, 13);
+  if (work && (p.workHouse || FOLK_OUT_WORK[j])) return 'work';
+  return inHours(h, p.bed - 1.5, p.bed) ? 'home' : 'errand';
+}
+const pickOf = a => a[Math.floor(Math.random() * a.length)];
+// where to go next and how long to stay there; place: put them there at once (a town waking)
+function folkNext(p, place = false) {
+  const t = p.t, P = t.places, H0 = t.houses[p.home], act = folkActivity(p);
+  const placesOf = (...kinds) => { const l = P.filter(q => kinds.includes(q.kind)); return l.length ? l : P; };
+  const inside = h => h.inTiles && h.inTiles.length ? pickOf(h.inTiles) : h.front;
+  let goal = H0.front, stay = FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin);
+  p.look = null;
+  if (act === 'sleep') { goal = p.bedTile; stay = 20 + Math.random() * 20; }
+  else if (act === 'home') { goal = inside(H0); stay = 15 + Math.random() * 25; }
+  else if (act === 'work' && p.workHouse) {
+    const W = p.workHouse;
+    goal = W.workSpot >= 0 ? W.workSpot : inside(W);
+    if (W.workSpot >= 0) p.look = [W.work % N + 0.5, Math.floor(W.work / N) + 0.5];
+    stay = FOLK.workMin + Math.random() * (FOLK.workMax - FOLK.workMin);
+  } else if (act === 'work') {
+    const k = FOLK_OUT_WORK[p.d.job];
+    goal = pickOf(k === 'fountain' && t.fount ? placesOf('fountain') : k === 'street' ? placesOf('street', 'planter') : k === 'door' ? placesOf('door') : P.length ? P : [{ i: H0.front }]).i;
+  } else if (act === 'watch') { goal = pickOf(placesOf('street', 'lamp', 'fountain', 'door')).i; stay = 3 + Math.random() * 6; }
+  else if (act === 'lamps') { goal = pickOf(placesOf('lamp')).i; stay = 2 + Math.random() * 3; }
+  else {
+    // an errand: calling in at a workshop, home for a while, or out about the town
+    const u = Math.random(), shops = t.houses.filter(h => (h.trade || h.cathedral) && h !== H0 && h.inTiles && h.inTiles.length);
+    if (u < 0.3 && shops.length) goal = inside(pickOf(shops));
+    else if (u < 0.42) goal = inside(H0);
+    else if (P.length) goal = pickOf(P).i;
+  }
+  if (goal == null || goal < 0) goal = H0.front;
+  p.act = act; p.asleep = false; p.actT = 2 + Math.random() * 2;
+  const jx = 0.25 + Math.random() * 0.5, jz = 0.25 + Math.random() * 0.5;
+  if (place) {
+    p.x = goal % N + jx; p.z = Math.floor(goal / N) + jz; p.y = surfaceY(p.x, p.z);
+    p.state = 'stay'; p.at = goal; p.stayT = Math.random() * stay; p.asleep = act === 'sleep'; p.route = null;
+    if (p.asleep && p.bedRec && goal === p.bedRec.side) { p.bedPh = 'sleep'; p.bedK = 1; p.coverK = 1; }
+    return;
   }
   const here = T(Math.floor(p.x), Math.floor(p.z));
-  if (goal === here) { p.state = 'stay'; p.stayT = FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin); return; }
+  if (goal === here) { p.state = 'stay'; p.at = goal; p.stayT = stay; p.asleep = act === 'sleep'; folkToBed(p); return; }
   const route = folkRoute(t, here, goal);
   if (!route || !route.length) { p.state = 'stay'; p.stayT = 2 + Math.random() * 3; return; }
-  p.state = 'walk'; p.route = route; p.ri = 0; p.goal = goal; p.stuckT = 0;
+  p.state = 'walk'; p.route = route; p.ri = 0; p.goal = goal; p.stuckT = 0; p.stayFor = stay;
   p.carry = p.d.job === 'carter' ? Math.random() < 0.7 : p.d.prop === 'none' && Math.random() < 0.08;
-  p.gx = goal % N + 0.25 + Math.random() * 0.5; p.gz = Math.floor(goal / N) + 0.25 + Math.random() * 0.5;
+  p.gx = goal % N + jx; p.gz = Math.floor(goal / N) + jz;
+}
+// what they say when you talk to them (F)
+const FOLK_SAY = {
+  any: ["Mind how you go out there.", "Keep to the roads after dark.", "Fine weather, isn't it?", "You're not from round here.", "The wilds are no place for a walk these days."],
+  tanner: ["Bring me hides and I'll make you leather.", "Leather won't stop a blade, but it's better than wool."],
+  smith: ["Iron, copper, bone: I can shape any of it.", "A good blade starts with good ingots."],
+  armorer: ["Plate's heavy, but so is a coffin.", "I'll fit you for chain when you've the ingots."],
+  masterSmith: ["Bring me the rarer metals and I'll show you real work.", "Mind the anvil. It's older than you."],
+  woodcutter: ["Every beam in this town came off my saw.", "Logs to planks, all day long."],
+  goodfolk: ["Fresh bread at the oven, if you've the flour.", "The mill never rests."],
+  ironmonger: ["Ingots, nails, hinges: if it's iron, I have it.", "Ore's no use till it's smelted."],
+  glazier: ["Sand and fire make glass, and a steady hand makes windows.", "Careful, that pane's still warm."],
+  mason: ["Every wall in town is standing because of my blocks.", "Stone keeps the cold and the beasts out."],
+  herbalist: ["A tincture for every ill, and a few for those who cause them.", "Don't touch the purple ones."],
+  innkeeper: ["Rooms are full, but there's always ale.", "Sit, rest your feet a while."],
+  guard: ["Move along, traveller.", "Quiet night so far."],
+  captain: ["The watch keeps this town safe, day and night.", "Seen anything strange on the roads?"],
+  lamplighter: ["Every lamp lit by dusk, every one put out by dawn.", "Mind the ladder."],
+  sweeper: ["Mind the pile, I've just swept that.", "This street won't sweep itself."],
+  crier: ["Hear ye, hear ye! All's well in town!", "News from the roads: the wilds grow bolder!"],
+  busker: ["A song for a coin, traveller?", "I know a tune about a hero. Want to hear it?"],
+  flowerSeller: ["Flowers for your sweetheart?", "Picked fresh this morning."],
+  elder: ["I remember when this was all forest.", "The young ones never listen."],
+  bishop: ["Peace be with you, child.", "The cathedral's doors are always open."],
+  priest: ["Light a candle before you go.", "May the road be kind to you."],
+  choir: ["We're practising for the feast.", "Shh, the bishop's listening."],
+  jeweller: ["Only the finest stones, I assure you.", "Auralith, now there's a gem worth having."],
+  merchant: ["Everything has a price, friend.", "Trade's been slow with the roads so wild."],
+  banker: ["Your coin is safe with me.", "Interest? Reasonable, I promise."],
+  cartographer: ["There's still much of this land no one's mapped.", "Bring me news of the far roads."],
+  carter: ["Out of the way, the cart's heavy!", "These roads will be the death of my wheels."],
+  gossip: ["Did you hear about the smith's daughter?", "Oh, I couldn't possibly say. But I will."],
+  pickpocket: ["Who, me? Just admiring your pack.", "Lovely day for a stroll, isn't it?"],
+};
+function folkGreeting() { const h = SKY.timeOfDay; return h < 12 ? 'Good morning.' : h < 18 ? 'Good day.' : 'Good evening.'; }
+let folkTalk = null;   // { p, text, t }
+function talkFolk(p) {
+  const lines = FOLK_SAY[p.d.job] || FOLK_SAY.any, text = (Math.random() < 0.35 ? folkGreeting() + ' ' : '') + pickOf(Math.random() < 0.75 ? lines : FOLK_SAY.any);
+  folkTalk = { p, text, t: FOLK.sayTime };
+  p.heard = FOLK.sayTime;
+  if (p.state === 'walk') { p.state = 'stay'; p.resume = true; }
+  p.stayT = Math.max(p.stayT, FOLK.sayTime + 0.5);
+  const el = $('folkSay'); el.querySelector('.who').textContent = p.d.name.full; el.querySelector('.say').textContent = text;
+}
+// the nearest townsperson you could talk to (within reach, awake, on your floor)
+function folkNear() {
+  if (!folkTowns.size || heroUp()) return null;
+  let best = null, bd = 1.6;
+  for (const t of folkTowns) if (t.batches) for (const p of t.folk) {
+    if (p.asleep) continue;
+    const d = Math.hypot(p.x - H.x, p.z - H.z);
+    if (d < bd && Math.abs(p.y - H.y) < 1) { bd = d; best = p; }
+  }
+  return best;
+}
+// (v452) getting into bed: once they've reached the tile beside it, if it's theirs and it's bedtime
+function folkToBed(p) {
+  if (p.asleep && p.bedRec && p.at === p.bedRec.side && !p.bedPh) { p.bedPh = 'lie'; p.bedK = 0; p.coverK = 0; p.actT = 2; }
+}
+const ease = k => k * k * (3 - 2 * k);
+// someone lying down in bed, getting up or asleep: from standing beside it, turned toward it, to lying on their
+// back with their head on the pillow; breathing slow while asleep
+function folkBedPose(p) {
+  const f = p.rig, b = p.bedRec, k = ease(p.bedK);
+  const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5;
+  const h = 1.05 * f.g.scale.y, top = surfaceY(mx, mz) + 0.16 + 0.12 + 0.17;
+  // lying: feet toward the foot, the head on the pillow
+  const lx = mx + DC[b.d] * (h - 0.82), lz = mz + DR[b.d] * (h - 0.82), ly = top + 0.1;
+  const sx = p.x, sz = p.z, sy = p.y;
+  const toBed = Math.atan2(mx - sx, mz - sz);
+  const turn = Math.min(1, p.bedK * 2.5);   // (turned to the bed first, then down onto it)
+  const yaw = p.face + angDiff(toBed, p.face) * ease(turn);
+  const fy = yaw + angDiff(ry, yaw) * k;
+  f.g.position.set(sx + (lx - sx) * k, sy + (ly - sy) * k + Math.sin(Math.PI * k) * 0.25, sz + (lz - sz) * k);
+  f.g.rotation.set(-Math.PI / 2 * k, fy, 0, 'YXZ');
+  folkKit.pose(f, 'idle', p.bedPh === 'sleep' ? 0 : p.animT * 0.2);
+  if (p.bedPh === 'sleep') { p.sz0 = f.g.scale.z; f.g.scale.z = p.sz0 * (1 + FOLK.breathe * Math.sin(p.animT * 1.6)); }
+  else p.sz0 = null;
+  if (p.bedK >= 1) p.face = ry + Math.PI;   // (when they get up again they're facing out of bed)
+}
+// the blanket's matrix: from the foot up over them, as far as their chest, pulled up as they settle
+const coverM = new GFX.Matrix4(), coverQ = new GFX.Quaternion(), coverP = new GFX.Vector3(), coverS = new GFX.Vector3(), coverY = new GFX.Vector3(0, 1, 0);
+function folkCoverMatrix(p) {
+  const b = p.bedRec, ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5;
+  const top = surfaceY(mx, mz) + 0.16 + 0.12 + 0.17, len = 1.25 * ease(p.coverK), footB = 0.9;
+  const cb = footB - len / 2;   // (its middle, along the bed from its centre)
+  const breath = p.bedPh === 'sleep' ? 1 + FOLK.breathe * 0.6 * Math.sin(p.animT * 1.6) : 1;
+  coverP.set(mx + DC[b.d] * cb, top + 0.13 * breath, mz + DR[b.d] * cb);
+  coverQ.setFromAxisAngle(coverY, ry); coverS.set(0.84, 0.26 * breath, Math.max(0.001, len));
+  return coverM.compose(coverP, coverQ, coverS).elements;
 }
 const folkCells = new Map();
 let heroLastX = 0, heroLastZ = 0;
 function updateFolk(dt) {
   folkTowns_tick();
+  if (folkTalk) folkTalk.t -= dt;
   const hvx = (H.x - heroLastX) / Math.max(dt, 1e-3), hvz = (H.z - heroLastZ) / Math.max(dt, 1e-3);
   heroLastX = H.x; heroLastZ = H.z;
   const heroMoving = Math.hypot(hvx, hvz) > 0.5;
@@ -18841,22 +19180,52 @@ function updateFolk(dt) {
             if (walkLine(p.x, p.z, cx, cz)) { tx = cx; tz = cz; break; }
           }
         }
+        // (v452) a shut door on the next step: opened, and shut again once they're through
+        if (p.ri < R.length && !p.opened) {
+          const dc = R[p.ri] % N - fc, dr = Math.floor(R[p.ri] / N) - fr;
+          if (Math.abs(dc) + Math.abs(dr) === 1) {
+            const q = doorAcross(fc, fr, dc ? (dc > 0 ? 1 : 3) : (dr > 0 ? 2 : 0));
+            if (q && !q.open && !q.gate) { setDoor(q, true, p.x, p.z); p.opened = q; sfx.door(); }
+          }
+        }
         const ex = tx - p.x, ez = tz - p.z, el = Math.hypot(ex, ez);
         if (p.ri >= R.length && el < 0.15) {
           p.state = 'stay'; p.at = p.goal; p.route = null;
-          p.stayT = FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin);
+          p.stayT = p.stayFor ?? FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin);
+          p.asleep = p.act === 'sleep'; folkToBed(p);
         } else {
           const sp = FOLK.speed * (p.carry ? 0.85 : 1);
           vx = ex / (el || 1) * sp; vz = ez / (el || 1) * sp; want = sp * dt;
           p.face += angDiff(Math.atan2(ex, ez), p.face) * (1 - Math.exp(-dt * 7));
         }
+      } else if (p.bedPh) {
+        // (v452) in bed: lying down, asleep (getting up when the hour comes), getting up
+        p.actT -= dt;
+        if (p.bedPh === 'lie') { p.bedK = Math.min(1, p.bedK + dt / FOLK.lieTime); if (p.bedK >= 1) { p.coverK = Math.min(1, p.coverK + dt / FOLK.coverTime); if (p.coverK >= 1) p.bedPh = 'sleep'; } }
+        else if (p.bedPh === 'sleep') { if (p.actT <= 0) { p.actT = 2 + Math.random() * 2; if (folkActivity(p) !== 'sleep') p.bedPh = 'rise'; } }
+        else if (p.coverK > 0) p.coverK = Math.max(0, p.coverK - dt / FOLK.coverTime);
+        else { p.bedK = Math.max(0, p.bedK - dt / FOLK.lieTime); if (p.bedK <= 0) { p.bedPh = null; p.asleep = false; folkNext(p); } }
       } else {
         p.stayT -= dt;
+        // (every few seconds: has the hour moved them on? Bed, work and the like don't wait for a stay to end)
+        p.actT -= dt;
+        if (p.actT <= 0) { p.actT = 2 + Math.random() * 2; if (folkActivity(p) !== p.act && !(p.heard > 0)) p.stayT = 0; }
+        if (p.resume && !(p.heard > 0)) { p.resume = false; p.stayT = 0; }
         if (p.stayT <= 0) folkNext(p);
+        else if (p.look && !(p.heard > 0)) p.face += angDiff(Math.atan2(p.look[0] - p.x, p.look[1] - p.z), p.face) * (1 - Math.exp(-dt * 3));
+      }
+      if (p.heard > 0) { p.heard -= dt; p.face += angDiff(Math.atan2(H.x - p.x, H.z - p.z), p.face) * (1 - Math.exp(-dt * 5)); }
+      // the door they opened, shut behind them once they're clear of it and no one's in the doorway
+      if (p.opened) {
+        const [mx, mz] = doorMid(p.opened);
+        if (Math.hypot(p.x - mx, p.z - mz) > 1.0) {
+          const inWay = Math.hypot(H.x - mx, H.z - mz) < 0.6 || t.folk.some(o => o !== p && Math.hypot(o.x - mx, o.z - mz) < 0.55);
+          if (!inWay) { if (p.opened.open) setDoor(p.opened, false); p.opened = null; }
+        }
       }
       // out of your way: off to the side you're not heading (straight away if you're standing still)
       const hx = p.x - H.x, hz = p.z - H.z, hd = Math.hypot(hx, hz);
-      if (H.alive && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
+      if (H.alive && !p.asleep && !p.bedPh && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
         let ax = hx / (hd || 1), az = hz / (hd || 1);
         if (heroMoving) {
           const l = Math.hypot(hvx, hvz), mx = hvx / l, mz = hvz / l, side = (-mz * hx + mx * hz) >= 0 ? 1 : -1;
@@ -18866,7 +19235,8 @@ function updateFolk(dt) {
         vx += ax * k; vz += az * k;
         if (p.state === 'stay') p.face += angDiff(Math.atan2(-hx, -hz), p.face) * (1 - Math.exp(-dt * 4));
       }
-      const got = moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
+      if (p.bedPh) { vx = vz = 0; }
+      const got = p.bedPh ? 0 : moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
       // stuck (someone in the way round a corner, say): after a while, off somewhere else
       if (p.state === 'walk') { if (want > 0 && got < want * 0.3) { p.stuckT += dt; if (p.stuckT > 2.5) folkNext(p); } else p.stuckT = 0; }
       p.y = surfaceY(p.x, p.z);
@@ -18883,7 +19253,7 @@ function updateFolk(dt) {
     for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
       const l = folkCells.get((c0 + dc) * 8192 + r0 + dr);
       if (l) for (const B of l) {
-        if (B.sepI <= A.sepI) continue;
+        if (B.sepI <= A.sepI || A.bedPh || B.bedPh) continue;
         const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = FOLK.rad * 2 + 0.08;
         if (d < m && d > 1e-4) { const push = (m - d) / 2; moveEntity(A, -dx / d * push, -dz / d * push, FOLK.rad, true); moveEntity(B, dx / d * push, dz / d * push, FOLK.rad, true); }
         // two standing side by side talk to each other
@@ -18897,9 +19267,10 @@ function updateFolk(dt) {
     p.talkTo = null;
     const hd = Math.hypot(H.x - p.x, H.z - p.z);
     if (hd > FOLK.waveR + 1) p.waved = 0;
-    if (p.state === 'walk') p.anim = p.carry ? 'carry' : 'walk';
+    if (p.heard > 0) p.anim = 'talk';
+    else if (p.state === 'walk') p.anim = p.carry ? 'carry' : 'walk';
     else if (p.moving) p.anim = 'walk';
-    else if (p.d.job === 'sweeper' && p.at >= 0 && folkStreet(p.at)) p.anim = 'sweep';
+    else if (p.d.job === 'sweeper' && p.at >= 0 && folkStreet(p.at) && p.act === 'work') p.anim = 'sweep';
     else if (hd < FOLK.waveR && p.waved === 0 && H.alive) { p.waved = Math.random() < FOLK.wave ? 1 : 2; if (p.waved === 1) p.waveT = p.animT; p.anim = p.waved === 1 ? 'wave' : 'idle'; }
     else if (p.waved === 1 && p.animT - p.waveT < FOLK.waveTime) p.anim = 'wave';
     else if (near) { p.anim = 'talk'; if (!p.moving) p.face += angDiff(Math.atan2(near.x - p.x, near.z - p.z), p.face) * (1 - Math.exp(-dt * 3)); }
@@ -18917,14 +19288,20 @@ function drawFolk() {
     const M = b.mat.uniforms.bones.value;
     for (const p of b.people) {
       const f = p.rig, far = Math.max(Math.abs(p.x - cx), Math.abs(p.z - cz)) > FOLK.show;
-      if (far) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); continue; }
-      f.g.position.set(p.x, p.y, p.z); f.g.rotation.set(0, p.face, 0);
-      folkKit.pose(f, p.anim, p.anim === 'walk' || p.anim === 'carry' ? p.walkT : p.animT);
+      if (far || (p.asleep && !p.bedPh)) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); continue; }
+      if (p.bedPh) folkBedPose(p);
+      else {
+        f.g.position.set(p.x, p.y, p.z); f.g.rotation.set(0, p.face, 0);
+        folkKit.pose(f, p.anim, p.anim === 'walk' || p.anim === 'carry' ? p.walkT : p.animT);
+      }
       f.g.updateMatrixWorld();
+      if (p.sz0 != null) f.g.scale.z = p.sz0;
       p.bones.forEach((o, j) => {
+        if (j === p.cover) { M.set(p.coverK > 0 && p.bedPh ? folkCoverMatrix(p) : ZERO16, (p.base + j) * 16); return; }
         const vis = p.chains[j].every(q => q.visible);
         M.set(vis ? o.matrixWorld.elements : ZERO16, (p.base + j) * 16);
       });
+      if (p.bedPh && p.bedK > 0.5) continue;   // (no blob shadow on the floor under someone in bed)
       folkShadows.reserve(shown + 1);
       const sm = folkShadows.instanceMatrix, q = shown * 16;
       sm.fill(0, q, q + 16); sm[q] = sm[q + 5] = sm[q + 10] = sm[q + 15] = 1; sm[q + 12] = p.x; sm[q + 13] = p.y + 0.02; sm[q + 14] = p.z;
@@ -18932,8 +19309,18 @@ function drawFolk() {
     }
   }
   folkShadows.count = shown; folkShadows.needsUpdate = true;
+  // what the one you're talking to says, over their head
+  const el = $('folkSay');
+  if (folkTalk && folkTalk.t > 0 && folkTowns.has(folkTalk.p.t) && folkTalk.p.rig && Math.hypot(folkTalk.p.x - H.x, folkTalk.p.z - H.z) < 6) {
+    const p = folkTalk.p, rect = cv.getBoundingClientRect();
+    v3.set(p.x, p.y + 1.05 * p.rig.g.scale.y + 0.15, p.z).project(camera);
+    el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
+    el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
+    el.hidden = false;
+  } else { el.hidden = true; folkTalk = null; }
   FOLK_READ.shown = shown; FOLK_READ.draws = folkBatches.length;
 }
+
 
 // ---------- Update ----------
 // a leg's swing over the walk cycle, -1 .. 1 (v411, Jordan felt the walk speed change at each end of the cycle):
@@ -19209,6 +19596,9 @@ function update(dt) {
     } else if (act.kind === 'station') {
       pr.innerHTML = key + (openSt === act.st && invOpen ? 'PUT AWAY' : 'USE ' + STATION_KIND[act.st.kind].name);
       v3.set(act.st.c + 0.5, LV[T(act.st.c, act.st.r)] * STEP + 1.2, act.st.r + 0.5);
+    } else if (act.kind === 'folk') {
+      pr.innerHTML = key + 'TALK TO ' + act.p.d.name.full.toUpperCase();
+      v3.set(act.p.x, act.p.y + 1.05 * act.p.rig.g.scale.y + 0.25, act.p.z);
     } else {
       pr.innerHTML = key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
       const mx = nd.w ? nd.c : nd.c + 0.5, mz = nd.w ? nd.r + 0.5 : nd.r;
@@ -21105,6 +21495,12 @@ const TUNING = [
     [FOLK, 'waveTime', 'How long they wave (s)', 0, 15, 0.5],
     [FOLK, 'wake', 'A town wakes when you come within this many tiles of its edge', 10, 120, 1],
     [FOLK, 'show', 'Shown within this many tiles of the view', 10, 200, 5],
+    [FOLK, 'workMin', 'Least time at work before moving about the shop (s)', 1, 120, 1],
+    [FOLK, 'workMax', 'Most time at work before moving about the shop (s)', 1, 240, 1],
+    [FOLK, 'sayTime', 'How long what they say stays up (s)', 1, 15, 0.5],
+    [FOLK, 'lieTime', 'Lying down / getting up (s)', 0.3, 5, 0.1],
+    [FOLK, 'coverTime', 'Pulling the blanket up / back (s)', 0.1, 3, 0.1],
+    [FOLK, 'breathe', 'Breathing while asleep', 0, 0.2, 0.01],
     [FOLK_READ, 'towns', 'Towns awake', 'readout', 0, 1],
     [FOLK_READ, 'people', 'Townsfolk about', 'readout', 0, 1],
     [FOLK_READ, 'shown', 'Townsfolk shown', 'readout', 0, 1],
@@ -22130,7 +22526,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 451, crashSeen = new Map();
+const GAME_VERSION = 452, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
