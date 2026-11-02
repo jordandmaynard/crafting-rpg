@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v483:** A monster's top banner goes at once when it dies (or is gone), with no hold or fade (Jordan).
+
 **v482:** Jordan's health bar tuning: top banner bigWidth 538, bigHeight 19, bigY 4, nameSize 41, nameY 9, nameStroke 4.
 
 **v481:** The tuning panel's big-bar sliders drive the top banner again (Jordan: they did nothing since the kit banner): HPBAR.bigWidth (bar width, banner px, 512), bigHeight (fill thickness, 10; track = fill + 14), new bigY (bar up/down), nameSize (name font, 28; the fit-to-leather shrink uses it), new nameY (monster name up/down) and nameStroke (black outline, -webkit-text-stroke with paint-order stroke fill, 0). Set as CSS vars --tbW/--tbH/--tbY/--tnS/--tnY/--tnK in styleBars; the bar stays centred on x 560. Jordan's HUD paste: topScale 0.6, topY 6, toastY 101.
