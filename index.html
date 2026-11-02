@@ -12958,6 +12958,37 @@ function buildingWalls(inside) {
   bldWalls = [...byEdge.values()];
   return bldWalls;
 }
+// (v534, Jordan: houses are too dark inside, their roofs and upper floors still shading them and the probes' light
+// dim, but no sun or moon should come in and no lamps should be needed) The inside fill: while you're in a building,
+// a light of its own (color × amount) on everything within its tiles on your story, day or night, eased in and out
+// over `fade` seconds; outside keeps its own light. renderer.inside, insideFill in the shaders' prelude. T > Picture.
+const INSIDE_FILL = { on: 1, amount: 0.5, color: '#ffe2bc', fade: 0.5 };
+const insideFill = { r: 0, g: 0, b: 0, x0: 0, z0: 0, y0: 0, y1: 0, bits: new Uint32Array(32) };
+const insideCol = new GFX.Color();
+let insideK = 0, insideKey = '';
+function updateInsideFill(dt, inBld) {
+  const b = inBld ? buildings.get(inBld) : null, want = INSIDE_FILL.on > 0.5 && b ? 1 : 0;
+  insideK = want > insideK ? Math.min(1, insideK + dt / Math.max(0.01, INSIDE_FILL.fade)) : Math.max(0, insideK - dt / Math.max(0.01, INSIDE_FILL.fade));
+  if (b) {
+    // (the 32 x 32 tiles round you, a bit each for the building's; remade when you or it change)
+    const hc = Math.floor(H.x), hr = Math.floor(H.z), x0 = hc - 16, z0 = hr - 16, key = b.id + ':' + roomSeq + ':' + x0 + ':' + z0 + ':' + seenStory();
+    if (key !== insideKey) {
+      insideKey = key;
+      const bits = insideFill.bits; bits.fill(0);
+      for (const t of b.set) {
+        const c = t % N, r = (t - c) / N, dx = c - x0, dz = r - z0;
+        if (dx < 0 || dz < 0 || dx > 31 || dz > 31) continue;
+        const n = dz * 32 + dx; bits[n >> 5] |= 1 << (n & 31);
+      }
+      const base = LV[T(clamp(hc, 0, N - 1), clamp(hr, 0, N - 1))] * STEP + seenStory() * WALL_H;
+      Object.assign(insideFill, { x0, z0, y0: base - 0.5, y1: base + WALL_H + 0.6 });
+    }
+  }
+  insideCol.set(INSIDE_FILL.color);
+  const k = insideK * Math.max(0, INSIDE_FILL.amount);
+  insideFill.r = insideCol.r * k; insideFill.g = insideCol.g * k; insideFill.b = insideCol.b * k;
+  renderer.inside = insideFill;
+}
 function updateCutaway(inside) {
   const sy = Math.sin(yaw), cy = Math.cos(yaw);
   wantCut.clear();
@@ -21487,6 +21518,7 @@ function update(dt) {
   for (const ch of chunks.values()) for (let k = 1; k <= STORY_MAX; k++) { const m = ch['up' + k], g = ch['glass' + k]; if (m) m.visible = k <= view; if (g) g.visible = k <= view; }
   for (const d of doors.values()) if (d.k) d.pivot.visible = d.k <= view;
   updateCutaway(inside);
+  updateInsideFill(dt, inBld);
 
   updateGhost();
   updatePlotWalls();
@@ -23565,6 +23597,10 @@ const TUNING = [
     [BLOOM, 'threshold', 'Bloom: glows above this brightness', 0, 2, 0.01],
     [BLOOM, 'knee', 'Bloom: eases in over this much', 0, 1, 0.01],
     [BLOOM, 'size', 'Bloom: how far it spreads (mosaic pixels)', 1, 30, 0.5],
+    [INSIDE_FILL, 'on', 'Inside fill: light inside the building you\'re in (0 off, 1 on)', 0, 1, 1],
+    [INSIDE_FILL, 'amount', 'Inside fill: strength', 0, 3, 0.01],
+    [INSIDE_FILL, 'color', 'Inside fill: colour', 'color'],
+    [INSIDE_FILL, 'fade', 'Inside fill: seconds to fade in and out', 0, 3, 0.05],
     [GRADE, 'black', 'Black point (takes the haze lift back out)', 0, 0.5, 0.005],
     [GRADE, 'contrast', 'Contrast', 0.5, 2, 0.01],
     [GRADE, 'pivot', 'Contrast pivots round this brightness', 0, 1, 0.01],
@@ -24576,7 +24612,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 533, crashSeen = new Map();
+const GAME_VERSION = 534, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

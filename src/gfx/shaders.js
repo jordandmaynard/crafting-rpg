@@ -12,7 +12,7 @@
 // round about give back.
 
 export const MAX_POINTS = 16;
-export const FRAME_BYTES = 1280;  // the Frame struct (1072 bytes: 16 point lights since v411), padded to the uniform offset alignment
+export const FRAME_BYTES = 1280;  // the Frame struct (1232 bytes: 16 point lights since v411, the inside fill since v534), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
 // Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
@@ -152,6 +152,9 @@ struct Frame {
   hazeB: vec4f,       // its texels (mosaic pixels) across, down
   post: vec4f,        // eye adaptation on (exposure.js), HDR highlights' peak (× white; 0 without HDR), clip height (see builtinCode)
   bloom: vec4f,       // bloom (bloom.js): strength (0 off), _, its texture coordinates a mosaic pixel (x, y)
+  insideA: vec4f,     // the inside fill (renderer.inside): its light (rgb), on (w > 0)
+  insideB: vec4f,     // its 32 x 32 tile window's first tile x, z; the heights it lights, from y0 to y1
+  insideBits: array<vec4u, 8>,   // which of the window's tiles are inside: bit (z * 32 + x)
 }
 struct Obj {
   model: mat4x4f,
@@ -258,6 +261,17 @@ fn ggx(f0: vec3f, rough: f32, N: vec3f, V: vec3f, L: vec3f) -> vec3f {
   let d = nh * nh * (a2 - 1.0) + 1.0;
   return Fs * (G * a2 / (PI * d * d));
 }
+// (v534) the inside fill: a light of its own on everything within the building you're in (its tiles, between two
+// heights), whatever the hour, so a house's inside isn't left dark by its roof's shadow and the probes' gloom
+fn insideFill(w: vec3f) -> vec3f {
+  if (F.insideA.w <= 0.0) { return vec3f(0.0); }
+  let t = vec2i(floor(w.xz - F.insideB.xy));
+  if (t.x < 0 || t.y < 0 || t.x > 31 || t.y > 31 || w.y < F.insideB.z || w.y > F.insideB.w) { return vec3f(0.0); }
+  let n = u32(t.y * 32 + t.x);
+  let word = F.insideBits[n >> 7u][(n >> 5u) & 3u];
+  if (((word >> (n & 31u)) & 1u) == 0u) { return vec3f(0.0); }
+  return F.insideA.rgb;
+}
 // the lit colour of a surface at world point w with normal N
 fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N: vec3f, receive: bool) -> vec3f {
   return shadeLitN(albedo, emissive, metal, rough0, w, N, N, receive);
@@ -285,6 +299,7 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
     }
     col += amb * diff;
   }
+  col += insideFill(w) * diff;
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
     var lc = F.sunColor.rgb * cloudShade(w.xz);

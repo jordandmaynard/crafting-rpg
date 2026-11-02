@@ -117,7 +117,10 @@ class Renderer {
     this.noEye = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.noEye, 0, new Float32Array([1, 0, 0, 1]));
     this.eye = null; this.hdr = false; this.hdrPeak = 0; this.bloom = null;
-    this.clipBelow = null;   // a world height: the plain and lit materials draw nothing below it while set (a water mirror)
+    this.clipBelow = null;
+    // the inside fill (see insideFill): null, or { r, g, b (its light; 0 = off), x0, z0 (the window's first tile), y0, y1,
+    // bits: a Uint32Array(32), the window's 32 x 32 tiles a bit each, row by row }
+    this.inside = null;   // a world height: the plain and lit materials draw nothing below it while set (a water mirror)
     this.gi = null;
     this._ensureShadow(512);
     this._frameBG = null; this._frameBGKey = '';
@@ -471,6 +474,12 @@ class Renderer {
     d[go + 21] = plain ? 0 : this.hdrPeak; d[go + 22] = this.clipBelow ?? 0; d[go + 23] = 0;   // (the character view's canvas is plain sRGB: no HDR)
     const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
     for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
+    const ins = plain ? null : this.inside, du = this._frameU || (this._frameU = new Uint32Array(d.buffer, d.byteOffset, d.length));
+    if (ins && (ins.r > 0 || ins.g > 0 || ins.b > 0)) {
+      d[go + 28] = ins.r; d[go + 29] = ins.g; d[go + 30] = ins.b; d[go + 31] = 1;
+      d[go + 32] = ins.x0; d[go + 33] = ins.z0; d[go + 34] = ins.y0; d[go + 35] = ins.y1;
+      for (let i = 0; i < 32; i++) du[go + 36 + i] = ins.bits[i];
+    } else d[go + 31] = 0;
     return slot * FRAME_BYTES;
   }
   _writeObj(mesh, mat) {
