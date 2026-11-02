@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v492:** Region and POI emblems in the discovery toast, from Jordan's Wanderer's Kit region toast icons (art/deliveries/wanderers-kit-region-toast-icons-v1.zip; the 96 px badges as ui/top3/crest-{stem}.webp). A first discovery shows the compass star, then after TOAST.glyphDelay 0.8 s crossfades over glyphFade 0.6 s to the emblem; entering a found region shows its emblem straight away instead of the four-pointed diamond. Biomes: meadow, forest, swamp, graveyard, alpine snow, desert, town, redwood forest (the Elderwood biome), volcanic wastes. Lakes and every sea kind use the lake emblem; rivers and roads their own. POIs: farm, cabin, grotto, obelisk, mausoleum, willow, dock. Waystones and landmasses have no emblem and keep the compass star.
+
 **v491:** Time of day up 1 more kit px (top 399), Jordan.
 
 **v490:** Jordan's HUD paste: miniRight -13, miniTop -3, tagScale 1.49, placeSize 12, placeWeight 600. Time of day moved up 2 kit px (top 400), to sit midway between the place name and the tag's bottom edge.
