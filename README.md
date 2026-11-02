@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v514:** (Jordan: holes in the hull's reflection with few steps, the bowsprit repeated with many) Reflection rays now hit only where they cross into a surface: one no nearer than the nearer end of the step by more than the thickness. Passing behind a thin thing never counts, and a long step that crosses the hull is never missed. The first step is jittered per pixel (new jitter slider) to break up banding. Defaults: steps 16, thickness 0.6 (it means something smaller now; 5 would bring the repeats back).
+
 **v513:** (Jordan) The single black frame while easing to or from the wheel's zoom: with a 3-pixel mosaic the pixel size steps to 2 partway through that ease (a hand zoom never goes out that far), the lit haze and bloom remade their textures for the new size and destroyed the old ones at once, while the scene already drawn that frame still read them, so the GPU threw the whole frame away. Textures (and grown buffers) dropped mid-frame now wait in the renderer's trash until the frame is sent.
 
 **v512:** (Jordan's tuning) Reflections: boost 10, reach 40, thick 5, calm 0.75 (boost and reach sliders now go to 20 and 80).

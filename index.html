@@ -8327,7 +8327,7 @@ const waveTex = (() => {
 // passes behind something within `thick` tiles, what's there is reflected. It fades toward the screen's edges and
 // its reach. amount: how much of the sky's reflection it replaces; boost: × the water's Fresnel where it hits (the
 // view is steep, so the true reflection is faint). Needs post-processing (the copy). T > Water.
-const SSR = { on: 1, amount: 1, boost: 10, steps: 12, reach: 40, thick: 5, calm: 0.75 };
+const SSR = { on: 1, amount: 1, boost: 10, steps: 16, reach: 40, thick: 0.6, calm: 0.75, jitter: 1 };
 const WATER_U = {
   ssrA: { value: { x: 0, y: 24, z: 14, w: 1.5 } }, ssrB: { value: { x: 1, y: 2.5, z: 0.6, w: 0 } },
   tWave: { value: waveTex }, time: { value: 0 }, waveAmp: { value: 1 }, flowSpeed: { value: 1 }, glitter: { value: 1 }, rough: { value: 0.03 },
@@ -8413,11 +8413,19 @@ fn bedPoint(wp: vec3f, fp: vec4f, d: f32) -> vec3f {
   return wp + dir * (d / max(-dir.y, 0.2));
 }
 // (v509) the screen-space reflection along the reflected ray from wp: rgb what it meets, a how sure (0 none)
-fn ssrTrace(wp: vec3f, dir: vec3f) -> vec4f {
+// (v514, Jordan: holes in the hull's reflection with few steps, the bowsprit repeated with many) a hit only where
+// the ray crosses the surface it lands behind: that surface no nearer than the nearer end of this step by more than
+// the thickness. A ray passing behind a thin thing (the bowsprit, a rope) never counts, whatever the step's length,
+// so the thickness can stay small; and a long step that does cross the hull is never missed for being long. The
+// first step is shifted per pixel (jitter) so the steps' bands break up.
+fn ssrTrace(wp: vec3f, dir: vec3f, frag: vec2f) -> vec4f {
   let dims = vec2i(textureDimensions(tRefrD));
   let n = i32(U.ssrA.y);
-  var prev = wp; var travel = 0.0;
+  let P = F.proj;
   var stepL = U.ssrA.z / (U.ssrA.y * U.ssrA.y) * 2.0;
+  let jit = fract(52.9829189 * fract(dot(floor(frag), vec2f(0.06711056, 0.00583715)))) * U.ssrB.w;
+  var prev = wp + dir * stepL * jit; var travel = stepL * jit;
+  var vzPrev = (F.view * vec4f(prev, 1.0)).z;
   for (var k = 0; k < 64; k++) {
     if (k >= n) { break; }
     let p = prev + dir * stepL;
@@ -8427,14 +8435,13 @@ fn ssrTrace(wp: vec3f, dir: vec3f) -> vec4f {
     if (any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) || c.w <= 0.0) { break; }
     let px = clamp(vec2i(uv * vec2f(dims)), vec2i(0), dims - 1);
     let zb = textureLoad(tRefrD, px, 0);
+    let vz = (F.view * vec4f(p, 1.0)).z;
     if (zb < 0.99999 && c.z / c.w > zb) {
-      // behind something: how far behind (view depth), and if not too far, close in on where it crossed
-      let P = F.proj;
+      // behind something (view z runs negative away from the eye): crossed into it this step, or only passing behind?
       let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
-      let vz = (F.view * vec4f(p, 1.0)).z;
-      if (vb - vz < U.ssrA.w) {
+      if (vb - max(vz, vzPrev) < U.ssrA.w) {
         var a = prev; var b = p;
-        for (var j = 0; j < 4; j++) {
+        for (var j = 0; j < 5; j++) {
           let m = (a + b) * 0.5;
           let cm = F.viewProj * vec4f(m, 1.0);
           let um = cm.xy / cm.w * vec2f(0.5, -0.5) + 0.5;
@@ -8448,7 +8455,7 @@ fn ssrTrace(wp: vec3f, dir: vec3f) -> vec4f {
         return vec4f(col, edge * (1.0 - smoothstep(U.ssrA.z * 0.6, U.ssrA.z, travel)));
       }
     }
-    prev = p;
+    prev = p; vzPrev = vz;
     stepL *= 1.0 + 2.0 / U.ssrA.y;
   }
   return vec4f(0.0);
@@ -8483,7 +8490,7 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
     let Nr = normalize(mix(N, vec3f(0.0, 1.0, 0.0), U.ssrB.z));
     let Rd = reflect(vd, Nr);
     if (Rd.y > 0.02) {
-      let hit = ssrTrace(i.wpos + vec3f(0.0, 0.02, 0.0), Rd);
+      let hit = ssrTrace(i.wpos + vec3f(0.0, 0.02, 0.0), Rd, i.pos.xy);
       let a = hit.a * U.ssrB.x;
       refl = mix(refl, hit.rgb, a);
       Fr = min(1.0, Fr * mix(1.0, U.ssrB.y, a));
@@ -9431,7 +9438,7 @@ function updateWater(dt) {
   for (const k of ['swellShade', 'crests', 'sparkle', 'caustics', 'shallows', 'shoreLine', 'shoreRipples']) U[k].value = WATER[k];
   U.refract.value = WATER.refraction;
   Object.assign(U.ssrA.value, { x: SSR.on > 0.5 ? 1 : 0, y: clamp(Math.round(SSR.steps), 4, 64), z: Math.max(1, SSR.reach), w: Math.max(0.1, SSR.thick) });
-  Object.assign(U.ssrB.value, { x: SSR.amount, y: SSR.boost, z: SSR.calm });
+  Object.assign(U.ssrB.value, { x: SSR.amount, y: SSR.boost, z: SSR.calm, w: SSR.jitter });
   U.sunDir.value.copy(sun.position).sub(sun.target.position).normalize();
   LU.sunDir.value.copy(U.sunDir.value);
   U.sunCol.value.copy(sun.color).multiplyScalar(sun.intensity);
@@ -23235,7 +23242,8 @@ const TUNING = [
     [SSR, 'boost', 'Reflections: strength (× the water\'s Fresnel where they hit)', 1, 20, 0.1],
     [SSR, 'steps', 'Reflections: steps along each ray (more is slower)', 4, 64, 1],
     [SSR, 'reach', 'Reflections: how far the rays go (tiles)', 2, 80, 0.5],
-    [SSR, 'thick', 'Reflections: how thick things are taken to be (tiles)', 0.1, 6, 0.05],
+    [SSR, 'thick', 'Reflections: how far in front of where a step starts a surface can be and still count as hit (tiles; small stops thin things repeating)', 0.05, 6, 0.05],
+    [SSR, 'jitter', 'Reflections: steps shifted per pixel (breaks up banding)', 0, 1, 0.01],
     [SSR, 'calm', 'Reflections: how much the waves are smoothed for them (1 a mirror)', 0, 1, 0.01],
     [WATER, 'shallows', 'Turquoise shallows', 0, 3, 0.05],
     [WATER, 'shoreLine', 'Foam line at the shore', 0, 1, 0.05],
@@ -24060,7 +24068,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 513, crashSeen = new Map();
+const GAME_VERSION = 514, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
