@@ -5885,7 +5885,11 @@ function* groundHazeSiteJob(cx, cz) {
     const solid = o.tile || (o.solid >= 0.15 && Math.hypot(x - tc - 0.5, z - tr - 0.5) < o.solid + 0.15) ? 1 : 0;
     ghSite[k] = y; ghSite[k + 1] = solid; ghSite[k + 2] = s[0]; ghSite[k + 3] = top;
     const w = s[0] > 1e-4 ? 255 / s[0] : 0;
-    ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); ghTint[k + 3] = 255;
+    // (v505) where none rests, the lake mist's colour, not black: haze stirred in there (a boat's wake dragging the
+    // mist out over the open sea) showed dark brown
+    if (w) { ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); }
+    else { ghTint[k] = col.lake[0] * 255; ghTint[k + 1] = col.lake[1] * 255; ghTint[k + 2] = col.lake[2] * 255; }
+    ghTint[k + 3] = 255;
     if (s[0] > 0.003) any = true;
   }
   // the drape: each texel at least as high as any within GH_DRAPE_R texels, less GH_DRAPE a tile beyond the first
@@ -13494,7 +13498,7 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // The boat's own frame: u across (+ to port), v along (+ toward the bow), y up from the deck. World from the
 // boat: x = b.x + cos(h) u + sin(h) v, z = b.z - sin(h) u + cos(h) v (h the heading, as H.face: atan2(dx, dz)).
 const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 7, accel: 1.2, turn: 0.5, notches: 2, sailRate: 0.8,
-  anchorTime: 1.6, gangV: -0.2, plank: 1.2, reach: 2, onto: 0.6, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
+  astern: 0.8, anchorTime: 1.6, gangV: -0.2, plank: 1.2, reach: 2, onto: 0.6, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
   // (v496, Jordan) the helm deck: a platform behind the wheel (helmP high, from the stern to helmFront), a ramp up to
   // it either side of the wheel (from rampV aft to helmFront, outboard of rampU); you stand at helmV on it, the
   // wheel's hub wheelY over the deck; it turns up to wheelTurn either way as you steer (wheelRate a second), your
@@ -13508,7 +13512,7 @@ const boats = [];
 // length), in the water's shader and here (seaSwell) alike. By each tile's feature (nameFeatures / nameSeas):
 // SEA: water named a sea or an ocean (inland seas too); MIST: lakes and ponds, and the bays, inlets, straits and
 // shallows of the open sea, which take the lake mist (GROUND_HAZE.lake); OPEN: each sea tile's 0..1, smooth over reach.
-const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 0.75, roll: 0.75, haze: 0.2 };   // (v504: pitch and roll apart)
+const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 1.45, roll: 0.45, haze: 0.2 };   // (v504: pitch and roll apart)
 const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N), MIST = new Uint8Array(N * N);
 const MIST_KINDS = new Set(['lake', 'bay', 'inlet', 'strait', 'shallows']);
 function computeOpenSea() {
@@ -13543,15 +13547,15 @@ function openAt(x, z) {
 }
 // the water's height off its rest at (x, z), as its shader swells it: the usual three short swells, and the sea's
 // two long ones out where it's open (the same sums as WATER_WGSL's swell and seaSwell)
-function waterSwell(x, z) {
+function waterSwell(x, z, seaOnly) {
   const U = WATER_U, t = U.time.value, TAU = 6.2832, L = U.swellLen.value;
   const k0 = TAU / (6 * L), k1 = TAU / (3.9 * L), k2 = TAU / (2.7 * L);
   const h = 0.5 * Math.sin((x * 0.83 + z * 0.56) * k0 + t * 0.9) + 0.3 * Math.sin((-x * 0.45 + z * 0.89) * k1 + t * 1.15 + 1.7) + 0.2 * Math.sin((x * 0.98 - z * 0.2) * k2 + t * 1.4 + 4.1);
-  const op = openAt(x, z);
-  if (op <= 0) return U.swellAmp.value * h;
+  const op = openAt(x, z), small = seaOnly ? 0 : U.swellAmp.value * h;
+  if (op <= 0) return small;
   const SL = U.seaLen.value, k3 = TAU / (13 * SL), k4 = TAU / (8.5 * SL);
   const sh = 0.6 * Math.sin((x * 0.31 + z * 0.95) * k3 + t * 0.55) + 0.4 * Math.sin((x * 0.92 - z * 0.39) * k4 + t * 0.7 + 2.3);
-  return U.swellAmp.value * h + U.seaAmp.value * op * sh;
+  return small + U.seaAmp.value * op * sh;
 }
 // a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
 const boatYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.74, m.h * 0.32 - 0.3]];
@@ -14063,11 +14067,13 @@ function restyleBoats() {
 const boatDeckY = b => b.wl * STEP - 0.16 + BOAT.free + (b.swell || 0);
 function boatTilt(b) {
   const L = 3.2, W = 1.1, K = SEA_SWELL.pitch, KR = SEA_SWELL.roll;
-  const at = (u, v) => { const [x, z] = boatWorld(b, u, v); return waterSwell(x, z); };
-  const fwd = at(0, L), aft = at(0, -L), port = at(W, 0), stbd = at(-W, 0);
+  const at = (u, v, big) => { const [x, z] = boatWorld(b, u, v); return waterSwell(x, z, big); };
+  // (v505, Jordan) it rises and falls on all the water's swell, but pitches and rolls on the sea's long swells only
+  const fwd = at(0, L, true), aft = at(0, -L, true), port = at(W, 0, true), stbd = at(-W, 0, true);
+  const heave = (at(0, L) + at(0, -L) + at(W, 0) + at(-W, 0)) / 4;
   // (v501, Jordan) held still while its gangplank's out (as it goes out and in, eased by how far it is)
   const ride = 1 - clamp(b.plank, 0, 1);
-  b.swell = (fwd + aft + port + stbd) / 4 * ride;
+  b.swell = heave * ride;
   b.pitch = -Math.atan2(fwd - aft, 2 * L) * K * ride;
   b.rollW = Math.atan2(port - stbd, 2 * W) * KR * ride;
 }
@@ -14140,7 +14146,7 @@ function boatSails(dn) {
   const b = H.boat;
   if (!b || !H.helm) return;
   const n = clamp(b.notch + dn, 0, BOAT.notches);
-  if (n === b.notch) { sfx.nope(); return; }
+  if (n === b.notch) { if (!(dn < 0 && n === 0)) sfx.nope(); return; }   // (S at furled: holding it backs up, v505)
   b.notch = n; sfx.swoosh();
 }
 // every boat a frame: the one you sail moves and turns; anchors, sails and gangplanks ease; you ride along
@@ -14150,7 +14156,10 @@ function updateBoats(dt) {
     b.anchor += clamp((b.anchorGoal ?? 1) - b.anchor, -dt / BOAT.anchorTime, dt / BOAT.anchorTime);
     b.plank += clamp((b.plankGoal ?? 1) - b.plank, -dt * 1.5, dt * 1.5);
     b.sail += clamp(b.notch / BOAT.notches - b.sail, -dt * BOAT.sailRate, dt * BOAT.sailRate);
-    const want = b.anchor < 0.05 ? BOAT.speed * b.sail : 0;
+    // (v505, Jordan) S held at the wheel with the sails furled and the boat stopped (or already going astern) backs
+    // it up slowly, to get off a shore or out of a corner
+    const astern = mine && b.notch === 0 && b.sail < 0.05 && b.speed < 0.05 && (keys.has('KeyS') || keys.has('ArrowDown'));
+    const want = b.anchor < 0.05 ? (astern ? -BOAT.astern : BOAT.speed * b.sail) : 0;
     b.speed += clamp(want - b.speed, -dt * BOAT.accel * 2, dt * BOAT.accel);
     b.turnRate = 0;
     let steer = 0;
@@ -14163,10 +14172,10 @@ function updateBoats(dt) {
     }
     // (v496) the wheel goes over as you steer and comes back amidships when you let go
     b.wheel += clamp(steer * BOAT.wheelTurn - b.wheel, -dt * BOAT.wheelRate, dt * BOAT.wheelRate);
-    if (b.speed > 0.01) {
+    if (Math.abs(b.speed) > 0.01) {
       const nx = b.x + Math.sin(b.h) * b.speed * dt, nz = b.z + Math.cos(b.h) * b.speed * dt;
       if (boatFits(nx, nz, b.h, b.wl)) { b.x = nx; b.z = nz; }
-      else { if (b.speed > 1.5) sfx.thunk(); b.speed = 0; }
+      else { if (Math.abs(b.speed) > 1.5) sfx.thunk(); b.speed = 0; }
     }
     if (H.boat === b || Math.hypot(b.x - H.x, b.z - H.z) < BOAT.see) boatTilt(b);
     // (v502) its wake through the ground haze, along the hull below the waterline's width
@@ -16711,7 +16720,7 @@ addEventListener('keydown', e => {
   if (mapOpen) return;
   // (v494) at a boat's wheel: W and S raise and lower the sails; no walking, rolling, jumping or abilities
   if (H.helm && mode === 'play') {
-    if (/^(KeyW|ArrowUp|KeyS|ArrowDown)$/.test(e.code)) { e.preventDefault(); if (!e.repeat) boatSails(e.code === 'KeyW' || e.code === 'ArrowUp' ? 1 : -1); return; }
+    if (/^(KeyW|ArrowUp|KeyS|ArrowDown)$/.test(e.code)) { e.preventDefault(); keys.add(e.code); if (!e.repeat) boatSails(e.code === 'KeyW' || e.code === 'ArrowUp' ? 1 : -1); return; }
     if (/^(Space|ShiftLeft|ShiftRight|KeyQ|KeyE)$/.test(e.code)) { e.preventDefault(); return; }
   }
   if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) toggleInv(); return; }
@@ -24175,7 +24184,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 504, crashSeen = new Map();
+const GAME_VERSION = 505, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

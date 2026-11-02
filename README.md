@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v505:** (Jordan) Holding S at the wheel with the sails furled and the boat stopped backs it up slowly (BOAT.astern 0.8 tiles a second), to get off a shore or out of a corner; let go and it stops. The boats pitch and roll on the sea's long swells only (the short swells still lift them up and down), so they no longer jitter. The ground haze's colour where none rests is the lake mist's grey rather than black: a boat's wake dragging mist out over the open sea had drawn a dark brown trail. Tuning: SEA_SWELL.pitch 1.45, roll 0.45.
+
 **v504:** (Jordan) No snow falls over water (the snow's tiles need ground: LV). The boats' pitch and roll on the swells tune apart: SEA_SWELL.pitch and SEA_SWELL.roll (both 0.75, T > Boats).
 
 **v503:** (Jordan) Out at sea and on the ocean the lit haze thins to SEA_SWELL.haze 0.2 of its density (so its light and the cloud shadows in it too), over the same ramp from the coast as the swells (OPEN where the camera looks; T > Boats). Wake tuning: BOAT_WAKE.radius 0.65, drag 1.2.
