@@ -289,6 +289,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v447:** The belt centre uses Jordan's separated layers (ui/belt/center-leather.webp, hp-frame.webp, xp-frame.webp, aligned and cropped from the 2172x724 sources), so the health and XP frames move on their own: T > HUD bars has Health bar and XP bar up/down sliders (HUD_BARS.hpY / xpY, kit px, -> --hpY / --xpY). Fills are 374x29 (HP) and 320x19 (XP) to match the new frame wells.
+
 **v446:** The big rose's frame is shallow (Jordan): its three walls are thin (core 0.10, blocks 0.14) flush with the outside face, the glass sits at ROSE.bigOut 0.05 (light origin too, via roseDims out), one slim moulding 0.03 proud of the face replaces the two deep rims, and the reveal is 0.14 deep and 0.05 across (was 0.36 x 0.03) with blocks sized to the circumference so it closes the gaps the wall's slices left (slices 0.02 tall on these walls).
 
 **v445:** The cathedral's rose window is a 3-wide set piece: it spans the three gallery-front walls over the door (the ones beside the door's were stone windows, now plain stone cut for it), a whole story high (ROSE.bigHole 0.82, bigY 0.98; glass 0.81 vs 0.44). ROSE_WALLS is a Map wall key -> rose; roseWall cuts each wall's share of the hole (ac from the rose's centre), rims/reveal/glass scale with roseDims(q). The one-wall rose (ROSE.y/hole/glass) stays for player-built ones later. size 4 -> 2.17 and grow 0.135 -> 0.073 so the light falls as big as before.
