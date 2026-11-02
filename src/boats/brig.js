@@ -10,7 +10,11 @@ import * as GFX from '../gfx/index.js';
 export const BRIG_SHAPE = {
   stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, gangV: -0.2, wheelV: -3.2,
   helmP: 0.45, helmFront: -3.42, rampV: -2.6, rampU: 0.42, wheelY: 0.85, wheelR: 0.26,
-  masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }],
+  // (v517, Jordan: the sails a quarter bigger) h: the mast's height, sh: the height its sails were first cut for,
+  // sailK: the sails' size over that (the masts stand taller to carry them)
+  masts: [{ v: 1.7, h: 8.0, sh: 7.0, w: 3.2 }, { v: -1.0, h: 8.8, sh: 7.8, w: 3.6 }], sailK: 1.25,
+  // the cathead the anchor hangs from (its block's underside, where the chain comes out)
+  hawse: [0.9, 0.19, 3.4],
 };
 // the deck's half width along the boat (to the bulwarks' inner face), the bulwarks' height over the deck, the keel
 export function hullHB(B, v) {
@@ -21,7 +25,11 @@ export function hullHB(B, v) {
 export const hullGH = v => 0.42 + 0.35 * Math.max(0, (v - 1.5) / 3.1) ** 2 + 0.18 * Math.max(0, (-v - 2.8) / 1.4);
 export const hullKeel = (B, v) => -B.free - 0.85 + 0.75 * Math.max(0, (v - 2.4) / 2.2) ** 2;
 // a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
-export const brigYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.74, m.h * 0.32 - 0.3]];
+// (v517: sailK times the first cut; the lower sail's foot stays 2.1 over the deck, the upper's 0.3 over the lower yard)
+export const brigYards = (m, k = BRIG_SHAPE.sailK) => {
+  const sh = m.sh || m.h, lh = (sh * 0.5 - 2.1) * k, uh = (sh * 0.32 - 0.3) * k, ly = 2.1 + lh, uy = ly + 0.3 + uh;
+  return [[ly, m.w * k, lh], [uy, m.w * 0.74 * k, uh]];
+};
 
 // ---------- liveries ----------
 // stains: [id, name, colour]; the hull's strakes darken from it down to the keel, the deck's boards are it and a
@@ -584,7 +592,13 @@ export function buildBrig(L, B = BRIG_SHAPE) {
       part(G.cone4, C.iron, s * 0.38, -0.57, 0, { sx: 0.18, sy: 0.2, sz: 0.12, rz: -s * 0.4 });
     }
   });
-  take('chain', () => part(G.box, C.iron, 0, -0.5, 0, { sx: 0.035, sy: 1, sz: 0.035 }));
+  // (v517, Jordan) one link of the anchor chain, its top at the origin, CHAIN.pitch long: an oval of iron in the xy
+  // plane (hangChain turns every other one a quarter round)
+  take('chain', () => {
+    const { len, wide, wire } = CHAIN, n = 10, r = (wide - wire) / 2, mid = (len - wire) / 2;
+    const at = k => { const t = k / n * Math.PI * 2; return [Math.sin(t) * r, -mid + Math.cos(t) * mid, 0]; };
+    for (let k = 0; k < n; k++) seg(G.box, C.iron, at(k), at(k + 1), wire);
+  });
   take('plank', () => {
     // No raised rungs: the entire walking surface is flush at local y=0.
     part(G.box, C.dark, 0.5, -0.059, 0, { sx: 1, sy: 0.062, sz: 0.62 });
@@ -594,6 +608,20 @@ export function buildBrig(L, B = BRIG_SHAPE) {
   return made;
 }
 
+// (v517) the anchor chain: links len long (pitch apart, so each runs through the next), wide across, of wire this thick
+export const CHAIN = { len: 0.13, pitch: 0.095, wide: 0.075, wire: 0.018 };
+const chainAt = new GFX.Matrix4();
+// the chain hung from the hawse down `len` to the anchor's ring: enough links for it, every other one turned a quarter
+export function hangChain(chainM, len) {
+  const n = Math.max(0, Math.ceil(Math.max(0, len - CHAIN.len * 0.5) / CHAIN.pitch));
+  chainM.reserve(n);
+  for (let i = 0; i < n; i++) {
+    const y = -i * CHAIN.pitch;
+    if (i % 2) chainAt.set(0, 0, 1, 0, 0, 1, 0, y, -1, 0, 0, 0, 0, 0, 0, 1); else chainAt.set(1, 0, 0, 0, 0, 1, 0, y, 0, 0, 1, 0, 0, 0, 0, 1);
+    chainM.setMatrixAt(i, chainAt);
+  }
+  chainM.count = n; chainM.needsUpdate = true;
+}
 // a boat's model from its shapes S: hull, a sail and furl roll on each yard, anchor and chain, gangplank, wheel, the
 // lanterns' glass; mats { boat, sail, glow }. Returns { g, sails, furls, anchorM, chainM, plankG, plankM, wheelM, glowM }.
 export function brigModel(S, B, mats) {
@@ -609,7 +637,8 @@ export function brigModel(S, B, mats) {
     const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); furls.push(f);
   }
   const anchorM = mesh(S.anchor); anchorM.position.set(0.9, -0.4, 3.4); g.add(anchorM);
-  const chainM = mesh(S.chain); chainM.position.set(0.9, 0.2, 3.4); g.add(chainM);
+  const chainM = lit(new GFX.InstancedMesh(S.chain, mats.boat, 64)); chainM.position.set(...B.hawse); g.add(chainM);
+  hangChain(chainM, B.hawse[1] + 0.4);
   const plankG = new GFX.Group(), plankM = mesh(S.plank); plankG.add(plankM); g.add(plankG);
   const wheelM = mesh(S.wheel); wheelM.position.set(0, B.wheelY, B.wheelV - 0.1); g.add(wheelM);
   const glowM = S.glow && mats.glow ? new GFX.Mesh(S.glow, mats.glow) : null;
