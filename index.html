@@ -18340,7 +18340,7 @@ function spawnTick(dt) {
 // Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
 // the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
 // with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
-const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1.25, stepRef: 0.75, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, show: 70 };
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1.25, stepRef: 0.75, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70 };
 const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
 const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
 const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
@@ -18421,6 +18421,8 @@ function folkPeople(t) {
         d = e; break;
       }
       if (!d) d = folkKit.design(folkSeed(t.n, hi0, k, 999));
+      // (v449, Jordan) anyone known as "of" a place is of this town
+      if (d.name.last.startsWith('of ')) { const of = 'of ' + titleCase(t.name); d.name.full = d.name.full.slice(0, -d.name.last.length) + of; d.name.last = of; }
       used.add(d.job);
       out.push({ must: !!want, keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
         moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
@@ -18706,12 +18708,12 @@ function updateFolk(dt) {
     const near = p.talkTo && p.talkTo.state === 'stay' && Math.hypot(p.talkTo.x - p.x, p.talkTo.z - p.z) < FOLK.talkR ? p.talkTo : null;
     p.talkTo = null;
     const hd = Math.hypot(H.x - p.x, H.z - p.z);
-    if (hd > 4) p.waved = 0;
+    if (hd > FOLK.waveR + 1) p.waved = 0;
     if (p.state === 'walk') p.anim = p.carry ? 'carry' : 'walk';
     else if (p.moving) p.anim = 'walk';
     else if (p.d.job === 'sweeper' && p.at >= 0 && folkStreet(p.at)) p.anim = 'sweep';
-    else if (hd < 3 && p.waved === 0 && H.alive) { p.waved = Math.random() < FOLK.wave ? 1 : 2; if (p.waved === 1) p.waveT = p.animT; p.anim = p.waved === 1 ? 'wave' : 'idle'; }
-    else if (p.waved === 1 && p.animT - p.waveT < 4.5) p.anim = 'wave';
+    else if (hd < FOLK.waveR && p.waved === 0 && H.alive) { p.waved = Math.random() < FOLK.wave ? 1 : 2; if (p.waved === 1) p.waveT = p.animT; p.anim = p.waved === 1 ? 'wave' : 'idle'; }
+    else if (p.waved === 1 && p.animT - p.waveT < FOLK.waveTime) p.anim = 'wave';
     else if (near) { p.anim = 'talk'; if (!p.moving) p.face += angDiff(Math.atan2(near.x - p.x, near.z - p.z), p.face) * (1 - Math.exp(-dt * 3)); }
     else p.anim = p.d.job === 'crier' ? 'talk' : 'idle';
     if (p.waved === 1 && p.anim === 'wave') p.face += angDiff(Math.atan2(H.x - p.x, H.z - p.z), p.face) * (1 - Math.exp(-dt * 4));
@@ -20910,7 +20912,9 @@ const TUNING = [
     [FOLK, 'talkR', 'Talk to anyone standing within (tiles)', 0, 4, 0.1],
     [FOLK, 'aside', 'Step aside when you come within (tiles)', 0, 3, 0.05],
     [FOLK, 'asideSpeed', 'How quickly they step aside', 0, 8, 0.1],
-    [FOLK, 'wave', 'Share who wave as you pass', 0, 1, 0.05],
+    [FOLK, 'wave', 'Share who wave as you pass (standing ones; each decides once as you come near)', 0, 1, 0.05],
+    [FOLK, 'waveR', 'Wave when you come within (tiles)', 0, 10, 0.25],
+    [FOLK, 'waveTime', 'How long they wave (s)', 0, 15, 0.5],
     [FOLK, 'wake', 'A town wakes when you come within this many tiles of its edge', 10, 120, 1],
     [FOLK, 'show', 'Shown within this many tiles of the view', 10, 200, 5],
     [FOLK_READ, 'towns', 'Towns awake', 'readout', 0, 1],
