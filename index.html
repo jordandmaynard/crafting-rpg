@@ -285,6 +285,12 @@ body:not(.noUI) #showUI { display: none; }
 #optsModal .maprow { margin-bottom: 10px; flex-wrap: wrap; }
 .maprow { display: flex; gap: 10px; align-items: center; justify-content: space-between; width: 100%; font-family: var(--display); font-size: 8px; color: var(--dim); }
 .seedEntry { display: flex; gap: 6px; align-items: center; }
+.lookOpt { display: flex; gap: 14px; align-items: flex-start; }
+.lookOpt canvas { width: 120px; height: 175px; flex: none; background: #0b0912; border: 2px solid #000; image-rendering: pixelated; }
+.lookSide { display: flex; flex-direction: column; gap: 6px; }
+.lookSide .maprow { margin: 0; }
+.lookSide button.on { outline: 2px solid #f2c14e; }
+#lookDesc { color: #a69ab3; font-size: 13px; line-height: 1.35; }
 #optName { width: 220px; margin-top: 6px; font: 600 16px var(--wk, serif); padding: 5px 8px; background: #0b0912; color: #efe4c8; border: 2px solid #000; outline: none; }
 #seedInput { width: 110px; font-family: var(--display); font-size: 9px; padding: 5px 6px; background: #0b0912; color: #efe4c8; border: 2px solid #000; outline: none; }
 #seedInput:focus { border-color: var(--gold); }
@@ -321,7 +327,7 @@ body:not(.noUI) #showUI { display: none; }
 #beltCenter { position: fixed; left: 50%; bottom: calc((4px + var(--bcY, 0px)) * var(--ui)); width: 544px; height: 136px; margin-left: -272px; transform: translateY(var(--bcDy, 0px)) scale(var(--bcS, var(--ui))); transform-origin: 50% 100%; pointer-events: none; z-index: 3; font-family: var(--wk); font-weight: 600; color: #f0dfb7; text-shadow: 1px 1px 0 #21130d; white-space: nowrap; }
 #beltCenter img { position: absolute; left: 0; top: 0; display: block; -webkit-user-drag: none; }
 #beltCenter .bc-body { width: 544px; height: 136px; }
-#beltCenter .bc-name { position: absolute; left: 48px; top: 11px; width: 372px; height: 32px; font-size: 24px; line-height: 32px; overflow: hidden; text-overflow: ellipsis; }
+#beltCenter .bc-name { position: absolute; left: 48px; top: 11px; width: 372px; height: 32px; font-size: 24px; line-height: 32px; overflow: hidden; text-overflow: ellipsis; transform: translateY(var(--nameY, 0px)); }
 /* (v447, Jordan's separated centre layers: the leather alone, the health and XP frames each their own image, moved
    up and down by HUD_BARS hpY / xpY with their fills, text and label) */
 #beltCenter .bc-hpf { left: 45.6px; top: 43.9px; width: 379px; height: 34.5px; transform: translateY(var(--hpY, 0px)); }
@@ -841,6 +847,10 @@ body.mapOpen #miniWrap.minimap { display: none; }
   <div class="sheet" role="dialog" aria-labelledby="optsTitle">
     <h1 id="optsTitle">OPTIONS</h1>
     <label class="opt"><span>Your name, on the belt under the hotbar</span><input type="text" id="optName" maxlength="24" autocomplete="off" spellcheck="false"></label>
+    <div class="opt lookOpt"><canvas id="lookView" width="200" height="292"></canvas><div class="lookSide"><span>Body type and looks (skin, hair, beard, eyes, build: your armor fits either body)</span>
+      <div class="maprow"><button id="optMasc">MASCULINE</button><button id="optFem">FEMININE</button></div>
+      <div class="maprow"><button id="optRoll">ROLL LOOKS</button><button id="optClassic">CLASSIC LOOK</button></div>
+      <small id="lookDesc"></small></div></div>
     <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
     <label class="opt check"><input type="checkbox" id="optPace"><span>Steady frame pacing: when the GPU can't keep up with the screen, draw on every second (or third) refresh so movement glides evenly, instead of as fast as it can unevenly</span></label>
@@ -889,7 +899,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 
 <script type="module">
 import * as GFX from './src/gfx/index.js';
-import { makeFolkKit, jobTitle } from './src/folk/townsfolk.js';
+import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade } from './src/folk/townsfolk.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
@@ -5607,7 +5617,7 @@ function eyeExposure() {
 // hdrPeak × white (src/gfx/renderer.js setHDR).
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer', steadyPace: true };
+  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer', steadyPace: true, body: 'masc', lookSeed: null };
   try { Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { /* defaults */ }
   d.mapFont = +d.mapFont || 0;   // (a number, so T > Map names can switch it too)
   return d;
@@ -5653,6 +5663,25 @@ $('optMapFont').addEventListener('change', () => { OPTIONS.mapFont = +$('optMapF
 $('optRelease').addEventListener('change', () => { OPTIONS.attackOnRelease = $('optRelease').checked; applyOptions(); });
 $('optPeak').addEventListener('input', () => { OPTIONS.hdrPeak = parseFloat($('optPeak').value); applyOptions(); });
 $('optsClose').addEventListener('click', () => toggleOptions(false));
+// (v450) the body type and the rolled look (a townsfolk seed: OPTIONS.lookSeed, null for the classic look)
+function setLook(body, seed) {
+  if (body) OPTIONS.body = body;
+  if (seed !== undefined) OPTIONS.lookSeed = seed;
+  applyOptions(); rebuildHero();
+}
+$('optMasc').addEventListener('click', e => { setLook('masc'); e.currentTarget.blur(); });
+$('optFem').addEventListener('click', e => { setLook('fem'); e.currentTarget.blur(); });
+$('optRoll').addEventListener('click', e => { setLook(null, (Math.random() * 4294967296) >>> 0); e.currentTarget.blur(); });
+$('optClassic').addEventListener('click', e => { setLook(null, null); e.currentTarget.blur(); });
+function renderLookDesc() {
+  const L = hero.look, nice = t => String(t).replace(/([A-Z])/g, ' $1').toLowerCase();
+  $('optMasc').classList.toggle('on', L.body !== 'fem'); $('optFem').classList.toggle('on', L.body === 'fem');
+  const bits = [L.seed == null ? 'Classic look' : `Look ${L.seed}`, `${nice(L.hairName)} hair, ${nice(L.hairStyle)}`];
+  if (L.beard && L.beard !== 'none') bits.push(nice(L.beard) + (L.beard === 'full' ? ' beard' : ''));
+  if (L.age === 'old') bits.push('weathered');
+  bits.push(`height ${L.height.toFixed(2)}`);
+  $('lookDesc').textContent = bits.join(' · ');
+}
 $('optsBtn').addEventListener('click', e => { toggleOptions(); e.currentTarget.blur(); });
 // hide or show the whole HUD
 const toggleUI = on => document.body.classList.toggle('noUI', on === undefined ? !document.body.classList.contains('noUI') : !on);
@@ -12293,82 +12322,214 @@ for (const kind of Object.keys(WEAPON_LOOK)) FANTASY.forEach((m, n) => {
 const WEAPON_TIERS = METAL_TIERS;
 // the hero's arm from shoulder to hand, and how far it's swung back by the hip holding the spear drawn back
 const SPEAR_ARM = 0.25, SPEAR_BACK = 0.55;
-function makeHuman() {
-  const g = new GFX.Group(), parts = [];
+// (v450) The hero's look, from Options: the body type and a look rolled from the townsfolk designs (the skin, hair and
+// its style, beard, eyes, the bust, the age's lines, height and build; never their clothes). With no roll kept
+// (lookSeed null) it's the classic look. Clothes and armor stay the hero's own, fitted to either build in makeHuman.
+const heroHair = flatMat({ color: '#6a3e22' }), heroEyes = flatMat({ color: '#141018' });
+function heroLook(body = OPTIONS.body, seed = OPTIONS.lookSeed) {
+  body = body === 'fem' ? 'fem' : 'masc';
+  if (seed == null) return { body, seed: null, skin: '#e0b48a', hair: '#6a3e22', hairName: 'brown', hairStyle: body === 'fem' ? 'long' : 'short', beard: 'none',
+    eyes: '#141018', bust: body === 'fem' ? { size: 0.5, lift: 0.5, sag: 0.3 } : null, age: 'adult', height: 1, build: 1 };
+  // (the first design at or after the seed with this body, so one seed gives one look per body)
+  let d = null;
+  for (let s = seed >>> 0, n = 0; n < 400; n++, s = (s + 1) >>> 0) { d = folkDesign(s); if (d.body === body) break; }
+  return { body, seed: d.seed, skin: d.skin, hair: d.hair, hairName: d.hairName, hairStyle: d.hairStyle, beard: d.beard, eyes: d.eyes,
+    bust: d.bust || null, age: d.age, height: d.height, build: d.build };
+}
+function makeHuman(L = heroLook()) {
+  const g = new GFX.Group(), parts = [], fem = L.body === 'fem';
+  heroSkin.color.set(L.skin); heroHair.color.set(L.hair); heroEyes.color.set(L.eyes);
   const { bone, boneDark, chain, chainDark, plate, plateDark } = HERO_MAT;
-  const { pants, boots, hood, leather, leatherDark } = HERO_MAT, hair = flatMat({ color: '#6a3e22' }), belt = flatMat({ color: '#2a1e16' });
+  const { pants, boots, hood, leather, leatherDark } = HERO_MAT, hair = heroHair, belt = flatMat({ color: '#2a1e16' });
   const pack = flatMat({ color: '#7a5434' }), roll = flatMat({ color: '#9a8a5a' });
   const shorts = flatMat({ color: '#f4efe6' }), heart = flatMat({ color: '#d8443a' });
   const box = (parent, w, h, d, x, y, z, mat, rx = 0, rz = 0) => { const m = new GFX.Mesh(new GFX.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.rotation.set(rx, 0, rz); parent.add(m); parts.push(m); return m; };
   const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
   const wear = (tag, ...ms) => { for (const m of ms) m.userData.gear = tag; };
+  // (v450) the feminine build's shapes, as the townsfolk's: solids lofted through rings of four corners, bottom to top,
+  // each ring's corners in the order (-w,-d) (+w,-d) (+w,+d) (-w,+d), straight sides between rings and a cap at each end
+  const rings = (parent, C, mat) => {
+    const pos = [], tri = (a, b, c) => pos.push(...a, ...b, ...c);
+    for (let i = 0; i < C.length - 1; i++) for (let j = 0; j < 4; j++) {
+      const k = (j + 1) % 4, Lo = C[i], U = C[i + 1];
+      tri(Lo[j], U[k], Lo[k]); tri(Lo[j], U[j], U[k]);
+    }
+    const b = C[0], t = C[C.length - 1];
+    tri(b[0], b[1], b[2]); tri(b[0], b[2], b[3]); tri(t[0], t[2], t[1]); tri(t[0], t[3], t[2]);
+    const geo = new GFX.BufferGeometry(); geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+    const m = new GFX.Mesh(geo, mat); parent.add(m); parts.push(m); return m;
+  };
+  // level rings [y, width, depth, x, z]
+  const loft = (parent, R, mat) => rings(parent, R.map(([y, w, d, x = 0, z = 0]) => [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sz]) => [x + sx * w / 2, y, z + sz * d / 2])), mat);
   // Joints: each leg turns at the hip (legL/legR), the knee (shin) and the ankle (foot); each arm at the shoulder
   // (armL/armR), the elbow (fore) and the wrist (hand, which holds the weapons); the body at the waist (chest, which
   // carries the head and arms). Each piece is the old box cut where the joint is, the lower half a hair thinner and
   // reaching a little up into the upper one, so a bend closes over without a gap and nothing shows double.
+  // (v450) The feminine build (the townsfolk's): narrower shoulders, waist and limbs, wider hips, the bust; LW is a
+  // leg's trouser width and AW an arm's sleeve, the skin 0.01 inside each.
+  const LX = fem ? 0.064 : 0.07, LW = fem ? 0.09 : 0.1, AW = fem ? 0.07 : 0.08, SHX = fem ? 0.152 : 0.175;
   const body = pivot(g, 0, 0, 0);
-  const legL = pivot(body, 0.07, 0.36, 0), legR = pivot(body, -0.07, 0.36, 0), KNEE = -0.14, ANKLE = -0.3;
+  const legL = pivot(body, LX, 0.36, 0), legR = pivot(body, -LX, 0.36, 0), KNEE = -0.14, ANKLE = -0.3;
   const knees = [], ankles = [];
   for (const leg of [legL, legR]) {
-    wear('pants', box(leg, 0.1, -KNEE, 0.11, 0, KNEE / 2, 0, pants)); wear('skinLegs', box(leg, 0.09, -KNEE, 0.1, 0, KNEE / 2, 0, heroSkin));
+    wear('pants', box(leg, LW, -KNEE, LW + 0.01, 0, KNEE / 2, 0, pants)); wear('skinLegs', box(leg, LW - 0.01, -KNEE, LW, 0, KNEE / 2, 0, heroSkin));
     const shin = pivot(leg, 0, KNEE, 0);
     knees.push(shin);
-    wear('pants', box(shin, 0.096, 0.12, 0.106, 0, -0.04, 0, pants)); wear('skinLegs', box(shin, 0.086, 0.12, 0.096, 0, -0.04, 0, heroSkin));
-    wear('cuffs', box(shin, 0.125, 0.04, 0.165, 0, -0.235 - KNEE, 0.015, leatherDark));
-    wear('kneesPlate', box(shin, 0.11, 0.06, 0.03, 0, 0.01, 0.06, HERO_MAT.plateDark));
+    wear('pants', box(shin, LW - 0.004, 0.12, LW + 0.006, 0, -0.04, 0, pants)); wear('skinLegs', box(shin, LW - 0.014, 0.12, LW - 0.004, 0, -0.04, 0, heroSkin));
+    wear('cuffs', box(shin, LW + 0.025, 0.04, 0.165, 0, -0.235 - KNEE, 0.015, leatherDark));
+    wear('kneesPlate', box(shin, LW + 0.01, 0.06, 0.03, 0, 0.01, LW * 0.6, HERO_MAT.plateDark));
     const foot = pivot(shin, 0, ANKLE - KNEE, 0);
     ankles.push(foot);
-    wear('boots', box(foot, 0.11, 0.13, 0.15, 0, 0.005, 0.015, boots)); wear('feet', box(foot, 0.09, 0.12, 0.13, 0, 0, 0.015, heroSkin));
+    wear('boots', box(foot, LW + 0.01, 0.13, 0.15, 0, 0.005, 0.015, boots)); wear('feet', box(foot, LW - 0.01, 0.12, 0.13, 0, 0, 0.015, heroSkin));
   }
   const chest = pivot(body, 0, 0.42, 0), CH = 0.42;
-  wear('shirt', box(chest, 0.28, 0.3, 0.16, 0, 0.52 - CH, 0, heroTunic), box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, heroTunic));
-  wear('skinTorso', box(chest, 0.27, 0.3, 0.15, 0, 0.52 - CH, 0, heroSkin));
-  wear('hipPants', box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, pants));
-  // heart boxer shorts: a low row of hearts that shows below the tunic, and a higher one when it's off too
-  wear('boxers', box(body, 0.28, 0.12, 0.16, 0, 0.345, 0, shorts));
-  for (const z of [0.0815, -0.0815]) {
-    for (const x of [-0.085, 0, 0.085]) wear('boxers', box(body, 0.035, 0.035, 0.006, x, 0.302, z, heart, 0, Math.PI / 4));
-    for (const x of [-0.0425, 0.0425]) wear('boxersBare', box(body, 0.035, 0.035, 0.006, x, 0.36, z, heart, 0, Math.PI / 4));
+  // the feminine torso narrows from the hips to the waist and widens again to the shoulders (hipAt / torsoAt: its
+  // width and depth at a height), with the bust in profile (BUST: [height, front z, width], bottom to top)
+  const lerp = (a, b, u) => a + (b - a) * u, clampU = u => Math.max(0, Math.min(1, u));
+  const HIP = { y0: 0.3, y1: 0.44, w0: 0.28, d0: 0.17, w1: 0.205, d1: 0.138 }, TOR = { y0: 0.41, y1: 0.67, w0: 0.205, d0: 0.138, w1: 0.24, d1: 0.15 };
+  const at = (P, y) => { const u = clampU((y - P.y0) / (P.y1 - P.y0)); return [lerp(P.w0, P.w1, u), lerp(P.d0, P.d1, u)]; };
+  const hipAt = y => at(HIP, y), torsoAt = y => at(TOR, y);
+  let BUST = null;
+  if (fem) {
+    const b = L.bust || { size: 0.5, lift: 0.5, sag: 0.3 }, F = y => torsoAt(y)[1] / 2, sh = TOR.w1;
+    const yApex = 0.545 + b.lift * 0.035 - b.sag * 0.025, out = 0.022 + b.size * 0.028;
+    const yMid = yApex - 0.022 - b.sag * 0.018 - b.size * 0.008, yLow = yMid - 0.02 - b.sag * 0.01;
+    BUST = [[yLow, F(yLow) - 0.002, sh - 0.07], [yMid, F(yMid) + out * (0.62 - b.sag * 0.15), sh - 0.05], [yApex, F(yApex) + out, sh - 0.035 + b.size * 0.01], [0.64, F(0.64) - 0.004, sh - 0.035]];
   }
-  wear('belt', box(body, 0.3, 0.045, 0.175, 0, 0.42, 0, belt), box(body, 0.055, 0.05, 0.02, 0, 0.42, 0.09, goldMat));
-  wear('hood', box(chest, 0.32, 0.07, 0.19, 0, 0.665 - CH, -0.005, hood));
-  // the leather armour's strap across the chest (and its shoulder pads, below)
-  // (v347: a touch shallower than the belt, and its lower end stops inside the belt, so the two never z-fight)
-  wear('pads', box(chest, 0.05, 0.29, 0.17, -0.014, 0.541 - CH, 0, leatherDark, 0, 0.6));
-  for (const y of [0.47, 0.53, 0.59]) wear('ribsBone', box(chest, 0.2, 0.025, 0.012, 0, y - CH, 0.085, bone));
-  wear('skirtChain', box(body, 0.3, 0.1, 0.18, 0, 0.33, 0, chain));
-  // (the plate pieces are worn by the fantasy metal sets too, in their colours: see DRESS_MAT)
-  wear('breastPlate', box(chest, 0.25, 0.2, 0.03, 0, 0.56 - CH, 0.085, plate), box(chest, 0.03, 0.18, 0.035, 0, 0.56 - CH, 0.095, goldMat));
-  wear('breastTrim', box(chest, 0.2, 0.06, 0.025, 0, 0.43 - CH, 0.085, plateDark));
+  const bustFront = y => {
+    if (y <= BUST[0][0]) return BUST[0][1];
+    for (let i = 0; i < BUST.length - 1; i++) if (y <= BUST[i + 1][0]) return lerp(BUST[i][1], BUST[i + 1][1], (y - BUST[i][0]) / (BUST[i + 1][0] - BUST[i][0]));
+    return BUST[BUST.length - 1][1];
+  };
+  // the front of the chest at a height, over the bust
+  const chestFront = y => Math.max(torsoAt(y)[1] / 2, y >= BUST[0][0] && y <= BUST[BUST.length - 1][0] ? bustFront(y) : 0);
+  // a layer over the hips from y0 to y1, grown by e all round (below the hips' foot it keeps their width)
+  const hipLayer = (y0, y1, e, mat) => loft(body, [y0, ...(y0 < HIP.y0 && y1 > HIP.y0 ? [HIP.y0] : []), y1].map(y => { const [w, d] = hipAt(y); return [y, w + 2 * e, d + 2 * e]; }), mat);
+  // the torso and bust grown by e (the bust's back sunk in the chest), in the chest's frame
+  const torsoLayer = (e, mat) => [
+    loft(chest, [TOR.y0, TOR.y1].map(y => { const [w, d] = torsoAt(y); return [y - CH, w + 2 * e, d + 2 * e]; }), mat), bustLayer(e, mat)];
+  const bustLayer = (e, mat) => { const back = y => torsoAt(y)[1] / 2 - 0.03; return loft(chest, BUST.map(([y, z, w]) => [y - CH, w + 2 * e, z + e - back(y), 0, (z + e + back(y)) / 2]), mat); };
+  // a panel laid on the chest's front from y0 to y1, over the bust: width w, thickness th, its middle lift out from the front
+  const chestPanel = (x, w, y0, y1, mat, lift = 0.008, th = 0.012) => {
+    const ys = [y0, ...BUST.map(q => q[0]).filter(y => y > y0 + 0.002 && y < y1 - 0.002), y1];
+    return loft(chest, ys.map(y => [y - CH, w, th, x, chestFront(y) + lift]), mat);
+  };
+  if (!fem) {
+    wear('shirt', box(chest, 0.28, 0.3, 0.16, 0, 0.52 - CH, 0, heroTunic), box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, heroTunic));
+    wear('skinTorso', box(chest, 0.27, 0.3, 0.15, 0, 0.52 - CH, 0, heroSkin));
+    wear('hipPants', box(body, 0.29, 0.09, 0.17, 0, 0.36, 0, pants));
+    // heart boxer shorts: a low row of hearts that shows below the tunic, and a higher one when it's off too
+    wear('boxers', box(body, 0.28, 0.12, 0.16, 0, 0.345, 0, shorts));
+    for (const z of [0.0815, -0.0815]) {
+      for (const x of [-0.085, 0, 0.085]) wear('boxers', box(body, 0.035, 0.035, 0.006, x, 0.302, z, heart, 0, Math.PI / 4));
+      for (const x of [-0.0425, 0.0425]) wear('boxersBare', box(body, 0.035, 0.035, 0.006, x, 0.36, z, heart, 0, Math.PI / 4));
+    }
+    wear('belt', box(body, 0.3, 0.045, 0.175, 0, 0.42, 0, belt), box(body, 0.055, 0.05, 0.02, 0, 0.42, 0.09, goldMat));
+    wear('hood', box(chest, 0.32, 0.07, 0.19, 0, 0.665 - CH, -0.005, hood));
+    // the leather armour's strap across the chest (and its shoulder pads, below)
+    // (v347: a touch shallower than the belt, and its lower end stops inside the belt, so the two never z-fight)
+    wear('pads', box(chest, 0.05, 0.29, 0.17, -0.014, 0.541 - CH, 0, leatherDark, 0, 0.6));
+    for (const y of [0.47, 0.53, 0.59]) wear('ribsBone', box(chest, 0.2, 0.025, 0.012, 0, y - CH, 0.085, bone));
+    wear('skirtChain', box(body, 0.3, 0.1, 0.18, 0, 0.33, 0, chain));
+    // (the plate pieces are worn by the fantasy metal sets too, in their colours: see DRESS_MAT)
+    wear('breastPlate', box(chest, 0.25, 0.2, 0.03, 0, 0.56 - CH, 0.085, plate), box(chest, 0.03, 0.18, 0.035, 0, 0.56 - CH, 0.095, goldMat));
+    wear('breastTrim', box(chest, 0.2, 0.06, 0.025, 0, 0.43 - CH, 0.085, plateDark));
+  } else {
+    // (v450) the same pieces fitted to the feminine build: the skin always under everything at the hips; the tunic,
+    // trousers' top and white briefs over them; the torso and bust in skin or tunic, a white bra when bare
+    loft(body, [HIP.y0, HIP.y1 - 0.005].map(y => [y, ...hipAt(y)]), heroSkin);
+    wear('shirt', hipLayer(0.312, 0.44, 0.006, heroTunic), ...torsoLayer(0.006, heroTunic));
+    wear('skinTorso', ...torsoLayer(0, heroSkin));
+    wear('hipPants', hipLayer(0.312, 0.44, 0.006, pants));
+    wear('briefs', hipLayer(0.288, 0.395, 0.004, shorts));
+    const yb = BUST[0][0], top = 0.665;
+    wear('bra', bustLayer(0.004, shorts), loft(chest, [yb - 0.012, yb + 0.012].map(y => { const [w, d] = torsoAt(y); return [y - CH, w + 0.008, d + 0.008]; }), shorts));
+    for (const s of [1, -1]) for (const side of [1, -1]) {
+      // the straps, front and back from the cups (or the band behind) up over the shoulders
+      const y0 = side > 0 ? BUST[2][0] : yb, zf = y => side * (torsoAt(y)[1] / 2 + 0.004);
+      wear('bra', loft(chest, [[y0 - CH, 0.016, 0.006, s * 0.07, zf(y0)], [top - CH, 0.016, 0.006, s * 0.07, zf(top)]], shorts));
+    }
+    for (const s of [1, -1]) wear('bra', box(chest, 0.016, 0.006, torsoAt(top)[1] + 0.008, s * 0.07, top - CH + 0.008, 0, shorts));
+    const [bw, bd] = hipAt(0.42), bt = hipAt(0.4425);
+    wear('belt', loft(body, [[0.3975, bw + 0.02, bd + 0.022], [0.4425, bt[0] + 0.02, bt[1] + 0.022]], belt), box(body, 0.05, 0.05, 0.02, 0, 0.42, bd / 2 + 0.019, goldMat));
+    wear('hood', box(chest, 0.28, 0.07, 0.18, 0, 0.665 - CH, -0.005, hood));
+    // the leather armour's strap, from the left hip up over the right shoulder, front and back clear of the bust and back
+    {
+      const a = 0.6, x0 = -0.01, y0 = 0.541, half = 0.145, hw = 0.025, ux = Math.cos(a) * hw, uy = Math.sin(a) * hw, C = [];
+      for (let i = 0; i <= 8; i++) {
+        const t = -half + (2 * half) * i / 8, cx = x0 - Math.sin(a) * t, cy = y0 + Math.cos(a) * t;
+        const corner = (sw, sd) => { const x = cx + sw * ux, y = cy + sw * uy; return [x, y - CH, sd > 0 ? chestFront(y) + 0.009 : -(torsoAt(y)[1] / 2 + 0.009)]; };
+        C.push([corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)]);
+      }
+      wear('pads', rings(chest, C, leatherDark));
+    }
+    for (const y of [0.47, 0.53, 0.59]) wear('ribsBone', chestPanel(0, 0.18, y - 0.0125, y + 0.0125, bone, 0.012, 0.012));
+    wear('skirtChain', hipLayer(0.28, 0.38, 0.012, chain));
+    wear('breastPlate', chestPanel(0, 0.215, 0.46, 0.66, plate, 0.008, 0.024), chestPanel(0, 0.03, 0.47, 0.65, goldMat, 0.016, 0.024));
+    wear('breastTrim', chestPanel(0, 0.18, 0.4, 0.46, plateDark, 0.009, 0.022));
+    box(chest, 0.1, 0.06, 0.09, 0, 0.69 - CH, 0, heroSkin);   // (the neck)
+  }
   box(chest, 0.22, 0.24, 0.1, 0, 0.53 - CH, -0.13, pack);
   box(chest, 0.3, 0.08, 0.08, 0, 0.68 - CH, -0.14, roll);
   const head = pivot(chest, 0, 0.7 - CH, 0);
   box(head, 0.19, 0.19, 0.18, 0, 0.1, 0, heroSkin);
-  // (the hair's front sits a hair proud of the face, v380: flush with it, the bangs' lower edge z-fought; still inside
-  // the helmet's front at 0.0975)
-  box(head, 0.2, 0.06, 0.196, 0, 0.215, -0.002, hair);
-  box(head, 0.2, 0.15, 0.05, 0, 0.13, -0.08, hair);
-  box(head, 0.035, 0.035, 0.01, -0.045, 0.11, 0.092, darkMat);
-  box(head, 0.035, 0.035, 0.01, 0.045, 0.11, 0.092, darkMat);
+  // (v450) the face and hair of the look, as the townsfolk's: eyes, brows (lashes and lips on the feminine face), the
+  // age's lines, a beard, and the hair's style. (The hair's front sits a hair proud of the face, v380: flush with it,
+  // the bangs' lower edge z-fought; still inside the helmet's front at 0.0975.)
+  const tint = (k) => flatMat({ color: folkShade(L.hair, k) });
+  for (const s of [1, -1]) {
+    box(head, 0.035, 0.035, 0.01, s * 0.045, 0.11, 0.092, heroEyes);
+    if (fem) {
+      const lash = flatMat({ color: '#1e1612' });
+      box(head, 0.042, 0.01, 0.012, s * 0.046, 0.131, 0.094, lash); box(head, 0.01, 0.012, 0.012, s * 0.07, 0.137, 0.094, lash);
+      box(head, 0.042, 0.01, 0.01, s * 0.046, 0.158, 0.093, tint(-0.1));
+    } else if (L.seed != null) box(head, 0.05, 0.014, 0.012, s * 0.045, 0.142, 0.094, tint(-0.15));
+  }
+  if (fem) box(head, 0.04, 0.012, 0.008, 0, 0.05, 0.092, flatMat({ color: folkShade(L.skin, -0.28) }));
+  if (L.age === 'old') for (const s of [1, -1]) box(head, 0.02, 0.008, 0.006, s * 0.072, 0.1, 0.091, flatMat({ color: folkShade(L.skin, -0.15) }));
+  const bc = L.age === 'old' ? hair : tint(-0.05);
+  if (L.beard === 'full') {
+    box(head, 0.17, 0.07, 0.035, 0, 0.035, 0.08, bc);
+    for (const s of [1, -1]) box(head, 0.025, 0.1, 0.11, s * 0.088, 0.06, 0.03, bc);
+    box(head, 0.08, 0.02, 0.012, 0, 0.068, 0.096, bc);
+  } else if (L.beard === 'moustache') box(head, 0.09, 0.022, 0.014, 0, 0.065, 0.095, bc);
+  else if (L.beard === 'stubble') box(head, 0.176, 0.058, 0.03, 0, 0.036, 0.078, flatMat({ color: folkShade(L.skin, -0.18) }));
+  const hs = L.hairStyle;
+  const htop = (h = 0.06) => box(head, 0.2, h, 0.196, 0, 0.185 + h / 2, -0.002, hair);
+  const hback = (h = 0.15, y = 0.13) => box(head, 0.2, h, 0.05, 0, y, -0.08, hair);
+  const fringe = () => box(head, 0.19, 0.03, 0.02, 0, 0.183, 0.095, hair);
+  if (hs === 'short') { htop(); hback(); }
+  else if (hs === 'crop') { htop(0.03); hback(0.1, 0.15); }
+  else if (hs === 'bald') { box(head, 0.2, 0.05, 0.11, 0, 0.12, -0.035, hair); hback(0.06, 0.12); }
+  else if (hs === 'shaggy') { htop(0.07); hback(0.2, 0.1); fringe(); for (const s of [1, -1]) box(head, 0.03, 0.1, 0.12, s * 0.1, 0.14, -0.02, hair); }
+  else if (hs === 'long') { htop(); hback(0.32, 0.04); fringe(); for (const s of [1, -1]) box(head, 0.035, 0.2, 0.05, s * 0.1, 0.08, 0.03, hair); }
+  else if (hs === 'bob') { htop(); hback(0.17, 0.1); fringe(); for (const s of [1, -1]) box(head, 0.03, 0.15, 0.15, s * 0.1, 0.11, -0.01, hair); }
+  else if (hs === 'bun') { htop(); hback(0.13, 0.14); box(head, 0.1, 0.09, 0.08, 0, 0.2, -0.12, hair); }
+  else if (hs === 'braid') {
+    htop(); hback(0.15, 0.13); fringe();
+    box(head, 0.045, 0.03, 0.04, 0, 0.07, -0.115, tint(-0.25));
+    for (let k = 0; k < 3; k++) box(head, 0.05 - k * 0.004, 0.055, 0.045, 0, 0.035 - k * 0.06, -0.115 - k * 0.006, hair, -0.08);
+  } else if (hs === 'ponytail') { htop(); hback(0.13, 0.14); box(head, 0.05, 0.03, 0.04, 0, 0.13, -0.11, tint(-0.25)); box(head, 0.06, 0.18, 0.05, 0, 0.03, -0.125, hair, -0.12); }
+  else { htop(); hback(); }
   wear('helmet', box(head, 0.215, 0.09, 0.205, 0, 0.235, -0.005, leather)); wear('helmetBand', box(head, 0.222, 0.03, 0.212, 0, 0.195, -0.005, leatherDark));
   for (const sx of [-1, 1]) wear('hornsBone', box(head, 0.035, 0.11, 0.035, sx * 0.12, 0.29, 0.02, bone, 0, -sx * 0.5), box(head, 0.03, 0.05, 0.03, sx * 0.155, 0.355, 0.02, boneDark, 0, -sx * 0.9));
   wear('coifChain', box(head, 0.225, 0.1, 0.08, 0, 0.1, -0.085, chain), box(head, 0.03, 0.12, 0.2, 0.105, 0.11, -0.005, chain), box(head, 0.03, 0.12, 0.2, -0.105, 0.11, -0.005, chain));
   wear('crestPlate', box(head, 0.03, 0.06, 0.22, 0, 0.3, -0.005, goldMat), box(head, 0.025, 0.07, 0.02, 0, 0.13, 0.105, plate));
-  const armL = pivot(chest, 0.175, 0.64 - CH, 0), armR = pivot(chest, -0.175, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
+  const armL = pivot(chest, SHX, 0.64 - CH, 0), armR = pivot(chest, -SHX, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
   armL.rotation.order = armR.rotation.order = 'YXZ';
   const elbows = [], wrists = [];
   for (const arm of [armL, armR]) {
-    wear('shirt', box(arm, 0.08, -ELBOW, 0.09, 0, ELBOW / 2, 0, heroTunic)); wear('skinTorso', box(arm, 0.07, -ELBOW, 0.08, 0, ELBOW / 2, 0, heroSkin));
+    wear('shirt', box(arm, AW, -ELBOW, AW + 0.01, 0, ELBOW / 2, 0, heroTunic)); wear('skinTorso', box(arm, AW - 0.01, -ELBOW, AW, 0, ELBOW / 2, 0, heroSkin));
     const fore = pivot(arm, 0, ELBOW, 0);
     elbows.push(fore);
-    wear('shirt', box(fore, 0.076, 0.11, 0.086, 0, -0.045, 0, heroTunic)); wear('skinTorso', box(fore, 0.066, 0.11, 0.076, 0, -0.045, 0, heroSkin));
+    wear('shirt', box(fore, AW - 0.004, 0.11, AW + 0.006, 0, -0.045, 0, heroTunic)); wear('skinTorso', box(fore, AW - 0.014, 0.11, AW - 0.004, 0, -0.045, 0, heroSkin));
     const hand = pivot(fore, 0, WRIST - ELBOW, 0);
     wrists.push(hand);
     hand.rotation.order = 'XZY';   // (a roll about the hand's own length first, then the bend)
-    box(hand, 0.07, 0.07, 0.075, 0, -0.035, 0, heroSkin);
-    wear('pads', box(arm, 0.11, 0.07, 0.12, 0, -0.005, 0, leatherDark));
+    box(hand, AW - 0.01, fem ? 0.066 : 0.07, fem ? 0.07 : 0.075, 0, -0.035, 0, heroSkin);
+    wear('pads', box(arm, AW + 0.03, 0.07, AW + 0.04, 0, -0.005, 0, leatherDark));
     // the fantasy sets' shoulder plates, a second tier over them from Orivane up
-    wear('pauldron', box(arm, 0.13, 0.05, 0.14, 0, 0.035, 0, plate)); wear('pauldronTop', box(arm, 0.1, 0.04, 0.11, 0, 0.075, 0, plateDark));
+    wear('pauldron', box(arm, AW + 0.05, 0.05, AW + 0.06, 0, 0.035, 0, plate)); wear('pauldronTop', box(arm, AW + 0.02, 0.04, AW + 0.03, 0, 0.075, 0, plateDark));
   }
   // each weapon in all four materials, the one in hand shown (tagged tier_wood...)
   const look = (parent, kind) => { for (const t of WEAPON_TIERS) { const tg = pivot(parent, 0, 0, 0); wear('tier_' + t, tg); for (const [w, h, d, x, y, z, m, rx, rz] of WEAPON_LOOK[kind][t]) box(tg, w, h, d, x, y, z, WM[m], rx, rz); } };
@@ -12413,8 +12574,9 @@ function makeHuman() {
   wear('hammer', hammer);
   look(hammerHead, 'hammer');
   hammerHead.rotation.z = -Math.PI / 2;
-  g.scale.setScalar(1.12);
-  return { g, parts, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer };
+  // (v450) the look's height and build, as the townsfolk's
+  g.scale.set(1.12 * L.build * (fem ? 0.98 : 1), 1.12 * L.height * (fem ? 0.97 : 1), 1.12 * L.build);
+  return { g, parts, look: L, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer };
 }
 
 // the Bone Road skeleton, box for box
@@ -12929,12 +13091,31 @@ scene.add(heroRoot);
 // SILHOUETTE.steady: how much of the eye's exposure its colour takes back off (1 always as bright, 0 brightens in the dark)
 const SILHOUETTE = { color: '#4fb8b0', steady: 1 };
 const silMat = new GFX.MeshBasicMaterial({ color: SILHOUETTE.color, depthWrite: false, depthFunc: GFX.GreaterDepth });
-hero.parts.slice().forEach(p => {
-  const s = new GFX.Mesh(p.geometry, silMat);
-  s.position.copy(p.position); s.rotation.copy(p.rotation); s.renderOrder = -1; s.userData.gear = p.userData.gear;
-  p.parent.add(s);
-});
-heroRoot.traverse(o => o.layers.set(1));
+// (each part's see-through silhouette, all on the hero's layer, then a copy of each on the world layer that draws
+// nothing but casts the hero's shadow; again whenever the hero's rebuilt for a new look: rebuildHero)
+function heroCopies() {
+  hero.parts.slice().forEach(p => {
+    const s = new GFX.Mesh(p.geometry, silMat);
+    s.position.copy(p.position); s.rotation.copy(p.rotation); s.renderOrder = -1; s.userData.gear = p.userData.gear;
+    p.parent.add(s);
+  });
+  hero.g.traverse(o => o.layers.set(1));
+  hero.parts.slice().forEach(p => {
+    const s = new GFX.Mesh(p.geometry, castOnlyMat);
+    s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true; s.userData.gear = p.userData.gear;
+    p.parent.add(s);
+  });
+}
+heroCopies();
+// (v450) the hero made again for the look in Options (body type and rolled look), dressed in what's worn
+function rebuildHero() {
+  heroRoot.remove(hero.g);
+  Object.assign(hero, makeHuman(heroLook()));
+  heroRoot.add(shadowy(hero.g));
+  heroCopies();
+  dressHero();
+  renderLookDesc();
+}
 // The character view on the inventory's folio: the hero as they stand, drawn again from the way the game's camera
 // looks (so they face the same way as on screen; DOLL_VIEW.turn turns it off that) into a see-through canvas of its own,
 // under studio lights of its own only (no shadow, fog, cloud shade, probe light, haze or eye: lightsOverride.plain)
@@ -12943,7 +13124,7 @@ heroRoot.traverse(o => o.layers.set(1));
 // screen's own UI scale; the gap is in the kit's 1080p pixels. They go to CSS as --hotS / --hotGap / --barS / --barGap.
 // (v429) Heights and lifts in 1080p px too: the belt's height and bottom, and how far up the centre piece, the hotbar
 // and the action + mode buttons sit from where the kit puts them (--beltH / --beltY / --bcY / --hotY / --barY).
-const HUD_BARS = { hotScale: 0.85, hotGap: 4, barScale: 0.85, barGap: 4, beltH: 97, beltY: 16, centerY: -5, hotY: -20, barY: -20, miniRight: -1, miniTop: -6, compassX: -15, compassY: 19, hpY: 0, xpY: 0 };
+const HUD_BARS = { hotScale: 0.85, hotGap: 4, barScale: 0.85, barGap: 4, beltH: 97, beltY: 16, centerY: -5, hotY: -20, barY: -20, miniRight: -1, miniTop: -6, compassX: -15, compassY: 19, hpY: 4, xpY: 2, nameY: 0 };
 function applyHudBars() {
   const st = document.documentElement.style;
   st.setProperty('--hotS', HUD_BARS.hotScale); st.setProperty('--hotGap', HUD_BARS.hotGap + 'px');
@@ -12951,7 +13132,7 @@ function applyHudBars() {
   st.setProperty('--beltH', HUD_BARS.beltH); st.setProperty('--beltY', HUD_BARS.beltY);
   st.setProperty('--miniR', HUD_BARS.miniRight); st.setProperty('--miniT', HUD_BARS.miniTop);
   st.setProperty('--compX', HUD_BARS.compassX + 'px'); st.setProperty('--compY', HUD_BARS.compassY + 'px');
-  st.setProperty('--hpY', HUD_BARS.hpY + 'px'); st.setProperty('--xpY', HUD_BARS.xpY + 'px');
+  st.setProperty('--hpY', HUD_BARS.hpY + 'px'); st.setProperty('--xpY', HUD_BARS.xpY + 'px'); st.setProperty('--nameY', HUD_BARS.nameY + 'px');
   st.setProperty('--bcY', HUD_BARS.centerY + 'px'); st.setProperty('--hotY', HUD_BARS.hotY + 'px'); st.setProperty('--barY', HUD_BARS.barY + 'px');
   try { layoutBelt(); } catch (err) { /* (before the HUD is up) */ }
 }
@@ -12962,13 +13143,19 @@ const dollTarget = renderer.canvasTarget($('dollView'));
 const dollCam = new GFX.PerspectiveCamera(DOLL_VIEW.fov, 200 / 292, 0.1, 40);
 const dollLights = { hemi: new GFX.HemisphereLight('#fff1dc', '#6a5440', DOLL_VIEW.sky), sun: new GFX.DirectionalLight('#fff0dc', DOLL_VIEW.sun), points: [], plain: true };
 dollLights.sun.castShadow = false;
+const lookTarget = renderer.canvasTarget($('lookView'));
 function renderDoll() {
+  // (v450) and in Options, the hero from the front, for the look
+  if (optsOpen && $('lookView').offsetParent) renderHeroView($('lookView'), lookTarget, H.face, 1);
   const cv = $('dollView');
   if (!invOpen || !cv.offsetParent) return;
-  const k = uiScale() * (devicePixelRatio || 1) / pxScale, w = Math.max(16, Math.round(200 * k)), h = Math.max(24, Math.round(292 * k));
+  renderHeroView(cv, dollTarget, yaw + DOLL_VIEW.turn, uiScale());
+}
+function renderHeroView(cv, target, a, ui) {
+  const k = ui * (devicePixelRatio || 1) / pxScale, w = Math.max(16, Math.round(200 * k)), h = Math.max(24, Math.round(292 * k));
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   // seen from the way the game's camera looks (so the hero faces the same way here as on screen), lit the same always
-  const V = DOLL_VIEW, a = yaw + V.turn, cx = H.x, cy = H.y + V.aimY, cz = H.z;
+  const V = DOLL_VIEW, cx = H.x, cy = H.y + V.aimY, cz = H.z;
   dollCam.fov = V.fov; dollCam.aspect = w / h; dollCam.updateProjectionMatrix();
   dollCam.position.set(cx + Math.sin(a) * V.dist, cy + V.lift, cz + Math.cos(a) * V.dist);
   dollCam.lookAt(cx, cy, cz); dollCam.updateMatrixWorld();
@@ -12979,18 +13166,12 @@ function renderDoll() {
   L.sun.updateMatrixWorld(); L.sun.target.updateMatrixWorld();
   const was = renderer.getRenderTarget(), auto = renderer.shadowMap.autoUpdate;
   renderer.shadowMap.autoUpdate = false; renderer.lightsOverride = L;
-  renderer.setRenderTarget(dollTarget); renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.setRenderTarget(target); renderer.setClearColor(0x000000, 0); renderer.clear();
   renderer.passName = 'character view';
   dollCam.layers.set(1); renderer.render(scene, dollCam);
   renderer.lightsOverride = null; renderer.shadowMap.autoUpdate = auto;
   renderer.setClearColor('#0b0912', 1); renderer.setRenderTarget(was);
 }
-// the hero's shadow: a copy of each part on the world layer that draws nothing but casts
-hero.parts.slice().forEach(p => {
-  const s = new GFX.Mesh(p.geometry, castOnlyMat);
-  s.position.copy(p.position); s.rotation.copy(p.rotation); s.scale.copy(p.scale); s.castShadow = true; s.userData.gear = p.userData.gear;
-  p.parent.add(s);
-});
 const shadowMat = new GFX.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.35, depthWrite: false });
 const shadowGeo = new GFX.CircleGeometry(0.26, 8).rotateX(-Math.PI / 2);
 const heroShadow = new GFX.Mesh(shadowGeo, shadowMat);
@@ -13605,7 +13786,7 @@ function useAbility(key) {
 const DRESS = {
   shirt: () => GEAR.chest, hood: () => GEAR.chest, skinTorso: () => !GEAR.chest, pads: () => setOn('chest'),
   pants: () => GEAR.legs, belt: () => GEAR.legs, skinLegs: () => !GEAR.legs, hipPants: () => GEAR.legs && !GEAR.chest,
-  boxers: () => !GEAR.legs, boxersBare: () => !GEAR.legs && !GEAR.chest,
+  boxers: () => !GEAR.legs, boxersBare: () => !GEAR.legs && !GEAR.chest, briefs: () => !GEAR.legs, bra: () => !GEAR.chest,
   boots: () => GEAR.boots, feet: () => !GEAR.boots, cuffs: () => setOn('boots'),
   helmet: () => GEAR.head, helmetBand: () => GEAR.head,
   // each set's own pieces: bone horns and ribs, a chain coif and skirt, an iron crest, nasal and breastplate
@@ -13646,6 +13827,7 @@ function dressHero() {
   });
 }
 dressHero();
+renderLookDesc();
 
 // A cell is ['gear', slot], ['pack', index] or ['hot', index] (a hotbar square), or with a station open ['in', index]
 // or ['out', index] of it, or with a crate or chest open ['box', index]; a pack, station or box square also counts
@@ -18346,7 +18528,7 @@ function spawnTick(dt) {
 // Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
 // the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
 // with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
-const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1.25, stepRef: 0.75, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70 };
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70 };
 const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
 const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
 const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
@@ -21042,6 +21224,7 @@ const TUNING = [
     [HUD_BARS, 'compassY', 'Compass: up / down on the minimap (kit px)', -80, 80, 1, applyHudBars],
     [HUD_BARS, 'hpY', 'Health bar: up / down on the belt (kit px)', -40, 40, 0.5, applyHudBars],
     [HUD_BARS, 'xpY', 'XP bar: up / down on the belt (kit px)', -40, 40, 0.5, applyHudBars],
+    [HUD_BARS, 'nameY', 'Name: up / down on the belt (kit px)', -40, 40, 0.5, applyHudBars],
   ]],
   ['Character view', [
     [DOLL_VIEW, 'fov', 'Lens (degrees)', 10, 60, 1],
@@ -21947,7 +22130,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 450, crashSeen = new Map();
+const GAME_VERSION = 451, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -22055,6 +22238,17 @@ window.GAME = {
   packCell: id => PACK.indexOf(id),
   crateAt: (c, r) => crateAt(c, r),
   // (tests: the character view's pixels, from the stand-in texture the test harness gives a canvas)
+  // (v450 test) the Options look view as a PNG data URL
+  lookPng: async () => {
+    const t = lookTarget.context._t; if (!t) return null;
+    const dev = renderer.device, row = Math.ceil(t.width * 4 / 256) * 256, buf = dev.createBuffer({ size: row * t.height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = dev.createCommandEncoder(); enc.copyTextureToBuffer({ texture: t }, { buffer: buf, bytesPerRow: row }, [t.width, t.height]); dev.queue.submit([enc.finish()]);
+    await buf.mapAsync(GPUMapMode.READ); const d = new Uint8Array(buf.getMappedRange()), bgra = String(t.format).startsWith('bgra');
+    const cv = document.createElement('canvas'); cv.width = t.width; cv.height = t.height; const cx = cv.getContext('2d'), im = cx.createImageData(t.width, t.height);
+    for (let y = 0; y < t.height; y++) for (let x = 0; x < t.width; x++) { const o = y * row + x * 4, q = (y * t.width + x) * 4, a = d[o + 3] || 1;
+      im.data[q] = 12 + (d[o + (bgra ? 2 : 0)] - 12 * a / 255); im.data[q + 1] = 9 + (d[o + 1] - 9 * a / 255); im.data[q + 2] = 18 + (d[o + (bgra ? 0 : 2)] - 18 * a / 255); im.data[q + 3] = 255; }
+    buf.unmap(); buf.destroy(); cx.putImageData(im, 0, 0); return cv.toDataURL();
+  },
   dollRead: async () => {
     const t = dollTarget.context._t; if (!t) return null;
     const dev = renderer.device, row = Math.ceil(t.width * 4 / 256) * 256, buf = dev.createBuffer({ size: row * t.height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
@@ -22331,6 +22525,8 @@ window.GAME = {
   queueKeys: () => [...buildQueue.keys()],
   hot: () => HOT.slice(), hotSel: () => hotSel, setHot: (n, id) => setHot(n, id), useHot: n => useHot(n), hotShown: () => [...document.querySelectorAll('#hotbar .hslot')].map(e => e.className),
   flights: () => flights.length, flightsRoofed: () => flights.map(f => !!f.roofed), bodies: () => [...stations.values()].filter(s => s.body).map(s => [s.kind, s.pulse || 0, s.body.scale.x]),
+  look: () => hero.look, setLook: (body, seed) => setLook(body, seed),
+  wear: (slot, id) => { GEAR[slot] = id; dressHero(); },
   dressed: tag => { let n = 0; heroRoot.traverse(o => { if (o.userData.gear === tag && o.visible) n++; }); return n; },
   nearTableKind: () => { const t = nearTable(); return t ? [t.kind, !!t.built] : null; },
   tables: () => TABLES.map(t => [t.c, t.r, t.built ? 'built' : towns[t.town].name, t.kind]),
