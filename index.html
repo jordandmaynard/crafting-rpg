@@ -5628,8 +5628,15 @@ if (MOBILE) outlineRT.colorFormat = 'rgba8unorm';
 // the heat shimmer's offsets, in mosaic pixels, for the outline pass to read the whole picture shifted by (see HEAT)
 const heatRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
 outlineRT.depthTexture.type = GFX.UnsignedIntType;
+// (v506, Jordan) the edge of the world: a fog that thickens from `start` tiles in from the edge to opaque at `end`
+// (in the distance fog's colour, × bright), billowing over `billow` tiles as it drifts, so the edge itself is never
+// seen. Laid over the finished picture in the outline pass, from each pixel's place in the world (where nothing was
+// drawn, where its line of sight meets the sea). Boats keep `keep` tiles in from the edge. T > World edge.
+const WORLD_EDGE = { on: 1, start: 14, end: 3, billow: 4, bright: 1, keep: 6 };
+let edgeSeaY = 0;
 const outlineMat = new GFX.ShaderMaterial({
-  uniforms: { tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, res: { value: new GFX.Vector2(1, 1) },
+  uniforms: { edgeInv: { value: new GFX.Matrix4() }, edgeA: { value: { x: 14, y: 3, z: 0, w: 1 } }, edgeB: { value: { x: 0.5, y: 0.5, z: 0.5, w: 0 } },
+    edgeC: { value: { x: 1, y: 4, z: 0, w: 0 } }, tColor: { value: outlineRT.texture }, tDepth: { value: outlineRT.depthTexture }, res: { value: new GFX.Vector2(1, 1) },
     useDepth: { value: 1 },
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
@@ -5648,6 +5655,29 @@ fn depthAt(px: vec2f) -> f32 {
   if (U.persp < 0.5) { return d * U.span; }
   let z = d * 2.0 - 1.0;
   return 2.0 * U.near * U.far / (U.far + U.near - z * (U.far - U.near)) - U.near;
+}
+fn edgeHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn edgeNoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(edgeHash(i), edgeHash(i + vec2f(1.0, 0.0)), u.x), mix(edgeHash(i + vec2f(0.0, 1.0)), edgeHash(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+// (v506) how thick the world's edge fog is at mosaic pixel px: from where the pixel is in the world
+fn edgeFog(px: vec2f) -> f32 {
+  let ndc = vec2f((px.x + 0.5) / U.res.x * 2.0 - 1.0, 1.0 - (px.y + 0.5) / U.res.y * 2.0);
+  let dd = textureLoad(tDepth, mid(px), 0);
+  var wp: vec3f;
+  if (dd < 0.99999) { let q = U.edgeInv * vec4f(ndc, dd * 2.0 - 1.0, 1.0); wp = q.xyz / q.w; }
+  else {
+    let a = U.edgeInv * vec4f(ndc, -1.0, 1.0); let b = U.edgeInv * vec4f(ndc, 1.0, 1.0);
+    let p0 = a.xyz / a.w; let p1 = b.xyz / b.w;
+    let t = clamp((U.edgeA.z - p0.y) / min(p1.y - p0.y, -1e-4), 0.0, 1.0);
+    wp = mix(p0, p1, t);
+  }
+  let n = U.edgeC.x;
+  var de = min(min(wp.x, wp.z), min(n - wp.x, n - wp.z));
+  let q = wp.xz * 0.14 + vec2f(U.edgeB.w * 0.06, U.edgeB.w * 0.035);
+  de += (0.65 * edgeNoise(q) + 0.35 * edgeNoise(q * 2.3 + vec2f(5.2, 1.3)) - 0.5) * U.edgeC.y;
+  return 1.0 - smoothstep(U.edgeA.y, max(U.edgeA.x, U.edgeA.y + 0.01), de);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   // (where hot air rises, the whole picture, strokes and all, is read a few pixels off: see HEAT)
@@ -5682,7 +5712,9 @@ fn depthAt(px: vec2f) -> f32 {
     }
     col = mix(col, U.color, e * U.strength * haze);
   }
-  col = postExpose(hazeApply(col, px)) + bloomAt(px);
+  col = hazeApply(col, px);
+  if (U.edgeA.w > 0.5) { col = mix(col, U.edgeB.xyz, edgeFog(px)); }
+  col = postExpose(col) + bloomAt(px);
   // the grade (T > Picture): the black point taken out (white kept), contrast round the pivot, saturation
   col = max(col - U.gBlack, vec3f(0.0)) / max(1.0 - U.gBlack, 0.05);
   col = max((col - U.gPivot) * U.gContrast + U.gPivot, vec3f(0.0));
@@ -5781,7 +5813,7 @@ const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 
   poolAway: 0.17, poolReach: 0.5,
   arrowWake: 0.22, arrowClear: 2.5, arrowPush: 2, arrowDrag: 6, landRadius: 0.35, landClear: 3, landPush: 5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400',
-  lake: 0.44, lakeColor: '#ababab'};   // (v499, Jordan: mist over lakes and ponds, and v501 bays, inlets, straits and shallows; not seas, oceans or rivers; the graveyards' for now)
+  lake: 0.44, lakeColor: '#ababab', lakeFade: 6};   // (v499, Jordan: mist over lakes and ponds, and v501 bays, inlets, straits and shallows; not seas, oceans or rivers; the graveyards' for now)
 const hazeStirs = [];   // arrows passing through it this frame (stirHaze)
 // on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T),
 // and no black point, which is there to take back the lit haze's washout
@@ -5841,7 +5873,7 @@ function* groundHazeSiteJob(cx, cz) {
     // none over rivers or the open sea (lava and swamp pools keep their haze), nor inside a closed-in building; lakes,
     // ponds, bays, inlets, straits and shallows have their own mist (v499, v501: MIST)
     const wi = T(tc, tr), lake = MIST[wi] === 1;
-    if (lake) { s = Math.max(0, G.lake); cb = 'lake'; land[c + r * W] = 1; }
+    if (lake) { s = Math.max(0, G.lake) * smooth(0, Math.max(0.5, G.lakeFade), MISTD[wi] - 0.5); cb = 'lake'; land[c + r * W] = 1; }
     else if ((WT[wi] >= 2 && !LAVA[wi]) || roomOf.has(wi)) s = 0; else land[c + r * W] = 1;
     if (s > 0) { m[k] = s; m[k + 1] = col[cb][0] * s; m[k + 2] = col[cb][1] * s; m[k + 3] = col[cb][2] * s; }
     if (c === W - 1 && (r & 1) === 1) yield;
@@ -5918,7 +5950,7 @@ function updateGroundHaze(dt) {
   if (on) {
     // anew when the camera's moved three tiles on, every couple of seconds (trees felled, things built), or retuned
     const cx = Math.round(camTarget.x), cz = Math.round(camTarget.z), now = performance.now();
-    const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor, G.lake, G.lakeColor, G.poolAway, G.poolReach].join();
+    const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor, G.lake, G.lakeColor, G.lakeFade, G.poolAway, G.poolReach].join();
     if (!ghJob && (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || now - ghAt > 2000 || key !== ghKey)) {
       const first = !ghCentre;
       ghCentre = [cx, cz]; ghAt = now; ghKey = key;
@@ -6229,6 +6261,14 @@ function renderWorld() {
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
   u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
+  // (v506) the world's edge fog: the camera's way back from the screen to the world, the sea's level at the edge
+  {
+    const E = WORLD_EDGE, fc = scene.fog.color, b = E.bright;
+    u.edgeInv.value.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).invert();
+    Object.assign(u.edgeA.value, { x: E.start, y: E.end, z: edgeSeaY, w: E.on > 0.5 ? 1 : 0 });
+    Object.assign(u.edgeB.value, { x: fc.r * b, y: fc.g * b, z: fc.b * b, w: (performance.now() / 1000) % 1e4 });
+    Object.assign(u.edgeC.value, { x: N, y: E.billow });
+  }
   renderer.setRenderTarget(null);
   renderer.clear();
   renderer.passName = 'outline + post to screen';
@@ -13514,9 +13554,15 @@ const boats = [];
 // shallows of the open sea, which take the lake mist (GROUND_HAZE.lake); OPEN: each sea tile's 0..1, smooth over reach.
 const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 1.45, roll: 0.45, haze: 0.2 };   // (v504: pitch and roll apart)
 const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N), MIST = new Uint8Array(N * N);
+// (v506, Jordan) each mist tile's distance (tiles, to 255) from the sea or a river beside it, so the mist fades out
+// there (over GROUND_HAZE.lakeFade) instead of stopping at a hard line
+const MISTD = new Uint8Array(N * N);
 const MIST_KINDS = new Set(['lake', 'bay', 'inlet', 'strait', 'shallows']);
 function computeOpenSea() {
   const NN = N * N, q = new Int32Array(NN), d = new Uint16Array(NN).fill(65535);
+  // (v506) the sea's level at the world's edge, for the edge fog where nothing is drawn
+  edgeSeaY = 0;
+  for (let k = 0; k < N; k++) { const i = T(k, 0); if (WL[i] && !LV[i]) { edgeSeaY = WL[i] * STEP - 0.1; break; } }
   SEA.fill(0); OPEN.fill(0); MIST.fill(0);
   for (let i = 0; i < NN; i++) {
     if (!WL[i] || LV[i] || LAVA[i] || !(WT[i] === 2 || (!WT[i] && !LANDID[i]))) continue;
@@ -13538,6 +13584,17 @@ function computeOpenSea() {
   }
   const reach = Math.max(0.5, SEA_SWELL.reach);
   for (let i = 0; i < NN; i++) if (SEA[i]) OPEN[i] = smooth(0, reach, Math.min(d[i], R) - 0.5);
+  // (v506) how far into each body of mist from the open water (sea, rivers) that isn't misty
+  MISTD.fill(255); n = 0;
+  for (let i = 0; i < NN; i++) if (WL[i] && !LV[i] && !LAVA[i] && !MIST[i]) { MISTD[i] = 0; q[n++] = i; }
+  for (let h = 0; h < n; h++) {
+    const i = q[h], c = i % N, r = (i - c) / N, di = MISTD[i];
+    if (di >= 254) continue;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const cc = c + dc, rr = r + dr, j = rr * N + cc;
+      if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && MIST[j] && MISTD[j] === 255) { MISTD[j] = di + 1; q[n++] = j; }
+    }
+  }
 }
 // OPEN at a point, between the tile middles
 function openAt(x, z) {
@@ -13568,6 +13625,59 @@ const BOAT_LAMP = { color: '#ffc46a', light: 2.3, range: 4, decay: 2, fade: 0.5 
 // a broad trail behind it. T > Boats.
 const BOAT_WAKE = { radius: 0.65, clear: 1.6, push: 2.5, drag: 1.2 };
 const boatGlowMat = new GFX.MeshBasicMaterial({ color: '#3a2a18' });
+// (v506, Jordan) the sails: shaded smooth (each corner's normal from the sail's curve, not the facet's) and fluttering
+// in the wind like the wheat: ripples running across the cloth, more toward the foot (the yard holds the head still).
+// flutter: how far the foot moves (tiles); speed: how fast. T > Boats.
+const SAIL_FLUTTER = { flutter: 0.06, speed: 4 };
+const SAIL_U = { windV: PLANT_U.windV, fl: { value: { x: SAIL_FLUTTER.flutter, y: SAIL_FLUTTER.speed, z: 0, w: 0 } } };
+const sailMat = new GFX.ShaderMaterial({ uniforms: SAIL_U, vertexColors: true, side: GFX.DoubleSide, attributes: { sg: 'vec2f' }, lit: true,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) n: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let M = O.model;
+  let c0 = M[0].xyz; let c1 = M[1].xyz; let c2 = M[2].xyz;
+  // (the sail's local x across (-0.5..0.5), y down from the yard (0..-1), z its belly; a furled sail barely moves)
+  let lx = v.position.x; let ly = -v.position.y;
+  let ph = U.windV.w * U.fl.y + M[3].x * 0.37 + M[3].z * 0.53;
+  let a1 = ph * 1.0 + lx * 7.0 - ly * 2.0;
+  let a2 = ph * 1.63 - lx * 11.0 + ly * 3.5 + 1.3;
+  let s = 0.65 * sin(a1) + 0.35 * sin(a2);
+  let sx = 0.65 * 7.0 * cos(a1) - 0.35 * 11.0 * cos(a2);
+  let sy = -0.65 * 2.0 * cos(a1) + 0.35 * 3.5 * cos(a2);
+  let A = U.fl.x * smoothstep(0.0, 1.0, length(c1));
+  let d = A * ly * s;
+  // the slope of the cloth (its own curve, as made, and the flutter's) gives the normal; turned into the world by the
+  // inverse transpose of the sail's turn and stretch
+  let gx = v.sg.x + A * ly * sx;
+  let gy = v.sg.y - A * (s + ly * sy);
+  let nl = vec3f(-gx, -gy, 1.0);
+  let n = c0 * (nl.x / dot(c0, c0)) + c1 * (nl.y / max(dot(c1, c1), 1e-6)) + c2 * (nl.z / dot(c2, c2));
+  let w = (M * vec4f(v.position.x, v.position.y, v.position.z + d, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, n);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  var N = normalize(i.n);
+  let toward = select(-i.eye, -F.camDir.xyz, F.camPos.w > 0.5);
+  if (dot(N, toward) < 0.0) { N = -N; }
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+// each corner of a sail's mesh its slope (dz/dx, dz/dy) on the smooth surface z(x, y) it was cut from
+function sailSlopes(geo, zf) {
+  if (!geo) return;
+  const p = geo.attributes.position.array, n = p.length / 3, sg = new Float32Array(n * 2), e = 1e-3;
+  for (let k = 0; k < n; k++) {
+    const x = p[k * 3], y = Math.min(-e, Math.max(-1 + e, p[k * 3 + 1]));
+    sg[k * 2] = (zf(x + e, y) - zf(x - e, y)) / (2 * e);
+    sg[k * 2 + 1] = (zf(x, y + e) - zf(x, y - e)) / (2 * e);
+  }
+  geo.setAttribute('sg', new GFX.BufferAttribute(sg, 2));
+}
+const SAIL_Z = [
+  (x, y) => { const fv = -y, w = 0.92 + 0.08 * fv, fu = x / w; return 0.32 * (1 - 4 * fu * fu) * Math.sin(Math.PI * Math.min(1, fv * 1.05)); },
+  (x, y) => { const v = -y, u = x / (0.94 + 0.06 * v) + 0.5; return 0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v); },
+];
 const boatLight = addLight(new GFX.PointLight(BOAT_LAMP.color, 0, BOAT_LAMP.range, BOAT_LAMP.decay));
 boatLight.layers.enableAll(); boatLight.visible = false;
 const _glowOff = new GFX.Color('#5a4224'), _glowOn = new GFX.Color();
@@ -13592,12 +13702,12 @@ const boatLocal = (b, x, z) => { const dx = x - b.x, dz = z - b.z, c = Math.cos(
 // open water the boat may float on: water at its own level, no land, lava, bridge or dock
 function boatWater(i, wl) { return WL[i] === wl && !LV[i] && !LAVA[i] && !BR[i]; }
 function boatFits(x, z, h, wl) {
-  const c = Math.cos(h), s = Math.sin(h);
+  const c = Math.cos(h), s = Math.sin(h), EM = Math.max(1, Math.round(WORLD_EDGE.keep));   // (v506: kept out of the edge fog)
   for (let v = BOAT.stern; v <= BOAT.bow + 0.01; v += 0.5) {
     const hb = boatHB(v) + 0.1;
     for (const u of [-hb, 0, hb]) {
       const px = x + c * u + s * v, pz = z - s * u + c * v, cc = Math.floor(px), rr = Math.floor(pz);
-      if (cc < 1 || rr < 1 || cc >= N - 1 || rr >= N - 1 || !boatWater(T(cc, rr), wl)) return false;
+      if (cc < EM || rr < EM || cc >= N - EM || rr >= N - EM || !boatWater(T(cc, rr), wl)) return false;
     }
   }
   return true;
@@ -13610,7 +13720,8 @@ function boatFits(x, z, h, wl) {
 const BOAT_GEOS = [];
 function boatShapes() {
   const k = BOAT.style ? 1 : 0;
-  return BOAT_GEOS[k] || (BOAT_GEOS[k] = (k ? boatShapesBrig : boatShapesFirst)());
+  if (!BOAT_GEOS[k]) { BOAT_GEOS[k] = (k ? boatShapesBrig : boatShapesFirst)(); sailSlopes(BOAT_GEOS[k].sail, SAIL_Z[k]); }
+  return BOAT_GEOS[k];
 }
 function boatShapesFirst() {
   const B = BOAT, save = OUT, made = {};
@@ -14045,7 +14156,7 @@ function boatGroup(b) {
     g.add(mesh(S.hull));
     b.sails = []; b.furls = [];
     for (const m of BOAT.masts) for (const [y, w, hgt] of boatYards(m)) {
-      const s = mesh(S.sail); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); b.sails.push(s);
+      const s = shadowy(new GFX.Mesh(S.sail, sailMat)); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); b.sails.push(s);
       const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); b.furls.push(f);
     }
     b.anchorM = mesh(S.anchor); b.anchorM.position.set(0.9, -0.4, 3.4); g.add(b.anchorM);
@@ -14151,6 +14262,7 @@ function boatSails(dn) {
 }
 // every boat a frame: the one you sail moves and turns; anchors, sails and gangplanks ease; you ride along
 function updateBoats(dt) {
+  SAIL_U.fl.value.x = SAIL_FLUTTER.flutter; SAIL_U.fl.value.y = SAIL_FLUTTER.speed;
   for (const b of boats) {
     const mine = H.boat === b && H.helm;
     b.anchor += clamp((b.anchorGoal ?? 1) - b.anchor, -dt / BOAT.anchorTime, dt / BOAT.anchorTime);
@@ -17923,7 +18035,7 @@ const AIM_NAMES = ['shot', 'volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boom
 // which shape shows now: a held aimed ability's, else the bow's shot while the attack's held
 function aimName() {
   if (aimForce >= 0) return AIM_NAMES[aimForce];
-  if (mode !== 'play' || !H.alive || invOpen) return null;
+  if (mode !== 'play' || !H.alive || invOpen || H.helm) return null;   // (v506: none at a boat's wheel)
   const w = weapon();
   for (const key of ['e', 'q']) if ((abilHeld[key] || TOUCH.hold === key) && AIMED.has(w[key])) return w[key];
   if (w.strike === 'shoot' && (mouse.down || PAD.attack || TOUCH.attack)) return 'shot';
@@ -21979,6 +22091,9 @@ function resize() {
   orthoCam.top = texel * rh / 2; orthoCam.bottom = -texel * rh / 2;
   orthoCam.updateProjectionMatrix();
   spanW = texel * rw; spanH = texel * rh;
+  // (v506, Jordan) the perspective camera frames the view unrounded, so zooming (and easing out at a boat's wheel)
+  // glides instead of jumping a whole even number of pixels a tile at a time
+  if (VIEW.perspective > 0.5) { spanH = viewH * rh / Math.max(1, rh - 2); spanW = spanH * rw / rh; }
   perspCam.aspect = rw / rh;
 }
 addEventListener('resize', resize);
@@ -22636,7 +22751,7 @@ const LABEL_PX = 16;
 // capitals, 0 writes them as names: Saltcross Path)
 const MAP_FONT = { px: 16, weight: 400, stroke: 4, spacing: 1.1, line: 1.05, wrap: 16, caps: 0 };
 // continents' and islands' names on the map: size (times a name's), weight (book font) and ink
-const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 13.5, bigInk: '#f6e3b4', isleInk: '#ecdcb6', ocean: 1.5, oceanWeight: 700, sea: 1.25, seaWeight: 600, townMid: 1.2, townMidWeight: 600, townBig: 1.5, townBigWeight: 700 };   // (oceans and seas sized near continents and islands, upright: v403)
+const LAND_LABEL = { big: 3, isle: 1.25, bigWeight: 700, isleWeight: 600, bigSpacing: 7, bigInk: '#f6e3b4', isleInk: '#ecdcb6', ocean: 1.5, oceanWeight: 700, sea: 1.25, seaWeight: 600, townMid: 1.2, townMidWeight: 600, townBig: 1.5, townBigWeight: 700 };   // (oceans and seas sized near continents and islands, upright: v403)
 let mapFontsAsked = false;
 // road names on the map (v401): 0 flat, 1 tilted to the road's run there (at most 45 degrees), 2 each letter upright
 // along the road
@@ -22975,6 +23090,14 @@ const TUNING = [
     [VIEW, 'sailOut', 'Farthest zoom out at a boat\'s wheel (× the standard view)', 0.1, 1, 0.01],
     [VIEW, 'sailTime', 'Seconds to ease to and from the wheel\'s zoom', 0.1, 4, 0.05],
   ]],
+  ['World edge', [
+    [WORLD_EDGE, 'on', 'Fog at the edge of the world (0 off)', 0, 1, 1],
+    [WORLD_EDGE, 'start', 'Fog starts this many tiles in from the edge', 1, 40, 0.5],
+    [WORLD_EDGE, 'end', 'Fog is opaque this many tiles in from the edge', -5, 20, 0.5],
+    [WORLD_EDGE, 'billow', 'Billows: how far its edge wanders (tiles)', 0, 12, 0.25],
+    [WORLD_EDGE, 'bright', 'Brightness (× the distance fog\'s colour)', 0, 3, 0.05],
+    [WORLD_EDGE, 'keep', 'Boats keep this many tiles in from the edge', 1, 20, 1],
+  ]],
   ['Boats', [
     [BOAT, 'style', 'Boat model: 0 first build, 1 Kinghaven merchant brig', 0, 1, 1, restyleBoats],
     [SEA_SWELL, 'height', 'Sea swells: height out at sea (tiles, crest to trough)', 0, 2, 0.01],
@@ -22990,6 +23113,8 @@ const TUNING = [
     [BOAT_WAKE, 'clear', 'Wake: how hard it clears the mist', 0, 6, 0.05],
     [BOAT_WAKE, 'push', 'Wake: how hard it pushes the mist aside', 0, 8, 0.1],
     [BOAT_WAKE, 'drag', 'Wake: how much it drags the mist along (× speed)', 0, 2, 0.05],
+    [SAIL_FLUTTER, 'flutter', 'Sails: how far the foot flutters in the wind (tiles)', 0, 0.3, 0.005],
+    [SAIL_FLUTTER, 'speed', 'Sails: how fast they flutter', 0, 12, 0.1],
   ]],
   ['Hero light', [
     [HERO_LIGHT, 'night', 'Strength at night', 0, 6, 0.05],
@@ -23154,6 +23279,7 @@ const TUNING = [
     [GROUND_HAZE, 'wastesColor', 'Blasted Wastes: colour', 'color'],
     [GROUND_HAZE, 'lake', 'Lakes, ponds, bays, inlets, straits, shallows: mist', 0, 2, 0.01],
     [GROUND_HAZE, 'lakeColor', 'Lakes, ponds, bays, inlets, straits, shallows: mist colour', 'color'],
+    [GROUND_HAZE, 'lakeFade', 'Lake mist fades in over this many tiles from the sea or a river', 0.5, 20, 0.5],
     [GROUND_HAZE, 'poolAway', 'Swamps and Wastes: share left away from water and lava', 0, 1, 0.01],
     [GROUND_HAZE, 'poolReach', 'Swamps and Wastes: thins over this many tiles off them', 0.5, 12, 0.5],
     [GROUND_HAZE, 'amount', 'Amount everywhere', 0, 3, 0.01],
@@ -24184,7 +24310,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 505, crashSeen = new Map();
+const GAME_VERSION = 506, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
