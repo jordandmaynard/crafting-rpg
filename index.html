@@ -5607,7 +5607,10 @@ scene.fog = new GFX.Fog('#b8c4d8', 1e5, 1e5 + 1);
 renderer.setClearColor('#0b0912', 1);
 // the view (T > Camera): the pixel-true orthographic camera, or a perspective one with a settable field of view
 // zoomIn / zoomOut: how far the wheel, +/- or the d-pad can zoom, as a multiple of the standard view
-const VIEW = { perspective: 1, fov: 20, zoomIn: 2.5, zoomOut: 0.9 };
+// (v497, Jordan) sailOut: the farthest zoom out while you're at a boat's wheel; taking the wheel or letting go eases the
+// limit there and back over sailTime seconds, the camera kept at the same share of the way out as it was
+const VIEW = { perspective: 1, fov: 20, zoomIn: 2.5, zoomOut: 0.9, sailOut: 0.5, sailTime: 1.2 };
+let sailZoom = 0;   // (0 ashore .. 1 at the wheel: how far the farthest zoom has gone over to VIEW.sailOut)
 const orthoCam = new GFX.OrthographicCamera(-1, 1, 1, -1, 0.1, 240);
 const perspCam = new GFX.PerspectiveCamera(VIEW.fov, 1, 1, 400);
 let camera = orthoCam;
@@ -21576,7 +21579,12 @@ function layoutBelt() {
   el.style.setProperty('--bcDy', (-69.5 * (s - cs)).toFixed(2) + 'px');
 }
 addEventListener('resize', layoutBelt);
-const zoomLimits = () => [Math.min(VIEW.zoomOut, VIEW.zoomIn), Math.max(VIEW.zoomOut, VIEW.zoomIn)];
+function zoomLimits() {
+  const hi = Math.max(VIEW.zoomOut, VIEW.zoomIn), lo = Math.min(VIEW.zoomOut, VIEW.zoomIn), k = smooth(0, 1, sailZoom);
+  return [k > 0 && VIEW.sailOut > 0 ? lo * Math.pow(VIEW.sailOut / lo, k) : lo, hi];
+}
+// how far out the camera is, as a share of the way from the closest zoom (0) to the farthest (1), taken evenly in scale
+const zoomShare = () => { const [lo, hi] = zoomLimits(); return hi > lo ? Math.log(hi / zoom) / Math.log(hi / lo) : 0; };
 const setZoom = z => { const [lo, hi] = zoomLimits(); zoom = Math.min(hi, Math.max(lo, z)); resize(); };
 const turnCam = d => { yawGoal += d * Math.PI / 2; };
 // the D-pad: on to the next 45 degree step either way
@@ -21584,6 +21592,15 @@ const snapCam = d => { const q = Math.PI / 4; yawGoal = (Math.round(yawGoal / q)
 const camRight = new GFX.Vector3(), camUp = new GFX.Vector3(), camK = { a: 0, b: 0 };
 const CAM_DIST = 70;
 function updateCamera(dt) {
+  // (v497) at a boat's wheel the farthest zoom eases out to VIEW.sailOut (and back in when you let go), the camera
+  // keeping its share of the way out
+  const sailGoal = H.helm ? 1 : 0;
+  if (sailZoom !== sailGoal) {
+    const f = zoomShare();
+    sailZoom = sailGoal > sailZoom ? Math.min(1, sailZoom + dt / Math.max(0.05, VIEW.sailTime)) : Math.max(0, sailZoom - dt / Math.max(0.05, VIEW.sailTime));
+    const [lo, hi] = zoomLimits();
+    zoom = hi * Math.pow(lo / hi, f); resize();
+  }
   { const [lo, hi] = zoomLimits(); if (zoom < lo || zoom > hi) setZoom(zoom); }   // the limits were just changed
   yaw += (yawGoal - yaw) * (1 - Math.exp(-dt * 8));
   if (Math.abs(yawGoal - yaw) < 1e-3) yaw = yawGoal;
@@ -22537,6 +22554,8 @@ const TUNING = [
     [VIEW, 'fov', 'Perspective field of view (degrees)', 5, 60, 1],
     [VIEW, 'zoomIn', 'Closest zoom in (× the standard view)', 1, 6, 0.05],
     [VIEW, 'zoomOut', 'Farthest zoom out (× the standard view; smaller sees more)', 0.1, 1, 0.01],
+    [VIEW, 'sailOut', 'Farthest zoom out at a boat\'s wheel (× the standard view)', 0.1, 1, 0.01],
+    [VIEW, 'sailTime', 'Seconds to ease to and from the wheel\'s zoom', 0.1, 4, 0.05],
   ]],
   ['Hero light', [
     [HERO_LIGHT, 'night', 'Strength at night', 0, 6, 0.05],
@@ -23729,7 +23748,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 496, crashSeen = new Map();
+const GAME_VERSION = 497, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
