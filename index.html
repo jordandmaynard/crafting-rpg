@@ -17224,6 +17224,19 @@ function styleBars() {
 let targetFoe = null, targetT = 0;
 const barFoes = new Set();
 const foeTop = f => f.g.position.y + (f.topH || 0.8) * f.base;
+// (v469) the cursor's view ray as far as the ground it first meets: something whose box on screen is under the
+// cursor but lies well beyond that along the ray is hidden behind a hill or a cliff, so it isn't picked
+const pickRay = { o: new GFX.Vector3(), d: new GFX.Vector3(), t: null };
+function cursorHidden(x, y, z) {
+  const R = pickRay;
+  if (R.t === null) {
+    const g = forcedPick ? null : pickGround(false);
+    R.o.copy(ray); R.d.copy(rayDir);
+    R.t = g ? (g.x - R.o.x) * R.d.x + (g.y - R.o.y) * R.d.y + (g.z - R.o.z) * R.d.z : Infinity;
+    if (forcedPick) R.t = Infinity;
+  }
+  return (x - R.o.x) * R.d.x + (y - R.o.y) * R.d.y + (z - R.o.z) * R.d.z > R.t + 1.5;
+}
 function pickFoe() {
   if (!started || mapOpen || !H.alive || mode !== 'play') return null;
   let best = null, bd = 1e9;
@@ -17236,16 +17249,18 @@ function pickFoe() {
     return best;
   }
   const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  pickRay.t = null;
   for (const f of foes) {
     if (Math.abs(f.x - H.x) > 40 || Math.abs(f.z - H.z) > 40) continue;
     const p = f.g.position;
-    v3.set(p.x, p.y, p.z).project(camera); if (v3.z > 1) continue;   // (v464: behind the camera, which projects mirrored back onto the screen)
+    v3.set(p.x, p.y, p.z).project(camera); if (v3.z > 1 || v3.z < -1) continue;   // (v464: behind the camera, which projects mirrored back onto the screen)
     const fx = sx(v3.x), fy = sy(v3.y);
     v3.set(p.x, foeTop(f), p.z).project(camera); const hy = sy(v3.y);
     const w = Math.max(22, (fy - hy) * 0.75), dx = Math.abs(mouse.x - fx);
     if (dx > w / 2 || mouse.y < hy - 6 || mouse.y > fy + 6) continue;
     const d = dx + Math.abs(mouse.y - (fy + hy) / 2) * 0.5;
-    if (d < bd) { bd = d; best = f; }
+    if (d >= bd || cursorHidden(p.x, (p.y + foeTop(f)) / 2, p.z)) continue;
+    bd = d; best = f;
   }
   return best;
 }
@@ -17254,6 +17269,7 @@ function pickFolk() {
   if (!started || mapOpen || !H.alive || mode !== 'play' || !folkTowns.size) return null;
   let best = null, bd = 1e9;
   const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  pickRay.t = null;
   for (const t of folkTowns) {
     if (!t.batches) continue;
     for (const p of t.folk) {
@@ -17264,13 +17280,14 @@ function pickFolk() {
         continue;
       }
       // (v464) someone behind the camera (a town at your back in the tilted view) projects mirrored onto the screen: skipped
-      v3.set(p.x, p.y, p.z).project(camera); if (v3.z > 1) continue;
+      v3.set(p.x, p.y, p.z).project(camera); if (v3.z > 1 || v3.z < -1) continue;
       const fx = sx(v3.x), fy = sy(v3.y);
       v3.set(p.x, p.y + 0.95 * p.rig.g.scale.y, p.z).project(camera); const hy = sy(v3.y);
       const w = Math.max(22, (fy - hy) * 0.45), dx = Math.abs(mouse.x - fx);
       if (dx > w / 2 || mouse.y < hy - 6 || mouse.y > fy + 6) continue;
       const d = dx + Math.abs(mouse.y - (fy + hy) / 2) * 0.5;
-      if (d < bd) { bd = d; best = p; }
+      if (d >= bd || cursorHidden(p.x, p.y + 0.5 * p.rig.g.scale.y, p.z)) continue;
+      bd = d; best = p;
     }
   }
   return best;
@@ -22869,7 +22886,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 468, crashSeen = new Map();
+const GAME_VERSION = 469, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
