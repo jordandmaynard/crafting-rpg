@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v481:** The tuning panel's big-bar sliders drive the top banner again (Jordan: they did nothing since the kit banner): HPBAR.bigWidth (bar width, banner px, 512), bigHeight (fill thickness, 10; track = fill + 14), new bigY (bar up/down), nameSize (name font, 28; the fit-to-leather shrink uses it), new nameY (monster name up/down) and nameStroke (black outline, -webkit-text-stroke with paint-order stroke fill, 0). Set as CSS vars --tbW/--tbH/--tbY/--tnS/--tnY/--tnK in styleBars; the bar stays centred on x 560. Jordan's HUD paste: topScale 0.6, topY 6, toastY 101.
+
 **v480:** Jordan's tuning: health bars hold 4, folkHold 0.5, targetFade 0.7; HUD topScale 0.7, toastScale 1. New HUD_BARS.toastY (T > HUD bars, 1080p px from the top, default 84) sets the framed toast's height on its own; it no longer follows the banner.
 
 **v479:** T > Crowd test spawn buttons (no console needed): a footpad, or a band of three bandits, a few tiles ahead of you, and Clear away every foe (spawnHumansAhead; tuning items with min 'action' are buttons, skipped by Copy).
