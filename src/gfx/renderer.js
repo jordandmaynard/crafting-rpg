@@ -70,7 +70,7 @@ class Renderer {
     this._bufs = new WeakMap(); this._texs = new WeakMap(); this._rts = new WeakMap(); this._mats = new WeakMap(); this._snaps = new WeakMap();
     this.profiler = null;   // a GpuProfiler: each pass is timed under passName (render), its label (compute) or its kind
     this.passName = '';
-    this._trash = [];       // textures dropped mid-frame, destroyed once the frame that may use them is sent
+    this._trash = [];       // textures and buffers dropped mid-frame, destroyed once the frame that may use them is sent
     this._freed = new FinalizationRegistry(b => b.destroy());
     this._frameNo = 0; this._enc = null; this._pendingClear = null; this._canvasTex = null; this._flushQueued = false;
 
@@ -381,7 +381,7 @@ class Renderer {
   }
   _ensureShadow(size) {
     if (size === this.shadowSize) return;
-    if (this.shadowTex) this.shadowTex.destroy();
+    if (this.shadowTex) this._trash.push(this.shadowTex);
     this.shadowSize = size;
     this.shadowTex = this.device.createTexture({ size: [size, size], format: SHADOW_FORMAT, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowView = this.shadowTex.createView();
@@ -588,7 +588,7 @@ class Renderer {
     let b = this._bufs.get(mesh);
     const arr = mesh.instanceMatrix;
     if (!b || b.size < arr.byteLength) {
-      if (b) { this._freed.unregister(b); b.buf.destroy(); }
+      if (b) { this._freed.unregister(b); this._trash.push(b.buf); }
       b = { buf: this.device.createBuffer({ size: arr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }), size: arr.byteLength, version: -1, count: -1 };
       this._bufs.set(mesh, b);
       this._freed.register(mesh, b.buf, b);
@@ -605,7 +605,7 @@ class Renderer {
     if (b && b.version === attr.version && b.length === attr.array.length) return b.buf;
     const arr = attr.array, bytes = Math.ceil(arr.byteLength / 4) * 4;
     if (!b || b.size < bytes) {
-      if (b) b.buf.destroy();
+      if (b) { this._freed.unregister(b); this._trash.push(b.buf); }
       const buf = this.device.createBuffer({ size: Math.max(4, bytes), usage: usage | GPUBufferUsage.COPY_DST });
       b = { buf, size: Math.max(4, bytes) };
       this._bufs.set(attr, b);
@@ -650,7 +650,7 @@ class Renderer {
       if (!rt.tex) { const t0 = performance.now(); rt.tex = rt.context.getCurrentTexture(); this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._liveCanvases.add(rt); }
       const t = rt.tex, w = t.width, h = t.height;
       if (!rt.depth || rt.depth.width !== w || rt.depth.height !== h) {
-        if (rt.depth) rt.depth.destroy();
+        if (rt.depth) this._trash.push(rt.depth);
         rt.depth = dev.createTexture({ size: [w, h], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT });
         rt.depthView = rt.depth.createView();
       }
@@ -660,7 +660,7 @@ class Renderer {
       if (!this._canvasTex) { const t0 = performance.now(); this._canvasTex = this.context.getCurrentTexture(); this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._lastCanvasTex = this._canvasTex; }
       const t = this._canvasTex, w = t.width, h = t.height;
       if (!this._canvasDepth || this._canvasDepth.width !== w || this._canvasDepth.height !== h) {
-        if (this._canvasDepth) this._canvasDepth.destroy();
+        if (this._canvasDepth) this._trash.push(this._canvasDepth);
         this._canvasDepth = dev.createTexture({ size: [w, h], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT });
         this._canvasDepthView = this._canvasDepth.createView();
       }
@@ -690,7 +690,7 @@ class Renderer {
     if (!g || g.version !== t.version) {
       const { data, width, height } = t.image;
       if (!g || g.w !== width || g.h !== height) {
-        if (g) g.tex.destroy();
+        if (g) this._trash.push(g.tex);
         const tex = this.device.createTexture({ size: [width, height], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
         g = { tex, view: tex.createView(), w: width, h: height, id: Math.random() };
         this._texs.set(t, g);

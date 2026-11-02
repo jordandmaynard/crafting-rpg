@@ -105,7 +105,7 @@ export class Bloom {
     this.on = false; this.strength = 0; this.dims = [0, 0]; this.key = 0; this._preKey = '';
   }
   _allocate(w, h) {
-    if (this.texA) { this.texA.destroy(); this.texB.destroy(); }
+    if (this.texA) this.renderer._trash.push(this.texA, this.texB);   // (v513: once the frame's sent)
     const make = () => this.device.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     this.texA = make(); this.texB = make();
     this.viewA = this.texA.createView(); this.viewB = this.texB.createView();

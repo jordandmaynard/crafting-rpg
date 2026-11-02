@@ -521,7 +521,9 @@ export class LitHaze {
   // the haze a mosaic pixel, and the march's a block: what it had at the block's nearest depth and farthest, and
   // those depths
   _allocate(X, Y, B) {
-    for (const t of [this.out, this.near, this.far, this.range]) if (t) t.destroy();
+    // (v513: thrown away once this frame is sent: the scene drawn before this in the frame may still read the old
+    // ones, and destroying them now voided the whole frame, a black one, when the mosaic's pixel size stepped)
+    for (const t of [this.out, this.near, this.far, this.range]) if (t) this.renderer._trash.push(t);
     const U = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING;
     const tex = (label, size, format) => this.device.createTexture({ label, size, format, usage: U });
     const hs = [Math.ceil(X / B), Math.ceil(Y / B)];
@@ -534,7 +536,7 @@ export class LitHaze {
     this.dims = [X, Y]; this.block = B; this.key++; this._marchKey = '';
   }
   _allocateGlow(S) {
-    if (this.glowTex) this.glowTex.destroy();
+    if (this.glowTex) this.renderer._trash.push(this.glowTex);
     this.glowTex = this.device.createTexture({ label: 'haze glow', size: [S, S], format: OUT_FORMAT, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     this.glowView = this.glowTex.createView();
     this.glowSize = S; this._marchKey = ''; this._glowKey = '';
