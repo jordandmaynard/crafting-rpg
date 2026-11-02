@@ -205,6 +205,8 @@ img.px { display: block; image-rendering: pixelated; pointer-events: none; -webk
 #prompt b { color: var(--void); background: var(--bone); padding: 4px 9px; margin-right: 12px; font-weight: normal; text-shadow: none; outline: 1px solid #000; }
 
 #toast { position: fixed; left: 50%; bottom: var(--toastB, 170px); transform: translateX(-50%); transform-origin: 50% 100%; font-family: var(--display); font-size: 15px; line-height: 1.6; color: var(--bone); background: var(--panel); border: 3px solid var(--blood); box-shadow: 4px 4px 0 #000; padding: 14px 22px; max-width: min(640px, calc(100vw - 32px)); width: max-content; box-sizing: border-box; text-align: center; pointer-events: none; }
+#toast { transition: opacity 0.5s linear; }
+#toast.out { opacity: 0; }
 #toast.good { border-color: var(--gold); color: var(--gold); }
 #toast.calm { border-color: var(--wisp); color: var(--wisp); }
 /* (v457) discoveries, entering a place, the times of day: the kit's floating toast (v3: 558 x 151, title in 35, 77, 488 x 38),
@@ -14950,8 +14952,12 @@ function renderXp() {
   for (let k = 1; k < XP_SEGMENTS; k++) { const d = document.createElement('i'); d.style.left = (k / XP_SEGMENTS * 100) + '%'; segs.appendChild(d); }
 }
 renderXp();
-// Messages queue up so each one stays readable for at least 1.4 s before the next replaces it.
-let toastTimer = 0, toastFree = 0, toastGen = 0;
+// Messages queue up so each one stays readable for at least TOAST.min seconds before the next replaces it.
+// (v476, Jordan) a toast fades in over TOAST.fade from nothing; one waiting in the queue replaces it at once (no fade);
+// the last one stays TOAST.show seconds in all, then fades out over TOAST.fade
+const TOAST = { min: 1.4, show: 2.8, fade: 0.5 };
+const toastQ = [];
+let toastTimer = 0, toastOn = false, toastAt = 0;
 // (v457) framed: the kit's floating toast (discoveries, entering a place, dusk and dawn), its title shrunk to fit
 // (v465, Jordan) toasts sit just above the belt's centre piece (the name / health / XP panel), 6 px clear of its top
 function placeToast() {
@@ -14959,23 +14965,35 @@ function placeToast() {
   document.documentElement.style.setProperty('--toastB', Math.round(innerHeight - top + 6) + 'px');
 }
 function toast(msg, tone = '', framed = false, icon = '') {
-  const now = performance.now(), wait = Math.max(0, toastFree - now), gen = toastGen;
-  toastFree = now + wait + 1400;
-  setTimeout(() => {
-    if (gen !== toastGen) return;
-    const t = $('toast');
-    if (framed) {
-      t.innerHTML = (icon ? `<img class="ti" src="ui/top3/crest-${icon}.webp" alt="">` : '') + '<span class="tt"></span>';
-      const tt = t.lastChild; tt.textContent = msg;
-      tcMeasure.font = '600 25px Spectral, Georgia, serif';
-      const w = tcMeasure.measureText(msg).width; tt.style.fontSize = w > 476 ? Math.max(18, 25 * 476 / w).toFixed(2) + 'px' : '';
-      t.className = tone + ' framed';
-    } else { t.textContent = msg; t.className = tone; }
-    placeToast();
-    t.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
-  }, wait);
+  toastQ.push({ msg, tone, framed, icon });
+  if (!toastOn || performance.now() - toastAt >= TOAST.min * 1000) toastNext();
+}
+function toastNext() {
+  clearTimeout(toastTimer);
+  const t = $('toast'), m = toastQ.shift();
+  t.style.transitionDuration = TOAST.fade + 's';
+  if (!m) {
+    toastOn = false; t.classList.add('out');
+    toastTimer = setTimeout(() => { if (!toastOn) t.hidden = true; }, TOAST.fade * 1000);
+    return;
+  }
+  if (m.framed) {
+    t.innerHTML = (m.icon ? `<img class="ti" src="ui/top3/crest-${m.icon}.webp" alt="">` : '') + '<span class="tt"></span>';
+    const tt = t.lastChild; tt.textContent = m.msg;
+    tcMeasure.font = '600 25px Spectral, Georgia, serif';
+    const w = tcMeasure.measureText(m.msg).width; tt.style.fontSize = w > 476 ? Math.max(18, 25 * 476 / w).toFixed(2) + 'px' : '';
+  } else t.textContent = m.msg;
+  // (from hidden: start clear and fade in; mid fade-out: fade back in from where it is; showing: swap at once)
+  const wasHidden = t.hidden;
+  t.className = (m.tone + (m.framed ? ' framed' : '') + (wasHidden ? ' out' : '')).trim();
+  placeToast();
+  t.hidden = false;
+  if (wasHidden) { void t.offsetWidth; t.classList.remove('out'); }
+  toastOn = true; toastAt = performance.now();
+  toastTimer = setTimeout(() => {
+    if (toastQ.length) { toastNext(); return; }
+    toastTimer = setTimeout(toastNext, Math.max(0, TOAST.show - TOAST.min) * 1000);
+  }, TOAST.min * 1000);
 }
 const v3 = new GFX.Vector3();
 let floatCount = 0;
@@ -17220,10 +17238,11 @@ function castJump() {
 }
 // Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at), or
 // hurt it by any means, and a bar shows over its head, staying 3 seconds after; its name and a big bar show at
-// the top of the screen only while you point at it (targetHold, 0 by default).
+// the top of the screen at once when you point at it (or at a townsperson), switching at once to whatever you point at
+// next, held targetHold seconds after you look away, then faded out over targetFade (v476, Jordan).
 // A hit flashes the bar and leaves the health just lost as a pale part that flares white and shrinks away,
 // as in neon-haze. All of it is in the tuning panel.
-const HPBAR = { hold: 3, targetHold: 0, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
+const HPBAR = { hold: 3, targetHold: 4, targetFade: 1, delay: 0, trailRate: 4, flash: 1.5, flashFade: 6, lostGlow: 8, raise: 0.3,
   width: 44, height: 5, bigWidth: 420, bigHeight: 12, nameSize: 11, opacity: 1,
   fill: '#e8b830', lost: '#901d1d', hot: '#ffffff', back: '#1a0e10' };
 const hbLost = new GFX.Color(), hbHot = new GFX.Color();
@@ -17237,7 +17256,7 @@ function styleBars() {
   for (const [k, v] of [['w', B.width + 'px'], ['h', B.height + 'px'], ['bigW', B.bigWidth + 'px'], ['bigH', B.bigHeight + 'px'],
     ['name', B.nameSize + 'px'], ['op', B.opacity], ['fill', B.fill], ['fillDark', dark], ['back', B.back]]) st.setProperty('--hb-' + k, v);
 }
-let targetFoe = null, targetT = 0;
+let targetFoe = null, targetFolk = null, targetT = 0;
 const barFoes = new Set();
 const foeTop = f => f.g.position.y + (f.topH || 0.8) * f.base;
 // (v469) the cursor's view ray as far as the ground it first meets: something whose box on screen is under the
@@ -17345,8 +17364,7 @@ function updateFoeBars(dt) {
     if (f.barHeat) f.barHeat *= Math.exp(-HPBAR.flashFade * dt);
   }
   const hov = pickFoe();
-  if (hov) { hov.barT = HPBAR.hold; targetFoe = hov; targetT = HPBAR.targetHold; barFoes.add(hov); }
-  else { targetT -= dt; if (targetT <= 0) targetFoe = null; }
+  if (hov) { hov.barT = HPBAR.hold; barFoes.add(hov); }
   const rect = cv.getBoundingClientRect();
   for (const f of barFoes) {
     if (f !== hov) f.barT -= dt;
@@ -17364,17 +17382,24 @@ function updateFoeBars(dt) {
     drawBar(f.barEl.lastChild, f.barEl.firstChild, f);
     f.barEl.hidden = false;
   }
-  const el = $('target'), job = el.querySelector('.tjob'), meter = el.querySelector('.meter');
+  const el = $('target'), job = el.querySelector('.tjob');
   // (v448) a townsperson pointed at (no monster): their name and job, no health
   const folk = hov ? null : pickFolk();
-  if (folk) {
-    el.querySelector('.tname').textContent = folk.d.name.full; job.textContent = jobTitle(folk.d);
-    job.hidden = false; el.hidden = false; targetFoe = null;
-    tcLayout('npc', folk.d.name.full, job.textContent);
+  if (hov) { targetFoe = hov; targetFolk = null; targetT = 0; }
+  else if (folk) { targetFolk = folk; targetFoe = null; targetT = 0; }
+  else targetT += dt;
+  if (targetFolk && !folkTowns.has(targetFolk.t)) targetFolk = null;
+  const hold = HPBAR.targetHold, fade = Math.max(0.01, HPBAR.targetFade);
+  if ((!targetFoe && !targetFolk) || targetT >= hold + fade) { targetFoe = targetFolk = null; el.hidden = true; return; }
+  el.style.opacity = (targetT <= hold ? 1 : 1 - (targetT - hold) / fade) * HPBAR.opacity;
+  if (targetFolk) {
+    const name = targetFolk.d.name.full, jt = jobTitle(targetFolk.d);
+    el.querySelector('.tname').textContent = name; job.textContent = jt;
+    job.hidden = false; el.hidden = false;
+    tcLayout('npc', name, jt);
     return;
   }
   job.hidden = true;
-  if (!targetFoe || (targetFoe !== hov && targetT <= 0) || !foes.includes(targetFoe)) { el.hidden = true; return; }
   el.querySelector('.tname').textContent = targetFoe.def.name;
   el.querySelector('.tc-lv span').textContent = targetFoe.level;
   el.querySelector('.tc-lv span').style.fontSize = String(targetFoe.level).length > 2 ? '30px' : '';
@@ -22285,7 +22310,8 @@ const TUNING = [
   ]],
   ['Health bars', [
     [HPBAR, 'hold', 'Bar over the head stays this long after you look away (seconds)', 0, 10, 0.1],
-    [HPBAR, 'targetHold', 'Big bar at the top stays this long (seconds)', 0, 10, 0.1],
+    [HPBAR, 'targetHold', 'Top banner stays this long after you look away (seconds)', 0, 10, 0.1],
+    [HPBAR, 'targetFade', 'Top banner then fades out over (seconds)', 0, 3, 0.05],
     [HPBAR, 'delay', 'Health just lost waits this long before it shrinks (seconds)', 0, 2, 0.05],
     [HPBAR, 'trailRate', 'How fast the health just lost shrinks', 0.2, 20, 0.1],
     [HPBAR, 'flash', 'Hit flash: how much the bar brightens (0 none)', 0, 5, 0.05],
@@ -22890,7 +22916,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 475, crashSeen = new Map();
+const GAME_VERSION = 476, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
