@@ -3458,7 +3458,34 @@ function drawProp(q, glowOk) {
   const n0 = OUT.n;
   if (g.solid) propEmit(g.solid, q, OUT);
   if (g.glow) propEmit(g.glow, q, glowOk ? GLOW : OUT);
+  if (q.id === 'hearth' && q.tiles) propStack(q);
   if (q.cut != null) cutTag(OUT, n0, q.cut, 1);
+}
+// (v543, Jordan: the cooking hearth's hood poked up through the roof) its chimney carried on up from the hood's top
+// and out through the roof, as a built hearth's stack is (hearthTop): up through any floors over it to the roof of
+// the story it comes out on, PROP_STACK.over above the roof under it, in coursed stone with a cap
+const PROP_STACK = { over: 0.45, w: 0.6, d: 0.3 };
+function propStack(q) {
+  const cs = Math.cos(q.ry), sn = Math.sin(q.ry), lz = -0.5 + WALL_IN + 0.165;
+  const at = (lx, lz2) => [q.x + cs * lx + sn * lz2, q.z - sn * lx + cs * lz2];
+  const [sx, sz] = at(0, lz), i = T(Math.floor(sx), Math.floor(sz));
+  // the story the stack comes out on: up past every story whose floor over it covers this tile
+  let s = q.k || 0, top = 0;
+  for (; s <= STORY_MAX; s++) {
+    const b = bldOf(s * SNN + i);
+    if (!b) { top = storyY(s, i) + (s === (q.k || 0) ? 2.4 : 1.2); break; }
+    if (!covered(s, i) || s === STORY_MAX) {
+      if (b.roofY) for (const [dx, dz] of [[-0.25, -0.15], [0.25, -0.15], [-0.25, 0.15], [0.25, 0.15]]) top = Math.max(top, b.roofY(sx + dx, sz + dz));
+      top = Math.max(top + PROP_STACK.over, storyY(s, i) + 2.4);
+      break;
+    }
+  }
+  if (!top) return;
+  const y0 = q.y + 1.9, h = top - y0, st = '#8a8276', dk = '#4e4a56';
+  if (h <= 0.05) return;
+  part(G.box, shade(CC(st), 0.86), sx, y0 + h / 2, sz, { sx: PROP_STACK.w, sy: h, sz: PROP_STACK.d, ry: q.ry });
+  for (let k = 1; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), sx, y0 + k * 0.3, sz, { sx: PROP_STACK.w + 0.02, sy: 0.03, sz: PROP_STACK.d + 0.02, ry: q.ry });
+  part(G.box, dk, sx, top + 0.04, sz, { sx: PROP_STACK.w + 0.1, sy: 0.1, sz: PROP_STACK.d + 0.08, ry: q.ry });
 }
 function propEmit(geo, q, B) {
   const a = geo.attributes.position.array, col = geo.attributes.color.array, m = a.length, cs = Math.cos(q.ry), sn = Math.sin(q.ry);
@@ -12880,7 +12907,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
   const base = top * STEP + k * WALL_H + WALL_H - 0.02;
-  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H - 0.03, k);
+  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);
   // Chebyshev distance from a point to the nearest outside tile: 45° hips everywhere
   const f = (x, z) => {
     let m = 1e9;
@@ -12934,8 +12961,10 @@ function roofMesh(rm, o = {}) {   // rm: a building
 // (v539, Jordan) a building walled only in stone (stone walls and windows; doors don't count either way) gets a flat
 // roof of flagstones in place of the hipped one, with its walls' crenels stood round it as a parapet. (v541, Jordan:
 // laid at first under the walls' tops, 1.88, it cut through wardrobes (1.91) and met the bookcases' tops: now thin and
-// at 1.97, its underside 1.93, and the crenels round it made taller to suit, see flatStoneRoof)
-const FLAT_CRENEL = 0.12;
+// at 1.97, its underside 1.93, and the crenels round it made taller to suit, see flatStoneRoof. v543: props stand on
+// the floor's top, 0.06 up, so the wardrobes' tops are at 1.97 and fought it: now at 2.06, underside 2.02, the
+// walls round it capped up to it and their crenels carried up over it)
+const FLAT_CRENEL = 0.22;   // (how high the crenels stand over the flat roof's caps)
 function stoneBuilding(rm) {
   const k = rm.k || 0, set = rm.set;
   let stone = 0;
@@ -12953,15 +12982,19 @@ function flatStoneRoof(rm, open, fy, k) {
   const y0 = fy - 0.04;
   for (const [c, r] of open) {
     part(G.box, '#3e3a44', c + 0.5, y0 + 0.01, r + 0.5, { sx: 1, sy: 0.02, sz: 1 });
-    // the crenels on the stone walls round it carried up another FLAT_CRENEL, in their own shade, so they stand
-    // as high over the roof as they did over the walls (they go with the roof, so hide with it)
+    // every wall round it capped from its top (1.88) up just over the roof, one shade so the caps meeting at the
+    // corners are as one, and the crenels carried up from there (on stone, on from the wall's own; they go with the
+    // roof, so hide with it)
     for (let d = 0; d < 4; d++) {
       if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
       const v = roomWall(c, r, d, k);
-      if (v !== 4 && v !== 14) continue;
-      const [ec, er, w] = edgeOf(c, r, d), i = T(ec, er), j = w ? T(ec - 1, er) : T(ec, er - 1);
-      const wy = Math.max(LV[i], LV[j]) * STEP + k * WALL_H + WALL_H - 0.12 + 0.2, kk = 0.92 + hs(ec, er, 50 + w) * 0.14;
-      for (const a of [0.2, 0.8]) part(G.box, shade(CC('#7e7a88'), kk), w ? ec : ec + a, wy + FLAT_CRENEL / 2, w ? er + a : er, { sx: 0.3, sy: FLAT_CRENEL, sz: 0.34, ry: w ? Math.PI / 2 : 0 });
+      if (!v) continue;
+      const [ec, er, w] = edgeOf(c, r, d), i = T(ec, er), j = w ? T(ec - 1, er) : T(ec, er - 1), ry = w ? Math.PI / 2 : 0;
+      const y1 = Math.max(LV[i], LV[j]) * STEP + k * WALL_H + WALL_H - 0.12, capTop = fy + 0.01, stone = v === 4 || v === 14;
+      const P = (a, yy, o) => part(G.box, o.col, w ? ec : ec + a, yy, w ? er + a : er, { sx: o.sx, sy: o.sy, sz: o.sz, ry });
+      if (capTop > y1) P(0.5, (y1 + capTop) / 2, { col: '#7c7886', sx: 1.31, sy: capTop - y1, sz: 0.31 });
+      const kk = 0.92 + hs(ec, er, 50 + w) * 0.14, m0 = stone ? y1 + 0.2 : capTop, m1 = capTop + FLAT_CRENEL;
+      if (m1 > m0) for (const a of [0.2, 0.8]) P(a, (m0 + m1) / 2, { col: shade(CC('#7e7a88'), kk), sx: 0.3, sy: m1 - m0, sz: 0.34 });
     }
     for (let j = 0; j < 2; j++) {
       const off = (r * 2 + j) % 2 ? 0.25 : 0;
@@ -24834,7 +24867,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 542, crashSeen = new Map();
+const GAME_VERSION = 543, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
