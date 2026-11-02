@@ -3298,7 +3298,7 @@ const PROP_OVER = new Set();
 function propOverFree(h, k, i) {
   const R = propRooms(h);
   if (k ? !(R.up && R.up.set.has(i)) : !h.tiles.some(([c, r]) => T(c, r) === i)) return false;
-  return !stairAt.has(k * SNN + i) && !(k && stairAt.has(i)) && !PROP_OVER.has(k * SNN + i);
+  return !stairAt.has(k * SNN + i) && !(k && stairAt.has(i)) && !PROP_OVER.has(k * SNN + i) && !(k && PROP_AT.get(k * SNN + i)?.chimney);
 }
 // set a prop down: the record drawProp draws, its tiles marked taken
 function propPut(h, k, id, tiles, f, wallV, ctx, opts = {}) {
@@ -3359,10 +3359,29 @@ function propTryList(h, k, id, cands, ctx, opts) {
   const P = PROPS[id];
   for (const cd of cands.slice(0, 40)) {
     const q = propPut(h, k, id, cd.foot, cd.f, cd.wallV, ctx, opts);
-    if (P.rug || P.hang || propReach(h, k)) return q;
+    if ((P.rug || P.hang || propReach(h, k)) && (id !== 'hearth' || chimneyUp(h, q))) return q;
     propTake(q);
   }
   return null;
+}
+// (v545, Jordan: a bed stood over a cooking hearth's chimney upstairs) the tiles over a cooking hearth that its
+// chimney goes up through (propStack: every story whose floor covers it) must be clear: no bed, prop, rug, hanging
+// prop, stair or kept-clear tile there. They're then taken in PROP_AT by a stand-in (a tall wall prop facing as the
+// hearth does, so nothing later stands there, nothing hangs on that wall behind it, and folk and you walk round it),
+// and the upstairs must still be got about with it there
+function chimneyUp(h, q) {
+  const keys = [];
+  for (const t of q.tiles) { const i = t % SNN; for (let s = q.k || 0; s < STORY_MAX && covered(s, i); s++) keys.push((s + 1) * SNN + i); }
+  if (!keys.length) return true;
+  const R = propRooms(h);
+  for (const key of keys) {
+    const i = key % SNN;
+    if (BEDS.has(key) || PROP_AT.has(key) || PROP_RUG.has(key) || PROP_OVER.has(key) || stairAt.has(key) || (key < 2 * SNN && R.up && R.up.clear.has(i))) return false;
+  }
+  const stand = { id: 'hearth', f: q.f, k: (q.k || 0) + 1, chimney: true, tiles: keys };
+  for (const key of keys) PROP_AT.set(key, stand);
+  if (R.up && keys.some(key => key < 2 * SNN) && !propReach(h, 1)) { for (const key of keys) PROP_AT.delete(key); return false; }
+  return true;
 }
 // the seats round a table: on the tiles before and behind its long side (a bench the table's width), facing it
 function propSeats(h, k, tq, kind, n, ctx) {
@@ -24946,7 +24965,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 544, crashSeen = new Map();
+const GAME_VERSION = 545, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
