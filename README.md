@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v488:** Jordan's health bar paste: delay 0.6, trailRate 20, flashFade 5.1, lost #990000, hot #fe3e3e.
+
 **v487:** Jordan's health bar paste: trailRate 6, flashFade 10, lost #f00000, hot #ffa8a8.
 
 **v486:** Round minimap from Jordan's Field Compass A kit (art/deliveries/wanderers-kit-field-compass-a-v1.zip): the map is a circle (262 px, clipped at radius 131) in a leather and brass ring; the compass ticks turn with the map and the N/E/S/W letters orbit at radius 143, staying upright (turnCompass). The watch sits in its own housing with a parchment place tag under it (place Spectral 14 px, time 10 px, #3c2717, long names ellipsis with a tooltip). North lock is a small padlock button on the ring (closed = north up, open = turns with the camera). No zoom buttons; wheel zoom kept. Group 348 x 426 at right 20, top 18 (miniRight/miniTop defaults reset to the kit's); dev buttons follow the ring's left edge. Old minimap-frame, watch-bezel, compass-face and compass-needle art removed.
