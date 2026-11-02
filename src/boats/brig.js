@@ -13,8 +13,10 @@ export const BRIG_SHAPE = {
   // (v517, Jordan: the sails a quarter bigger) h: the mast's height, sh: the height its sails were first cut for,
   // sailK: the sails' size over that (the masts stand taller to carry them)
   masts: [{ v: 1.7, h: 8.0, sh: 7.0, w: 3.2 }, { v: -1.0, h: 8.8, sh: 7.8, w: 3.6 }], sailK: 1.25,
-  // the cathead the anchor hangs from (its block's underside, where the chain comes out)
-  hawse: [0.9, 0.19, 3.4],
+  // the cathead the anchor hangs from (its beam's underside, where the chain comes out; v521: a beam out over the rail),
+  // the anchor's ring top when stowed, clear of the water, and its turn about the vertical, so its arms and stock
+  // stand off the hull's flare
+  hawse: [1.1, 0.56, 3.4], anchorUp: 0.48, anchorTurn: 0.9,
 };
 // the deck's half width along the boat (to the bulwarks' inner face), the bulwarks' height over the deck, the keel
 export function hullHB(B, v) {
@@ -554,7 +556,10 @@ export function buildBrig(L, B = BRIG_SHAPE) {
       for (const dy of [-0.12, 0.12]) part(G.box, C.iron, x, y + dy, z, { sx: 0.19, sy: 0.045, sz: 0.19 });
       part(G.cone4, C.iron, x, y + 0.18, z, { sx: 0.23, sy: 0.12, sz: 0.23, ry: Math.PI / 4 });
     }
-    part(G.box, C.dark, 0.9, 0.25, 3.4, { sx: 0.5, sy: 0.12, sz: 0.14 });
+    // the cathead: a beam out over the bow's rail (v521: up from under the rail and out further, so the anchor hangs
+    // clear of the water and the hull)
+    part(G.box, C.dark, (0.68 + B.hawse[0] + 0.08) / 2, B.hawse[1] + 0.06, B.hawse[2], { sx: B.hawse[0] + 0.08 - 0.68, sy: 0.12, sz: 0.14 });
+    part(G.box, C.dark, B.hawse[0] + 0.05, B.hawse[1] + 0.13, B.hawse[2], { sx: 0.06, sy: 0.04, sz: 0.16 });
   });
   // (v499, Jordan) the stern lanterns' glass, lit while you're at the wheel: drawn over the glass in its own glowing material
   take('glow', () => {
@@ -698,9 +703,9 @@ export function brigModel(S, B, mats) {
     const s = lit(new GFX.Mesh(hgt >= tallest && S.sailE ? S.sailE : S.sail, mats.sail)); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); sails.push(s);
     const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); furls.push(f);
   }
-  const anchorM = mesh(S.anchor); anchorM.position.set(0.9, -0.4, 3.4); g.add(anchorM);
+  const anchorM = mesh(S.anchor); anchorM.position.set(B.hawse[0], B.anchorUp, B.hawse[2]); anchorM.rotation.y = B.anchorTurn; g.add(anchorM);
   const chainM = lit(new GFX.InstancedMesh(S.chain, mats.boat, 64)); chainM.position.set(...B.hawse); g.add(chainM);
-  hangChain(chainM, B.hawse[1] + 0.4);
+  hangChain(chainM, B.hawse[1] - B.anchorUp);
   const plankG = new GFX.Group(), plankM = mesh(S.plank); plankG.add(plankM); g.add(plankG);
   const wheelM = mesh(S.wheel); wheelM.position.set(0, B.wheelY, B.wheelV - 0.1); g.add(wheelM);
   // (v519) the name across the transom
