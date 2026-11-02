@@ -119,7 +119,8 @@ class Renderer {
     this.eye = null; this.hdr = false; this.hdrPeak = 0; this.bloom = null;
     this.clipBelow = null;
     // the inside fill (see insideFill): null, or { r, g, b (its light; 0 = off), x0, z0 (the window's first tile), y0, y1,
-    // bits: a Uint32Array(32), the window's 32 x 32 tiles a bit each, row by row }
+    // bits: a Uint32Array(32), the window's 32 x 32 tiles a bit each, row by row; key [x, y, z] toward its key light,
+    // keyShare, ground (the hemisphere's floor-facing share), even (0..1: only what it adds over the light there) }
     this.inside = null;   // a world height: the plain and lit materials draw nothing below it while set (a water mirror)
     this.gi = null;
     this._ensureShadow(512);
@@ -479,6 +480,9 @@ class Renderer {
       d[go + 28] = ins.r; d[go + 29] = ins.g; d[go + 30] = ins.b; d[go + 31] = 1;
       d[go + 32] = ins.x0; d[go + 33] = ins.z0; d[go + 34] = ins.y0; d[go + 35] = ins.y1;
       for (let i = 0; i < 32; i++) du[go + 36 + i] = ins.bits[i];
+      const kd = ins.key || [0, 1, 0];
+      d[go + 68] = kd[0]; d[go + 69] = kd[1]; d[go + 70] = kd[2]; d[go + 71] = ins.ground ?? 1;
+      d[go + 72] = ins.keyShare ?? 0; d[go + 73] = ins.even ?? 0; d[go + 74] = 0; d[go + 75] = 0;
     } else d[go + 31] = 0;
     return slot * FRAME_BYTES;
   }

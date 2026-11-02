@@ -12962,8 +12962,13 @@ function buildingWalls(inside) {
 // dim, but no sun or moon should come in and no lamps should be needed) The inside fill: while you're in a building,
 // a light of its own (color × amount) on everything within its tiles on your story, day or night, eased in and out
 // over `fade` seconds; outside keeps its own light. renderer.inside, insideFill in the shaders' prelude. T > Picture.
-const INSIDE_FILL = { on: 1, amount: 0.5, color: '#ffe2bc', fade: 0.5 };
-const insideFill = { r: 0, g: 0, b: 0, x0: 0, z0: 0, y0: 0, y1: 0, bits: new Uint32Array(32) };
+// (v535, Jordan: it flattened everything; upper floors came out brighter) Hemispherical, faces turned to the floor
+// getting `ground` of it, with a key light (`key` of it) from above (`keyUp`, 0 level .. 1 straight down) and from the
+// camera's side (`keySide`, -1 its left .. 1 its right), so shapes stay modelled; `even` 0..1: only what it adds over
+// the light already there, so a gloomy ground floor and a brighter upper one end up alike.
+const INSIDE_FILL = { on: 1, amount: 0.5, color: '#ffe2bc', fade: 0.5, ground: 0.35, key: 0.5, keyUp: 0.65, keySide: -0.5, even: 0.8 };
+const insideFill = { r: 0, g: 0, b: 0, x0: 0, z0: 0, y0: 0, y1: 0, bits: new Uint32Array(32), key: [0, 1, 0], keyShare: 0, ground: 1, even: 0 };
+const insideFwd = new GFX.Vector3();
 const insideCol = new GFX.Color();
 let insideK = 0, insideKey = '';
 function updateInsideFill(dt, inBld) {
@@ -12987,6 +12992,15 @@ function updateInsideFill(dt, inBld) {
   insideCol.set(INSIDE_FILL.color);
   const k = insideK * Math.max(0, INSIDE_FILL.amount);
   insideFill.r = insideCol.r * k; insideFill.g = insideCol.g * k; insideFill.b = insideCol.b * k;
+  // the key light: from toward the camera, up keyUp and off to keySide of it
+  camera.getWorldDirection(insideFwd);
+  let fx = -insideFwd.x, fz = -insideFwd.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
+  const up = clamp(INSIDE_FILL.keyUp, 0, 1), side = clamp(INSIDE_FILL.keySide, -1, 1), hz = Math.sqrt(1 - up * up);
+  // (the camera's right is (fz, -fx): toward the camera blended toward its right by side, its left when negative)
+  let kx = fx * (1 - Math.abs(side)) + fz * side, kz = fz * (1 - Math.abs(side)) - fx * side;
+  const kl = Math.hypot(kx, kz) || 1; kx = kx / kl * hz; kz = kz / kl * hz;
+  insideFill.key[0] = kx; insideFill.key[1] = up; insideFill.key[2] = kz;
+  insideFill.keyShare = clamp(INSIDE_FILL.key, 0, 1); insideFill.ground = clamp(INSIDE_FILL.ground, 0, 1); insideFill.even = clamp(INSIDE_FILL.even, 0, 1);
   renderer.inside = insideFill;
 }
 function updateCutaway(inside) {
@@ -23601,6 +23615,11 @@ const TUNING = [
     [INSIDE_FILL, 'amount', 'Inside fill: strength', 0, 3, 0.01],
     [INSIDE_FILL, 'color', 'Inside fill: colour', 'color'],
     [INSIDE_FILL, 'fade', 'Inside fill: seconds to fade in and out', 0, 3, 0.05],
+    [INSIDE_FILL, 'ground', 'Inside fill: how much reaches faces turned to the floor', 0, 1, 0.01],
+    [INSIDE_FILL, 'key', 'Inside fill: share from one key light (the rest all round)', 0, 1, 0.01],
+    [INSIDE_FILL, 'keyUp', 'Inside fill: key light height (0 level, 1 straight down)', 0, 1, 0.01],
+    [INSIDE_FILL, 'keySide', 'Inside fill: key light from the camera\'s left (-1) to its right (1)', -1, 1, 0.01],
+    [INSIDE_FILL, 'even', 'Inside fill: evens out (1: only tops up what light is already there)', 0, 1, 0.01],
     [GRADE, 'black', 'Black point (takes the haze lift back out)', 0, 0.5, 0.005],
     [GRADE, 'contrast', 'Contrast', 0.5, 2, 0.01],
     [GRADE, 'pivot', 'Contrast pivots round this brightness', 0, 1, 0.01],
@@ -24612,7 +24631,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 534, crashSeen = new Map();
+const GAME_VERSION = 535, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

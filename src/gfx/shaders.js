@@ -12,7 +12,7 @@
 // round about give back.
 
 export const MAX_POINTS = 16;
-export const FRAME_BYTES = 1280;  // the Frame struct (1232 bytes: 16 point lights since v411, the inside fill since v534), padded to the uniform offset alignment
+export const FRAME_BYTES = 1280;  // the Frame struct (1264 bytes: 16 point lights since v411, the inside fill since v534), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
 // Probe lighting's shared WGSL, for the shaders that draw and the compute pass that lights the probes (each
@@ -155,6 +155,8 @@ struct Frame {
   insideA: vec4f,     // the inside fill (renderer.inside): its light (rgb), on (w > 0)
   insideB: vec4f,     // its 32 x 32 tile window's first tile x, z; the heights it lights, from y0 to y1
   insideBits: array<vec4u, 8>,   // which of the window's tiles are inside: bit (z * 32 + x)
+  insideC: vec4f,     // (v535) its key light's way (toward it), and the hemisphere's floor-facing share
+  insideD: vec4f,     // the key light's share, how far it evens out the light already there
 }
 struct Obj {
   model: mat4x4f,
@@ -263,14 +265,18 @@ fn ggx(f0: vec3f, rough: f32, N: vec3f, V: vec3f, L: vec3f) -> vec3f {
 }
 // (v534) the inside fill: a light of its own on everything within the building you're in (its tiles, between two
 // heights), whatever the hour, so a house's inside isn't left dark by its roof's shadow and the probes' gloom
-fn insideFill(w: vec3f) -> vec3f {
+// (v535: hemispherical, bright above and dimmer below, with a soft key light from above toward the camera, so it
+// models shapes instead of flattening them)
+fn insideFill(w: vec3f, N: vec3f) -> vec3f {
   if (F.insideA.w <= 0.0) { return vec3f(0.0); }
   let t = vec2i(floor(w.xz - F.insideB.xy));
   if (t.x < 0 || t.y < 0 || t.x > 31 || t.y > 31 || w.y < F.insideB.z || w.y > F.insideB.w) { return vec3f(0.0); }
   let n = u32(t.y * 32 + t.x);
   let word = F.insideBits[n >> 7u][(n >> 5u) & 3u];
   if (((word >> (n & 31u)) & 1u) == 0u) { return vec3f(0.0); }
-  return F.insideA.rgb;
+  let hemi = mix(F.insideC.w, 1.0, 0.5 + 0.5 * N.y);
+  let key = 1.6 * max(dot(N, F.insideC.xyz), 0.0);
+  return F.insideA.rgb * mix(hemi, key, F.insideD.x);
 }
 // the lit colour of a surface at world point w with normal N
 fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N: vec3f, receive: bool) -> vec3f {
@@ -284,6 +290,7 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
   let f0 = mix(vec3f(0.04), albedo, metal);
   let rough = clamp(max(rough0, 0.0525), 0.0, 1.0);
   var col = emissive;
+  var ambSeen = vec3f(0.0);
   if (F.hemiSky.w > 0.5) {
     var amb = mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.5 * N.y + 0.5);
     if (F.giA.x > 0.5) {
@@ -298,8 +305,12 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
       }
     }
     col += amb * diff;
+    ambSeen = amb;
   }
-  col += insideFill(w) * diff;
+  // (v535, Jordan: upper floors came out brighter: they already had more light) evened out: only what the fill adds
+  // over the light already there, by insideD.y
+  let fi = insideFill(w, N);
+  col += mix(fi, max(fi - ambSeen, vec3f(0.0)), F.insideD.y) * diff;
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
     var lc = F.sunColor.rgb * cloudShade(w.xz);
