@@ -117,6 +117,7 @@ class Renderer {
     this.noEye = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.noEye, 0, new Float32Array([1, 0, 0, 1]));
     this.eye = null; this.hdr = false; this.hdrPeak = 0; this.bloom = null;
+    this.clipBelow = null;   // a world height: the plain and lit materials draw nothing below it while set (a water mirror)
     this.gi = null;
     this._ensureShadow(512);
     this._frameBG = null; this._frameBGKey = '';
@@ -275,7 +276,7 @@ class Renderer {
       this._open = open = { pass, target: this.target, color: tgt.color, enc: this._enc, ts: ts && this.profiler ? this.profiler.names.length - 1 : -1 };
     }
     pass.setBindGroup(0, this._frameBindGroup(), [frameOff]);
-    const override = scene.overrideMaterial;
+    const override = scene.overrideMaterial, clip = this.clipBelow != null;
     let lastPipe = null;
     for (const it of list) {
       const mesh = it.mesh, mat = override || mesh.material;
@@ -283,7 +284,7 @@ class Renderer {
       const geo = mesh.geometry, kind = override && override.isMeshNormalMaterial ? 'normal' : mat.isShaderMaterial ? 'shader' : mat.isMeshStandardMaterial ? 'std' : 'basic';
       const hasColor = kind !== 'normal' && mat.vertexColors && !!geo.attributes.color, inst = !!mesh.isInstancedMesh;
       if (inst && kind === 'shader') continue;
-      const pipe = this._pipeline(kind, mat, hasColor, tgt.format, inst);
+      const pipe = this._pipeline(kind, mat, hasColor, tgt.format, inst, clip && (kind === 'basic' || kind === 'std'));
       if (!pipe) continue;
       if (pipe !== lastPipe) { pass.setPipeline(pipe); lastPipe = pipe; }
       const [bg, off] = this._writeObj(mesh, mat);
@@ -467,7 +468,7 @@ class Renderer {
     const hz = !plain && this.haze && this.haze.view() ? this.haze.uniforms() : null;
     for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
     d[go + 20] = this.eye && this.eye.on && !plain ? 1 : 0;   // (and no eye: the studio shot is the same by day and night)
-    d[go + 21] = plain ? 0 : this.hdrPeak; d[go + 22] = 0; d[go + 23] = 0;   // (the character view's canvas is plain sRGB: no HDR)
+    d[go + 21] = plain ? 0 : this.hdrPeak; d[go + 22] = this.clipBelow ?? 0; d[go + 23] = 0;   // (the character view's canvas is plain sRGB: no HDR)
     const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
     for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
     return slot * FRAME_BYTES;
@@ -749,14 +750,14 @@ class Renderer {
     }
     return { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
   }
-  _pipeline(kind, mat, hasColor, format, inst = false) {
+  _pipeline(kind, mat, hasColor, format, inst = false, clip = false) {
     const blend = kind === 'normal' ? undefined : this._blend(mat);
     const cull = kind === 'normal' ? 'none' : mat.side === M.DoubleSide ? 'none' : mat.side === M.BackSide ? 'front' : 'back';
     const depthCompare = !mat.depthTest ? 'always' : kind === 'normal' ? 'less-equal' : DEPTH_FUNC[mat.depthFunc] || 'less-equal';
     const depthWrite = kind === 'normal' ? true : !!mat.depthWrite;
     const writeMask = kind === 'normal' || mat.colorWrite ? GPUColorWrite.ALL : 0;
     const prog = kind === 'shader' ? 'shader' + mat.id : kind;
-    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format].join('|');
+    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format, clip].join('|');
     let p = this._pipelines.get(key);
     if (p !== undefined) return p;
     const buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }];
@@ -768,7 +769,7 @@ class Renderer {
       layout = info.layout;
       let loc = 2;
       for (const name in mat.attributes) { const [f, s] = ATTR_FORMAT[mat.attributes[name]]; buffers.push({ arrayStride: s, attributes: [{ shaderLocation: loc++, offset: 0, format: f }] }); }
-    } else code = builtinCode(kind, hasColor, inst);
+    } else code = builtinCode(kind, hasColor, inst, clip);
     if (inst) buffers.push(INSTANCE_LAYOUT);
     const module = this._module(code);
     try {

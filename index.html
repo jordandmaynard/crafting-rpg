@@ -5634,8 +5634,9 @@ if (MOBILE) outlineRT.colorFormat = 'rgba8unorm';
 const heatRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter });
 outlineRT.depthTexture.type = GFX.UnsignedIntType;
 // (v525, Jordan) mirrored proxy reflections: the docks and boats drawn again from a camera mirrored under the water
-// (layer 9: the boats, and a copy of every dock's deck that only this pass sees) into proxyRT, the water's plane
-// cutting away whatever lies below it (an oblique near plane). The water reads that picture for them, bent by its
+// (layer 9: the boats, and a copy of every dock's deck that only this pass sees) into proxyRT, whatever lies below
+// the water left out (renderer.clipBelow; v526: an oblique near plane did it in v525, but it squeezed the depths of
+// everything near the water together, and the hull's planks fought as the camera moved). The water reads that picture for them, bent by its
 // ripples, in place of the screen-space reflections, which skip any ray that meets a dock or boat (maskRT: their
 // depth from the real camera, to tell where the screen shows them). See SSR.proxy.
 const proxyRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
@@ -5644,18 +5645,6 @@ maskRT.depthTexture = new GFX.DepthTexture(1, 1); maskRT.depthTexture.type = GFX
 maskRT.colorFormat = 'rgba8unorm';
 if (MOBILE) proxyRT.colorFormat = 'rgba8unorm';
 const reflCam = new GFX.PerspectiveCamera(VIEW.fov, 1, 1, 400);
-// the camera's projection cut by the plane y = h (kept above it) in place of its near plane: Lengyel's oblique near
-// plane, in the GL convention the cameras use (the renderer turns the depth to 0..1 after)
-function obliqueClip(cam, h) {
-  const M = cam.projectionMatrix.elements, W = cam.matrixWorld.elements;
-  // the plane in the camera's own space: (the camera's world matrix, transposed) × (0, 1, 0, -h)
-  const cx = W[1], cy = W[5], cz = W[9], cw = W[13] - h;
-  const sg = v => v > 0 ? 1 : v < 0 ? -1 : 0;
-  const qx = (sg(cx) + M[8]) / M[0], qy = (sg(cy) + M[9]) / M[5], qz = -1, qw = (1 + M[10]) / M[14];
-  const s = 2 / (cx * qx + cy * qy + cz * qz + cw * qw);
-  M[2] = cx * s; M[6] = cy * s; M[10] = cz * s + 1; M[14] = cw * s;
-  cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
-}
 // the water level to mirror in: the boat you're on, else the boat or dock nearest the camera's target (within
 // PROXY_NEAR tiles); null when there's none
 const PROXY_NEAR = 70;
@@ -5687,13 +5676,13 @@ function renderProxies() {
   reflCam.up.set(0, 1, 0);
   reflCam.lookAt(e[12] - e[8], py + e[9], e[14] - e[10]);
   reflCam.updateMatrixWorld();
-  obliqueClip(reflCam, h - 0.02);
   WATER_U.ssrD.value.x = h;
   reflCam.layers.set(9);
   renderer.setClearColor(0x000000, 0);
   renderer.setRenderTarget(proxyRT); renderer.clear();
   renderer.passName = 'proxy reflections';
-  renderer.render(scene, reflCam);
+  renderer.clipBelow = h - 0.02;
+  try { renderer.render(scene, reflCam); } finally { renderer.clipBelow = null; }
   renderer.setRenderTarget(maskRT); renderer.clear();
   renderer.passName = 'proxy mask';
   cam.layers.set(9); renderer.render(scene, cam);
@@ -24248,7 +24237,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 525, crashSeen = new Map();
+const GAME_VERSION = 526, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

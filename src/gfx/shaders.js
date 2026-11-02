@@ -150,7 +150,7 @@ struct Frame {
   giC: vec4f,         // the height field: its first texel x, z, texels across
   hazeA: vec4f,       // lit haze (haze.js): on
   hazeB: vec4f,       // its texels (mosaic pixels) across, down
-  post: vec4f,        // eye adaptation on (exposure.js), HDR highlights' peak (× white; 0 without HDR)
+  post: vec4f,        // eye adaptation on (exposure.js), HDR highlights' peak (× white; 0 without HDR), clip height (see builtinCode)
   bloom: vec4f,       // bloom (bloom.js): strength (0 off), _, its texture coordinates a mosaic pixel (x, y)
 }
 struct Obj {
@@ -310,7 +310,9 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
 // the built-in materials, with or without a colour per vertex, and drawn once or as copies (inst: each copy placed
 // by its own matrix, after the object's)
 const INST_IN = '@location(8) i0: vec4f, @location(9) i1: vec4f, @location(10) i2: vec4f, @location(11) i3: vec4f,';
-export function builtinCode(kind, hasColor, inst = false) {
+// clip: drop whatever lies below the frame's post.z in the world (renderer.clipBelow: the game's water mirror)
+export function builtinCode(kind, hasColor, inst = false, clip = false) {
+  const cut = clip ? 'if (i.world.y < F.post.z) { discard; }' : '';
   const vin = `struct VIn { @location(0) position: vec3f, ${hasColor ? '@location(1) color: vec3f,' : ''} ${inst ? INST_IN : ''} }`;
   const col = hasColor ? 'v.color' : 'vec3f(1.0)';
   const model = inst ? '(O.model * mat4x4f(v.i0, v.i1, v.i2, v.i3))' : 'O.model';
@@ -340,10 +342,12 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }`;
   if (kind === 'basic') return head + `
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  ${cut}
   return vec4f(applyFog(O.color.rgb * i.color, viewDepth(i.world)), O.color.a);
 }`;
   return head + `
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  ${cut}
   let N = flatNormal(i.eye);
   let c = shadeLit(O.color.rgb * i.color, O.emissive.rgb, O.pbr.x, O.pbr.y, i.world, N, O.emissive.w > 0.5);
   return vec4f(applyFog(c, viewDepth(i.world)), O.color.a);
