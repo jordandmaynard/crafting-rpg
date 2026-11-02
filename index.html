@@ -209,7 +209,7 @@ img.px { display: block; image-rendering: pixelated; pointer-events: none; -webk
 #toast.calm { border-color: var(--wisp); color: var(--wisp); }
 /* (v457) discoveries, entering a place, the times of day: the kit's floating toast (v3: 558 x 151, title in 35, 77, 488 x 38),
    under the top banner, scaled by --toastS; the title shrinks to fit (toast) */
-/* (v471, Jordan) the framed toast hangs under the minimap's watch strip, centred on it and as wide as the case (toastScale 0.565 = 315 / 558), the frame turned upside down so
+/* (v473, Jordan) the framed toast hangs under the minimap's watch strip, centred on it and as wide as the case (toastScale 0.565 = 315 / 558), the frame turned upside down so
    its crest sits at the bottom; the badge and the title stay upright (badge 242,70 and title 35,36 in the flipped frame) */
 #toast.framed { left: calc(100vw - (var(--miniR, 20) + 157.5) * 1px * var(--ui, 1)); top: calc((var(--miniT, 18) + 380) * 1px * var(--ui, 1)); bottom: auto; width: 558px; height: 151px; max-width: none; padding: 0; border: 0; box-shadow: none; background: none; transform: translateX(-50%) scale(calc(var(--toastK, 0.565) * var(--ui, 1))); transform-origin: 50% 0; z-index: 6; }
 #toast.framed::before { content: ""; position: absolute; inset: 0; background: url("ui/top3/toast-frame.webp") 0 0 / 558px 151px no-repeat; transform: scaleY(-1); }
@@ -378,7 +378,7 @@ body.touch #belt, body.touch #beltCenter, body.noUI #belt, body.noUI #beltCenter
 body.building:not(.touch) { --barLift: calc(150px * var(--ui)); }
 
 /* the minimap in its casing, top right; the dev buttons in a row to its left */
-/* (v471, Jordan) the dev buttons and frame rate sit back at the minimap's top left */
+/* (v473, Jordan) the dev buttons and frame rate sit back at the minimap's top left */
 .hud.tr { right: calc(347px * var(--ui)); top: calc(18px * var(--ui)); flex-direction: row; align-items: flex-start; }
 #miniWrap.minimap { right: calc(var(--miniR, 20) * 1px * var(--ui)); top: calc(var(--miniT, 18) * 1px * var(--ui)); width: 315px; height: 378px; transform: scale(var(--ui)); transform-origin: top right; isolation: isolate; filter: drop-shadow(0 5px 5px #140c0799); }
 /* (the minimap and watch case B, v349: the map case over the watch's bezel, cut from one master at y 300) */
@@ -18861,7 +18861,7 @@ function spawnTick(dt) {
 // Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
 // the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
 // with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
-const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70, workMin: 25, workMax: 60, sayTime: 4.5, lieTime: 3.2, coverTime: 0.6, breathe: 0.05, sink: 15 };
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70, workMin: 25, workMax: 60, sayTime: 4.5, lieTime: 3.2, coverTime: 0.6, breathe: 0.05, sink: 24 };
 const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
 const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
 const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
@@ -19398,7 +19398,7 @@ function folkBedPose(p) {
     const up = bedV.set(0, 1, 0).applyQuaternion(bedQ1), hx = mx - F[0] * 0.62, hz = mz - F[1] * 0.62, hy = floorY + 0.6, r = h - 0.1 * sy;
     return { q: bedQ1, ox: hx - up.x * r, oy: hy - up.y * r, oz: hz - up.z * r, ux: up.x, uy: up.y, uz: up.z };
   };
-  let sitK = 0, lean = 0;
+  let sitK = 0, lean = 0, hipBend = 0;
   if (k < 0.2) {
     const a = ease(k / 0.2);
     f.g.position.set(P0x + (SPx - P0x) * a, p.y, P0z + (SPz - P0z) * a);
@@ -19419,12 +19419,16 @@ function folkBedPose(p) {
     f.g.position.set(hx - up.x * hipH, hy - up.y * hipH, hz - up.z * hipH);
     sitK = 1 - a;
   } else {
-    const L = lying(ease(Math.min(1, (k - 0.9) / 0.1)));
+    const sk = ease(Math.min(1, (k - 0.9) / 0.1)), L = lying(sk);
     f.g.quaternion.copy(L.q); f.g.position.set(L.ox, L.oy, L.oz);
+    hipBend = sk * FOLK.sink * Math.PI / 180;   // (v473, Jordan: the torso sinks, the legs stay level)
   }
-  f.sitK = sitK; f.lean = lean;
+  f.sitK = sitK; f.lean = lean; f.hipBend = hipBend;
   folkKit.pose(f, 'idle', p.bedPh === 'sleep' ? 0 : p.animT * 0.2);
-  f.sitK = 0; f.lean = 0;
+  f.sitK = 0; f.lean = 0; f.hipBend = 0;
+  // (v473, Jordan) nothing in their hands in bed, and no lute on their back
+  f.tool.visible = false;
+  if (f.lute && k > 0.3) f.lute.visible = false;
   if (p.bedPh === 'sleep') { p.sz0 = f.g.scale.z; f.g.scale.z = p.sz0 * (1 + FOLK.breathe * Math.sin(p.animT * 1.6)); }
   else p.sz0 = null;
   if (k <= 0) p.face = face0;
@@ -21861,7 +21865,7 @@ const TUNING = [
     [FOLK, 'workMax', 'Most time at work before moving about the shop (s)', 1, 240, 1],
     [FOLK, 'sayTime', 'How long what they say stays up (s)', 1, 15, 0.5],
     [FOLK, 'lieTime', 'Getting into bed / out of it (s)', 0.5, 8, 0.1],
-    [FOLK, 'sink', 'Asleep: body tipped feet-down into the mattress (degrees)', 0, 40, 1],
+    [FOLK, 'sink', 'Asleep: torso tipped down into the mattress, bent at the hips so the legs stay level (degrees)', 0, 45, 1],
     [FOLK, 'coverTime', 'Pulling the blanket up / back (s)', 0.1, 3, 0.1],
     [FOLK, 'breathe', 'Breathing while asleep', 0, 0.2, 0.01],
     [FOLK_READ, 'towns', 'Towns awake', 'readout', 0, 1],
@@ -22892,7 +22896,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 472, crashSeen = new Map();
+const GAME_VERSION = 473, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

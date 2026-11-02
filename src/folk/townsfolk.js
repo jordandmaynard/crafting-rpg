@@ -1064,6 +1064,7 @@ export function pose(f, anim, t) {
   f.tool.visible = anim !== 'carry' && anim !== 'sweep' && anim !== 'play';
   // (the busker's lute: on the back, or across the front to be played)
   if (f.lute) {
+    f.lute.visible = true;
     const L = f.lute, at = anim === 'play' ? f.luteFront : f.luteBack;
     L.position.set(at[0], at[1], at[2]);
     if (anim === 'play') L.rotation.set(0, Math.PI, LUTE_TILT); else L.rotation.set(0, 0, 0.6);
@@ -1172,6 +1173,8 @@ export function pose(f, anim, t) {
     bodyY *= 1 - k;
   }
   if (f.lean) f.chest.rotation.x += f.lean;
+  // (v473) bent forward at the hips by f.hipBend (asleep, sunk into the mattress: the legs kept level)
+  if (f.hipBend) { f.legL.rotation.x -= f.hipBend; f.legR.rotation.x -= f.hipBend; }
   f.body.position.y = bodyY - crouch;
   // (breathing sinks the body: the legs rise as much, so the feet stay on the ground)
   f.legL.position.y = f.legR.position.y = 0.36 - Math.min(0, bodyY);
