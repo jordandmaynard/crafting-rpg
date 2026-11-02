@@ -18873,9 +18873,18 @@ function folkOpen(t, i) {
   if (TN[i] !== t.n + 1 || !LV[i] || WT[i] || LAVA[i] || stairAt.has(i)) return false;
   const o = OBJ[OB[i]];
   if (o.tile || o.solid >= 0.1) return false;
+  // (v463, Jordan: one walked into the cathedral's side) nothing round standing on it: towers, buttresses, columns
+  if (pillars.has(i)) return false;
   return !(t.fount && Math.abs(c - t.c) <= 1 && Math.abs(r - t.r) <= 1);
 }
 const folkStreet = i => !!(TSTREET[i] || PATH[i]);
+// a tile with something round beside it (a tower or buttress can reach over the tile's edge): walked through square,
+// tile centre to tile centre, never cut across on a diagonal or a straight-line shortcut
+function folkTight(i) {
+  const c = i % N, r = Math.floor(i / N) % N;
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) if (pillars.has(T(c + dc, r + dr))) return true;
+  return false;
+}
 // The town's people (made the first time it wakes; the same every time, from the world's seed): each house's, its
 // job fitting the town's size (the tannery's a tanner, the smithy's a smith, the cathedral's clergy), with a seed
 // whose design gives that job.
@@ -19042,7 +19051,7 @@ function folkRoute(t, a, b) {
         const op = [0, 1, 2, 3].map(d => open(c, r, d));
         for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
           const dH = dx > 0 ? 1 : 3, dV = dz > 0 ? 2 : 0;
-          if (op[dH] && op[dV] && open(c + dx, r, dV) && open(c, r + dz, dH)) step(0, c + dx, r + dz, 1.414);
+          if (op[dH] && op[dV] && open(c + dx, r, dV) && open(c, r + dz, dH) && !folkTight(i) && !folkTight(T(c + dx, r + dz))) step(0, c + dx, r + dz, 1.414);
         }
       }
     }
@@ -19371,7 +19380,7 @@ function updateFolk(dt) {
         if (p.ri < R.length) {
           tx = R[p.ri] % N + 0.5; tz = Math.floor(R[p.ri] / N) % N + 0.5;
           if (!p.up) for (let j = Math.min(R.length, p.ri + 4) - 1; j > p.ri; j--) {
-            let ok = true; for (let q = p.ri + 1; q <= j; q++) if (!plain(R[q])) ok = false;
+            let ok = !folkTight(here); for (let q = p.ri; q <= j; q++) if (!plain(R[q]) || folkTight(R[q])) ok = false;
             if (!ok) continue;
             const cx = j === R.length - 1 ? p.gx : R[j] % N + 0.5, cz = j === R.length - 1 ? p.gz : Math.floor(R[j] / N) % N + 0.5;
             if (walkLine(p.x, p.z, cx, cz)) { tx = cx; tz = cz; break; }
@@ -22732,7 +22741,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 462, crashSeen = new Map();
+const GAME_VERSION = 463, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
