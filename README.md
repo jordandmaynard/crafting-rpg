@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v490:** Jordan's HUD paste: miniRight -13, miniTop -3, tagScale 1.49, placeSize 12, placeWeight 600. Time of day moved up 2 kit px (top 400), to sit midway between the place name and the tag's bottom edge.
+
 **v489:** Minimap place tag settings (Jordan, T > HUD bars): tagScale (the parchment tag and its two lines, scaled about the tag's top centre; the tag is cut from the housing art below its frame and drawn again in .tagWrap), placeSize / placeWeight / placeStroke and timeSize / timeWeight / timeStroke (black text stroke). Time of day is italic. Spectral now loads 400-800 in both styles. The north-lock padlock moved onto the ring's south-east edge (centre 284,274).
 
 **v488:** Jordan's health bar paste: delay 0.6, trailRate 20, flashFade 5.1, lost #990000, hot #fe3e3e.
