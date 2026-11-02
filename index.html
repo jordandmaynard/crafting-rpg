@@ -13863,7 +13863,7 @@ function groundStep(c, r, d, foe) {
   if (nc < 0 || nr < 0 || nc >= N || nr >= N) return false;
   const i = T(c, r), n = T(nc, nr);
   if (foe && stairAt.has(n)) return false;   // (nothing wild climbs your stairs)
-  if (!terrainOpen(i, n, d) || OBJ[OB[n]].tile) return false;
+  if (!terrainOpen(i, n, d) || (OBJ[OB[n]].tile && !(moverHero && seatAt(0, n)))) return false;   // (v537: you walk over seats)
   if (foe && BI[n] === TOWN && BI[i] !== TOWN) return false;
   // nothing wild walks into lava (you can, if you must)
   const w = wallOn(c, r, d);
@@ -13882,7 +13882,7 @@ function enterOpen(c, r, d, k, b) {
   const below = k ? stairAt.get((k - 1) * SNN + b) : null;
   if (below) return b === below.t1 && d === ((below.d + 2) & 3) && wallOpen(c, r, d, k);
   if (!k) return groundStep(c, r, d, false);
-  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && !PROP_AT.has(k * SNN + b) && wallOpen(c, r, d, k);
+  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && (!PROP_AT.has(k * SNN + b) || !!seatAt(k, b)) && wallOpen(c, r, d, k);
 }
 function heroStep(c, r, d) {
   const nc = c + DC[d], nr = r + DR[d];
@@ -15368,10 +15368,12 @@ const HOT = ['sword_wood', 'bow_wood', 'spear_wood', 'axe_wood', 'hammer_wood', 
 let hotSel = 0;
 const hotUsable = id => !!id && !!ITEMS[id] && ITEMS[id].slot === 'weapon';
 // building materials are counted out of the pack (H.wood and H.stone read it; addItem and takeItem change it)
-Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') } });
+Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') },
+  // (v537) at a boat's wheel or sat down: weapon away, no attacks, rolls or abilities
+  still: { get: () => !!(H.helm || H.seat) } });
 const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
 function useAbility(key) {
-  if (H.helm) { sfx.nope(); return; }
+  if (H.still) { sfx.nope(); return; }
   const a = weapon()[key];
   if (a) ABILITY[a].cast();
   else if (mode === 'play' && H.alive) sfx.nope();
@@ -15388,11 +15390,11 @@ const DRESS = {
   coifChain: () => setOn('head') === 'chain', skirtChain: () => setOn('chest') === 'chain',
   crestPlate: () => plated('head'), breastPlate: () => plated('chest'), breastTrim: () => plated('chest'), kneesPlate: () => plated('legs'),
   pauldron: () => FANTASY_SET[setOn('chest')] >= 0, pauldronTop: () => FANTASY_SET[setOn('chest')] >= 2,
-  sword: () => !H.helm && weapon().kind === 'sword',
-  bow: () => !H.helm && weapon().kind === 'bow',
-  spear: () => !H.helm && weapon().kind === 'spear',
-  axe: () => !H.helm && weapon().kind === 'axe',
-  hammer: () => !H.helm && weapon().kind === 'hammer',
+  sword: () => !H.still && weapon().kind === 'sword',
+  bow: () => !H.still && weapon().kind === 'bow',
+  spear: () => !H.still && weapon().kind === 'spear',
+  axe: () => !H.still && weapon().kind === 'axe',
+  hammer: () => !H.still && weapon().kind === 'hammer',
   ...Object.fromEntries(WEAPON_TIERS.map(t => ['tier_' + t, () => weapon().tier === t])),
 };
 const DRESS_MAT = {
@@ -16241,11 +16243,11 @@ function updateBar() {
       el.title = costTip(s.cat ? KIND_SLOT[cost].name : s.name, cost);
     }
     if (mode === 'build') el.classList.toggle('on', s.cat ? catOf(buildKind) === s.cat : buildKind === s.id);
-    else if (TOUCH_IDS.includes(s.id)) el.classList.toggle('locked', !!s.locked || !!H.helm);
+    else if (TOUCH_IDS.includes(s.id)) el.classList.toggle('locked', !!s.locked || H.still);
   }
 }
 // (v496) at a boat's wheel the touch attack buttons grey out too
-function renderTouchLocks() { for (const { s, el } of touchEls) el.classList.toggle('locked', !!s.locked || !!H.helm); }
+function renderTouchLocks() { for (const { s, el } of touchEls) el.classList.toggle('locked', !!s.locked || H.still); }
 function renderStats() {
   updateBar();
 }
@@ -17087,7 +17089,7 @@ function respawn() {
     if (stepOpen(h.c, h.r, d, false) && !OBJ[OB[n]].solid) { at = [h.c + 0.5 + DC[d] * 0.85, h.r + 0.5 + DR[d] * 0.85]; break; }
   }
   [H.x, H.z] = at || [spawn.x, spawn.z];
-  H.story = 0; H.stair = null; H.boat = null; if (H.helm) setHelm(false);
+  H.story = 0; H.stair = null; H.boat = null; if (H.helm) setHelm(false); if (H.seat) standUp(true);
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.alive = true; H.invuln = 2;
   H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
   renderHp();
@@ -17128,6 +17130,8 @@ addEventListener('keydown', e => {
     if (/^(KeyW|ArrowUp|KeyS|ArrowDown)$/.test(e.code)) { e.preventDefault(); keys.add(e.code); if (!e.repeat) { H.notchT = 0; boatSails(e.code === 'KeyW' || e.code === 'ArrowUp' ? 1 : -1); } return; }
     if (/^(Space|ShiftLeft|ShiftRight|KeyQ|KeyE)$/.test(e.code)) { e.preventDefault(); return; }
   }
+  // (v537) sat down: no rolling, jumping or abilities either
+  if (H.seat && mode === 'play' && /^(Space|ShiftLeft|ShiftRight|KeyQ|KeyE)$/.test(e.code)) { e.preventDefault(); return; }
   if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) toggleInv(); return; }
   if (e.code === 'Escape' && craftAt) { toggleCraft(null); return; }
   if (e.code === 'Escape' && invOpen) { toggleInv(false); return; }
@@ -17511,7 +17515,7 @@ function updateAim() {
     const m = moveInput();
     if (TOUCH.aim) {
       aim.x = TOUCH.aim[0]; aim.z = TOUCH.aim[1];
-      if (!m && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip && !H.bow && !H.spear) H.face = Math.atan2(aim.x, aim.z);
+      if (!m && !H.still && H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip && !H.bow && !H.spear) H.face = Math.atan2(aim.x, aim.z);
     } else if (m) { aim.x = m[0]; aim.z = m[1]; }
     else { aim.x = Math.sin(H.face); aim.z = Math.cos(H.face); }
     return;
@@ -17539,7 +17543,7 @@ function updateAim() {
 // ---------- Abilities ----------
 // the sword's three-stroke combo, or with bare hands a right and a left jab
 function startSwing() {
-  if (H.helm) return;
+  if (H.still) return;
   if (weapon().strike === 'shoot') { startShot('shot'); return; }
   if (weapon().strike === 'poke') { startSpear('poke'); return; }
   if (H.swing >= 0 || H.whirl >= 0 || H.lunge >= 0 || H.dash >= 0 || H.flip) return;
@@ -18328,7 +18332,7 @@ const AIM_NAMES = ['shot', 'volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boom
 // which shape shows now: a held aimed ability's, else the bow's shot while the attack's held
 function aimName() {
   if (aimForce >= 0) return AIM_NAMES[aimForce];
-  if (mode !== 'play' || !H.alive || invOpen || H.helm) return null;   // (v506: none at a boat's wheel)
+  if (mode !== 'play' || !H.alive || invOpen || H.still) return null;   // (v506: none at a boat's wheel)
   const w = weapon();
   for (const key of ['e', 'q']) if ((abilHeld[key] || TOUCH.hold === key) && AIMED.has(w[key])) return w[key];
   if (w.strike === 'shoot' && (mouse.down || PAD.attack || TOUCH.attack)) return 'shot';
@@ -18566,7 +18570,7 @@ function updateHarpoon(dt) {
   chainLinks.count = n; chainLinks.needsUpdate = true;
 }
 function castDash() {
-  if (H.helm || !H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
+  if (H.still || !H.alive || H.cdDash > 0 || H.dash >= 0 || H.flip) return;
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
@@ -18839,6 +18843,7 @@ const doorsNear = () => [...doors.values()].map(d => [d, d.w ? d.c : d.c + 0.5, 
 function actionHere() {
   if (mode !== 'play' || !H.alive) return null;
   if (H.helm) return { kind: 'helm', x: H.x, z: H.z };   // (v494: at the wheel, F only lets go of it)
+  if (H.seat) return { kind: 'stand', x: H.x, z: H.z };   // (v537: sat down, F only stands you up)
   const opts = [], near = dropsNear(), dist = o => Math.hypot(o.x - H.x, o.z - H.z);
   if (nearHelm()) { const [x, z] = boatWorld(H.boat, 0, BOAT.wheelV); opts.push({ kind: 'helm', x, z }); }
   if (near.length) { const d = near.reduce((a, b) => dist(b) < dist(a) ? b : a); opts.push({ kind: 'loot', drops: near, x: d.x, z: d.z }); }
@@ -18847,6 +18852,7 @@ function actionHere() {
   for (const t of tablesNear()) opts.push({ kind: 'table', table: t, x: t.x, z: t.z });
   for (const st of stationsNear()) { const [x, z] = stMid(st); opts.push({ kind: 'station', st, x, z }); }
   for (const [d, x, z] of doorsNear()) opts.push({ kind: 'door', door: d, x, z });
+  { const sq = seatHere(); if (sq) opts.push({ kind: 'sit', seat: sq, x: H.x, z: H.z }); }
   // (v452) someone to talk to (not while they're still answering you)
   const fp = folkNear();
   if (fp && !(folkTalk && folkTalk.p === fp && folkTalk.t > 0)) opts.push({ kind: 'folk', p: fp, x: fp.x, z: fp.z });
@@ -18863,7 +18869,64 @@ function useAction() {
   else if (a.kind === 'station') { if (openSt === a.st && invOpen) toggleInv(false); else openStation(a.st); }
   else if (a.kind === 'folk') talkFolk(a.p);
   else if (a.kind === 'helm') boatHelm();
+  else if (a.kind === 'sit') sitDown(a.seat);
+  else if (a.kind === 'stand') standUp();
   else useDoor(a.door);
+}
+// ----- sitting (v537, Jordan) -----
+// Benches, chairs and stools can be walked over; F on one sits you down (on a bench, facing a table beside it if
+// there's one), your weapon put away and attacks, rolls and abilities off as at a boat's wheel; F again stands you up.
+const SEAT_IDS = new Set(['bench', 'chair', 'stool']);
+const SIT = { ease: 0.25, drop: 0.02, thigh: 1.45, knee: 1.45, arms: 0.5 };
+function seatAt(k, i) { const q = PROP_AT.get(k * SNN + i); return q && SEAT_IDS.has(q.id) ? q : null; }
+// the seat you're standing on: { q, c, r, k }
+function seatHere() {
+  if (H.stair || H.boat || H.flip || H.dash >= 0) return null;
+  const c = Math.floor(H.x), r = Math.floor(H.z), q = seatAt(H.story, T(c, r));
+  return q ? { q, c, r, k: H.story } : null;
+}
+function sitDown(s) {
+  // which way you face: a chair or stool the way it's set (toward its table); a bench toward a table beside your tile
+  let f = s.q.f;
+  if (s.q.id === 'bench') {
+    for (let d = 0; d < 4; d++) {
+      const t = PROP_AT.get(s.k * SNN + T(s.c + DC[d], s.r + DR[d]));
+      if (t && /table|desk/i.test(t.id)) { f = d; break; }
+    }
+  }
+  H.seat = { q: s.q, x: s.c + 0.5, z: s.r + 0.5, face: Math.atan2(DC[f], DR[f]) };
+  H.swing = -1; H.bow = H.spear = null; H.moving = false;
+  dressHero(); renderStats(); renderTouchLocks();
+}
+function standUp(now = false) {
+  if (!H.seat) return;
+  H.seat = null;
+  if (now) H.sitK = 0;
+  dressHero(); renderStats(); renderTouchLocks();
+}
+// each frame: settle onto the seat (and off it), and stand up if anything takes you out of play
+function updateSit(dt) {
+  if (H.seat && (mode !== 'play' || !H.alive)) standUp();
+  const goal = H.seat ? 1 : 0, rate = dt / Math.max(0.05, SIT.ease);
+  H.sitK = goal > (H.sitK || 0) ? Math.min(1, (H.sitK || 0) + rate) : Math.max(0, (H.sitK || 0) - rate);
+  if (H.seat) {
+    const k = 1 - Math.exp(-dt * 14);
+    H.x += (H.seat.x - H.x) * k; H.z += (H.seat.z - H.z) * k;
+    H.face += angDiff(H.seat.face, H.face) * k;
+  }
+}
+// the sitting pose, over whatever the rest of animateHero set, by H.sitK: thighs out level, shins hanging, hands in the lap
+function sitPose() {
+  const k = smooth(0, 1, H.sitK || 0);
+  if (k <= 0) return;
+  const mix = (a, b) => a + (b - a) * k;
+  hero.legL.rotation.set(mix(hero.legL.rotation.x, -SIT.thigh), hero.legL.rotation.y * (1 - k), hero.legL.rotation.z * (1 - k));
+  hero.legR.rotation.set(mix(hero.legR.rotation.x, -SIT.thigh), hero.legR.rotation.y * (1 - k), hero.legR.rotation.z * (1 - k));
+  hero.knees[0].rotation.x = mix(hero.knees[0].rotation.x, SIT.knee); hero.knees[1].rotation.x = mix(hero.knees[1].rotation.x, SIT.knee);
+  hero.armL.rotation.x = mix(hero.armL.rotation.x, -SIT.arms); hero.armR.rotation.x = mix(hero.armR.rotation.x, -SIT.arms);
+  hero.body.rotation.z *= 1 - k;
+  hero.body.position.y = mix(hero.body.position.y, -SIT.drop);
+  hero.legL.position.y = hero.legR.position.y = 0.36 - Math.min(0, hero.body.position.y);
 }
 function useDoor(d = nearDoor()) {
   if (!d || !H.alive) return;
@@ -21304,11 +21367,12 @@ function update(dt) {
   H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt; H.boost = Math.max(0, (H.boost || 0) - dt);
   updateAim();
   updateBoats(dt);
+  updateSit(dt);
 
   spikes.enter('update: hero');
   // ----- hero -----
   if (H.alive) {
-    const m = H.helm ? null : moveInput();   // (v494: at a boat's wheel, W and S work the sails instead)
+    const m = H.still ? null : moveInput();   // (v494: at a boat's wheel, W and S work the sails instead)
     let vx = 0, vz = 0;
     H.canJump = heroUp() || H.boat ? null : jumpEdge(m);
     if (H.flip) {
@@ -21356,7 +21420,7 @@ function update(dt) {
     vx += H.kx; vz += H.kz;
     H.kx *= Math.exp(-dt * 9); H.kz *= Math.exp(-dt * 9);
     const x0 = H.x, z0 = H.z;
-    const moved = H.flip || H.helm ? 0 : H.boat ? boatWalk(vx * dt, vz * dt) : moveEntity(H, vx * dt, vz * dt, 0.26, false);
+    const moved = H.flip || H.still ? 0 : H.boat ? boatWalk(vx * dt, vz * dt) : moveEntity(H, vx * dt, vz * dt, 0.26, false);
     if (!H.boat) boatBoard();
     if (H.lunge >= 0 && H.lungeKind === 'charge') chargeMoved(dt, moved, Math.hypot(vx - H.kx, vz - H.kz) * dt);
     H.moving = moved > dt * 0.5;
@@ -21372,7 +21436,7 @@ function update(dt) {
     else { heroSettle(); if (!H.flip) H.y = heroFloorY(); }
 
     // attacks
-    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear && !H.helm) startSwing();
+    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear && !H.still) startSwing();
     if (H.bow) updateBow(dt);
     if (H.spear) updateSpear(dt);
     if (H.axeWind >= 0) updateAxeWind(dt);
@@ -21563,6 +21627,9 @@ function update(dt) {
     } else if (act.kind === 'folk') {
       pr.innerHTML = key + 'TALK TO ' + act.p.d.name.full.toUpperCase();
       v3.set(act.p.x, act.p.y + 1.05 * act.p.rig.g.scale.y + 0.25, act.p.z);
+    } else if (act.kind === 'sit' || act.kind === 'stand') {
+      pr.innerHTML = key + (act.kind === 'sit' ? 'SIT' : 'STAND UP');
+      v3.set(H.x, H.y + 1.6, H.z);
     } else if (act.kind === 'helm') {
       pr.innerHTML = key + (H.helm ? 'DROP ANCHOR' : 'TAKE THE WHEEL') + (H.boat && H.boat.livery ? ' <span class="boatName">· ' + H.boat.livery.name.toUpperCase() + '</span>' : '');   // (v515: the boat's name)
       v3.set(H.x, H.y + 2.2, H.z);
@@ -21916,10 +21983,10 @@ function fitText(e, base) {
 if (document.fonts) document.fonts.ready.then(() => { placeFit = false; fitPlace(); });
 const plateName = n => { const t = titleCase(n); return t.charAt(0).toUpperCase() + t.slice(1); };
 function animateHero(dt) {
-  const bowHeld = mode === 'play' && H.alive && !H.helm && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
+  const bowHeld = mode === 'play' && H.alive && !H.still && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
   bowUp = H.bow || bowHeld ? Math.min(1, bowUp + dt / 0.12) : Math.max(0, bowUp - dt / 0.2);
-  hamPlan = mode === 'play' && H.alive && !H.helm && weapon().kind === 'hammer' && H.dash < 0 && !H.flip ? hammerPlan() : null;
-  axPlan = mode === 'play' && H.alive && !H.helm && weapon().kind === 'axe' && H.dash < 0 && !H.flip ? axePlan() : null;
+  hamPlan = mode === 'play' && H.alive && !H.still && weapon().kind === 'hammer' && H.dash < 0 && !H.flip ? hammerPlan() : null;
+  axPlan = mode === 'play' && H.alive && !H.still && weapon().kind === 'axe' && H.dash < 0 && !H.flip ? axePlan() : null;
   // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
   // foot slides forward under you), and a sidestep that opens the legs and closes them again, leading with
@@ -22195,6 +22262,7 @@ function animateHero(dt) {
   if (hamPlan && !tucked) hammerHands();
   if (axPlan && !tucked) weaponHands(axPlan, hero.axe);
   if (H.helm && H.boat && !tucked) helmHands();
+  sitPose();
 }
 // (v496, Jordan) both hands on the wheel's rim, up either side of the hub (the left hand at the rim's upper left, the
 // right at its upper right), following it round by BOAT.grip as it turns; the elbows out and down
@@ -24631,7 +24699,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 536, crashSeen = new Map();
+const GAME_VERSION = 537, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
