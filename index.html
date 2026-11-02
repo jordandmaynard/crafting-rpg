@@ -13980,6 +13980,12 @@ const FOE = {
   // roads by humanTick, not by the biomes; loot: [item, chance, most] dropped on a kill
   footpad: { human: true, name: 'Footpad', hp: 30, dmg: 7, speed: 3.1, reach: 0.9, aggro: 8, rad: 0.22, loot: [['bread', 0.35, 1]] },
   bandit: { human: true, name: 'Bandit', hp: 42, dmg: 9, speed: 2.9, reach: 0.95, aggro: 9, rad: 0.24, loot: [['bread', 0.3, 2], ['leather', 0.3, 2]] },
+  // (v544) the forests' poachers (bows mostly), the coasts' and snows' raiders, the graveyards' robbers by night,
+  // and the open road's highwaymen at dusk and after (a crossbow or a sword)
+  poacher: { human: true, name: 'Poacher', hp: 34, dmg: 8, speed: 3.0, reach: 0.9, aggro: 11, rad: 0.22, loot: [['hide', 0.5, 2], ['leather', 0.2, 1], ['bone', 0.3, 2]] },
+  raider: { human: true, name: 'Raider', hp: 60, dmg: 13, speed: 3.0, reach: 1.0, aggro: 9, rad: 0.26, loot: [['ironIngot', 0.3, 2], ['copperIngot', 0.3, 2], ['bread', 0.3, 2]] },
+  graveRobber: { human: true, name: 'Grave robber', hp: 36, dmg: 9, speed: 2.8, reach: 1.0, aggro: 8, rad: 0.23, loot: [['bone', 0.5, 3], ['copperIngot', 0.15, 1]] },
+  highwayman: { human: true, name: 'Highwayman', hp: 50, dmg: 12, speed: 3.3, reach: 0.95, aggro: 11, rad: 0.23, loot: [['ironIngot', 0.3, 1], ['leather', 0.3, 2], ['bread', 0.3, 1]] },
 };
 
 // ---------- Movement and collision ----------
@@ -18150,7 +18156,14 @@ function flyArrowSteps(a, dt) {
     const x0 = a.x, z0 = a.z;
     a.x += a.vx * h; a.y += a.vy * h; a.z += a.vz * h; a.flown += Math.hypot(a.vx, a.vz) * h;
     if (a.x < 1 || a.z < 1 || a.x >= N - 1 || a.z >= N - 1) { a.dead = true; return; }
-    const f = arrowFoe(a);
+    // (v544) a poacher's arrow or a highwayman's bolt is after you, not the foes
+    if (a.hostile) {
+      const up = a.y - H.y;
+      if (H.alive && up > -0.2 && up < 1.4 && Math.hypot(H.x - a.x, H.z - a.z) < 0.3) {
+        deathCause = a.cause; hurtHero(a.dmg, a.x - a.vx * 0.05, a.z - a.vz * 0.05, a.lvl); a.dead = true; return;
+      }
+    }
+    const f = a.hostile ? null : arrowFoe(a);
     if (f) {
       const hl = Math.hypot(a.vx, a.vz) || 1;
       hurtFoe(f, a.dmg, a.rain ? a.fromX : f.x - a.vx / hl, a.rain ? a.fromZ : f.z - a.vz / hl, a.knock * 8);
@@ -21289,11 +21302,28 @@ function drawFolk() {
 // overhead chop), a dagger the punch's straight jab, a spear a level poke. Seen you, they square up (the brandish);
 // hit, they flinch; killed, they fall back and lie a while, then sink away. They come along the roads (humanTick):
 // footpads alone in danger bands 1-3, bandits 2-4 together in bands 2-6, in the meadows and forests (WILD_WHERE).
+// (v544) Poachers, raiders, grave robbers and highwaymen too, each where WILD_WHERE says (HUMAN_SPOT); a bow or
+// crossbow shoots from range (HUMAN_RANGED, humanShoot: arrows in `arrows`, marked hostile, that hit the hero).
 // cap: people about at once; every: seconds between tries; lie, sink: seconds a body lies, and sinks
 const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 4, sink: 1.5 };
 const HUMAN_KINDS = Object.keys(FOE).filter(k => FOE[k].human && WILD_WHERE[k]);
 const WILD_BIOME = { meadow: MEADOW, forest: FOREST, swamp: SWAMP, graveyard: GRAVE, snow: SNOW, desert: DESERT, 'deep forest': DEEP, 'blasted wastes': WASTES };
 const humanFallen = [];
+// (v544) shooters: range (tiles) they shoot from, back (tiles) inside which they step away between shots, cd (s) between
+// shots, speed (tiles/s) of the arrow or bolt and dmg (times the kind's dmg). They loose straight at where you stand.
+const HUMAN_RANGED = {
+  shortbow: { range: 9, back: 3.5, cd: 1.5, speed: 20, dmg: 1 },
+  crossbow: { range: 11, back: 4, cd: 2.6, speed: 28, dmg: 1.3 },
+};
+function humanShoot(f) {
+  const R = f.ranged, y = f.y + 0.78 * f.rig.g.scale.y, dx = H.x - f.x, dz = H.z - f.z, l = Math.hypot(dx, dz) || 1;
+  // (from the bow hand, a little ahead and to the left of the body)
+  const ox = Math.sin(f.face) * 0.3 + Math.cos(f.face) * 0.1, oz = Math.cos(f.face) * 0.3 - Math.sin(f.face) * 0.1;
+  arrows.push({ state: 'fly', hostile: true, x: f.x + ox, y, z: f.z + oz, vx: dx / l * R.speed, vy: (H.y + 0.75 - y) / (l / R.speed), vz: dz / l * R.speed, flown: 0,
+    range: R.range * 1.6, dmg: Math.round(f.def.dmg * R.dmg), lvl: f.level || 1, knock: 0, life: 0,
+    cause: 'Shot down by a ' + f.def.name.toLowerCase() + ' in ' + titleCase(regionName) + '.' });
+  if (Math.hypot(dx, dz) < 16) sfx.bow();
+}
 // a person of this kind: their build, baked, in a mesh of their own
 function humanRig(kind) {
   let d = null;
@@ -21315,6 +21345,10 @@ function humanRig(kind) {
 function humanFoe(f) {
   const r = f.rig;
   if (r.d.prop === 'spear') f.def = { ...f.def, reach: f.def.reach + 0.35 };
+  // (v544) a shovel's swung from the end of its haft, reaching further
+  if (r.d.prop === 'shovel') f.def = { ...f.def, reach: f.def.reach + 0.3 };
+  f.ranged = HUMAN_RANGED[r.d.prop] || null;
+  f.toolY = r.tool.position.y;
   f.base = 1; f.topH = r.g.scale.y * 0.95; f.walkT = Math.random() * 9; f.animT = Math.random() * 20; f.combo = 2; f.lastAtk = -9;
   f.who = r.d.name.full;
 }
@@ -21361,8 +21395,25 @@ function poseHuman(f, dt, sp) {
   f.animT += dt;
   // (the walk at the hero's cadence: WALK.cadence of the cycle a tile)
   if (moving) f.walkT += dt * sp * WALK.cadence / 4.2;
-  folkKit.pose(r, f.atk >= 0 ? 'idle' : moving ? 'walk' : f.aggro ? 'brandish' : 'idle', moving ? f.walkT : f.animT);
-  if (f.atk >= 0) {
+  folkKit.pose(r, f.atk >= 0 ? (f.ranged ? 'brandish' : 'idle') : moving ? 'walk' : f.aggro ? 'brandish' : 'idle', moving ? f.walkT : f.animT);
+  r.tool.position.y = f.toolY;
+  if (f.atk >= 0 && f.ranged) {
+    // (v544) the bow or crossbow levelled at you (the brandish's aim), as the hero shoots: drawn back over the wind-up
+    // (the string hand to the chin), loosed as the blow would land, the bow arm kicking and the hand flying back past
+    // the ear; a crossbow is braced, kicks up as it looses and comes down again to be wound
+    const u = Math.min(1, f.atk / 0.85), draw = smooth(0, 0.5, u), loose = smooth(0.52, 0.58, u), back = smooth(0.58, 1, u);
+    if (wp === 'shortbow') {
+      r.armR.rotation.z = -0.55 - 0.3 * draw * (1 - loose) - 0.45 * loose * (1 - back);
+      r.elbows[1].rotation.x = -1.7 - 0.45 * draw * (1 - loose) - 0.2 * loose * (1 - back);
+      r.armR.rotation.y = -0.25 * loose * (1 - back);
+      r.armL.rotation.x = -1.45 + 0.12 * loose * (1 - smooth(0.6, 0.75, u));
+    } else {
+      const kick = loose * (1 - smooth(0.6, 0.8, u));
+      r.armL.rotation.x = -1.45 - 0.25 * kick; r.armR.rotation.x = -1.35 - 0.25 * kick;
+      r.chest.rotation.x -= 0.08 * kick;
+    }
+    r.tool.rotation.x = -(r.chest.rotation.x + r.armL.rotation.x + r.elbows[0].rotation.x + r.wrists[0].rotation.x);
+  } else if (f.atk >= 0) {
     const P = SWORD_POSE, u = Math.min(1, f.atk / 0.85), W = HUMAN_POSE.windup, S = HUMAN_POSE.cut;
     let ax = 0, ay = 0, az = -0.08, elbowR = 0, elbowL = 0, chestX = 0, chestY = 0, hips = 0, offX = -0.25, offZ = 0.08;
     const legAdd = [0, 0], kneeAdd = [0, 0], wr = [0, 0, 0];
@@ -21416,8 +21467,10 @@ function poseHuman(f, dt, sp) {
     r.body.position.y -= legDrop(r.legL.rotation.x, r.knees[0].rotation.x, r.legR.rotation.x, r.knees[1].rotation.x);
     r.ankles[0].rotation.x = -(r.legL.rotation.x + r.knees[0].rotation.x);
     r.ankles[1].rotation.x = -(r.legR.rotation.x + r.knees[1].rotation.x);
-    // a spear lies level, pointing ahead; the rest hang from the fist along the arm
-    r.tool.rotation.set(wp === 'spear' ? Math.PI / 2 - (chestX + ax + elbowR + wr[0]) : 0, 0, 0);
+    // a spear lies level, pointing ahead; a torch is turned flame foremost and a shovel gripped at the end of its haft,
+    // the blade out ahead and tipped down to your height; the rest hang from the fist along the arm
+    r.tool.rotation.set(wp === 'spear' ? Math.PI / 2 - (chestX + ax + elbowR + wr[0]) : wp === 'torch' ? Math.PI : 0, 0, 0);
+    if (wp === 'shovel') { r.tool.position.y = f.toolY - 0.5; r.tool.rotation.x = 0.8; }
   }
   // hit: a flinch back from the blow
   if (f.hitT < 0.3) {
@@ -21428,8 +21481,19 @@ function poseHuman(f, dt, sp) {
   f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
   f.shadow.position.set(f.x, f.y + 0.02, f.z);
 }
-// people along the roads: now and then a road tile some way off (in a biome and danger band one of HUMAN_KINDS keeps
-// to, out of town) gets a footpad, or a band of bandits
+// people in the wilds: now and then (HUMAN.every) one of HUMAN_KINDS out at this hour (WILD_WHERE's time) is put
+// somewhere some way off that suits it (HUMAN_SPOT) in a biome and danger band it keeps to, out of town, with the
+// rest of its band about it: footpads, bandits and highwaymen on the roads, poachers in the woods off them, grave
+// robbers in the graveyards, raiders along the coasts (any biome) and in the snows
+const HUMAN_SPOT = { footpad: 'road', bandit: 'road', highwayman: 'road', poacher: 'off', raider: 'coast', graveRobber: 'any' };
+const nearSea = (c, r, n = 2) => { for (let dr = -n; dr <= n; dr++) for (let dc = -n; dc <= n; dc++) if (SEA[T(clamp(c + dc, 0, N - 1), clamp(r + dr, 0, N - 1))]) return true; return false; };
+function humanSuits(kind, i, c, r) {
+  const w = WILD_WHERE[kind], band = BAND[i] || 1, spot = HUMAN_SPOT[kind] || 'any';
+  if (band < w.bands[0] || band > w.bands[1]) return false;
+  if (spot === 'road' ? !PATH[i] : spot === 'off' ? !!PATH[i] : false) return false;
+  return w.biomes.some(b => WILD_BIOME[b] === BI[i] || (b === 'coast' && nearSea(c, r)));
+}
+const humanHour = k => { const t = WILD_WHERE[k].time, dl = daylight(); return t === 'night' ? dl < 0.35 : t === 'dusk/night' ? dl < 0.6 : true; };
 let humanT = 6;
 function humanTick(dt) {
   humanT -= dt;
@@ -21438,18 +21502,19 @@ function humanTick(dt) {
   if (heroInTown() || !HUMAN_KINDS.length) return;
   const have = foes.reduce((n, f) => n + (f.rig ? 1 : 0), 0);
   if (have >= HUMAN.cap) return;
-  for (let tries = 0; tries < 40; tries++) {
+  // (each kind out now, in a random order, looked for a place in turn, so the roads' kinds aren't crowded out by the
+  // kinds that can stand anywhere)
+  const kinds = HUMAN_KINDS.filter(humanHour).sort(() => Math.random() - 0.5);
+  for (const kind of kinds) for (let tries = 0; tries < 40; tries++) {
     const a = Math.random() * Math.PI * 2, d = HUMAN.near + Math.random() * (HUMAN.far - HUMAN.near);
     const c = Math.floor(H.x + Math.cos(a) * d), r = Math.floor(H.z + Math.sin(a) * d);
     if (c < 2 || r < 2 || c >= N - 2 || r >= N - 2) continue;
     const i = T(c, r);
-    if (!PATH[i] || !humanOpen(i)) continue;
-    const band = BAND[i] || 1, kinds = HUMAN_KINDS.filter(k => { const w = WILD_WHERE[k]; return band >= w.bands[0] && band <= w.bands[1] && w.biomes.some(b => WILD_BIOME[b] === BI[i]); });
-    if (!kinds.length) continue;
-    const kind = kinds[Math.floor(Math.random() * kinds.length)], [lo, hi] = WILD_WHERE[kind].group;
+    if (!humanOpen(i) || !humanSuits(kind, i, c, r)) continue;
+    const [lo, hi] = WILD_WHERE[kind].group;
     const n = Math.min(HUMAN.cap - have, lo + Math.floor(Math.random() * (hi - lo + 1)));
     for (let k = 0; k < n; k++) {
-      // (the rest of a band about the first, on open ground beside the road)
+      // (the rest of a band about the first, on open ground beside it)
       let x = c + 0.5, z = r + 0.5;
       if (k) for (let t = 0; t < 8; t++) {
         const b = k * 2.1 + t * 0.8, x1 = c + 0.5 + Math.cos(b) * 0.9, z1 = r + 0.5 + Math.sin(b) * 0.9;
@@ -21461,7 +21526,7 @@ function humanTick(dt) {
   }
 }
 // (v479) the T panel's spawn buttons (Crowd test): n of a kind d tiles ahead of you, side by side
-const HUMAN_SPAWN = { footpad: 0, bandit: 0, clear: 0 };
+const HUMAN_SPAWN = { footpad: 0, bandit: 0, poacher: 0, raider: 0, graveRobber: 0, highwayman: 0, clear: 0 };
 function spawnHumansAhead(kind, n, d = 4) {
   const out = [];
   for (let k = 0; k < n; k++) {
@@ -22446,17 +22511,27 @@ function updateFoe(f, dt, night) {
     f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 6));
     if (f.atk > 0.45 && !f.struck) {
       f.struck = true;
-      if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2 && see) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z, f.level || 1); }
+      // (v544) a bow or crossbow looses at you instead
+      if (f.ranged) { if (see) humanShoot(f); }
+      else if (dist < d.reach + 0.45 && Math.abs(H.y - f.y) < 1.2 && see) { deathCause = 'Felled by a ' + d.name.toLowerCase() + ' in ' + titleCase(regionName) + '.'; hurtHero(d.dmg, f.x, f.z, f.level || 1); }
     }
-    if (f.atk > 0.85) { f.atk = -1; f.cd = 0.9 + Math.random() * 0.5; }
+    if (f.atk > 0.85) { f.atk = -1; f.cd = f.ranged ? f.ranged.cd * (0.85 + Math.random() * 0.3) : 0.9 + Math.random() * 0.5; }
   } else if (f.aggro) {
-    if (dist < d.reach && f.cd <= 0 && H.alive && see) {
+    // (v544) a bow or crossbow shoots from range (f.ranged.range), keeps its distance and turns to you between shots
+    const reachNow = f.ranged ? f.ranged.range : d.reach, R = f.ranged;
+    if (R && see && dist < R.back && f.cd > 0) {
+      const wade = driftSlow(f.x, f.z), sp = d.speed * 0.6 * wade;
+      vx = -dx / (dist || 1) * sp; vz = -dz / (dist || 1) * sp; want = sp * dt;
+      f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 8));
+    }
+    else if (R && see && dist < reachNow && f.cd > 0) f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 6));
+    else if (dist < reachNow && f.cd <= 0 && H.alive && see) {
       f.atk = 0; f.struck = false;
       // (a person's blows run through the sword's three-blow combo: two sweeps and the overhead chop, begun again after a pause)
       if (f.rig) { f.combo = time - (f.lastAtk || -9) > 2.6 ? 0 : (f.combo + 1) % 3; f.lastAtk = time; }
     }
     else if (d.rooted) f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 4));
-    else if (dist > d.reach * 0.75 || !see) {
+    else if (dist > reachNow * (R ? 0.85 : 0.75) || !see) {
       // straight at you when nothing's in the way, otherwise along a path round whatever is
       let tx = H.x, tz = H.z;
       if (see) f.path = null;
@@ -23801,6 +23876,10 @@ const TUNING = [
     // (v479) people on the road, put a few tiles ahead of you
     [HUMAN_SPAWN, 'footpad', 'A footpad in front of you', 'action', () => spawnHumansAhead('footpad', 1)],
     [HUMAN_SPAWN, 'bandit', 'A band of three bandits in front of you', 'action', () => spawnHumansAhead('bandit', 3)],
+    [HUMAN_SPAWN, 'poacher', 'A poacher in front of you', 'action', () => spawnHumansAhead('poacher', 1, 7)],
+    [HUMAN_SPAWN, 'raider', 'A war band of three raiders in front of you', 'action', () => spawnHumansAhead('raider', 3)],
+    [HUMAN_SPAWN, 'graveRobber', 'A grave robber in front of you', 'action', () => spawnHumansAhead('graveRobber', 1)],
+    [HUMAN_SPAWN, 'highwayman', 'A highwayman in front of you', 'action', () => spawnHumansAhead('highwayman', 1, 7)],
     [HUMAN_SPAWN, 'clear', 'Clear away every foe about', 'action', () => foes.slice().forEach(removeFoe)],
   ]],
   ['Ground haze', [
@@ -24867,7 +24946,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 543, crashSeen = new Map();
+const GAME_VERSION = 544, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
