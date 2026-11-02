@@ -14313,6 +14313,7 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // a share of full speed; notchHold: seconds W or S held before the next order
 const BOAT = { ...BRIG_SHAPE, speed: 7, accel: 1.2, turn: 0.5, notches: 4, sailRate: 0.8, notchHold: 0.4,
   astern: 0.25, anchorTime: 1.6, plank: 1.2, reach: 2, onto: 0.6, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
+  endSlide: [0, 0.6, -0.6, 1.1, -1.1],   // (v554) where along a dock's end the gangway of a boat moored across it may sit
   // (v496, Jordan) the helm deck: a platform behind the wheel (helmP high, from the stern to helmFront), a ramp up to
   // it either side of the wheel (from rampV aft to helmFront, outboard of rampU); you stand at helmV on it, the
   // wheel's hub wheelY over the deck; it turns up to wheelTurn either way as you steer (wheelRate a second), your
@@ -14578,10 +14579,19 @@ function boatShapesFirst() {
 // one boat at a dock: alongside it, bow out to sea, on whichever side has room
 function placeBoat(k) {
   const d = k.d, bc = k.base % N, br = (k.base - bc) / N, ox = bc + 0.5, oz = br + 0.5, h = Math.atan2(DC[d], DR[d]);
-  const dockY = LV[k.tiles[0]] * STEP;
+  const dockY = LV[k.tiles[0]] * STEP, tries = [];
   for (const along of [BOAT.along, BOAT.along + 0.6, BOAT.along + 1.2]) for (const sg of [1, -1]) {
     const off = (DOCKS.wide / 2) + BOAT.gap + BOAT.beam, px = -DR[d] * sg, pz = DC[d] * sg;
-    const x = ox + DC[d] * along + px * off, z = oz + DR[d] * along + pz * off;
+    tries.push([ox + DC[d] * along + px * off, oz + DR[d] * along + pz * off, h, px, pz, off]);
+  }
+  // (v554, Jordan) no room alongside: moored across the dock's far end instead, broadside to it (bow either way, its
+  // gangway slid a little either way along the end by BOAT.endSlide), the gangplank onto the end planks
+  const endOff = DOCKS.len + 0.5 + BOAT.gap + BOAT.beam;
+  for (const slide of BOAT.endSlide) for (const sg of [1, -1]) {
+    const fx = -DR[d] * sg, fz = DC[d] * sg, sv = slide - BOAT.gangV;
+    tries.push([ox + DC[d] * endOff + fx * sv, oz + DR[d] * endOff + fz * sv, Math.atan2(fx, fz), DC[d], DR[d], BOAT.gap + BOAT.beam]);
+  }
+  for (const [x, z, h, px, pz, off] of tries) {
     const ci = T(Math.floor(x), Math.floor(z)), wl = WL[ci];
     if (!wl || !boatFits(x, z, h, wl)) continue;
     const b = { x, z, h, wl, speed: 0, notch: 0, sail: 0, anchor: 1, anchorGoal: 1, plank: 1, side: 0, endY: dockY, len: BOAT.plank, phase: hs(bc, br, 496) * 6.28, dock: k, g: null,
@@ -25074,7 +25084,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 553, crashSeen = new Map();
+const GAME_VERSION = 554, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
