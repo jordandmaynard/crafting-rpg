@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v470:** Townsfolk face where they're walking again (Jordan: they were moonwalking). v468's steering change dropped the line that turns a walker to face their way; it's back, turning toward their actual heading, steering included.
+
 **v469:** More stray townsperson banners (Jordan, cursor held at the top of the screen while turning the camera): picking now ignores anyone hidden behind the land. cursorHidden() marches the cursor's view ray to the ground (pickGround) once per pick, and a townsperson or monster whose middle lies more than 1.5 further along the ray than that ground is skipped. Points nearer than the near plane (projected depth below -1) are skipped too. People hidden inside buildings or under roofs can still be picked.
 
 **v468:** Townsfolk stop getting stuck on corners and each other (Jordan). Straight-line shortcuts along a route must clear both shoulders (walkLine on lines FOLK.rad + 0.06 either side), not just the middle. Walkers steer round anyone within a tile ahead, to the side away from them, and both keep right when they meet head on. Someone standing steps aside for a townsperson walking at them, and a walker is no longer shoved back by someone standing (the stander gives way). When stuck: after 0.4 s no shortcuts (tile middles only, p.noCut), after 1 s they pass through other townsfolk for 2.5 s (p.ghostT), and only after 3.5 s do they give up and go somewhere else.
