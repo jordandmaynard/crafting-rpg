@@ -4473,6 +4473,7 @@ function finishTowns() {
   buildCobbles();
   buildFountains();
   buildHalos();
+  buildBoats();
   for (const t of towns) {
     for (const hse of t.houses) {
       makeDoor(...hse.door); makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
@@ -13460,6 +13461,307 @@ function reachableStep(c0, r0, c1, r1, foe) {
 }
 const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1))] ? 0.06 : 0);
 
+// ---------- Boats ----------
+// (v494, Jordan) A two-masted boat moored beside every dock: not part of the world's tiles, but its own moving model.
+// Walk up its gangplank to the wheel and press F: you take the wheel and the anchor comes up. W and S set the sails
+// (furled, half, full), which sets the speed (no wind yet); the boat always turns toward where the camera looks, at a
+// fixed rate. F again leaves the wheel and drops the anchor; the gangplank comes down where there's ground to reach.
+// The boat's own frame: u across (+ to starboard), v along (+ toward the bow), y up from the deck. World from the
+// boat: x = b.x + cos(h) u + sin(h) v, z = b.z - sin(h) u + cos(h) v (h the heading, as H.face: atan2(dx, dz)).
+const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 7, accel: 1.2, turn: 0.5, notches: 2, sailRate: 0.8,
+  anchorTime: 1.6, gangV: -0.2, plank: 1.2, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
+  masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }] };
+const boats = [];
+// a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
+const boatYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.74, m.h * 0.32 - 0.3]];
+const boatMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
+// the deck's half width along the boat (to the bulwarks' inner face), and the bulwarks' height over the deck
+function boatHB(v) {
+  const B = BOAT;
+  if (v <= B.mid) { const t = Math.min(1, (B.mid - v) / (B.mid - B.stern)); return B.beam * (1 - 0.26 * t * t); }
+  const t = Math.min(1, (v - B.mid) / (B.bow - B.mid));
+  return Math.max(0.04, B.beam * Math.pow(1 - t * t, 0.62));
+}
+const boatGH = v => 0.42 + 0.35 * Math.max(0, (v - 1.5) / 3.1) ** 2 + 0.18 * Math.max(0, (-v - 2.8) / 1.4);
+const boatKeel = v => -BOAT.free - 0.85 + 0.75 * Math.max(0, (v - 2.4) / 2.2) ** 2;
+const boatWorld = (b, u, v) => [b.x + Math.cos(b.h) * u + Math.sin(b.h) * v, b.z - Math.sin(b.h) * u + Math.cos(b.h) * v];
+const boatLocal = (b, x, z) => { const dx = x - b.x, dz = z - b.z, c = Math.cos(b.h), s = Math.sin(b.h); return [dx * c - dz * s, dx * s + dz * c]; };
+// open water the boat may float on: water at its own level, no land, lava, bridge or dock
+function boatWater(i, wl) { return WL[i] === wl && !LV[i] && !LAVA[i] && !BR[i]; }
+function boatFits(x, z, h, wl) {
+  const c = Math.cos(h), s = Math.sin(h);
+  for (let v = BOAT.stern; v <= BOAT.bow + 0.01; v += 0.5) {
+    const hb = boatHB(v) + 0.1;
+    for (const u of [-hb, 0, hb]) {
+      const px = x + c * u + s * v, pz = z - s * u + c * v, cc = Math.floor(px), rr = Math.floor(pz);
+      if (cc < 1 || rr < 1 || cc >= N - 1 || rr >= N - 1 || !boatWater(T(cc, rr), wl)) return false;
+    }
+  }
+  return true;
+}
+// the shapes, made once and shared by every boat: the hull with its deck, masts, yards and rigging; each sail and its
+// furled roll (a mesh each, scaled as it's set or furled); the anchor and its chain; the gangplank
+let BOAT_GEO = null;
+function boatShapes() {
+  if (BOAT_GEO) return BOAT_GEO;
+  const B = BOAT, save = OUT, made = {};
+  const take = (name, fn) => { OUT = new Buf(); try { fn(); } finally { const m = OUT.mesh(boatMat); OUT = save; made[name] = m && m.geometry; } };
+  take('hull', () => {
+    const vs = [];
+    for (let k = 0; k <= 22; k++) vs.push(B.stern + (B.bow - B.stern) * (1 - Math.pow(1 - k / 22, 1.3)));
+    vs.push(B.gangV - 0.35, B.gangV + 0.35); vs.sort((a, b) => a - b);
+    const gang = (v0, v1) => v0 >= B.gangV - 0.36 && v1 <= B.gangV + 0.36;
+    // a section's points down one side: gunwale, deck edge, waterline, bilge, keel
+    const sec = v => { const hb = boatHB(v), gh = boatGH(v); return [[hb + 0.06, gh], [hb + 0.02, 0], [hb * 0.93, -B.free + 0.05], [hb * 0.6, -B.free - 0.5], [0, boatKeel(v)]]; };
+    const cols = ['#6b4528', '#4e3220', '#5a2a1e', '#4a2418'];
+    for (let k = 0; k + 1 < vs.length; k++) {
+      const v0 = vs[k], v1 = vs[k + 1], a = sec(v0), b = sec(v1);
+      if (v1 - v0 < 1e-4) continue;
+      for (const sg of [-1, 1]) for (let j = 0; j < 4; j++) {
+        if (j === 0 && gang(v0, v1)) continue;   // (the gangway: a gap in the bulwarks both sides)
+        const P = (p, v) => [sg * p[0], p[1], v];
+        quad(P(a[j], v0), P(b[j], v1), P(b[j + 1], v1), P(a[j + 1], v0), shade(CC(cols[j]), 0.94 + hs(k, j + (sg > 0 ? 9 : 0), 494) * 0.12));
+      }
+      // the deck: planks along it
+      const K = 8, hb0 = boatHB(v0), hb1 = boatHB(v1);
+      for (let q = 0; q < K; q++) {
+        const f0 = -1 + 2 * q / K, f1 = -1 + 2 * (q + 1) / K, col = shade(CC(q % 2 ? '#b48a58' : '#a87e4e'), 0.95 + hs(q, Math.floor(v0 * 2), 495) * 0.1);
+        quad([f0 * hb0, 0, v0], [f0 * hb1, 0, v1], [f1 * hb1, 0, v1], [f1 * hb0, 0, v0], col);
+      }
+      // the rail along the bulwarks' top
+      for (const sg of [-1, 1]) if (!gang(v0, v1)) seg(G.box, '#8a5a34', [sg * (boatHB(v0) + 0.06), boatGH(v0) + 0.03, v0], [sg * (boatHB(v1) + 0.06), boatGH(v1) + 0.03, v1], 0.05);
+    }
+    // the transom across the stern, two windows in it
+    const st = sec(B.stern);
+    for (let j = 0; j < 4; j++) quad([-st[j][0], st[j][1], B.stern], [st[j][0], st[j][1], B.stern], [st[j + 1][0], st[j + 1][1], B.stern], [-st[j + 1][0], st[j + 1][1], B.stern], CC(j ? '#4e3220' : '#5e3c22'));
+    for (const sg of [-0.5, 0.5]) part(G.box, '#1e1814', sg, -0.3, B.stern - 0.02, { sx: 0.34, sy: 0.3, sz: 0.04 });
+    part(G.box, '#8a5a34', 0, 0.08, B.stern - 0.03, { sx: st[1][0] * 2 + 0.1, sy: 0.08, sz: 0.06 });
+    // stem post and bowsprit
+    seg(G.box, '#5a3a22', [0, boatKeel(B.bow), B.bow], [0, boatGH(B.bow) + 0.25, B.bow + 0.12], 0.06);
+    const sprit = [0, 2.0, B.bow + 2.5];
+    seg(G.cyl8, '#6b4a2c', [0, 0.6, B.bow - 0.4], sprit, 0.08);
+    // the masts: tapered, a top on each, two yards each, shrouds to the sides, stays fore and aft
+    for (const m of B.masts) {
+      seg(G.frust7, '#6b4a2c', [0, -0.4, m.v], [0, m.h, m.v], 0.17);
+      part(G.box, '#5a3a22', 0, m.h * 0.62, m.v, { sx: 0.8, sy: 0.07, sz: 0.7 });
+      for (const [y, w] of boatYards(m)) seg(G.cyl6, '#5a3a22', [-w / 2, y, m.v + 0.14], [w / 2, y, m.v + 0.14], 0.05);
+      for (const sg of [-1, 1]) for (const dv of [-0.35, 0.1]) seg(G.cyl6, '#2a2018', [sg * (boatHB(m.v + dv) + 0.06), boatGH(m.v + dv), m.v + dv], [0, m.h * 0.62, m.v], 0.014);
+    }
+    const [fore, main] = B.masts;
+    seg(G.cyl6, '#2a2018', [0, fore.h, fore.v], sprit, 0.014);
+    seg(G.cyl6, '#2a2018', [0, fore.h * 0.62, fore.v], [0, 0.9, B.bow - 0.2], 0.014);
+    seg(G.cyl6, '#2a2018', [0, main.h, main.v], [0, fore.h * 0.8, fore.v], 0.014);
+    seg(G.cyl6, '#2a2018', [0, main.h, main.v], [0, boatGH(B.stern) + 0.05, B.stern + 0.15], 0.014);
+    // a pennant at the main truck
+    tri([0, main.h + 0.05, main.v], [0, main.h - 0.35, main.v], [0, main.h - 0.15, main.v - 1.1], CC('#a8322a'));
+    // the wheel: a post, a rim of twelve pieces, eight spokes out past it to handles
+    const W0 = BOAT.wheelV;
+    part(G.box, '#5a3a22', 0, 0.45, W0, { sx: 0.14, sy: 0.9, sz: 0.14 });
+    const wy = 1.0, wz = W0 - 0.1, R = 0.36;
+    for (let k = 0; k < 12; k++) { const a = (k + 0.5) / 12 * Math.PI * 2; part(G.box, '#7a5232', Math.cos(a) * R, wy + Math.sin(a) * R, wz, { sx: 0.05, sy: 2 * Math.PI * R / 12 + 0.02, sz: 0.06, rz: a }); }
+    for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; part(G.box, '#8a6040', Math.cos(a) * 0.24, wy + Math.sin(a) * 0.24, wz, { sx: 0.035, sy: 0.48, sz: 0.035, rz: a - Math.PI / 2 }); }
+    part(G.cyl8, '#b8923a', 0, wy, wz, { sx: 0.12, sy: 0.08, sz: 0.12, rx: Math.PI / 2 });
+    // the hawse where the anchor's chain runs out, a cathead over it
+    part(G.box, '#5a3a22', 0.9, 0.25, 3.4, { sx: 0.5, sy: 0.12, sz: 0.14 });
+  });
+  // the sails: each hangs from its yard (y 0 at the yard, down to -1), bellied forward, in panels; scaled down to furl
+  for (const [name, wTop, wBot] of [['sail', 0.92, 1.0]]) take(name, () => {
+    const nu = 6, nv = 5;
+    const pt = (i, j) => { const fu = i / nu - 0.5, fv = j / nv, w = wTop + (wBot - wTop) * fv; return [fu * w, -fv, 0.32 * (1 - 4 * fu * fu) * Math.sin(Math.PI * Math.min(1, fv * 1.05))]; };
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) quad(pt(i, j), pt(i + 1, j), pt(i + 1, j + 1), pt(i, j + 1), shade(CC(i % 2 ? '#e8dcc0' : '#ddd0b2'), 0.97 + j * 0.01));
+  });
+  take('furl', () => part(G.cyl8, '#d6c8a6', 0, 0, 0, { sx: 1, sy: 1, sz: 1, rz: Math.PI / 2 }));
+  take('anchor', () => {
+    const c = '#2e2e34';
+    seg(G.cyl6, c, [0, -0.85, 0], [0, 0, 0], 0.045);
+    for (const sg of [-1, 1]) seg(G.cyl6, c, [0, -0.85, 0], [sg * 0.38, -0.55, 0], 0.04);
+    for (const sg of [-1, 1]) part(G.cone4, c, sg * 0.4, -0.5, 0, { sx: 0.14, sy: 0.16, sz: 0.08, rz: -sg * 0.6 });
+    part(G.box, '#4a3020', 0, -0.08, 0, { sx: 0.06, sy: 0.06, sz: 0.6 });
+    part(G.cyl8, c, 0, 0.03, 0, { sx: 0.12, sy: 0.04, sz: 0.12, rx: Math.PI / 2 });
+  });
+  take('chain', () => part(G.box, '#3a3a40', 0, -0.5, 0, { sx: 0.04, sy: 1, sz: 0.04 }));
+  take('plank', () => {
+    part(G.box, '#9a7048', 0.5, -0.03, 0, { sx: 1, sy: 0.06, sz: 0.62 });
+    for (const x of [0.15, 0.38, 0.62, 0.85]) part(G.box, '#7a5432', x, 0.01, 0, { sx: 0.035, sy: 0.03, sz: 0.58 });
+  });
+  OUT = save;
+  return BOAT_GEO = made;
+}
+// one boat at a dock: alongside it, bow out to sea, on whichever side has room
+function placeBoat(k) {
+  const d = k.d, bc = k.base % N, br = (k.base - bc) / N, ox = bc + 0.5, oz = br + 0.5, h = Math.atan2(DC[d], DR[d]);
+  const dockY = LV[k.tiles[0]] * STEP;
+  for (const along of [BOAT.along, BOAT.along + 0.6, BOAT.along + 1.2]) for (const sg of [1, -1]) {
+    const off = (DOCKS.wide / 2) + BOAT.gap + BOAT.beam, px = -DR[d] * sg, pz = DC[d] * sg;
+    const x = ox + DC[d] * along + px * off, z = oz + DR[d] * along + pz * off;
+    const ci = T(Math.floor(x), Math.floor(z)), wl = WL[ci];
+    if (!wl || !boatFits(x, z, h, wl)) continue;
+    const b = { x, z, h, wl, speed: 0, notch: 0, sail: 0, anchor: 1, anchorGoal: 1, plank: 1, side: 0, endY: dockY, phase: hs(bc, br, 496) * 6.28, dock: k, g: null };
+    // the gangplank goes down on the dock's side
+    const [u] = boatLocal(b, x - px * off, z - pz * off);
+    b.side = u > 0 ? 1 : -1;
+    const [ex, ez] = boatWorld(b, b.side * (boatHB(BOAT.gangV) + BOAT.plank - 0.3), BOAT.gangV);
+    b.endY = surfaceY(ex, ez);
+    return b;
+  }
+  return null;
+}
+function buildBoats() {
+  for (const b of boats) if (b.g) scene.remove(b.g);
+  boats.length = 0;
+  const S = boatShapes();
+  for (const k of docks) {
+    const b = placeBoat(k);
+    if (!b) continue;
+    const g = new GFX.Group(), mesh = geo => shadowy(new GFX.Mesh(geo, boatMat));
+    g.add(mesh(S.hull));
+    b.sails = []; b.furls = [];
+    for (const m of BOAT.masts) for (const [y, w, hgt] of boatYards(m)) {
+      const s = mesh(S.sail); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); b.sails.push(s);
+      const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); b.furls.push(f);
+    }
+    b.anchorM = mesh(S.anchor); b.anchorM.position.set(0.9, -0.4, 3.4); g.add(b.anchorM);
+    b.chainM = mesh(S.chain); b.chainM.position.set(0.9, 0.2, 3.4); g.add(b.chainM);
+    b.plankG = new GFX.Group(); b.plankM = mesh(S.plank); b.plankG.add(b.plankM); g.add(b.plankG);
+    b.g = g; scene.add(g);
+    boats.push(b);
+    poseBoat(b, 0);
+  }
+}
+// the deck's height in the world, bobbing on the swell
+const boatDeckY = b => b.wl * STEP - 0.16 + BOAT.free + Math.sin(time * 1.3 + b.phase) * 0.04;
+function poseBoat(b, dt) {
+  const g = b.g, y = boatDeckY(b);
+  g.visible = Math.hypot(b.x - H.x, b.z - H.z) < BOAT.see;
+  if (!g.visible && H.boat !== b) return;
+  g.position.set(b.x, y, b.z);
+  g.rotation.set(0, b.h, Math.sin(time * 0.9 + b.phase) * 0.012 + clamp(b.turnRate || 0, -0.5, 0.5) * 0.06);
+  b.sails.forEach((s, j) => { const k = b.sail; s.visible = k > 0.02; s.scale.y = Math.max(0.02, k) * s.userData.h0; });
+  b.furls.forEach(f => { const r = 0.06 + 0.14 * (1 - b.sail); f.scale.y = f.scale.z = r; });
+  // the anchor: hung under the cathead when up, down out of sight under the water when dropped
+  const ay = -0.4 - b.anchor * (BOAT.free + 2.6);
+  b.anchorM.position.y = ay; b.chainM.scale.y = Math.max(0.05, 0.2 - ay - 0.6);
+  b.chainM.visible = b.anchor > 0.02;
+  // the gangplank: out from the deck's edge on its side, sloping down to the ground it rests on
+  const hb = boatHB(BOAT.gangV), L = BOAT.plank * b.plank;
+  b.plankG.visible = b.plank > 0.02;
+  b.plankG.position.set(b.side * (hb + 0.02), 0.03, BOAT.gangV);
+  b.plankG.rotation.set(0, b.side > 0 ? 0 : Math.PI, Math.atan2(clamp(b.endY - y, -1.6, 1.6), BOAT.plank));
+  b.plankM.scale.set(Math.max(0.01, L), 1, 1);
+}
+// the gangplank's foot, where it can go down: ground (or a dock) beside the gangway at about deck height
+function boatLanding(b) {
+  const y = boatDeckY(b), hb = boatHB(BOAT.gangV);
+  for (const sg of b.side ? [b.side, -b.side] : [1, -1]) {
+    const [x, z] = boatWorld(b, sg * (hb + BOAT.plank - 0.3), BOAT.gangV), i = T(Math.floor(x), Math.floor(z));
+    if (!(LV[i] > 0 || BR[i]) || LAVA[i]) continue;
+    const gy = surfaceY(x, z);
+    if (Math.abs(gy - y) < 1.6) return { side: sg, y: gy };
+  }
+  return null;
+}
+// F at the wheel: take it (the anchor comes up, the gangplank in) or leave it (the anchor drops, the sails furl, and
+// the gangplank goes down if there's ground beside the gangway)
+function boatHelm() {
+  const b = H.boat;
+  if (!b) return;
+  if (!H.helm) {
+    H.helm = true; b.anchorGoal = 0; b.notch = 0; b.plankGoal = 0;
+    H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null;
+    toast('You take the wheel. W and S set the sails; the boat turns where you look. F lets go and drops anchor.', 'calm');
+    sfx.equip();
+  } else {
+    H.helm = false; b.anchorGoal = 1; b.notch = 0;
+    const land = boatLanding(b);
+    if (land) { b.side = land.side; b.endY = land.y; b.plankGoal = 1; } else b.plankGoal = 0;
+    sfx.door();
+  }
+}
+function boatSails(dn) {
+  const b = H.boat;
+  if (!b || !H.helm) return;
+  const n = clamp(b.notch + dn, 0, BOAT.notches);
+  if (n === b.notch) { sfx.nope(); return; }
+  b.notch = n; sfx.swoosh();
+}
+// every boat a frame: the one you sail moves and turns; anchors, sails and gangplanks ease; you ride along
+function updateBoats(dt) {
+  for (const b of boats) {
+    const mine = H.boat === b && H.helm;
+    b.anchor += clamp((b.anchorGoal ?? 1) - b.anchor, -dt / BOAT.anchorTime, dt / BOAT.anchorTime);
+    b.plank += clamp((b.plankGoal ?? 1) - b.plank, -dt * 1.5, dt * 1.5);
+    b.sail += clamp(b.notch / BOAT.notches - b.sail, -dt * BOAT.sailRate, dt * BOAT.sailRate);
+    const want = b.anchor < 0.05 ? BOAT.speed * b.sail : 0;
+    b.speed += clamp(want - b.speed, -dt * BOAT.accel * 2, dt * BOAT.accel);
+    b.turnRate = 0;
+    if (mine) {
+      // toward the way the camera looks, at a fixed rate
+      const goal = Math.atan2(-Math.sin(yaw), -Math.cos(yaw)), dh = clamp(angDiff(goal, b.h), -BOAT.turn * dt, BOAT.turn * dt);
+      if (Math.abs(dh) > 1e-5 && boatFits(b.x, b.z, b.h + dh, b.wl)) { b.h += dh; b.turnRate = dh / Math.max(dt, 1e-4) / BOAT.turn; }
+    }
+    if (b.speed > 0.01) {
+      const nx = b.x + Math.sin(b.h) * b.speed * dt, nz = b.z + Math.cos(b.h) * b.speed * dt;
+      if (boatFits(nx, nz, b.h, b.wl)) { b.x = nx; b.z = nz; }
+      else { if (b.speed > 1.5) sfx.thunk(); b.speed = 0; }
+    }
+    poseBoat(b, dt);
+  }
+  // riding: you stay where you stand on the deck as it moves
+  const b = H.boat;
+  if (b) {
+    if (H.helm) { H.bu = 0; H.bv = BOAT.wheelV - 0.6; H.face = b.h; }
+    [H.x, H.z] = boatWorld(b, H.bu, H.bv);
+    H.y = boatHeroY(b);
+  }
+}
+function boatHeroY(b) {
+  const y = boatDeckY(b), hb = boatHB(BOAT.gangV), s = H.bu * b.side;
+  if (b.plank > 0.5 && Math.abs(H.bv - BOAT.gangV) < 0.4 && s > hb) return y + 0.03 + (b.endY - y) * clamp((s - hb) / BOAT.plank, 0, 1);
+  return y + 0.02;
+}
+// a step on the deck (or the gangplank), kept inside the bulwarks and clear of the masts and the wheel; off the
+// gangplank's foot you step ashore
+function boatWalk(dx, dz) {
+  const b = H.boat, c = Math.cos(b.h), s = Math.sin(b.h);
+  let u = H.bu + dx * c - dz * s, v = H.bv + dx * s + dz * c;
+  const hbG = boatHB(BOAT.gangV), onPlank = b.plank > 0.98 && Math.abs(v - BOAT.gangV) < 0.32 && u * b.side > hbG - 0.45;
+  if (onPlank) {
+    if (u * b.side > hbG - 0.3) v = clamp(v, BOAT.gangV - 0.24, BOAT.gangV + 0.24);
+    if (u * b.side > hbG + BOAT.plank) {
+      // ashore
+      const [x, z] = boatWorld(b, u, v);
+      H.boat = null; H.helm = false; H.x = x; H.z = z; H.story = 0; H.stair = null;
+      return Math.hypot(dx, dz);
+    }
+  } else {
+    v = clamp(v, BOAT.stern + 0.35, BOAT.bowWalk);
+    const lim = Math.max(0, boatHB(v) - 0.32);
+    u = clamp(u, -lim, lim);
+  }
+  for (const [pu, pv, R] of [[0, BOAT.masts[0].v, 0.42], [0, BOAT.masts[1].v, 0.42], [0, BOAT.wheelV, 0.5]]) {
+    const eu = u - pu, ev = v - pv, l = Math.hypot(eu, ev);
+    if (l < R) { const k = l > 1e-4 ? R / l : 0; u = pu + eu * k + (k ? 0 : R); v = pv + ev * k; }
+  }
+  const moved = Math.hypot(u - H.bu, v - H.bv);
+  H.bu = u; H.bv = v;
+  [H.x, H.z] = boatWorld(b, u, v);
+  return moved;
+}
+// off the boat: stepping onto a lowered gangplank's foot takes you aboard
+function boatBoard() {
+  if (H.boat || H.flip) return;
+  for (const b of boats) {
+    if (b.plank < 0.98 || Math.abs(b.x - H.x) > 9 || Math.abs(b.z - H.z) > 9) continue;
+    const [u, v] = boatLocal(b, H.x, H.z), hb = boatHB(BOAT.gangV), s = u * b.side, end = hb + BOAT.plank;
+    if (Math.abs(v - BOAT.gangV) < 0.3 && s > end - 0.55 && s <= end && Math.abs(H.y - b.endY) < 0.8) {
+      H.boat = b; H.helm = false; H.bu = u; H.bv = v; H.story = 0; H.stair = null;
+      return;
+    }
+  }
+}
+// the wheel's within reach
+const nearHelm = () => !!H.boat && Math.hypot(H.bu, H.bv - (BOAT.wheelV - 0.6)) < 1.0;
+
 // ---------- The hero ----------
 // The hero draws in a second pass on its own layer, so wherever scenery or walls hide it a flat
 // silhouette shows through instead.
@@ -15877,7 +16179,7 @@ function respawn() {
     if (stepOpen(h.c, h.r, d, false) && !OBJ[OB[n]].solid) { at = [h.c + 0.5 + DC[d] * 0.85, h.r + 0.5 + DR[d] * 0.85]; break; }
   }
   [H.x, H.z] = at || [spawn.x, spawn.z];
-  H.story = 0; H.stair = null;
+  H.story = 0; H.stair = null; H.boat = null; H.helm = false;
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.alive = true; H.invuln = 2;
   H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
   renderHp();
@@ -15913,6 +16215,11 @@ addEventListener('keydown', e => {
     return;
   }
   if (mapOpen) return;
+  // (v494) at a boat's wheel: W and S raise and lower the sails; no walking, rolling, jumping or abilities
+  if (H.helm && mode === 'play') {
+    if (/^(KeyW|ArrowUp|KeyS|ArrowDown)$/.test(e.code)) { e.preventDefault(); if (!e.repeat) boatSails(e.code === 'KeyW' || e.code === 'ArrowUp' ? 1 : -1); return; }
+    if (/^(Space|ShiftLeft|ShiftRight|KeyQ|KeyE|KeyA|KeyD|ArrowLeft|ArrowRight)$/.test(e.code)) { e.preventDefault(); return; }
+  }
   if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) toggleInv(); return; }
   if (e.code === 'Escape' && craftAt) { toggleCraft(null); return; }
   if (e.code === 'Escape' && invOpen) { toggleInv(false); return; }
@@ -17621,7 +17928,9 @@ const doorsNear = () => [...doors.values()].map(d => [d, d.w ? d.c : d.c + 0.5, 
 // shut a door; with more than one in reach, the one most nearly ahead of you (then the nearest)
 function actionHere() {
   if (mode !== 'play' || !H.alive) return null;
+  if (H.helm) return { kind: 'helm', x: H.x, z: H.z };   // (v494: at the wheel, F only lets go of it)
   const opts = [], near = dropsNear(), dist = o => Math.hypot(o.x - H.x, o.z - H.z);
+  if (nearHelm()) { const [x, z] = boatWorld(H.boat, 0, BOAT.wheelV); opts.push({ kind: 'helm', x, z }); }
   if (near.length) { const d = near.reduce((a, b) => dist(b) < dist(a) ? b : a); opts.push({ kind: 'loot', drops: near, x: d.x, z: d.z }); }
   const bp = bonePileNear();
   if (bp) opts.push({ kind: 'bones', pile: bp, x: bp.x, z: bp.z });
@@ -17643,6 +17952,7 @@ function useAction() {
   else if (a.kind === 'table') toggleCraft(craftAt ? null : a.table);
   else if (a.kind === 'station') { if (openSt === a.st && invOpen) toggleInv(false); else openStation(a.st); }
   else if (a.kind === 'folk') talkFolk(a.p);
+  else if (a.kind === 'helm') boatHelm();
   else useDoor(a.door);
 }
 function useDoor(d = nearDoor()) {
@@ -20083,13 +20393,14 @@ function update(dt) {
   H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt);
   H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt; H.boost = Math.max(0, (H.boost || 0) - dt);
   updateAim();
+  updateBoats(dt);
 
   spikes.enter('update: hero');
   // ----- hero -----
   if (H.alive) {
-    const m = moveInput();
+    const m = H.helm ? null : moveInput();   // (v494: at a boat's wheel, W and S work the sails instead)
     let vx = 0, vz = 0;
-    H.canJump = heroUp() ? null : jumpEdge(m);
+    H.canJump = heroUp() || H.boat ? null : jumpEdge(m);
     if (H.flip) {
       // the flip: across and down on an arc, turning over once, then a puff of dust where you land
       const F = H.flip;
@@ -20135,7 +20446,8 @@ function update(dt) {
     vx += H.kx; vz += H.kz;
     H.kx *= Math.exp(-dt * 9); H.kz *= Math.exp(-dt * 9);
     const x0 = H.x, z0 = H.z;
-    const moved = H.flip ? 0 : moveEntity(H, vx * dt, vz * dt, 0.26, false);
+    const moved = H.flip || H.helm ? 0 : H.boat ? boatWalk(vx * dt, vz * dt) : moveEntity(H, vx * dt, vz * dt, 0.26, false);
+    if (!H.boat) boatBoard();
     if (H.lunge >= 0 && H.lungeKind === 'charge') chargeMoved(dt, moved, Math.hypot(vx - H.kx, vz - H.kz) * dt);
     H.moving = moved > dt * 0.5;
     if (H.moving) {
@@ -20146,11 +20458,11 @@ function update(dt) {
       H.stepF += ((mx * fx + mz * fz) / ml - H.stepF) * k;
       H.stepS += ((mx * fz - mz * fx) / ml - H.stepS) * k;
     }
-    heroSettle();
-    if (!H.flip) H.y = heroFloorY();
+    if (H.boat) H.y = boatHeroY(H.boat);
+    else { heroSettle(); if (!H.flip) H.y = heroFloorY(); }
 
     // attacks
-    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear) startSwing();
+    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear && !H.helm) startSwing();
     if (H.bow) updateBow(dt);
     if (H.spear) updateSpear(dt);
     if (H.axeWind >= 0) updateAxeWind(dt);
@@ -20338,6 +20650,9 @@ function update(dt) {
     } else if (act.kind === 'folk') {
       pr.innerHTML = key + 'TALK TO ' + act.p.d.name.full.toUpperCase();
       v3.set(act.p.x, act.p.y + 1.05 * act.p.rig.g.scale.y + 0.25, act.p.z);
+    } else if (act.kind === 'helm') {
+      pr.innerHTML = key + (H.helm ? 'DROP ANCHOR' : 'TAKE THE WHEEL');
+      v3.set(H.x, H.y + 2.2, H.z);
     } else {
       pr.innerHTML = key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
       const mx = nd.w ? nd.c : nd.c + 0.5, mz = nd.w ? nd.r + 0.5 : nd.r;
@@ -23312,7 +23627,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 493, crashSeen = new Map();
+const GAME_VERSION = 494, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -23753,6 +24068,8 @@ window.GAME = {
     if (roof) for (const b of buildings.values()) if (b.mesh && cathTile.get(T(...b.tiles[0])) === ca) { take(b.mesh, false); for (const kid of b.mesh.children) take(kid, false); }
     return out;
   },
+  boats: () => boats.map(b => ({ x: +b.x.toFixed(2), z: +b.z.toFixed(2), h: +b.h.toFixed(2), wl: b.wl, side: b.side, speed: +b.speed.toFixed(2), notch: b.notch, anchor: +b.anchor.toFixed(2), plank: +b.plank.toFixed(2), dock: [b.dock.c, b.dock.r] })),
+  aboard: () => H.boat ? { u: +H.bu.toFixed(2), v: +H.bv.toFixed(2), helm: !!H.helm, boat: boats.indexOf(H.boat) } : null,
   pipeKeys: () => [...renderer._pipelines.entries()].map(([k, v]) => k.slice(0, 40) + (v ? '' : ' NULL')).filter(k => /shadow/.test(k)),
   light: h => (h !== undefined && (SKY.timeOfDay = h, advanceClock(0), updateSky()), { hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
   // draw a frame and give it back as a PNG data URL
