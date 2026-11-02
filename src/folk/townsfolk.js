@@ -678,17 +678,31 @@ export function makeFolkKit(GFX) {
     } else if (d.beard === 'moustache') box(head, 0.09, 0.022, 0.014, 0, 0.065, 0.095, bc);
     else if (d.beard === 'stubble') box(head, 0.176, 0.058, 0.03, 0, 0.036, 0.078, shade(skin, -0.18));
     // (v9) war paint across the eyes, a cloth over the nose and mouth, or a bone skull mask
-    if (d.warpaint) box(head, 0.196, 0.03, 0.004, 0, 0.11, 0.0915, d.warpaint);
+    if (d.warpaint && !(d.mask && d.mask.kind === 'skull')) box(head, 0.196, 0.03, 0.004, 0, 0.11, 0.0915, d.warpaint);
     if (d.mask && d.mask.kind === 'cloth') {
       box(head, 0.2, 0.07, 0.014, 0, 0.058, 0.1, d.mask.color);
       box(head, 0.21, 0.03, 0.17, 0, 0.072, 0.01, d.mask.color);
       box(head, 0.04, 0.035, 0.03, 0, 0.065, -0.1, shade(d.mask.color, -0.2));
     } else if (d.mask) {
-      box(head, 0.2, 0.15, 0.016, 0, 0.095, 0.1, d.mask.color);
-      for (const s of [1, -1]) box(head, 0.042, 0.036, 0.008, s * 0.045, 0.115, 0.107, '#1a1214');
-      box(head, 0.022, 0.024, 0.008, 0, 0.08, 0.107, '#1a1214');
-      box(head, 0.1, 0.008, 0.008, 0, 0.045, 0.107, '#3a3030');
-      for (const x of [-0.03, 0, 0.03]) box(head, 0.006, 0.02, 0.009, x, 0.045, 0.107, '#3a3030');
+      // (v10, Jordan: less goofy, more sinister) a skull: the brow and cheeks full width, the jaw narrowing; deep sockets
+      // slanted down at their inner corners by the brow ridge, an upside-down heart of a nose hole, and only the upper
+      // teeth, long and uneven, over a dark open mouth. Eyes glow in the sockets when the hood's do.
+      const M = d.mask.color, HOLE = '#120c0e';
+      box(head, 0.2, 0.1, 0.016, 0, 0.12, 0.1, M);
+      taper(head, 0.018, 0.071, [0.13, 0.016, 0, 0.1], [0.2, 0.016, 0, 0.1], M);
+      for (const s of [1, -1]) {
+        box(head, 0.06, 0.05, 0.008, s * 0.046, 0.117, 0.107, HOLE);
+        box(head, 0.04, 0.016, 0.008, s * 0.048, 0.088, 0.107, HOLE);
+        box(head, 0.07, 0.018, 0.006, s * 0.03, 0.142, 0.111, shade(M, -0.06), 0, s * 0.42);
+        box(head, 0.03, 0.022, 0.006, s * 0.082, 0.083, 0.11, shade(M, -0.12), 0, -s * 0.5);
+        if (d.head.glow) box(head, 0.014, 0.01, 0.004, s * 0.05, 0.112, 0.112, d.head.glow);
+        box(head, 0.012, 0.032, 0.008, s * 0.008, 0.072, 0.107, HOLE, 0, s * 0.45);
+      }
+      box(head, 0.11, 0.032, 0.008, 0, 0.04, 0.107, HOLE);
+      [0.024, 0.016, 0.026, 0.02, 0.028, 0.017].forEach((len, i) => {
+        const x = -0.045 + i * 0.018;
+        box(head, 0.013, len, 0.006, x, 0.06 - len / 2, 0.1125, shade(M, -0.04 * (i % 2)), 0, ((i * 37) % 5 - 2) * 0.06);
+      });
     }
     // hair, then whatever's on the head over it
     const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif' || hat === 'cultHood';
