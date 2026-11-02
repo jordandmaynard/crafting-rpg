@@ -12869,7 +12869,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
   const base = top * STEP + k * WALL_H + WALL_H - 0.02;
-  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H - 0.14);
+  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H - 0.03, k);
   // Chebyshev distance from a point to the nearest outside tile: 45° hips everywhere
   const f = (x, z) => {
     let m = 1e9;
@@ -12921,8 +12921,10 @@ function roofMesh(rm, o = {}) {   // rm: a building
   return m;
 }
 // (v539, Jordan) a building walled only in stone (stone walls and windows; doors don't count either way) gets a flat
-// roof of flagstones in place of the hipped one, laid just under the walls' tops (1.88) so their crenels stand round
-// it as a parapet
+// roof of flagstones in place of the hipped one, with its walls' crenels stood round it as a parapet. (v541, Jordan:
+// laid at first under the walls' tops, 1.88, it cut through wardrobes (1.91) and met the bookcases' tops: now thin and
+// at 1.97, its underside 1.93, and the crenels round it made taller to suit, see flatStoneRoof)
+const FLAT_CRENEL = 0.12;
 function stoneBuilding(rm) {
   const k = rm.k || 0, set = rm.set;
   let stone = 0;
@@ -12935,18 +12937,28 @@ function stoneBuilding(rm) {
   return stone > 0;
 }
 // (fy: the flagstones' top. Tiles under a floor or a stair are left out, as the hipped roof does)
-function flatStoneRoof(rm, open, fy) {
+function flatStoneRoof(rm, open, fy, k) {
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const y0 = fy - 0.06;
+  const y0 = fy - 0.04;
   for (const [c, r] of open) {
-    part(G.box, '#3e3a44', c + 0.5, y0 + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+    part(G.box, '#3e3a44', c + 0.5, y0 + 0.01, r + 0.5, { sx: 1, sy: 0.02, sz: 1 });
+    // the crenels on the stone walls round it carried up another FLAT_CRENEL, in their own shade, so they stand
+    // as high over the roof as they did over the walls (they go with the roof, so hide with it)
+    for (let d = 0; d < 4; d++) {
+      if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
+      const v = roomWall(c, r, d, k);
+      if (v !== 4 && v !== 14) continue;
+      const [ec, er, w] = edgeOf(c, r, d), i = T(ec, er), j = w ? T(ec - 1, er) : T(ec, er - 1);
+      const wy = Math.max(LV[i], LV[j]) * STEP + k * WALL_H + WALL_H - 0.12 + 0.2, kk = 0.92 + hs(ec, er, 50 + w) * 0.14;
+      for (const a of [0.2, 0.8]) part(G.box, shade(CC('#7e7a88'), kk), w ? ec : ec + a, wy + FLAT_CRENEL / 2, w ? er + a : er, { sx: 0.3, sy: FLAT_CRENEL, sz: 0.34, ry: w ? Math.PI / 2 : 0 });
+    }
     for (let j = 0; j < 2; j++) {
       const off = (r * 2 + j) % 2 ? 0.25 : 0;
       for (let q = -1; q < 2; q++) {
         const x0 = Math.max(0, q * 0.5 + off), x1 = Math.min(1, (q + 1) * 0.5 + off);
         if (x1 - x0 < 0.05) continue;
         const col = shade(CC('#86828e'), 0.82 + hs(c, r, 90 + j * 3 + q) * 0.26);
-        part(G.box, col, c + (x0 + x1) / 2, y0 + 0.035, r + 0.25 + j * 0.5, { sx: x1 - x0 - 0.04, sy: 0.05, sz: 0.46 });
+        part(G.box, col, c + (x0 + x1) / 2, y0 + 0.025, r + 0.25 + j * 0.5, { sx: x1 - x0 - 0.04, sy: 0.03, sz: 0.46 });
       }
     }
   }
@@ -24812,7 +24824,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 540, crashSeen = new Map();
+const GAME_VERSION = 541, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
