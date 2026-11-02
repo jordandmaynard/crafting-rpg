@@ -6025,6 +6025,9 @@ $('hideBtn').addEventListener('click', e => { toggleUI(false); e.currentTarget.b
 $('showUI').addEventListener('click', e => { toggleUI(true); e.currentTarget.blur(); });
 applyOptions();
 function hazeOn() { return HAZE.on > 0.5 && HAZE.density > 0; }
+// (v503, Jordan) out at sea or on the ocean the lit haze thins to SEA_SWELL.haze of itself (its density, so its light
+// too), over the same ramp from the coast as the swells (OPEN where the camera looks)
+const seaHazeK = () => 1 - (1 - SEA_SWELL.haze) * openAt(camTarget.x, camTarget.z);
 // (how far into the sun's or moon's light we are: 0 at the handover, 1 outside its fades; the haze's shadowed sky
 // follows it too)
 let lightFade = 1;
@@ -6033,7 +6036,7 @@ function updateHaze() {
   const res = outlineMat.uniforms.res.value, a = CLOUDS.direction * Math.PI / 180;
   hazeTint.set(HAZE.color);
   haze.update({ on: hazeOn(), camera, res: [res.x, res.y], ss: ssNow, depth: renderer.textureView(outlineRT.depthTexture), steps: HAZE.steps, block: HAZE.block,
-    top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density, height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
+    top: camTarget.y + HAZE.top, bottom: camTarget.y - 8, density: HAZE.density * seaHazeK(), height: HAZE.height, floor: HAZE.floor, ground: camTarget.y,
     sun: HAZE.sun, forward: HAZE.forward, shafts: HAZE.shafts, shadeSky: HAZE.shadeSky * lightFade, sky: HAZE.sky, lamps: HAZE.lamps, lava: HAZE.lava, lavaHeight: HAZE.lavaHeight,
     wisps: HAZE.wispsOn > 0.5 ? HAZE.wisps : 0, wispSize: HAZE.wispSize, wind: [Math.cos(a) * HAZE.windSpeed, 0, Math.sin(a) * HAZE.windSpeed],
     tint: [hazeTint.r, hazeTint.g, hazeTint.b], lift: HAZE.lift, groundColour: gi.gcolView, hfSize: gi.uniforms()[10],
@@ -13505,7 +13508,7 @@ const boats = [];
 // length), in the water's shader and here (seaSwell) alike. By each tile's feature (nameFeatures / nameSeas):
 // SEA: water named a sea or an ocean (inland seas too); MIST: lakes and ponds, and the bays, inlets, straits and
 // shallows of the open sea, which take the lake mist (GROUND_HAZE.lake); OPEN: each sea tile's 0..1, smooth over reach.
-const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 0.75 };
+const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 0.75, haze: 0.2 };
 const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N), MIST = new Uint8Array(N * N);
 const MIST_KINDS = new Set(['lake', 'bay', 'inlet', 'strait', 'shallows']);
 function computeOpenSea() {
@@ -13559,7 +13562,7 @@ const BOAT_LAMP = { color: '#ffc46a', light: 2.3, range: 4, decay: 2, fade: 0.5 
 // (v502, Jordan) the boats' wake through the ground haze: the hull, stern to bow, clears it (radius tiles, clear a
 // frame), pushes it out to the sides (push) and drags it along as it goes (drag × speed), so a boat under way leaves
 // a broad trail behind it. T > Boats.
-const BOAT_WAKE = { radius: 1.0, clear: 1.6, push: 2.5, drag: 0.6 };
+const BOAT_WAKE = { radius: 0.65, clear: 1.6, push: 2.5, drag: 1.2 };
 const boatGlowMat = new GFX.MeshBasicMaterial({ color: '#3a2a18' });
 const boatLight = addLight(new GFX.PointLight(BOAT_LAMP.color, 0, BOAT_LAMP.range, BOAT_LAMP.decay));
 boatLight.layers.enableAll(); boatLight.visible = false;
@@ -22969,6 +22972,7 @@ const TUNING = [
     [SEA_SWELL, 'reach', 'Sea swells: grow to full over this many tiles from the coast (on a new world)', 1, 20, 0.5],
     [SEA_SWELL, 'length', 'Sea swells: length (× 13 and 8.5 tiles a wave)', 0.3, 4, 0.05],
     [SEA_SWELL, 'pitch', 'How much the boats pitch and roll with the water', 0, 2, 0.05],
+    [SEA_SWELL, 'haze', 'Lit haze out at sea (share of its density, over the swells\' ramp)', 0, 1, 0.01],
     [BOAT_LAMP, 'light', 'Brig lanterns at the wheel: light strength', 0, 6, 0.05],
     [BOAT_LAMP, 'range', 'Brig lanterns: light reach (tiles)', 1, 20, 0.5],
     [BOAT_LAMP, 'color', 'Brig lanterns: colour', 'color'],
@@ -24170,7 +24174,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 502, crashSeen = new Map();
+const GAME_VERSION = 503, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
