@@ -127,7 +127,13 @@ class Renderer {
   // ---- the three-like surface the game calls ----
   setPixelRatio() {}
   getPixelRatio() { return 1; }
-  setSize(w, h) { this.domElement.width = Math.max(1, w | 0); this.domElement.height = Math.max(1, h | 0); }
+  // (only on a change: setting a canvas's size, even to what it is, throws its picture away, and the page can show
+  // that blank for a frame)
+  setSize(w, h) {
+    const W = Math.max(1, w | 0), H = Math.max(1, h | 0), el = this.domElement;
+    if (el.width !== W) el.width = W;
+    if (el.height !== H) el.height = H;
+  }
   setClearColor(c, a = 1) { this.clearColor.set(c); this.clearAlpha = a; }
   setRenderTarget(rt) { this._runPendingClear(); this.target = rt || null; }
   // a second canvas to draw into, see-through where nothing is drawn (the inventory's character view): hand it to
