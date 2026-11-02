@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v474:** Timber window shutters (Jordan): a shutter only hangs on a side where the next edge along the same wall line (same story) is a blank wall or no wall; beside a door, gate or another window that side's shutter is left off (shutterSides(c, r, w) bit 1 low end, bit 2 high end, passed through timberWindow to shutters).
+
 **v473:** Sleepers sink further and keep their legs level (Jordan): FOLK.sink 24 degrees tips the torso down into the mattress under the blanket (head still on the pillow) and bends them forward at the hips by as much (townsfolk.js f.hipBend), so the legs lie level instead of poking down through the floor; their tool is hidden through the whole bed sequence and the busker's lute while they lie.
 
 **v472:** Windows blinking lit and dark as you walk at night (Jordan): the glass shader's lamp glow (lamps and fires shining through a pane) only read the first 8 point lights, and the lit lamps' order in the light list shifts as the nearest 12 change, so a pane lit by the 9th or later light popped off. It now reads all of them (MAX_POINTS 16), so a pane's glow fades with its lamp's light.

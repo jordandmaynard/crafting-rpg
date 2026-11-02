@@ -11243,7 +11243,7 @@ function wallPieceRaw(c, r, w, type, cut) {
     for (const a of [0, 1]) { p = at(a, y + CUT_H / 2); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 0.16, sy: CUT_H, sz: 0.26, ry }); }
     return;
   }
-  if (type === 13) { const out = windowOutside(c, r, w); timberWindow(at, y, ry, k, out, shutterPick(c, r, w, out), out ? windowRoofColor(c, r, w, out) : null); }
+  if (type === 13) { const out = windowOutside(c, r, w); timberWindow(at, y, ry, k, out, shutterPick(c, r, w, out), out ? windowRoofColor(c, r, w, out) : null, shutterSides(c, r, w)); }
   else if (!door) {
     let p = at(0.5, y + 0.25); part(G.box, shade(CC('#7a7484'), k), p[0], p[1], p[2], { sx: 1, sy: 0.5, sz: 0.24, ry });
     p = at(0.5, y + 0.5 + (WALL_H - 0.6) / 2); part(G.box, shade(CC(TIMBER.plaster), k), p[0], p[1], p[2], { sx: 0.98, sy: WALL_H - 0.6, sz: 0.18, ry });
@@ -11385,7 +11385,7 @@ function giGeo(b, cuts, proxy) {
 }
 // a timber wall with a square window: the stone foot, a beam right across under the window and another over it,
 // plaster either side and above and below, the window's own posts, four panes and the bars between them
-function timberWindow(at, y, ry, k, out = 0, pick = 0, roofCol = null) {
+function timberWindow(at, y, ry, k, out = 0, pick = 0, roofCol = null, sides = 3) {
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const plaster = shade(CC(TIMBER.plaster), k), beam = TIMBER.beam, y0 = BAY.y0, y1 = BAY.y1, hw = WINDOW_HW, ym = (y0 + y1) / 2;
   const bay = out && BAY.on && BAY.depth > 0.02, g = hw - 0.04, bar = '#3a2a1c';
@@ -11431,8 +11431,8 @@ function timberWindow(at, y, ry, k, out = 0, pick = 0, roofCol = null) {
   }
   // (on a bay they hang from its front corner posts, v418)
   if (out && SHUTTER.on) {
-    if (bay) shutters(at, y + (y0 + 0.05 + y1 - 0.04) / 2, ry, out, hw, y1 - y0 - 0.12, pick, hw + 0.04, 0.1 + BAY.depth);
-    else shutters(at, y + ym, ry, out, hw, y1 - y0 - 0.03, pick);
+    if (bay) shutters(at, y + (y0 + 0.05 + y1 - 0.04) / 2, ry, out, hw, y1 - y0 - 0.12, pick, hw + 0.04, 0.1 + BAY.depth, sides);
+    else shutters(at, y + ym, ry, out, hw, y1 - y0 - 0.03, pick, hw, 0.14, sides);
   }
 }
 // The bay windows (v417): how far they bump out, the timber window's height (y0..y1 over the wall's foot), the roof's colour
@@ -11467,6 +11467,18 @@ function windowOutside(c, r, w) {
   if (fa !== fb) return fa ? -1 : 1;
   return 0;
 }
+// (v474, Jordan) which of a timber window's shutters to hang: bit 1 the low end along the wall, bit 2 the high end,
+// each only where the next edge along the same line (on this story) is a blank wall or no wall, not a door or window
+function shutterSides(c, r, w) {
+  const k = Math.round(PDY / WALL_H);
+  const val = (cc, rr) => {
+    if (cc < 0 || rr < 0 || cc >= N || rr >= N) return 0;
+    const i = T(cc, rr);
+    return k ? (UP[k] && (w ? UP[k].WW : UP[k].WN).get(i)) || 0 : (w ? WW : WN)[i];
+  };
+  const free = v => !isDoorVal(v) && !isWindowVal(v);
+  return (free(w ? val(c, r - 1) : val(c - 1, r)) ? 1 : 0) | (free(w ? val(c, r + 1) : val(c + 1, r)) ? 2 : 0);
+}
 // (a building's shutters all one colour: picked by its building, or by the wall when the rooms aren't known yet)
 function shutterPick(c, r, w, out) {
   const k = Math.round(PDY / WALL_H), inside = out > 0 ? (w ? T(c - 1, r) : T(c, r - 1)) : T(c, r), rm = rooms.get(roomOf.get(k * SNN + inside));
@@ -11479,12 +11491,13 @@ function windowRoofColor(c, r, w, out) {
   for (const kk of [k, 0]) { const rm = rooms.get(roomOf.get(kk * SNN + inside)); if (rm) { const b = buildings.get(rm.bld); return (b && b.color) || rm.color; } }
   return null;
 }
-function shutters(at, ym, ry, out, hw, hh, pick, ha = hw, off = 0.14) {
+function shutters(at, ym, ry, out, hw, hh, pick, ha = hw, off = 0.14, sides = 3) {
   const wv = Math.abs(ry) > 0.1, th = SHUTTER.open * Math.PI / 180, col = SHUTTER.colors[Math.floor(pick * SHUTTER.colors.length) % SHUTTER.colors.length];
   const nrm = wv ? [out, 0, 0] : [0, 0, out], alongV = wv ? [0, 0, 1] : [1, 0, 0];
   const saveE = emitSurf; emitSurf = null; SURF = SURF_WOOD;
   try {
     for (const side of [-1, 1]) {
+      if (!(sides & (side < 0 ? 1 : 2))) continue;
       const h = at(0.5 + side * ha, ym);
       // (shut, a shutter runs from its hinge toward the middle: -side along the wall)
       const da = -side * Math.cos(th), dn = Math.sin(th);
@@ -22896,7 +22909,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 473, crashSeen = new Map();
+const GAME_VERSION = 474, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
