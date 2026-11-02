@@ -490,6 +490,7 @@ class Renderer {
     if (e) { d[o + 20] = e.r * ei; d[o + 21] = e.g * ei; d[o + 22] = e.b * ei; } else { d[o + 20] = d[o + 21] = d[o + 22] = 0; }
     d[o + 23] = mesh.receiveShadow ? 1 : 0;
     d[o + 24] = mat.metalness ?? 0; d[o + 25] = mat.roughness ?? 1;
+    d[o + 26] = mesh.objX ?? 0; d[o + 27] = 0;   // (objX: a number of the mesh's own for its ShaderMaterial, O.pbr.z)
     return [page.bg, k * OBJ_BYTES];
   }
   // what the camera's layers can see, sorted for drawing

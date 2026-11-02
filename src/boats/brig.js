@@ -311,12 +311,16 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   let s = 0.65 * sin(a1) + 0.35 * sin(a2);
   let sx = 0.65 * 7.0 * cos(a1) - 0.35 * 11.0 * cos(a2);
   let sy = -0.65 * 2.0 * cos(a1) + 0.35 * 3.5 * cos(a2);
-  let A = U.fl.x * smoothstep(0.0, 1.0, length(c1));
-  let d = A * ly * s;
-  // the slope of the cloth (its own curve, as made, and the flutter's) gives the normal; turned into the world by the
-  // inverse transpose of the sail's turn and stretch
-  let gx = v.sg.x + A * ly * sx;
-  let gy = v.sg.y - A * (s + ly * sy);
+  // (v527) the wind's billow (the mesh's objX, tiles): the cloth arcs forward between the yard and the foot, its
+  // edges too, and a sail drawn that taut flutters less
+  let B = O.pbr.z;
+  let A = U.fl.x * smoothstep(0.0, 1.0, length(c1)) * (1.0 - 0.6 * smoothstep(0.0, 0.8, B));
+  let across = 1.0 - 1.6 * lx * lx; let down = sin(3.14159 * ly);
+  let d = A * ly * s + B * across * down;
+  // the slope of the cloth (its own curve, as made, the flutter's and the billow's) gives the normal; turned into the
+  // world by the inverse transpose of the sail's turn and stretch
+  let gx = v.sg.x + A * ly * sx - B * 3.2 * lx * down;
+  let gy = v.sg.y - A * (s + ly * sy) - B * across * 3.14159 * cos(3.14159 * ly);
   let nl = vec3f(-gx, -gy, 1.0);
   let n = c0 * (nl.x / dot(c0, c0)) + c1 * (nl.y / max(dot(c1, c1), 1e-6)) + c2 * (nl.z / dot(c2, c2));
   let w = (M * vec4f(v.position.x, v.position.y, v.position.z + d, 1.0)).xyz;

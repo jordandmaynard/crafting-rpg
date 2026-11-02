@@ -157,7 +157,7 @@ struct Obj {
   model: mat4x4f,
   color: vec4f,       // a: opacity
   emissive: vec4f,    // w: 1 when it takes shadows
-  pbr: vec4f,         // metalness, roughness
+  pbr: vec4f,         // metalness, roughness, the mesh's objX
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var shadowMap: texture_depth_2d;
