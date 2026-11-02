@@ -228,6 +228,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune .title { font-family: var(--display); font-size: 11px; color: var(--gold); }
 .tune button { font-family: var(--body); font-size: 17px; letter-spacing: 0; padding: 2px 9px; border-width: 2px; box-shadow: 2px 2px 0 #000; }
 .tune .tune-close { margin-left: auto; line-height: 1; }
+.tune .tune-act { display: block; width: 100%; margin: 4px 0; text-align: left; }
 .tune details { border-top: 2px solid var(--panel-edge); padding: 4px 0; }
 .tune summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 4px 0; user-select: none; }
 .tune summary::-webkit-details-marker { display: none; }
@@ -19897,6 +19898,16 @@ function humanTick(dt) {
     return;
   }
 }
+// (v479) the T panel's spawn buttons (Crowd test): n of a kind d tiles ahead of you, side by side
+const HUMAN_SPAWN = { footpad: 0, bandit: 0, clear: 0 };
+function spawnHumansAhead(kind, n, d = 4) {
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const s = (k - (n - 1) / 2) * 0.8;
+    out.push(spawnFoe(kind, H.x + Math.sin(H.face) * d + Math.cos(H.face) * s, H.z + Math.cos(H.face) * d - Math.sin(H.face) * s));
+  }
+  return out;
+}
 const humanOpen = i => !!LV[i] && !SH[i] && !LAVA[i] && !WT[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN && !roomOf.has(i) && !FL[i];
 
 
@@ -22096,6 +22107,10 @@ const TUNING = [
     [CROWD_READ, 'foes', 'Foes about', 'readout', 0, 1],
     [CROWD_READ, 'draws', 'Draw calls a frame', 'readout', 0, 1],
     [CROWD_READ, 'fps', 'Frames a second', 'readout', 0, 1],
+    // (v479) people on the road, put a few tiles ahead of you
+    [HUMAN_SPAWN, 'footpad', 'A footpad in front of you', 'action', () => spawnHumansAhead('footpad', 1)],
+    [HUMAN_SPAWN, 'bandit', 'A band of three bandits in front of you', 'action', () => spawnHumansAhead('bandit', 3)],
+    [HUMAN_SPAWN, 'clear', 'Clear away every foe about', 'action', () => foes.slice().forEach(removeFoe)],
   ]],
   ['Ground haze', [
     [GROUND_HAZE, 'on', 'Ground haze (0 off, 1 on)', 0, 1, 1],
@@ -22840,7 +22855,7 @@ const tuneClosed = (() => { try { return new Set(JSON.parse(localStorage.getItem
 const saveTuneClosed = () => { try { localStorage.setItem(TUNE_CLOSED_KEY, JSON.stringify([...tuneClosed])); } catch (err) { /* storage blocked */ } };
 const tuneDecimals = step => Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
 const tuneShow = (v, step) => (typeof v === 'string' ? v : v.toFixed(tuneDecimals(step)));
-const tuneLine = ([title, items]) => `${title}: ` + items.map(([o, k, , , , st]) => `${k} ${tuneShow(o[k], st)}`).join(', ');
+const tuneLine = ([title, items]) => `${title}: ` + items.filter(it => it[3] !== 'action').map(([o, k, , , , st]) => `${k} ${tuneShow(o[k], st)}`).join(', ');
 const tuneButton = (text, className = '') => Object.assign(document.createElement('button'), { type: 'button', textContent: text, className });
 function tuneCopy(text, btn, out, label) {
   const fallback = () => { out.value = text; out.hidden = false; out.select(); out.scrollIntoView({ block: 'nearest' }); };
@@ -22886,6 +22901,13 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
         text.textContent = label;
         const val = document.createElement('span');
         val.className = 'v';
+        // (v479) a button that does something (max: what)
+        if (min === 'action') {
+          const b = tuneButton(label, 'tune-act');
+          b.addEventListener('click', () => { max(); b.blur(); });
+          sec.append(b);
+          continue;
+        }
         // a value the game measures, shown as it changes
         if (min === 'readout') {
           val.textContent = obj[key].toFixed(tuneDecimals(step));
@@ -23117,7 +23139,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 478, crashSeen = new Map();
+const GAME_VERSION = 479, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -23440,7 +23462,7 @@ window.GAME = {
   findPath: (c0, r0, c1, r1) => { const p = findPath(c0, r0, c1, r1); return p && p.length; },
   clearFoes: () => foes.slice().forEach(removeFoe),
   // (v477) people on the road: spawn some of a kind beside you, or list who's about
-  spawnHuman: (kind = 'bandit', n = 1, d = 4) => { const out = []; for (let k = 0; k < n; k++) out.push(spawnFoe(kind, H.x + Math.sin(H.face) * d + (k - (n - 1) / 2) * 0.8, H.z + Math.cos(H.face) * d)); return out.map(f => f.who); },
+  spawnHuman: (kind = 'bandit', n = 1, d = 4) => spawnHumansAhead(kind, n, d).map(f => f.who),
   humans: () => foes.filter(f => f.rig).map(f => ({ kind: f.kind, who: f.who, prop: f.rig.d.prop, level: f.level, hp: f.hp, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), combo: f.combo })),
   fallen: () => humanFallen.length,
   face: a => { H.face = a; },
