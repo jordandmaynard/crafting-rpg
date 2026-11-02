@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v465:** HUD rearranged (Jordan): toasts (framed and plain) sit just above the belt's centre panel, 6 px clear of its top (placeToast sets --toastB from #beltCenter's rect each time one shows; framed toasts scale from their bottom edge). The OPTIONS / TUNE / HIDE UI / GPU buttons and the frame rate moved under the minimap and watch strip, right-aligned and wrapping to its width. The monster / townsperson banner is drawn at full kit size (HUD_BARS.topScale 1, x the UI scale).
+
 **v464:** Stray townsperson banners (Jordan: a name showing with the cursor over empty grass): in the tilted view, people in a town behind the camera projected mirrored back onto the screen, so pickFolk could match the cursor to someone out of sight. pickFolk and pickFoe now skip anyone whose projected depth is past 1 (behind the camera).
 
 **v463:** Townsfolk no longer walk into the cathedral's towers and buttresses (Jordan). Routes (A*) knew walls but not the round things in `pillars` (towers, buttresses, columns), which can reach over a tile's edge: folkOpen now refuses a tile with one on it, and next to one (folkTight) a route takes no diagonal and walkers take no straight-line shortcut, going tile centre to tile centre instead.
