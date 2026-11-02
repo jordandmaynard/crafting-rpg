@@ -3497,21 +3497,45 @@ function raiseTownHouses(t, n) {
   const sizes = big ? [[7, 6], [6, 6], [7, 5], [6, 5], [5, 5]] : [[6, 5], [5, 5], [6, 4], [5, 4], [4, 4]];
   // (v426) a large town's cathedral takes the best place first, on the plaza if it can
   const cath = big ? placeCathedral(t, n, house, cands, piece) : t.tier === 1 ? placeChapel(t, n, house, cands, piece) : null;
-  for (const [c0, r0, d] of cands) {
+  // (2026-11-02, Jordan: a door may open on a one-tile street only when nothing stands right across it; otherwise the
+  // house is set back a tile, a single street tile leading from the street to its door. keep: the tiles across the
+  // street from a door, left free so no house is built there later)
+  const keep = new Set();
+  const across = (c, r, e) => [c + DC[e] * 2, r + DR[e] * 2];   // (from the tile inside a door, out through edge e)
+  if (cath) {
+    const [xc, xr] = across(...cath.inside, (cath.cathedral.d + 2) & 3), x = T(xc, xr);
+    if (!TSTREET[x]) keep.add(x);
+  }
+  for (const [s0, q0, d] of cands) {
     if (t.houses.length >= TT.houses) break;
     const p = (d + 1) & 3, back = (d + 2) & 3;
+    let c0 = s0, r0 = q0, fit = null, setBack = 0;
     const at = (a, b) => [c0 + DC[p] * a + DC[d] * b, r0 + DR[p] * a + DR[d] * b];
-    let fit = null;
-    for (const [w, dep] of sizes) {
-      const o0 = -Math.floor((w - 1 - Math.floor(hs(c0, r0, 320 + d) * 2)) / 2), a1 = o0 + w - 1;
-      let ok = true;
-      for (let a = o0 - 1; a <= a1 + 1 && ok; a++) for (let b = 0; b <= dep + 1 && ok; b++) {
-        const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep;
-        if (inside ? !inTown(c, r) || TSTREET[i] || house.has(i) : (b > 0 && (!inTown(c, r) || house.has(i)))) ok = false;
+    for (const sb of [0, 1]) {
+      c0 = s0 + DC[d] * sb; r0 = q0 + DR[d] * sb;
+      if (!sb) {
+        // right across the street from the door: more street, or open ground in the town (it's kept open)
+        const [xc, xr] = at(0, -1), x = T(xc, xr);
+        if (!TSTREET[x] && (!inTown(xc, xr) || house.has(x))) continue;
+      } else {
+        const i = T(c0, r0);
+        if (!inTown(c0, r0) || TSTREET[i] || house.has(i) || keep.has(i)) break;
       }
-      if (ok) { fit = { w, dep, o0, a1 }; break; }
+      for (const [w, dep] of sizes) {
+        const o0 = -Math.floor((w - 1 - Math.floor(hs(c0, r0, 320 + d) * 2)) / 2), a1 = o0 + w - 1;
+        let ok = true;
+        for (let a = o0 - 1; a <= a1 + 1 && ok; a++) for (let b = 0; b <= dep + 1 && ok; b++) {
+          const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep;
+          if (inside ? !inTown(c, r) || TSTREET[i] || house.has(i) || keep.has(i) : (b > 0 && (!inTown(c, r) || house.has(i)))) ok = false;
+        }
+        if (ok) { fit = { w, dep, o0, a1 }; break; }
+      }
+      if (fit) { setBack = sb; break; }
+      if (!sb) break;   // (set a house back only when something across the street needs it)
     }
     if (!fit) continue;
+    if (setBack) TSTREET[T(c0, r0)] = 1;   // (the street tile out to its door)
+    else { const [xc, xr] = at(0, -1), x = T(xc, xr); if (!TSTREET[x]) keep.add(x); }
     const { w, dep, o0, a1 } = fit, roll = hs(c0, r0, 330 + d);
     let style = TOWN_STYLE[t.tier].find(([, v]) => roll < v)[0];
     // (2026-11-02, Jordan) the town's own buildings, in the order the houses go up: a tavern (two stories, rooms
@@ -3577,7 +3601,7 @@ function raiseTownHouses(t, n) {
       }
     }
     // a balcony over the street (large towns, a full upper story): three planks out in front, railed, a door out to it
-    if (two && big && !plan.terrace && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
+    if (two && big && !setBack && !plan.terrace && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
       const bal = [-1, 0, 1].map(a => at(a, 0)), free = bal.every(([c, r]) => !U.FL.has(T(c, r)) && !BALCONY.has(T(c, r))) && [-1, 0, 1].every(a => upp.has(K(a, 1)));
       if (free) {
         for (const [c, r] of bal) { const i = T(c, r); U.FL.set(i, 1); BALCONY.add(i); piece(c, r); }
@@ -3900,6 +3924,9 @@ function placeChapel(t, n, house, cands, piece) {
       const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep;
       if (inside ? !inTown(c, r) || TSTREET[i] || house.has(i) || LV[i] !== lv : (b > 0 && (!inTown(c, r) || house.has(i)))) ok = false;
     }
+    // (nothing right across a narrow street from its door: the town's edge counts as something)
+    const [xc, xr] = at(0, -1);
+    if (ok && !TSTREET[T(xc, xr)] && !inTown(xc, xr)) ok = false;
     if (ok) return raiseChapel(t, c0, r0, d, W, dep, house, piece);
   }
   return null;
@@ -24631,7 +24658,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 536, crashSeen = new Map();
+const GAME_VERSION = 537, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
