@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v504:** (Jordan) No snow falls over water (the snow's tiles need ground: LV). The boats' pitch and roll on the swells tune apart: SEA_SWELL.pitch and SEA_SWELL.roll (both 0.75, T > Boats).
+
 **v503:** (Jordan) Out at sea and on the ocean the lit haze thins to SEA_SWELL.haze 0.2 of its density (so its light and the cloud shadows in it too), over the same ramp from the coast as the swells (OPEN where the camera looks; T > Boats). Wake tuning: BOAT_WAKE.radius 0.65, drag 1.2.
 
 **v502:** (Jordan) Out on the water (aboard a boat, or over a sea, lake or river's tile) the place name is the water's own (its feature from FEAT: ocean, sea, bay, inlet, strait, shallows, lake, river), with its glyph and its own discovery toast, rather than the nearest land region. The boats cut a broad wake through the ground haze (BOAT_WAKE: the hull from stern to bow clears it, pushes it aside and drags it along with the speed, as a stir handed to the haze sim each frame; T > Boats). The ground haze is drawn out further for the boats' wider view: its slices 96 tiles across (were 56), fading out over their last 8 tiles instead of stopping at a hard line, and its site map 104 tiles across (was 64) (src/gfx/groundhaze.js). Tuning: SEA_SWELL.pitch 0.75, BOAT_LAMP.light 2.3, range 4. The ground haze also rebuilds when the lake mist's amount or colour changes.
