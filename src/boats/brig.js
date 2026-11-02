@@ -1,0 +1,493 @@
+// The Kinghaven merchant brig (v498, in the game since; its own module since v511) and its liveries (v511, Jordan):
+// the hull's lower strakes and the deck in a wood stain each, the painted band (and the transom) in a paint with a
+// trim colour for its pinstripe and gilt, the sails' cloth, and the emblem on them: a shape in a field colour with a
+// smaller charge of it in another. Every colour is muted, as painted or stained wood and dyed canvas are; a livery is
+// rolled from a seed (rollLivery), so a liked one can be had again. Shared by the game (index.html) and the random
+// model generator (townsfolk.html): the shapes come out the same in both.
+import * as GFX from '../gfx/index.js';
+
+// the hull's size and the deck's fittings, as the game's BOAT has them (the game spreads these into BOAT)
+export const BRIG_SHAPE = {
+  stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, gangV: -0.2, wheelV: -3.2,
+  helmP: 0.45, helmFront: -3.42, rampV: -2.6, rampU: 0.42, wheelY: 0.85, wheelR: 0.26,
+  masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }],
+};
+// the deck's half width along the boat (to the bulwarks' inner face), the bulwarks' height over the deck, the keel
+export function hullHB(B, v) {
+  if (v <= B.mid) { const t = Math.min(1, (B.mid - v) / (B.mid - B.stern)); return B.beam * (1 - 0.26 * t * t); }
+  const t = Math.min(1, (v - B.mid) / (B.bow - B.mid));
+  return Math.max(0.04, B.beam * Math.pow(1 - t * t, 0.62));
+}
+export const hullGH = v => 0.42 + 0.35 * Math.max(0, (v - 1.5) / 3.1) ** 2 + 0.18 * Math.max(0, (-v - 2.8) / 1.4);
+export const hullKeel = (B, v) => -B.free - 0.85 + 0.75 * Math.max(0, (v - 2.4) / 2.2) ** 2;
+// a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
+export const brigYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.74, m.h * 0.32 - 0.3]];
+
+// ---------- liveries ----------
+// stains: [id, name, colour]; the hull's strakes darken from it down to the keel, the deck's boards are it and a
+// shade darker (rails, masts and the helm deck are of the deck's wood). paints: the band under the rail and the
+// transom. trims: the pinstripe, the gilt and the brass. cloths: the sails. pennants: the swallowtail.
+export const STAINS = [
+  ['oak', 'Oak', '#92613e'], ['pine', 'Honey pine', '#ad8656'], ['teak', 'Teak', '#9c6b3c'], ['walnut', 'Walnut', '#6c4831'],
+  ['cedar', 'Cedar', '#a05a3c'], ['mahogany', 'Mahogany', '#7c4130'], ['drift', 'Weathered grey', '#857d72'], ['tar', 'Tarred', '#433832'],
+];
+export const DECKS = [
+  ['oak', 'Oak', '#8a6a44'], ['pine', 'Honey pine', '#a88a5e'], ['teak', 'Teak', '#93703f'], ['walnut', 'Walnut', '#6b5039'],
+  ['cedar', 'Cedar', '#94634a'], ['mahogany', 'Mahogany', '#7a4a37'], ['drift', 'Weathered grey', '#8e877b'], ['ash', 'Scrubbed ash', '#a99a7c'],
+];
+export const PAINTS = [
+  ['forest', 'Forest green', '#395749'], ['oxblood', 'Oxblood', '#6b2e29'], ['navy', 'Navy', '#2f3e53'], ['ochre', 'Ochre', '#977838'],
+  ['slate', 'Slate', '#4d585e'], ['teal', 'Deep teal', '#2f5755'], ['black', 'Black', '#2c2927'], ['cream', 'Cream', '#c6b996'],
+  ['brick', 'Brick red', '#83452f'], ['plum', 'Plum', '#4e3547'], ['sage', 'Sage', '#677659'], ['dove', 'Dove grey', '#87877d'],
+];
+export const TRIMS = [
+  ['gold', 'Gilt', '#b8923a'], ['cream', 'Cream', '#d3c7a3'], ['red', 'Red ochre', '#94432f'], ['white', 'Bone white', '#cdc6b5'],
+  ['black', 'Black', '#2c2a28'], ['verdigris', 'Verdigris', '#5d8676'], ['blue', 'Faded blue', '#5a6e85'],
+];
+export const CLOTHS = [
+  ['canvas', 'Canvas', '#e8dcc0', 4], ['bleached', 'Bleached', '#ede7d8', 2], ['tan', 'Tanned', '#c6a273', 2], ['barked', 'Tan-bark red', '#a9654a', 1.5],
+  ['ochre', 'Ochre', '#c49f5a', 1], ['grey', 'Weathered grey', '#b8b3a6', 1], ['dun', 'Dun', '#d2c098', 1.5],
+];
+export const PENNANTS = [['red', 'Red', '#a8322a'], ['blue', 'Blue', '#3a5276'], ['green', 'Green', '#3f6a4c'], ['gold', 'Gold', '#b8923a'], ['black', 'Black', '#2c2927'], ['white', 'White', '#d8d2c2']];
+// the emblems: each a few convex pieces (x across, y down, about -1..1), its field, and a charge inside it
+const ngon = (n, r, a0 = 0, cx = 0, cy = 0) => Array.from({ length: n }, (_, k) => { const a = a0 + k / n * Math.PI * 2; return [cx + Math.sin(a) * r, cy - Math.cos(a) * r]; });
+const rect = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+const bar = (a, len, w) => { const c = Math.cos(a), s = Math.sin(a); return [[-len, -w], [len, -w], [len, w], [-len, w]].map(([x, y]) => [x * c - y * s, x * s + y * c]); };
+const star = (r, k) => { const out = [ngon(5, r * k, Math.PI / 5)]; for (let j = 0; j < 5; j++) { const a = j / 5 * Math.PI * 2, b = a + Math.PI / 5, c = a - Math.PI / 5; out.push([[Math.sin(a) * r, -Math.cos(a) * r], [Math.sin(b) * r * k, -Math.cos(b) * r * k], [Math.sin(c) * r * k, -Math.cos(c) * r * k]]); } return out; };
+const sun = (r, n) => { const out = [ngon(12, r * 0.55)]; for (let j = 0; j < n; j++) { const a = j / n * Math.PI * 2, w = Math.PI / n * 0.55; out.push([[Math.sin(a) * r, -Math.cos(a) * r], [Math.sin(a + w) * r * 0.5, -Math.cos(a + w) * r * 0.5], [Math.sin(a - w) * r * 0.5, -Math.cos(a - w) * r * 0.5]]); } return out; };
+const chev = (k, w) => [[[-0.95 * k, 0.55 * k], [0, -0.45 * k], [0, -0.45 * k + w], [-0.95 * k, 0.55 * k + w]], [[0, -0.45 * k], [0.95 * k, 0.55 * k], [0.95 * k, 0.55 * k + w], [0, -0.45 * k + w]]];
+export const EMBLEMS = {
+  diamond: { name: 'Diamond', field: [[[0, -1], [0.8, 0], [0, 1], [-0.8, 0]]], charge: [[[0, -0.5], [0.4, 0], [0, 0.5], [-0.4, 0]]] },
+  roundel: { name: 'Roundel', field: [ngon(18, 0.85)], charge: [ngon(14, 0.42)] },
+  cross: { name: 'Cross', field: [rect(-0.28, -0.95, 0.28, 0.95), rect(-0.95, -0.28, 0.95, 0.28)], charge: [rect(-0.12, -0.8, 0.12, 0.8), rect(-0.8, -0.12, 0.8, 0.12)] },
+  saltire: { name: 'Saltire', field: [bar(Math.PI / 4, 1.05, 0.22), bar(-Math.PI / 4, 1.05, 0.22)], charge: [bar(Math.PI / 4, 0.9, 0.09), bar(-Math.PI / 4, 0.9, 0.09)] },
+  star: { name: 'Star', field: star(1, 0.45), charge: [ngon(5, 0.3)] },
+  chevron: { name: 'Chevron', field: chev(1, 0.42), charge: [[[-0.75, 0.48], [0, -0.28], [0, -0.17], [-0.75, 0.59]], [[0, -0.28], [0.75, 0.48], [0.75, 0.59], [0, -0.17]]] },
+  bars: { name: 'Two bars', field: [rect(-0.95, -0.6, 0.95, -0.15), rect(-0.95, 0.15, 0.95, 0.6)], charge: [rect(-0.8, -0.44, 0.8, -0.31), rect(-0.8, 0.31, 0.8, 0.44)] },
+  sun: { name: 'Sun', field: sun(1, 10), charge: [ngon(12, 0.3)] },
+  none: { name: 'Plain', field: [], charge: [] },
+};
+const EMBLEM_W = [['diamond', 3], ['roundel', 2], ['cross', 1.5], ['saltire', 1.2], ['star', 1.5], ['chevron', 1.2], ['bars', 1], ['sun', 1], ['none', 0.8]];
+const hexRGB = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const far = (a, b, d) => { const x = hexRGB(a), y = hexRGB(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]) > d; };
+export function mulberry32(a) {
+  return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+// a livery from a seed: { seed, hull, deck, paint, trim, cloth, emblem, field, charge, pennant }, each an [id, name, colour]
+// (the emblem its id). (Append any new rolls at the end, or every kept seed changes.)
+export function rollLivery(seed) {
+  const r = mulberry32((seed | 0) * 7919 + 1013);
+  const pick = list => list[Math.floor(r() * list.length) % list.length];
+  const wpick = list => { const tot = list.reduce((s, x) => s + x[x.length - 1], 0); let u = r() * tot; for (const x of list) { u -= x[x.length - 1]; if (u <= 0) return x; } return list[list.length - 1]; };
+  const hull = pick(STAINS);
+  // (the deck most often of the hull's own wood, scrubbed paler sometimes; never tarred)
+  const same = DECKS.find(d => d[0] === hull[0]);
+  const deck = same && r() < 0.55 ? same : pick(DECKS);
+  const paint = pick(PAINTS);
+  let trim = pick(TRIMS); for (let n = 0; n < 8 && !far(trim[2], paint[2], 70); n++) trim = pick(TRIMS);
+  const cloth = wpick(CLOTHS);
+  const emblem = wpick(EMBLEM_W)[0];
+  // the field: often the hull's paint; never lost against the cloth. The charge: clear of the field.
+  const all = [...PAINTS, ...TRIMS];
+  let field = r() < 0.5 ? paint : pick(all); for (let n = 0; n < 12 && !far(field[2], cloth[2], 95); n++) field = pick(all);
+  let charge = r() < 0.5 ? trim : pick(all); for (let n = 0; n < 12 && !far(charge[2], field[2], 80); n++) charge = pick(all);
+  const pennant = pick(PENNANTS);
+  return { seed: seed | 0, hull, deck, paint, trim, cloth, emblem, field, charge, pennant };
+}
+// the livery as rows for a panel: [what, its name, its colour]
+export const describeLivery = L => [
+  ['Hull', L.hull[1] + ' stain', L.hull[2]], ['Deck', L.deck[1], L.deck[2]], ['Paint', L.paint[1], L.paint[2]], ['Trim', L.trim[1], L.trim[2]],
+  ['Sails', L.cloth[1], L.cloth[2]], ['Emblem', EMBLEMS[L.emblem].name + (L.emblem === 'none' ? '' : ` in ${L.field[1].toLowerCase()}`), L.emblem === 'none' ? null : L.field[2]],
+  ...(L.emblem === 'none' ? [] : [['Charge', L.charge[1], L.charge[2]]]), ['Pennant', L.pennant[1], L.pennant[2]],
+];
+// a short name for the livery: its paint and its emblem
+export const liveryName = L => `${L.paint[1]} and ${L.trim[1].toLowerCase()}${L.emblem === 'none' ? '' : ', ' + EMBLEMS[L.emblem].name.toLowerCase()}`;
+
+// ---------- the mesh kit (the game's own part/seg/quad/tri, so the shapes match) ----------
+const colorCache = new Map();
+const CC = h => { let k = colorCache.get(h); if (!k) { k = new GFX.Color(h); colorCache.set(h, k); } return k; };
+const shade = (c, f) => { const k = (typeof c === 'string' ? CC(c) : c).clone().multiplyScalar(f); k.r = Math.min(1, k.r); k.g = Math.min(1, k.g); k.b = Math.min(1, k.b); return k; };
+const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
+let G = null, GP = null;
+function prims() {
+  if (G) return;
+  G = { box: new GFX.BoxGeometry(1, 1, 1), cone4: new GFX.ConeGeometry(0.5, 1, 4), cyl6: new GFX.CylinderGeometry(0.5, 0.5, 1, 6),
+    cyl8: new GFX.CylinderGeometry(0.5, 0.5, 1, 8), oct: new GFX.OctahedronGeometry(0.5, 0), frust7: new GFX.CylinderGeometry(0.26, 0.5, 1, 7) };
+  GP = new Map();
+  for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attributes.position.array);
+}
+class Buf {
+  constructor() { this.p = []; this.c = []; }
+  geometry() {
+    if (!this.p.length) return null;
+    const g = new GFX.BufferGeometry();
+    g.setAttribute('position', new GFX.BufferAttribute(new Float32Array(this.p), 3));
+    g.setAttribute('color', new GFX.BufferAttribute(new Float32Array(this.c), 3));
+    g.computeVertexNormals();
+    return g;
+  }
+}
+let OUT = null;
+const dummy = new GFX.Object3D(), segAxis = new GFX.Vector3(), segDir = new GFX.Vector3();
+const col = c => typeof c === 'string' ? CC(c) : c;
+function tri(a, b, c, ca, cb = ca, cc = ca) {
+  const p = OUT.p, k = OUT.c; ca = col(ca); cb = col(cb); cc = col(cc);
+  p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+  k.push(ca.r, ca.g, ca.b, cb.r, cb.g, cb.b, cc.r, cc.g, cc.b);
+}
+function quad(a, b, c, d, ca, cb = ca, cc = cb, cd = ca) { tri(a, b, c, ca, cb, cc); tri(a, c, d, ca, cc, cd); }
+function emit(geo, color) {
+  dummy.updateMatrix();
+  const e = dummy.matrix.elements, src = GP.get(geo), k = col(color), p = OUT.p, cl = OUT.c;
+  const det = e[0] * (e[5] * e[10] - e[6] * e[9]) - e[4] * (e[1] * e[10] - e[2] * e[9]) + e[8] * (e[1] * e[6] - e[2] * e[5]);
+  const sw = det < 0 ? [0, 1, -1] : [0, 0, 0];
+  for (let i0 = 0; i0 < src.length; i0 += 3) {
+    const i = i0 + sw[(i0 / 3) % 3] * 3, px = src[i], py = src[i + 1], pz = src[i + 2];
+    p.push(e[0] * px + e[4] * py + e[8] * pz + e[12], e[1] * px + e[5] * py + e[9] * pz + e[13], e[2] * px + e[6] * py + e[10] * pz + e[14]);
+    cl.push(k.r, k.g, k.b);
+  }
+}
+function part(geo, color, x, y, z, { ry = 0, rx = 0, rz = 0, s = 1, sx = s, sy = s, sz = s } = {}) {
+  dummy.position.set(x, y, z); dummy.quaternion.set(0, 0, 0, 1); dummy.rotation.set(rx, ry, rz); dummy.scale.set(sx, sy, sz);
+  emit(geo, color);
+}
+function seg(geo, color, a, b, r) {
+  segDir.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const len = segDir.length();
+  if (len < 1e-5) return;
+  segDir.divideScalar(len);
+  segAxis.set(segDir.z, 0, -segDir.x);
+  const sl = segAxis.length();
+  if (sl < 1e-6) segAxis.set(1, 0, 0); else segAxis.divideScalar(sl);
+  dummy.quaternion.setFromAxisAngle(segAxis, Math.acos(Math.max(-1, Math.min(1, segDir.y))));
+  dummy.position.set((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2); dummy.scale.set(r * 2, len, r * 2);
+  emit(geo, color);
+}
+
+// ---------- the sails' smooth shading ----------
+// the sail's cloth as made, z (its belly) over x across and y down from the yard
+export const BRIG_SAIL_Z = (x, y) => { const v = -y, u = x / (0.94 + 0.06 * v) + 0.5; return 0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v); };
+// each corner of a sail's mesh its slope (dz/dx, dz/dy) on the smooth surface z(x, y) it was cut from
+export function sailSlopes(geo, zf) {
+  if (!geo) return;
+  const p = geo.attributes.position.array, n = p.length / 3, sg = new Float32Array(n * 2), e = 1e-3;
+  for (let k = 0; k < n; k++) {
+    const x = p[k * 3], y = Math.min(-e, Math.max(-1 + e, p[k * 3 + 1]));
+    sg[k * 2] = (zf(x + e, y) - zf(x - e, y)) / (2 * e);
+    sg[k * 2 + 1] = (zf(x, y + e) - zf(x, y - e)) / (2 * e);
+  }
+  geo.setAttribute('sg', new GFX.BufferAttribute(sg, 2));
+}
+// (v506) the sails' material: shaded smooth (each corner's normal from the sail's curve) and fluttering in the wind
+// like the wheat. windV: the wind's uniform ({ value: { x, y, z, w } }: its way, lean, phase); U.fl: flutter, speed.
+export function makeSailMat(windV) {
+  const U = { windV, fl: { value: { x: 0.06, y: 4, z: 0, w: 0 } } };
+  const mat = new GFX.ShaderMaterial({ uniforms: U, vertexColors: true, side: GFX.DoubleSide, attributes: { sg: 'vec2f' }, lit: true,
+    code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) n: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let M = O.model;
+  let c0 = M[0].xyz; let c1 = M[1].xyz; let c2 = M[2].xyz;
+  // (the sail's local x across (-0.5..0.5), y down from the yard (0..-1), z its belly; a furled sail barely moves)
+  let lx = v.position.x; let ly = -v.position.y;
+  let ph = U.windV.w * U.fl.y + M[3].x * 0.37 + M[3].z * 0.53;
+  let a1 = ph * 1.0 + lx * 7.0 - ly * 2.0;
+  let a2 = ph * 1.63 - lx * 11.0 + ly * 3.5 + 1.3;
+  let s = 0.65 * sin(a1) + 0.35 * sin(a2);
+  let sx = 0.65 * 7.0 * cos(a1) - 0.35 * 11.0 * cos(a2);
+  let sy = -0.65 * 2.0 * cos(a1) + 0.35 * 3.5 * cos(a2);
+  let A = U.fl.x * smoothstep(0.0, 1.0, length(c1));
+  let d = A * ly * s;
+  // the slope of the cloth (its own curve, as made, and the flutter's) gives the normal; turned into the world by the
+  // inverse transpose of the sail's turn and stretch
+  let gx = v.sg.x + A * ly * sx;
+  let gy = v.sg.y - A * (s + ly * sy);
+  let nl = vec3f(-gx, -gy, 1.0);
+  let n = c0 * (nl.x / dot(c0, c0)) + c1 * (nl.y / max(dot(c1, c1), 1e-6)) + c2 * (nl.z / dot(c2, c2));
+  let w = (M * vec4f(v.position.x, v.position.y, v.position.z + d, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, n);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  var N = normalize(i.n);
+  let toward = select(-i.eye, -F.camDir.xyz, F.camPos.w > 0.5);
+  if (dot(N, toward) < 0.0) { N = -N; }
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+  });
+  return { mat, U };
+}
+
+// ---------- the brig's shapes in a livery ----------
+// { hull, glow, sail, wheel, furl, anchor, chain, plank }: geometries, the sail with its slopes (sailSlopes)
+export function buildBrig(L, B = BRIG_SHAPE) {
+  prims();
+  const made = {}, HB = v => hullHB(B, v), GH = hullGH, KEEL = v => hullKeel(B, v);
+  const hs = (a, b, k) => hash(a, b, k + (L.seed % 9973) * 0.137);
+  // the woods: the hull's stain darkening down its strakes (as oak's did, in linear light), the deck's for its
+  // boards, rails, masts and helm deck
+  const hullC = L.hull[2], deckC = L.deck[2];
+  const C = {
+    wood: shade(deckC, 0.87), dark: shade(hullC, 0.24), edge: shade(hullC, 0.28), cap: shade(deckC, 1.5),
+    paint: CC(L.paint[2]), band: null, gold: CC(L.trim[2]), iron: CC('#2e2e34'), rope: CC('#494135'),
+    canvas: CC(L.cloth[2]), canvasShade: shade(L.cloth[2], 0.9),
+  };
+  // (the sail's foot: a band of its paint, lightened toward the cloth)
+  C.band = CC(L.paint[2]).clone().lerp(C.canvas, 0.22);
+  const strakes = [C.paint, shade(hullC, 1), shade(hullC, 0.77), shade(hullC, 0.61), shade(hullC, 0.41), shade(hullC, 0.24)];
+  const boardA = shade(deckC, 1), boardB = shade(deckC, 0.77), bed = shade(deckC, 0.19);
+  const post = shade(deckC, 0.58), rail = shade(deckC, 1), cleat = shade(deckC, 0.77), rampSide = shade(deckC, 0.44);
+  const take = (name, fn) => { OUT = new Buf(); try { fn(); made[name] = OUT.geometry(); } finally { OUT = null; } };
+  // A thin ribbon wrapped around the existing collision outline; no textures.
+  const sidePoint = (v, y) => {
+    const hb = HB(v), ky = KEEL(v);
+    const sec = [[hb + 0.055, GH(v)], [hb + 0.04, 0],
+      [hb * 0.99, ky * 0.18], [hb * 0.91, ky * 0.36],
+      [hb * 0.78, ky * 0.54], [hb * 0.5, ky * 0.78], [0, ky]];
+    for (let j = 0; j < sec.length - 1; j++) if (y >= sec[j + 1][1]) {
+      const t = (y - sec[j][1]) / (sec[j + 1][1] - sec[j][1]);
+      return sec[j][0] + (sec[j + 1][0] - sec[j][0]) * t;
+    }
+    return 0;
+  };
+  // (v499, Jordan) the decks' boards as the wood floor's: a quarter tile apart, 0.215 wide over a dark bed 0.02
+  // under them (so the seams outline as the floor's do), in the deck's two tones; boards along the boat, from v a
+  // to b, at heights ya to yb, between lo(v) and hi(v) across
+  const boards = (a, b, ya, yb, lo, hi) => {
+    quad([lo(a), ya - 0.02, a], [lo(b), yb - 0.02, b], [hi(b), yb - 0.02, b], [hi(a), ya - 0.02, a], bed);
+    for (let q = -7; q < 7; q++) {
+      const l = q * 0.25 + 0.0175, r = (q + 1) * 0.25 - 0.0175;
+      const al = Math.max(lo(a), l), ar = Math.min(hi(a), r), bl = Math.max(lo(b), l), br = Math.min(hi(b), r);
+      if (ar - al < 1e-4 && br - bl < 1e-4) continue;
+      const w0 = Math.max(0, ar - al), w1 = Math.max(0, br - bl);
+      quad([al, ya, a], [bl, yb, b], [bl + w1, yb, b], [al + w0, ya, a],
+        shade(q & 1 ? boardA : boardB, 0.92 + hs(q, Math.floor(Math.min(a, b) - B.stern), 499) * 0.14));
+    }
+  };
+  take('hull', () => {
+    // Exact gangway stations make both 0.7 m rail openings explicit.
+    const vs = Array.from({ length: 25 }, (_, k) => B.stern + (B.bow - B.stern) * k / 24);
+    vs.push(B.gangV - 0.35, B.gangV + 0.35);
+    vs.sort((a, b) => a - b);
+    const gap = (a, b) => a >= B.gangV - 0.350001 && b <= B.gangV + 0.350001;
+    const ys = v => [GH(v), 0, ...[0.18, 0.36, 0.54, 0.78, 1].map(f => KEEL(v) * f)];
+    for (let k = 0; k < vs.length - 1; k++) {
+      const a = vs[k], b = vs[k + 1], ya = ys(a), yb = ys(b), open = gap(a, b);
+      if (b - a < 1e-6) continue;
+      for (const s of [-1, 1]) {
+        for (let j = 0; j < ya.length - 1; j++) {
+          if (j === 0 && open) continue;
+          const p = (v, y) => [s * sidePoint(v, y), y, v];
+          quad(p(a, ya[j]), p(b, yb[j]), p(b, yb[j + 1]), p(a, ya[j + 1]), shade(strakes[j], 0.94 + hs(k, j + (s > 0 ? 11 : 0), 496) * 0.1));
+        }
+        // Narrow dark seams, broad readable strakes below the paint.
+        for (let j = 2; j < ya.length - 1; j++) {
+          const p = (v, y) => [s * (sidePoint(v, y) + 0.004), y, v];
+          quad(p(a, ya[j] + 0.009), p(b, yb[j] + 0.009), p(b, yb[j] - 0.009), p(a, ya[j] - 0.009), C.dark);
+        }
+        if (!open) {
+          // Inner bulwark and cap close the shell's thickness.
+          const ha = HB(a), hb = HB(b), ga = GH(a), gb = GH(b);
+          quad([s * ha, 0, a], [s * hb, 0, b], [s * hb, gb, b], [s * ha, ga, a], C.wood);
+          quad([s * ha, ga, a], [s * hb, gb, b], [s * (hb + 0.055), gb, b], [s * (ha + 0.055), ga, a], C.cap);
+          seg(G.box, C.cap, [s * (ha + 0.04), ga, a], [s * (hb + 0.04), gb, b], 0.035);
+          // One continuous pinstripe below the cap.
+          quad([s * (sidePoint(a, ga - 0.09) + 0.004), ga - 0.09, a], [s * (sidePoint(b, gb - 0.09) + 0.004), gb - 0.09, b],
+            [s * (sidePoint(b, gb - 0.12) + 0.004), gb - 0.12, b], [s * (sidePoint(a, ga - 0.12) + 0.004), ga - 0.12, a], C.gold);
+        }
+      }
+      // the deck's boards, as the wood floor's (v499)
+      boards(a, b, 0, 0, v => -HB(v), v => HB(v));
+    }
+    // Close rail ends without putting a threshold across either gangway.
+    for (const v of [B.gangV - 0.35, B.gangV + 0.35]) for (const s of [-1, 1]) {
+      const h = HB(v), y = GH(v);
+      quad([s * h, 0, v], [s * (h + 0.04), 0, v], [s * (h + 0.055), y, v], [s * h, y, v], C.cap);
+    }
+    // Raised external ribs echo the half-timbered buildings. They stay outside the deck.
+    for (const v of [-3.9, -2.9, -1.9, -0.9, 0.65, 1.7, 2.7, 3.55]) for (const s of [-1, 1]) {
+      const y = GH(v), low = -0.67;
+      seg(G.box, C.edge, [s * (sidePoint(v, low) + 0.015), low, v], [s * (sidePoint(v, y - 0.04) + 0.015), y - 0.04, v], 0.023);
+    }
+    // Solid transom, restrained stern lights, and a carved diamond crest.
+    const st = B.stern;
+    for (const v of [st, B.bow]) {
+      const levels = ys(v);
+      for (let j = 0; j < levels.length - 1; j++) {
+        const u = sidePoint(v, levels[j]), l = sidePoint(v, levels[j + 1]);
+        quad([-u, levels[j], v], [u, levels[j], v], [l, levels[j + 1], v], [-l, levels[j + 1], v], strakes[j]);
+      }
+    }
+    part(G.box, C.cap, 0, GH(st), st, { sx: HB(st) * 2 + 0.11, sy: 0.065, sz: 0.065 });
+    for (const x of [-0.57, 0.57]) {
+      part(G.box, C.dark, x, -0.25, st - 0.018, { sx: 0.38, sy: 0.31, sz: 0.035 });
+      part(G.box, '#718b83', x, -0.25, st - 0.04, { sx: 0.29, sy: 0.22, sz: 0.016 });
+      part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.027, sy: 0.23, sz: 0.02 });
+      part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.29, sy: 0.025, sz: 0.02 });
+    }
+    part(G.box, C.gold, 0, 0.19, st - 0.045, { sx: 0.19, sy: 0.19, sz: 0.035, rz: Math.PI / 4 });
+    // Stem and compact bowsprit; no furniture on the walking plane.
+    seg(G.box, C.dark, [0, KEEL(B.bow), B.bow], [0, GH(B.bow) + 0.2, B.bow + 0.055], 0.035);
+    const sprit = [0, 1.7, B.bow + 1.65];
+    seg(G.cyl8, C.cap, [0, 0.7, B.bow - 0.3], sprit, 0.065);
+    for (const m of B.masts) {
+      seg(G.frust7, C.wood, [0, -0.25, m.v], [0, m.h, m.v], 0.155);
+      // Mast partners fit comfortably within the existing radius-0.42 obstacle.
+      part(G.cyl8, C.dark, 0, 0.09, m.v, { sx: 0.48, sy: 0.18, sz: 0.48 });
+      for (const y of [0.32, m.h * 0.59, m.h * 0.85]) part(G.cyl8, C.iron, 0, y, m.v, { sx: y < 1 ? 0.31 : 0.22, sy: 0.055, sz: y < 1 ? 0.31 : 0.22 });
+      part(G.box, C.dark, 0, m.h * 0.64, m.v, { sx: 0.65, sy: 0.09, sz: 0.5 });
+      for (const [y, w] of brigYards(m)) {
+        seg(G.cyl8, C.dark, [-w / 2, y, m.v + 0.14], [w / 2, y, m.v + 0.14], 0.055);
+        for (const s of [-1, 1]) seg(G.cyl6, C.rope, [0, y + 0.6, m.v], [s * w * 0.46, y, m.v + 0.14], 0.01);
+      }
+      for (const s of [-1, 1]) for (const dv of [-0.26, 0.2]) {
+        const v = m.v + dv;
+        seg(G.cyl6, C.rope, [s * (HB(v) + 0.05), GH(v), v], [0, m.h * 0.86, m.v], 0.012);
+      }
+      part(G.oct, C.gold, 0, m.h + 0.04, m.v, { sx: 0.14, sy: 0.19, sz: 0.14 });
+    }
+    const [fore, main] = B.masts;
+    for (const [a, b] of [[[0, fore.h, fore.v], sprit], [[0, main.h, main.v], [0, fore.h * 0.82, fore.v]], [[0, main.h, main.v], [0, B.helmP + 0.6, B.stern + 0.08]]])
+      seg(G.cyl6, C.rope, a, b, 0.012);
+    // Swallowtail pennant, faceted rather than textured.
+    const pn = L.pennant[2];
+    quad([0, main.h, main.v], [0, main.h - 0.36, main.v], [0.06, main.h - 0.31, main.v - 0.62], [0.06, main.h - 0.03, main.v - 0.62], CC(pn));
+    tri([0.06, main.h - 0.03, main.v - 0.62], [0.06, main.h - 0.17, main.v - 0.62], [0, main.h - 0.06, main.v - 1.04], shade(pn, 1.15));
+    tri([0.06, main.h - 0.17, main.v - 0.62], [0.06, main.h - 0.31, main.v - 0.62], [0, main.h - 0.36, main.v - 1.04], shade(pn, 0.86));
+    // the wheel's post
+    part(G.box, C.dark, 0, B.wheelY / 2, B.wheelV, { sx: 0.13, sy: B.wheelY, sz: 0.13 });
+    // (v496, Jordan) the helm deck behind the wheel: planked, a step face between the ramps (behind the wheel), a
+    // ramp up to it either side of the wheel, and a rail round its stern and sides
+    const P = B.helmP, F = B.helmFront, RV = B.rampV, RU = B.rampU;
+    const hvs = [B.stern, (B.stern + F) / 2, F];
+    for (let k = 0; k + 1 < hvs.length; k++) boards(hvs[k], hvs[k + 1], P, P, v => -HB(v), v => HB(v));
+    quad([-RU, 0, F], [RU, 0, F], [RU, P, F], [-RU, P, F], post);
+    part(G.box, rail, 0, P - 0.015, F + 0.02, { sx: RU * 2, sy: 0.04, sz: 0.05 });
+    for (const sg of [-1, 1]) {
+      // the ramp's top, boarded as the deck (v499) and cleated, and its inner side down to the deck
+      boards(F, RV, P, 0, sg > 0 ? () => RU : v => -HB(v), sg > 0 ? v => HB(v) : () => -RU);
+      for (let c = 1; c < 5; c++) { const t = c / 5, v = F + (RV - F) * t, y = P * (1 - t) + 0.02, hb = HB(v); seg(G.box, cleat, [sg * (RU + 0.04), y, v], [sg * (hb - 0.04), y, v], 0.025); }
+      tri([sg * RU, 0, RV], [sg * RU, P, F], [sg * RU, 0, F], rampSide);
+      part(G.box, rail, sg * RU, P / 2, F + 0.03, { sx: 0.06, sy: P, sz: 0.06 });
+    }
+    // its rail: posts round the stern and down each side to the platform's front
+    const TR = P + 0.36, rails = [];
+    for (const sg of [-1, 1]) { rails.push([]); for (const v of [F, (F + B.stern) / 2, B.stern + 0.08]) rails[rails.length - 1].push([sg * (HB(v) - 0.03), v]); }
+    for (const side of rails) {
+      for (const [u, v] of side) seg(G.box, post, [u, P, v], [u, TR, v], 0.05);
+      for (let k = 0; k + 1 < side.length; k++) seg(G.box, rail, [side[k][0], TR, side[k][1]], [side[k + 1][0], TR, side[k + 1][1]], 0.05);
+    }
+    seg(G.box, rail, [rails[0][2][0], TR, rails[0][2][1]], [rails[1][2][0], TR, rails[1][2][1]], 0.05);
+    // (the backstay comes down to a post at the rail's middle, clear over the head of whoever's at the wheel)
+    seg(G.box, post, [0, P, B.stern + 0.08], [0, TR + 0.25, B.stern + 0.08], 0.06);
+    // Lanterns sit over the stern rail, behind the permitted walking region.
+    for (const s of [-1, 1]) {
+      const x = s * 0.86, z = st - 0.025, y = GH(st) + 0.25;
+      seg(G.box, C.iron, [x, GH(st), z], [x, y + 0.28, z], 0.019);
+      part(G.box, '#d3ab5f', x, y, z, { sx: 0.14, sy: 0.19, sz: 0.14 });
+      for (const dy of [-0.12, 0.12]) part(G.box, C.iron, x, y + dy, z, { sx: 0.19, sy: 0.045, sz: 0.19 });
+      part(G.cone4, C.iron, x, y + 0.18, z, { sx: 0.23, sy: 0.12, sz: 0.23, ry: Math.PI / 4 });
+    }
+    part(G.box, C.dark, 0.9, 0.25, 3.4, { sx: 0.5, sy: 0.12, sz: 0.14 });
+  });
+  // (v499, Jordan) the stern lanterns' glass, lit while you're at the wheel: drawn over the glass in its own glowing material
+  take('glow', () => {
+    for (const s of [-1, 1]) part(G.box, '#ffffff', s * 0.86, GH(B.stern) + 0.25, B.stern - 0.025, { sx: 0.15, sy: 0.2, sz: 0.15 });
+  });
+  take('sail', () => {
+    const nu = 10, nv = 8;
+    // Top edge stays exactly y=0, bottom exactly y=-1, for the furl animation.
+    const pt = (u, v, offset = 0) => [(u - 0.5) * (0.94 + 0.06 * v), -v, 0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v) + offset];
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+      const c = j === nv - 1 ? C.band : i % 2 ? C.canvas : C.canvasShade;
+      quad(pt(i / nu, j / nv), pt((i + 1) / nu, j / nv), pt((i + 1) / nu, (j + 1) / nv), pt(i / nu, (j + 1) / nv), shade(c, 0.97 + j * 0.004));
+    }
+    // The emblem, clipped onto each cloth triangle so it follows the sail's curve (a flat decal would cut through
+    // its belly): each convex piece of its field, then of its charge, a little proud of the cloth on both faces
+    const cross = (a, b, p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    const piece = (poly0, color, offset) => {
+      // (each piece wound the way the clip takes as inside)
+      let area = 0; for (let k = 0; k < poly0.length; k++) area += cross([0, 0], poly0[k], poly0[(k + 1) % poly0.length]);
+      const shape = area < 0 ? [...poly0].reverse() : poly0;
+      for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+        const a = [i / nu, j / nv], b = [(i + 1) / nu, j / nv], c = [(i + 1) / nu, (j + 1) / nv], d = [i / nu, (j + 1) / nv];
+        for (const uv of [[a, b, c], [a, c, d]]) {
+          let poly = uv;
+          for (let k = 0; k < shape.length && poly.length; k++) {
+            const p = shape[k], q = shape[(k + 1) % shape.length], next = [];
+            for (let n = 0; n < poly.length; n++) {
+              const u = poly[n], v = poly[(n + 1) % poly.length], du = cross(p, q, u), dv = cross(p, q, v);
+              if (du >= 0) next.push(u);
+              if ((du >= 0) !== (dv >= 0)) { const t = du / (du - dv); next.push([u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t]); }
+            }
+            poly = next;
+          }
+          if (poly.length < 3) continue;
+          const abc = uv.map(p => pt(...p)), denom = cross(...uv);
+          const surface = p => {
+            const w0 = cross(uv[1], uv[2], p) / denom, w1 = cross(uv[2], uv[0], p) / denom, w2 = 1 - w0 - w1;
+            return abc[0].map((n, k) => n * w0 + abc[1][k] * w1 + abc[2][k] * w2 + (k === 2 ? offset : 0));
+          };
+          for (let k = 1; k + 1 < poly.length; k++) tri(surface(poly[0]), surface(poly[k]), surface(poly[k + 1]), color);
+        }
+      }
+    };
+    // (the emblem's middle a little over the sail's; across, squeezed by 0.72 so its shapes come out about as wide as
+    // tall on the sail, which is wider than it hangs)
+    const E = EMBLEMS[L.emblem] || EMBLEMS.diamond, R = 0.19, toUV = poly => poly.map(([x, y]) => [0.5 + x * R * 0.72, 0.43 + y * R]);
+    for (const face of [-1, 1]) {
+      for (const p of E.field) piece(toUV(p), CC(L.field[2]), face * 0.004);
+      for (const p of E.charge) piece(toUV(p), CC(L.charge[2]), face * 0.008);
+    }
+  });
+  take('wheel', () => {
+    const R = B.wheelR, Rh = R + 0.1, wp = (a, r) => [Math.cos(a) * r, Math.sin(a) * r, 0];
+    for (let k = 0; k < 12; k++) seg(G.box, C.cap, wp(k * Math.PI / 6, R), wp((k + 1) * Math.PI / 6, R), 0.0225);
+    for (let k = 0; k < 8; k++) seg(G.cyl6, C.wood, wp(k * Math.PI / 4, 0.035), wp(k * Math.PI / 4, Rh), 0.021);
+    part(G.cyl8, C.gold, 0, 0, 0, { sx: 0.1, sy: 0.07, sz: 0.1, rx: Math.PI / 2 });
+  });
+  take('furl', () => {
+    part(G.cyl8, C.canvasShade, 0, 0, 0, { sx: 1, sy: 1, sz: 1, rz: Math.PI / 2 });
+    for (const x of [-0.32, 0, 0.32]) part(G.cyl8, C.rope, x, 0, 0, { sx: 1.035, sy: 0.025, sz: 1.035, rz: Math.PI / 2 });
+  });
+  take('anchor', () => {
+    // Ring top at the local origin; all metal hangs below it.
+    for (let k = 0; k < 8; k++) { const p = a => [Math.cos(a) * 0.065, -0.065 + Math.sin(a) * 0.065, 0]; seg(G.cyl6, C.iron, p(k * Math.PI / 4), p((k + 1) * Math.PI / 4), 0.013); }
+    seg(G.cyl6, C.iron, [0, -0.12, 0], [0, -0.85, 0], 0.035);
+    part(G.box, C.dark, 0, -0.23, 0, { sx: 0.055, sy: 0.065, sz: 0.52 });
+    for (const s of [-1, 1]) {
+      seg(G.cyl6, C.iron, [0, -0.85, 0], [s * 0.32, -0.72, 0], 0.035);
+      seg(G.cyl6, C.iron, [s * 0.32, -0.72, 0], [s * 0.4, -0.54, 0], 0.032);
+      part(G.cone4, C.iron, s * 0.38, -0.57, 0, { sx: 0.18, sy: 0.2, sz: 0.12, rz: -s * 0.4 });
+    }
+  });
+  take('chain', () => part(G.box, C.iron, 0, -0.5, 0, { sx: 0.035, sy: 1, sz: 0.035 }));
+  take('plank', () => {
+    // No raised rungs: the entire walking surface is flush at local y=0.
+    part(G.box, C.dark, 0.5, -0.059, 0, { sx: 1, sy: 0.062, sz: 0.62 });
+    for (let j = 0; j < 4; j++) part(G.box, shade(deckC, j % 2 ? 1.52 : 1.8), 0.5, -0.014, -0.2325 + j * 0.155, { sx: 1, sy: 0.028, sz: 0.145 });
+  });
+  sailSlopes(made.sail, BRIG_SAIL_Z);
+  return made;
+}
+
+// a boat's model from its shapes S: hull, a sail and furl roll on each yard, anchor and chain, gangplank, wheel, the
+// lanterns' glass; mats { boat, sail, glow }. Returns { g, sails, furls, anchorM, chainM, plankG, plankM, wheelM, glowM }.
+export function brigModel(S, B, mats) {
+  const g = new GFX.Group();
+  const lit = m => { m.castShadow = m.receiveShadow = true; return m; };
+  const mesh = geo => lit(new GFX.Mesh(geo, mats.boat));
+  g.add(mesh(S.hull));
+  const sails = [], furls = [];
+  for (const m of B.masts) for (const [y, w, hgt] of brigYards(m)) {
+    const s = lit(new GFX.Mesh(S.sail, mats.sail)); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); sails.push(s);
+    const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); furls.push(f);
+  }
+  const anchorM = mesh(S.anchor); anchorM.position.set(0.9, -0.4, 3.4); g.add(anchorM);
+  const chainM = mesh(S.chain); chainM.position.set(0.9, 0.2, 3.4); g.add(chainM);
+  const plankG = new GFX.Group(), plankM = mesh(S.plank); plankG.add(plankM); g.add(plankG);
+  const wheelM = mesh(S.wheel); wheelM.position.set(0, B.wheelY, B.wheelV - 0.1); g.add(wheelM);
+  const glowM = S.glow && mats.glow ? new GFX.Mesh(S.glow, mats.glow) : null;
+  if (glowM) { glowM.visible = false; g.add(glowM); }
+  return { g, sails, furls, anchorM, chainM, plankG, plankM, wheelM, glowM };
+}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Townsfolk Viewer</title>
+<title>Random Model Generator</title>
 <style>
 /* layout: the figure on a lit stage, controls in a side panel (stacked under it on phones). Dark first, like the game. */
 :root {
@@ -56,6 +56,7 @@ td:first-child { color: var(--dim); width: 58px; }
 .chip button { border: none; background: none; padding: 2px 6px; }
 .chip .x { color: var(--dim); }
 .muted { color: var(--dim); font-size: 12px; }
+body.boats .folkOnly, body:not(.boats) .boatOnly { display: none; }
 kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 #err { position: fixed; left: 8px; right: 8px; bottom: 8px; background: var(--errBg); color: var(--errInk); padding: 8px 10px; border-radius: 6px; font: 12px ui-monospace, monospace; white-space: pre-wrap; z-index: 9; }
 @media (max-width: 760px) {
@@ -70,11 +71,11 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
   <div id="stage">
     <canvas id="view"></canvas>
     <div id="names"></div>
-    <div id="hint">Drag to turn · <kbd>[</kbd> <kbd>]</kbd> seeds · <kbd>1</kbd>–<kbd>8</kbd> moves · <kbd>H</kbd> hostile · <kbd>A</kbd> <kbd>D</kbd> facing · <kbd>Space</kbd> pause</div>
+    <div id="hint">Drag to turn · <kbd>[</kbd> <kbd>]</kbd> seeds · <kbd>1</kbd>–<kbd>8</kbd> moves · <kbd>H</kbd> hostile · <kbd>B</kbd> boat · <kbd>A</kbd> <kbd>D</kbd> facing · <kbd>Space</kbd> pause</div>
   </div>
   <div id="panel">
-    <h1>Townsfolk</h1>
-    <p class="sub">Each number is one person. Keep the ones you like.</p>
+    <h1>Random Model Generator</h1>
+    <p class="sub">Each number is one person, or one boat's livery. Keep the ones you like.</p>
 
     <div id="who"><div id="whoName"></div><div id="whoJob"></div></div>
 
@@ -86,15 +87,18 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
       <button id="rand" title="Random seed (R)">Random</button>
     </div>
     <div class="row" style="margin-top:6px">
-      <span class="muted">People</span>
-      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button>
-      <button id="randWild" title="A random bandit, cultist, poacher… (H)">Generate hostile</button>
+      <span class="muted">Models</span>
+      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button><button data-pool="boats">Boats</button>
     </div>
     <div class="row" style="margin-top:6px">
+      <button id="randWild" title="A random bandit, cultist, poacher… (H)">Generate hostile</button>
+      <button id="randBoat" title="A random boat livery (B)">Generate livery</button>
+    </div>
+    <div class="row folkOnly" style="margin-top:6px">
       <span class="muted">Body</span>
       <button data-body="any" class="on">Any</button><button data-body="masc">Masculine</button><button data-body="fem">Feminine</button>
     </div>
-    <div class="row" style="margin-top:6px">
+    <div class="row folkOnly" style="margin-top:6px">
       <label class="muted" for="job">Job</label>
       <select id="job"></select>
     </div>
@@ -103,8 +107,10 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
       <button data-mode="one" class="on">One</button><button data-mode="line">Lineup of 7</button>
     </div>
 
-    <h2>Move</h2>
-    <div class="row" id="anims"></div>
+    <h2 class="folkOnly">Move</h2>
+    <div class="row folkOnly" id="anims"></div>
+    <h2 class="boatOnly">Sails</h2>
+    <div class="row boatOnly"><button data-sails="1" class="on">Set</button><button data-sails="0.5">Reefed</button><button data-sails="0">Furled</button></div>
     <div class="row" style="margin-top:6px">
       <span class="muted">Speed</span><input id="speed" type="range" min="0" max="2" step="0.05" value="1">
       <button id="pause" title="Space">Pause</button>
@@ -124,7 +130,7 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     <div class="row"><span class="muted" style="width:62px">Camera tilt</span><input id="tilt" type="range" min="0" max="50" step="1" value="17"><span id="tiltv" class="muted">17°</span></div>
     <div class="row"><span class="muted" style="width:62px">Zoom</span><input id="zoom" type="range" min="0.6" max="2.2" step="0.05" value="1"></div>
 
-    <h2>Outfit</h2>
+    <h2 id="outfitH">Outfit</h2>
     <table id="outfit"></table>
 
     <h2>Kept</h2>
@@ -144,6 +150,7 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 <script type="module">
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, design as folkDesign, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
+import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat } from './src/boats/brig.js';
 
 const $ = id => document.getElementById(id);
 const store = { get(k, d) { try { const v = localStorage.getItem('emberwild.folk.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -157,11 +164,17 @@ renderer.shadowMap.enabled = false;
 const cv = $('view');
 const target = renderer.canvasTarget(cv);
 const scene = new GFX.Scene();
-const cam = new GFX.PerspectiveCamera(20, 1, 0.1, 60);
+const cam = new GFX.PerspectiveCamera(20, 1, 0.1, 400);
 // the character view's studio lights (the game's dollLights): sky and ground, and a sun up and to the camera's left
 const lights = { hemi: new GFX.HemisphereLight('#fff1dc', '#6a5440', 0.95), sun: new GFX.DirectionalLight('#fff0dc', 1.5), points: [], plain: true };
 lights.sun.castShadow = false;
 const kit = makeFolkKit(GFX);
+// (v14) the boats: the game's brig in a livery from each seed, its sails fluttering in a breeze
+const boatMat = new GFX.MeshStandardMaterial({ flatShading: true, roughness: 1, metalness: 0, vertexColors: true, side: GFX.DoubleSide });
+const wind = { value: { x: 0.8, y: 0.6, z: 0.02, w: 0 } };
+const { mat: sailMat } = makeSailMat(wind);
+const brigGeos = new Map();
+const brigShapes = L => { if (!brigGeos.has(L.seed)) { if (brigGeos.size > 40) brigGeos.clear(); brigGeos.set(L.seed, buildBrig(L, BRIG_SHAPE)); } return brigGeos.get(L.seed); };
 
 // ---------- state ----------
 const S = {
@@ -170,28 +183,36 @@ const S = {
 };
 // (v9) two lists of people: the towns' folk, and the hostile folk of the road and the wilds (their own seeds: kept
 // as 'w' + number, and in the link as #wild=number)
-const hashM = location.hash.match(/(seed|wild)=(\d+)/);
-S.pool = hashM ? (hashM[1] === 'wild' ? 'wilds' : 'town') : store.get('pool', 'town');
-S.seed = hashM ? +hashM[2] : store.get(S.pool === 'wilds' ? 'wildSeed' : 'seed', 1);
-const design = s => folkDesign(s, S.pool);
-const tag = s => (S.pool === 'wilds' ? 'w' : '') + s;
-const untag = k => { const m = String(k).match(/^(w?)(\d+)$/); return m ? { pool: m[1] ? 'wilds' : 'town', seed: +m[2] } : null; };
+// (v14) and boats: a livery a seed (kept as 'b' + number, #boat=number)
+const hashM = location.hash.match(/(seed|wild|boat)=(\d+)/);
+const POOL_OF = { seed: 'town', wild: 'wilds', boat: 'boats' }, LINK = { town: '#seed=', wilds: '#wild=', boats: '#boat=' };
+const SEED_KEY = { town: 'seed', wilds: 'wildSeed', boats: 'boatSeed' }, TAG = { town: '', wilds: 'w', boats: 'b' };
+S.pool = hashM ? POOL_OF[hashM[1]] : store.get('pool', 'town');
+S.sails = 1;
+S.seed = hashM ? +hashM[2] : store.get(SEED_KEY[S.pool], 1);
+const isBoats = () => S.pool === 'boats';
+const design = s => isBoats() ? rollLivery(s) : folkDesign(s, S.pool);
+const tag = s => TAG[S.pool] + s;
+const untag = k => { const m = String(k).match(/^([wb]?)(\d+)$/); return m ? { pool: m[1] === 'w' ? 'wilds' : m[1] === 'b' ? 'boats' : 'town', seed: +m[2] } : null; };
 let folks = [], yawDrag = 0, t = 0;
 
-const fits = s => { const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || d.job === S.job); };
+const fits = s => { if (isBoats()) return true; const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || d.job === S.job); };
 function step(dir) { let s = S.seed; for (let n = 0; n < 3000; n++) { s = Math.max(1, s + dir); if (fits(s)) break; if (s === 1 && dir < 0) break; } setSeed(s); }
 function randomSeed() { let s; for (let n = 0; n < 3000; n++) { s = 1 + Math.floor(Math.random() * 999999); if (fits(s)) break; } setSeed(s); }
-function lineSeeds() { const out = [S.seed]; let s = S.seed; while (out.length < 7 && s < S.seed + 4000) { s++; if (fits(s)) out.push(s); } return out; }
+function lineSeeds() { const out = [S.seed]; let s = S.seed; while (out.length < (isBoats() ? 3 : 7) && s < S.seed + 4000) { s++; if (fits(s)) out.push(s); } return out; }
 
 function setSeed(s) {
-  S.seed = Math.max(1, s | 0); store.set(S.pool === 'wilds' ? 'wildSeed' : 'seed', S.seed);
-  history.replaceState(null, '', (S.pool === 'wilds' ? '#wild=' : '#seed=') + S.seed);
+  S.seed = Math.max(1, s | 0); store.set(SEED_KEY[S.pool], S.seed);
+  history.replaceState(null, '', LINK[S.pool] + S.seed);
   $('seed').value = S.seed;
   rebuild();
   keptList();
 }
 function rebuild() {
   for (const f of folks) scene.remove(f.g);
+  document.body.classList.toggle('boats', isBoats());
+  $('outfitH').textContent = isBoats() ? 'Livery' : 'Outfit';
+  if (isBoats()) return rebuildBoats();
   const seeds = S.mode === 'one' ? [S.seed] : lineSeeds(), gap = 0.78;
   folks = seeds.map((s, i) => {
     const f = kit.build(design(s));
@@ -204,6 +225,33 @@ function rebuild() {
   $('names').innerHTML = S.mode === 'one' ? '' : seeds.map(s => { const d = design(s); return `<button data-s="${s}" title="${d.name.full}, ${jobTitle(d)}">${s}<br>${jobTitle(d)}</button>`; }).join('');
   outfit(design(S.seed));
 }
+// (v14) the boats: one, or three side by side, sails set as picked, the gangplank in and the anchor up
+function rebuildBoats() {
+  const seeds = S.mode === 'one' ? [S.seed] : lineSeeds(), gap = 11;
+  folks = seeds.map((s, i) => {
+    const L = rollLivery(s), m = brigModel(brigShapes(L), BRIG_SHAPE, { boat: boatMat, sail: sailMat });
+    m.g.position.x = (i - (seeds.length - 1) / 2) * gap;
+    m.plankG.visible = false; m.chainM.visible = false; m.anchorM.position.y = -0.4;
+    scene.add(m.g);
+    return m;
+  });
+  boatSails();
+  $('names').innerHTML = S.mode === 'one' ? '' : seeds.map(s => `<button data-s="${s}" title="${liveryName(rollLivery(s))}">${s}<br>${liveryName(rollLivery(s))}</button>`).join('');
+  const L = rollLivery(S.seed);
+  $('whoName').textContent = liveryName(L);
+  $('whoJob').textContent = `Merchant brig · livery ${S.seed}`;
+  $('outfit').innerHTML = describeLivery(L).map(([k, v, c]) => `<tr><td>${k}</td><td>${c ? `<span class="sw" style="background:${c}"></span>` : ''}${v}</td></tr>`).join('');
+}
+function boatSails() {
+  for (const m of folks) {
+    if (!m.sails) continue;
+    m.sails.forEach(s => { s.visible = S.sails > 0.02; s.scale.y = Math.max(0.02, S.sails) * s.userData.h0; });
+    m.furls.forEach(f => { const r = 0.06 + 0.14 * (1 - S.sails); f.scale.y = f.scale.z = r; });
+  }
+}
+document.querySelectorAll('[data-sails]').forEach(b => b.onclick = () => {
+  S.sails = +b.dataset.sails; document.querySelectorAll('[data-sails]').forEach(x => x.classList.toggle('on', x === b)); boatSails();
+});
 function outfit(d) {
   $('whoName').textContent = d.name.full;
   $('whoJob').textContent = `${jobTitle(d)} · ${TIERS[d.tier]}`;
@@ -211,8 +259,8 @@ function outfit(d) {
     + `<tr><td>Skin</td><td><span class="sw" style="background:${d.skin}"></span>${d.skin}</td></tr>`;
 }
 function keptList() {
-  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : '') + u.seed;
-    return `<span class="chip"><button data-load="${k}" title="${u.pool === 'wilds' ? 'Hostile' : 'Townsfolk'} ${u.seed}">${label}</button><button class="x" data-drop="${k}" aria-label="Remove ${label}">×</button></span>`; }).join('');
+  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : u.pool === 'boats' ? '⛵ ' : '') + u.seed;
+    return `<span class="chip"><button data-load="${k}" title="${u.pool === 'wilds' ? 'Hostile' : u.pool === 'boats' ? 'Boat livery' : 'Townsfolk'} ${u.seed}">${label}</button><button class="x" data-drop="${k}" aria-label="Remove ${label}">×</button></span>`; }).join('');
   $('keptNote').style.display = S.kept.length ? 'none' : '';
   $('keep').textContent = S.kept.includes(tag(S.seed)) ? 'Kept' : 'Keep this seed';
 }
@@ -232,6 +280,7 @@ document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
 $('names').onclick = e => { const b = e.target.closest('[data-s]'); if (b) { document.querySelector('[data-mode="one"]').click(); setSeed(+b.dataset.s); } };
 // jobs grouped by where they're found
 function jobList() {
+  if (isBoats()) return;
   $('job').innerHTML = `<option value="any">${S.pool === 'wilds' ? 'Any kind' : 'Any job'}</option>` + POOLS[S.pool].map(t =>
     `<optgroup label="${TIERS[t]}">${Object.entries(JOBS).filter(([, J]) => J.tier === t).map(([k, J]) => `<option value="${k}">${J.title}</option>`).join('')}</optgroup>`).join('');
   $('job').value = S.job;
@@ -241,10 +290,11 @@ function setPool(pool, seed) {
   if (pool !== S.pool) { S.pool = pool; S.job = 'any'; store.set('pool', pool); }
   document.querySelectorAll('[data-pool]').forEach(x => x.classList.toggle('on', x.dataset.pool === S.pool));
   jobList();
-  setSeed(seed ?? store.get(pool === 'wilds' ? 'wildSeed' : 'seed', 1));
+  setSeed(seed ?? store.get(SEED_KEY[pool], 1));
 }
 document.querySelectorAll('[data-pool]').forEach(b => b.onclick = () => setPool(b.dataset.pool));
 $('randWild').onclick = () => { setPool('wilds', S.seed); randomSeed(); };
+$('randBoat').onclick = () => { setPool('boats', S.seed); randomSeed(); };
 jobList();
 document.querySelectorAll('[data-pool]').forEach(x => x.classList.toggle('on', x.dataset.pool === S.pool));
 $('job').onchange = e => { S.job = e.target.value; if (!fits(S.seed)) step(1); else rebuild(); };
@@ -291,6 +341,7 @@ addEventListener('keydown', e => {
   else if (k === ' ') { setPause(!S.paused); e.preventDefault(); }
   else if (k >= '1' && k <= String(ANIMS.length)) setAnim(ANIMS[+k - 1]);
   else if (k === 'h') $('randWild').click();
+  else if (k === 'b') $('randBoat').click();
   else if (k === 'k') $('keep').click();
 });
 // drag across the picture to turn them freely
@@ -310,16 +361,19 @@ function frame(now) {
   const w = Math.max(16, Math.round(r.width * k)), h = Math.max(16, Math.round(r.height * k));
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const yaw = S.spin ? spinYaw : -S.facing * Math.PI / 4 + yawDrag;
-  for (const f of folks) { kit.pose(f, S.anim, t + f.offset); f.g.rotation.y = yaw; }
-  // frame the figure (or the lineup) whatever the canvas's shape, from DOLL_VIEW's height and aim
-  const aspect = w / h, span = S.mode === 'one' ? 0.75 : 7 * 0.78, tall = 1.45;
+  for (const f of folks) { if (!f.sails) kit.pose(f, S.anim, t + f.offset); f.g.rotation.y = yaw; }
+  wind.value.w = (wind.value.w + (S.paused ? 0 : dt * 2 * S.speed)) % 1e4;
+  // frame the figure (or the lineup) whatever the canvas's shape, from DOLL_VIEW's height and aim (a boat: its
+  // length and its masts)
+  const boatsOn = isBoats();
+  const aspect = w / h, span = boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = boatsOn ? 10 : 1.45;
   const vf = 20 * Math.PI / 180, need = Math.max(tall / 2 / Math.tan(vf / 2), span / 2 / (Math.tan(vf / 2) * aspect));
-  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = 0.6;
+  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = boatsOn ? 3 : 0.6;
   cam.fov = 20; cam.aspect = aspect; cam.updateProjectionMatrix();
   cam.position.set(0, aimY + Math.sin(a) * dist, Math.cos(a) * dist);
   cam.lookAt(0, aimY, 0); cam.updateMatrixWorld();
   const la = -0.9;
-  lights.sun.position.set(Math.sin(la) * 4, aimY + 5, Math.cos(la) * 4); lights.sun.target.position.set(0, aimY, 0);
+  lights.sun.position.set(Math.sin(la) * 4, aimY + 5, Math.cos(la) * 4); lights.sun.target.position.set(0, aimY, 0);   // (a direction: the same for a boat)
   lights.sun.updateMatrixWorld(); lights.sun.target.updateMatrixWorld();
   renderer.lightsOverride = lights;
   renderer.setRenderTarget(target); renderer.setClearColor(0x000000, 0); renderer.clear();

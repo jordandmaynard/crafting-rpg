@@ -960,6 +960,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 <script type="module">
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_WHERE } from './src/folk/townsfolk.js';
+import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes } from './src/boats/brig.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
@@ -13607,14 +13608,14 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // ground or a dock up to BOAT.reach beyond the gangway (v495), else stays in.
 // The boat's own frame: u across (+ to port), v along (+ toward the bow), y up from the deck. World from the
 // boat: x = b.x + cos(h) u + sin(h) v, z = b.z - sin(h) u + cos(h) v (h the heading, as H.face: atan2(dx, dz)).
-const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 7, accel: 1.2, turn: 0.5, notches: 2, sailRate: 0.8,
-  astern: 0.8, anchorTime: 1.6, gangV: -0.2, plank: 1.2, reach: 2, onto: 0.6, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
+// (v511: the hull's size, the masts and the helm deck's fittings come from src/boats/brig.js, BRIG_SHAPE)
+const BOAT = { ...BRIG_SHAPE, speed: 7, accel: 1.2, turn: 0.5, notches: 2, sailRate: 0.8,
+  astern: 0.8, anchorTime: 1.6, plank: 1.2, reach: 2, onto: 0.6, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
   // (v496, Jordan) the helm deck: a platform behind the wheel (helmP high, from the stern to helmFront), a ramp up to
   // it either side of the wheel (from rampV aft to helmFront, outboard of rampU); you stand at helmV on it, the
   // wheel's hub wheelY over the deck; it turns up to wheelTurn either way as you steer (wheelRate a second), your
   // hands on its rim following it by grip
-  helmP: 0.45, helmFront: -3.42, helmV: -3.47, rampV: -2.6, rampU: 0.42, wheelY: 0.85, wheelR: 0.26, wheelTurn: 0.9, wheelRate: 2.2, grip: 0.6,
-  masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }], style: 1 };
+  helmV: -3.47, wheelTurn: 0.9, wheelRate: 2.2, grip: 0.6, style: 1 };
 const boats = [];
 // (v499, Jordan) Seas and oceans swell up to SEA_SWELL.height (a half tile, crest to trough) away from their edges,
 // easing down to the water's usual swell within `reach` tiles of land or of the calmer named water (bays, inlets,
@@ -13684,8 +13685,7 @@ function waterSwell(x, z, seaOnly) {
   const sh = 0.6 * Math.sin((x * 0.31 + z * 0.95) * k3 + t * 0.55) + 0.4 * Math.sin((x * 0.92 - z * 0.39) * k4 + t * 0.7 + 2.3);
   return small + U.seaAmp.value * op * sh;
 }
-// a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
-const boatYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.74, m.h * 0.32 - 0.3]];
+const boatYards = brigYards;   // (v511: src/boats/brig.js)
 const boatMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
 // (v499) the brig's stern lanterns, lit while you're at its wheel: the glass glows (BOAT_LAMP.color, eased in and out
 // over fade seconds) and one warm light hangs between them (strength, range, falloff). T > Boats.
@@ -13695,71 +13695,18 @@ const BOAT_LAMP = { color: '#ffc46a', light: 2.3, range: 4, decay: 2, fade: 0.5 
 // a broad trail behind it. T > Boats.
 const BOAT_WAKE = { radius: 0.65, clear: 1.6, push: 2.5, drag: 1.2 };
 const boatGlowMat = new GFX.MeshBasicMaterial({ color: '#3a2a18' });
-// (v506, Jordan) the sails: shaded smooth (each corner's normal from the sail's curve, not the facet's) and fluttering
-// in the wind like the wheat: ripples running across the cloth, more toward the foot (the yard holds the head still).
+// (v506, Jordan) the sails: shaded smooth and fluttering in the wind like the wheat (src/boats/brig.js, makeSailMat).
 // flutter: how far the foot moves (tiles); speed: how fast. T > Boats.
 const SAIL_FLUTTER = { flutter: 0.06, speed: 4 };
-const SAIL_U = { windV: PLANT_U.windV, fl: { value: { x: SAIL_FLUTTER.flutter, y: SAIL_FLUTTER.speed, z: 0, w: 0 } } };
-const sailMat = new GFX.ShaderMaterial({ uniforms: SAIL_U, vertexColors: true, side: GFX.DoubleSide, attributes: { sg: 'vec2f' }, lit: true,
-  code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) n: vec3f }
-@vertex fn vs(v: VIn) -> VOut {
-  let M = O.model;
-  let c0 = M[0].xyz; let c1 = M[1].xyz; let c2 = M[2].xyz;
-  // (the sail's local x across (-0.5..0.5), y down from the yard (0..-1), z its belly; a furled sail barely moves)
-  let lx = v.position.x; let ly = -v.position.y;
-  let ph = U.windV.w * U.fl.y + M[3].x * 0.37 + M[3].z * 0.53;
-  let a1 = ph * 1.0 + lx * 7.0 - ly * 2.0;
-  let a2 = ph * 1.63 - lx * 11.0 + ly * 3.5 + 1.3;
-  let s = 0.65 * sin(a1) + 0.35 * sin(a2);
-  let sx = 0.65 * 7.0 * cos(a1) - 0.35 * 11.0 * cos(a2);
-  let sy = -0.65 * 2.0 * cos(a1) + 0.35 * 3.5 * cos(a2);
-  let A = U.fl.x * smoothstep(0.0, 1.0, length(c1));
-  let d = A * ly * s;
-  // the slope of the cloth (its own curve, as made, and the flutter's) gives the normal; turned into the world by the
-  // inverse transpose of the sail's turn and stretch
-  let gx = v.sg.x + A * ly * sx;
-  let gy = v.sg.y - A * (s + ly * sy);
-  let nl = vec3f(-gx, -gy, 1.0);
-  let n = c0 * (nl.x / dot(c0, c0)) + c1 * (nl.y / max(dot(c1, c1), 1e-6)) + c2 * (nl.z / dot(c2, c2));
-  let w = (M * vec4f(v.position.x, v.position.y, v.position.z + d, 1.0)).xyz;
-  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, n);
-}
-@fragment fn fs(i: VOut) -> @location(0) vec4f {
-  var N = normalize(i.n);
-  let toward = select(-i.eye, -F.camDir.xyz, F.camPos.w > 0.5);
-  if (dot(N, toward) < 0.0) { N = -N; }
-  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
-  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
-}`,
-});
-// each corner of a sail's mesh its slope (dz/dx, dz/dy) on the smooth surface z(x, y) it was cut from
-function sailSlopes(geo, zf) {
-  if (!geo) return;
-  const p = geo.attributes.position.array, n = p.length / 3, sg = new Float32Array(n * 2), e = 1e-3;
-  for (let k = 0; k < n; k++) {
-    const x = p[k * 3], y = Math.min(-e, Math.max(-1 + e, p[k * 3 + 1]));
-    sg[k * 2] = (zf(x + e, y) - zf(x - e, y)) / (2 * e);
-    sg[k * 2 + 1] = (zf(x, y + e) - zf(x, y - e)) / (2 * e);
-  }
-  geo.setAttribute('sg', new GFX.BufferAttribute(sg, 2));
-}
-const SAIL_Z = [
-  (x, y) => { const fv = -y, w = 0.92 + 0.08 * fv, fu = x / w; return 0.32 * (1 - 4 * fu * fu) * Math.sin(Math.PI * Math.min(1, fv * 1.05)); },
-  (x, y) => { const v = -y, u = x / (0.94 + 0.06 * v) + 0.5; return 0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v); },
-];
+const { mat: sailMat, U: SAIL_U } = makeSailMat(PLANT_U.windV);
+// the first build's sail as made (the brig's is in brig.js)
+const SAIL_Z0 = (x, y) => { const fv = -y, w = 0.92 + 0.08 * fv, fu = x / w; return 0.32 * (1 - 4 * fu * fu) * Math.sin(Math.PI * Math.min(1, fv * 1.05)); };
 const boatLight = addLight(new GFX.PointLight(BOAT_LAMP.color, 0, BOAT_LAMP.range, BOAT_LAMP.decay));
 boatLight.layers.enableAll(); boatLight.visible = false;
 const _glowOff = new GFX.Color('#5a4224'), _glowOn = new GFX.Color();
-// the deck's half width along the boat (to the bulwarks' inner face), and the bulwarks' height over the deck
-function boatHB(v) {
-  const B = BOAT;
-  if (v <= B.mid) { const t = Math.min(1, (B.mid - v) / (B.mid - B.stern)); return B.beam * (1 - 0.26 * t * t); }
-  const t = Math.min(1, (v - B.mid) / (B.bow - B.mid));
-  return Math.max(0.04, B.beam * Math.pow(1 - t * t, 0.62));
-}
-const boatGH = v => 0.42 + 0.35 * Math.max(0, (v - 1.5) / 3.1) ** 2 + 0.18 * Math.max(0, (-v - 2.8) / 1.4);
-const boatKeel = v => -BOAT.free - 0.85 + 0.75 * Math.max(0, (v - 2.4) / 2.2) ** 2;
+// the deck's half width along the boat (to the bulwarks' inner face), the bulwarks' height over the deck, the keel
+// (v511: from src/boats/brig.js)
+const boatHB = v => hullHB(BOAT, v), boatGH = hullGH, boatKeel = v => hullKeel(BOAT, v);
 // (v496) the floor's height over the deck where you stand: the helm platform, and its ramps beside the wheel
 function boatFloor(u, v) {
   const B = BOAT;
@@ -13788,10 +13735,16 @@ function boatFits(x, z, h, wl) {
 // (boatShapesBrig, made by another agent from the boat handoff); each made once when first wanted. T > Boats
 // switches them on the boats where they are (restyleBoats).
 const BOAT_GEOS = [];
-function boatShapes() {
-  const k = BOAT.style ? 1 : 0;
-  if (!BOAT_GEOS[k]) { BOAT_GEOS[k] = (k ? boatShapesBrig : boatShapesFirst)(); sailSlopes(BOAT_GEOS[k].sail, SAIL_Z[k]); }
-  return BOAT_GEOS[k];
+// (v511, Jordan) the brig in each boat's livery (b.livery, rolled from its dock), its shapes made once a livery
+const BRIG_GEOS = new Map();
+function boatShapes(b) {
+  if (BOAT.style && b && b.livery) {
+    const key = b.livery.seed;
+    if (!BRIG_GEOS.has(key)) BRIG_GEOS.set(key, buildBrig(b.livery, BOAT));
+    return BRIG_GEOS.get(key);
+  }
+  if (!BOAT_GEOS[0]) { BOAT_GEOS[0] = boatShapesFirst(); sailSlopes(BOAT_GEOS[0].sail, SAIL_Z0); }
+  return BOAT_GEOS[0];
 }
 function boatShapesFirst() {
   const B = BOAT, save = OUT, made = {};
@@ -13916,276 +13869,7 @@ function boatShapesFirst() {
   OUT = save;
   return made;
 }
-// The Kinghaven merchant brig (v498): a broad wooden hull with a forest-green upper band, dark ribs, cream sails
-// with a green-and-gilt crest, red swallowtail pennant, stern lanterns; the same deck, gangways, helm deck, wheel
-// and unit sail/furl/anchor/chain/plank shapes as the first build, so everything else works the same on it
-function boatShapesBrig() {
-  const B = BOAT, save = OUT, made = {};
-  const C = {
-    wood: '#815537', dark: '#4a2e21', edge: '#503925', cap: '#aa8050',
-    green: '#395749', greenLight: '#516a50', gold: '#b8923a', iron: '#2e2e34',
-    rope: '#494135', canvas: '#e8dcc0', canvasShade: '#ddd0b2'
-  };
-  const take = (name, fn) => {
-    OUT = new Buf();
-    try { fn(); const mesh = OUT.mesh(boatMat); made[name] = mesh && mesh.geometry; }
-    finally { OUT = save; }
-  };
-  // A thin ribbon wrapped around the existing collision outline; no textures.
-  const sidePoint = (v, y) => {
-    const hb = boatHB(v), ky = boatKeel(v);
-    const sec = [[hb + 0.055, boatGH(v)], [hb + 0.04, 0],
-      [hb * 0.99, ky * 0.18], [hb * 0.91, ky * 0.36],
-      [hb * 0.78, ky * 0.54], [hb * 0.5, ky * 0.78], [0, ky]];
-    for (let j = 0; j < sec.length - 1; j++) if (y >= sec[j + 1][1]) {
-      const t = (y - sec[j][1]) / (sec[j + 1][1] - sec[j][1]);
-      return sec[j][0] + (sec[j + 1][0] - sec[j][0]) * t;
-    }
-    return 0;
-  };
-  // (v499, Jordan) the decks' boards as the wood floor's: a quarter tile apart, 0.215 wide over a dark bed 0.02
-  // under them (so the seams outline as the floor's do), in the floor's two browns; boards along the boat, from v a
-  // to b, at heights ya to yb, between lo(v) and hi(v) across
-  const boards = (a, b, ya, yb, lo, hi) => {
-    quad([lo(a), ya - 0.02, a], [lo(b), yb - 0.02, b], [hi(b), yb - 0.02, b], [hi(a), ya - 0.02, a], CC('#3e2c1e'));
-    for (let q = -7; q < 7; q++) {
-      const l = q * 0.25 + 0.0175, r = (q + 1) * 0.25 - 0.0175;
-      const al = Math.max(lo(a), l), ar = Math.min(hi(a), r), bl = Math.max(lo(b), l), br = Math.min(hi(b), r);
-      if (ar - al < 1e-4 && br - bl < 1e-4) continue;
-      const w0 = Math.max(0, ar - al), w1 = Math.max(0, br - bl);
-      quad([al, ya, a], [bl, yb, b], [bl + w1, yb, b], [al + w0, ya, a],
-        shade(CC(q & 1 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(q, Math.floor(Math.min(a, b) - B.stern), 499) * 0.14));
-    }
-  };
-  take('hull', () => {
-    // Exact gangway stations make both 0.7 m rail openings explicit.
-    const vs = Array.from({ length: 25 }, (_, k) => B.stern + (B.bow - B.stern) * k / 24);
-    vs.push(B.gangV - 0.35, B.gangV + 0.35);
-    vs.sort((a, b) => a - b);
-    const gap = (a, b) => a >= B.gangV - 0.350001 && b <= B.gangV + 0.350001;
-    const ys = v => [boatGH(v), 0, ...[0.18, 0.36, 0.54, 0.78, 1].map(f => boatKeel(v) * f)];
-    const colors = [C.green, '#92613e', '#815234', '#74492e', '#603c29', '#4a2e21'];
-    for (let k = 0; k < vs.length - 1; k++) {
-      const a = vs[k], b = vs[k + 1], ya = ys(a), yb = ys(b), open = gap(a, b);
-      if (b - a < 1e-6) continue;
-      for (const s of [-1, 1]) {
-        for (let j = 0; j < ya.length - 1; j++) {
-          if (j === 0 && open) continue;
-          const p = (v, y) => [s * sidePoint(v, y), y, v];
-          quad(p(a, ya[j]), p(b, yb[j]), p(b, yb[j + 1]), p(a, ya[j + 1]),
-            shade(CC(colors[j]), 0.94 + hs(k, j + (s > 0 ? 11 : 0), 496) * 0.1));
-        }
-        // Narrow dark seams, broad readable strakes below the green paint.
-        for (let j = 2; j < ya.length - 1; j++) {
-          const p = (v, y) => [s * (sidePoint(v, y) + 0.004), y, v];
-          quad(p(a, ya[j] + 0.009), p(b, yb[j] + 0.009),
-            p(b, yb[j] - 0.009), p(a, ya[j] - 0.009), CC(C.dark));
-        }
-        if (!open) {
-          // Inner bulwark and cap close the shell's thickness.
-          const ha = boatHB(a), hb = boatHB(b), ga = boatGH(a), gb = boatGH(b);
-          quad([s * ha, 0, a], [s * hb, 0, b], [s * hb, gb, b], [s * ha, ga, a], CC(C.wood));
-          quad([s * ha, ga, a], [s * hb, gb, b], [s * (hb + 0.055), gb, b],
-            [s * (ha + 0.055), ga, a], CC(C.cap));
-          seg(G.box, C.cap, [s * (ha + 0.04), ga, a], [s * (hb + 0.04), gb, b], 0.035);
-          // One continuous cream/gilt pinstripe below the cap.
-          quad([s * (sidePoint(a, ga - 0.09) + 0.004), ga - 0.09, a],
-            [s * (sidePoint(b, gb - 0.09) + 0.004), gb - 0.09, b],
-            [s * (sidePoint(b, gb - 0.12) + 0.004), gb - 0.12, b],
-            [s * (sidePoint(a, ga - 0.12) + 0.004), ga - 0.12, a], CC(C.gold));
-        }
-      }
-      // the deck's boards, as the wood floor's (v499)
-      boards(a, b, 0, 0, v => -boatHB(v), v => boatHB(v));
-    }
-    // Close rail ends without putting a threshold across either gangway.
-    for (const v of [B.gangV - 0.35, B.gangV + 0.35]) for (const s of [-1, 1]) {
-      const h = boatHB(v), y = boatGH(v);
-      quad([s * h, 0, v], [s * (h + 0.04), 0, v],
-        [s * (h + 0.055), y, v], [s * h, y, v], CC(C.cap));
-    }
-    // Raised external ribs echo the half-timbered buildings. They stay outside the deck.
-    for (const v of [-3.9, -2.9, -1.9, -0.9, 0.65, 1.7, 2.7, 3.55]) for (const s of [-1, 1]) {
-      const y = boatGH(v), low = -0.67;
-      seg(G.box, C.edge, [s * (sidePoint(v, low) + 0.015), low, v],
-        [s * (sidePoint(v, y - 0.04) + 0.015), y - 0.04, v], 0.023);
-    }
-    // Solid transom, restrained stern lights, and a carved diamond crest.
-    const st = B.stern;
-    for (const v of [st, B.bow]) {
-      const levels = ys(v);
-      for (let j = 0; j < levels.length - 1; j++) {
-        const u = sidePoint(v, levels[j]), l = sidePoint(v, levels[j + 1]);
-        quad([-u, levels[j], v], [u, levels[j], v], [l, levels[j + 1], v], [-l, levels[j + 1], v], CC(colors[j]));
-      }
-    }
-    part(G.box, C.cap, 0, boatGH(st), st, { sx: boatHB(st) * 2 + 0.11, sy: 0.065, sz: 0.065 });
-    for (const x of [-0.57, 0.57]) {
-      part(G.box, C.dark, x, -0.25, st - 0.018, { sx: 0.38, sy: 0.31, sz: 0.035 });
-      part(G.box, '#718b83', x, -0.25, st - 0.04, { sx: 0.29, sy: 0.22, sz: 0.016 });
-      part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.027, sy: 0.23, sz: 0.02 });
-      part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.29, sy: 0.025, sz: 0.02 });
-    }
-    part(G.box, C.gold, 0, 0.19, st - 0.045, { sx: 0.19, sy: 0.19, sz: 0.035, rz: Math.PI / 4 });
-    // Stem and compact bowsprit; no furniture on the walking plane.
-    seg(G.box, C.dark, [0, boatKeel(B.bow), B.bow], [0, boatGH(B.bow) + 0.2, B.bow + 0.055], 0.035);
-    const sprit = [0, 1.7, B.bow + 1.65];
-    seg(G.cyl8, C.cap, [0, 0.7, B.bow - 0.3], sprit, 0.065);
-    for (const m of B.masts) {
-      seg(G.frust7, C.wood, [0, -0.25, m.v], [0, m.h, m.v], 0.155);
-      // Mast partners fit comfortably within the existing radius-0.42 obstacle.
-      part(G.cyl8, C.dark, 0, 0.09, m.v, { sx: 0.48, sy: 0.18, sz: 0.48 });
-      for (const y of [0.32, m.h * 0.59, m.h * 0.85])
-        part(G.cyl8, C.iron, 0, y, m.v, { sx: y < 1 ? 0.31 : 0.22, sy: 0.055, sz: y < 1 ? 0.31 : 0.22 });
-      part(G.box, C.dark, 0, m.h * 0.64, m.v, { sx: 0.65, sy: 0.09, sz: 0.5 });
-      for (const [y, w] of boatYards(m)) {
-        seg(G.cyl8, C.dark, [-w / 2, y, m.v + 0.14], [w / 2, y, m.v + 0.14], 0.055);
-        for (const s of [-1, 1]) seg(G.cyl6, C.rope, [0, y + 0.6, m.v], [s * w * 0.46, y, m.v + 0.14], 0.01);
-      }
-      for (const s of [-1, 1]) for (const dv of [-0.26, 0.2]) {
-        const v = m.v + dv;
-        seg(G.cyl6, C.rope, [s * (boatHB(v) + 0.05), boatGH(v), v], [0, m.h * 0.86, m.v], 0.012);
-      }
-      part(G.oct, C.gold, 0, m.h + 0.04, m.v, { sx: 0.14, sy: 0.19, sz: 0.14 });
-    }
-    const [fore, main] = B.masts;
-    for (const [a, b] of [
-      [[0, fore.h, fore.v], sprit], [[0, main.h, main.v], [0, fore.h * 0.82, fore.v]],
-      [[0, main.h, main.v], [0, B.helmP + 0.6, B.stern + 0.08]]
-    ]) seg(G.cyl6, C.rope, a, b, 0.012);
-    // Swallowtail pennant, faceted rather than textured.
-    quad([0, main.h, main.v], [0, main.h - 0.36, main.v],
-      [0.06, main.h - 0.31, main.v - 0.62], [0.06, main.h - 0.03, main.v - 0.62], CC('#a8322a'));
-    tri([0.06, main.h - 0.03, main.v - 0.62], [0.06, main.h - 0.17, main.v - 0.62], [0, main.h - 0.06, main.v - 1.04], CC('#b84432'));
-    tri([0.06, main.h - 0.17, main.v - 0.62], [0.06, main.h - 0.31, main.v - 0.62], [0, main.h - 0.36, main.v - 1.04], CC('#923127'));
-    // Keep v496's raised helm and separate animated wheel.
-    part(G.box, C.dark, 0, B.wheelY / 2, B.wheelV, { sx: 0.13, sy: B.wheelY, sz: 0.13 });
-    // (v496, Jordan) the helm deck behind the wheel: planked, a step face between the ramps (behind the wheel), a
-    // ramp up to it either side of the wheel, and a rail round its stern and sides
-    const P = B.helmP, F = B.helmFront, RV = B.rampV, RU = B.rampU;
-    const hvs = [B.stern, (B.stern + F) / 2, F];
-    for (let k = 0; k + 1 < hvs.length; k++) boards(hvs[k], hvs[k + 1], P, P, v => -boatHB(v), v => boatHB(v));
-    quad([-RU, 0, F], [RU, 0, F], [RU, P, F], [-RU, P, F], CC('#6b4528'));
-    part(G.box, '#8a5a34', 0, P - 0.015, F + 0.02, { sx: RU * 2, sy: 0.04, sz: 0.05 });
-    for (const sg of [-1, 1]) {
-      const hbF = boatHB(F), hbR = boatHB(RV);
-      // the ramp's top, boarded as the deck (v499) and cleated, and its inner side down to the deck
-      boards(F, RV, P, 0, sg > 0 ? () => RU : v => -boatHB(v), sg > 0 ? v => boatHB(v) : () => -RU);
-      for (let c = 1; c < 5; c++) { const t = c / 5, v = F + (RV - F) * t, y = P * (1 - t) + 0.02, hb = boatHB(v); seg(G.box, '#7a5432', [sg * (RU + 0.04), y, v], [sg * (hb - 0.04), y, v], 0.025); }
-      tri([sg * RU, 0, RV], [sg * RU, P, F], [sg * RU, 0, F], CC('#5e3c22'));
-      part(G.box, '#8a5a34', sg * RU, P / 2, F + 0.03, { sx: 0.06, sy: P, sz: 0.06 });
-    }
-    // its rail: posts round the stern and down each side to the platform's front
-    const TR = P + 0.36, rail = [];
-    for (const sg of [-1, 1]) { rail.push([]); for (const v of [F, (F + B.stern) / 2, B.stern + 0.08]) rail[rail.length - 1].push([sg * (boatHB(v) - 0.03), v]); }
-    for (const side of rail) {
-      for (const [u, v] of side) seg(G.box, '#6b4528', [u, P, v], [u, TR, v], 0.05);
-      for (let k = 0; k + 1 < side.length; k++) seg(G.box, '#8a5a34', [side[k][0], TR, side[k][1]], [side[k + 1][0], TR, side[k + 1][1]], 0.05);
-    }
-    seg(G.box, '#8a5a34', [rail[0][2][0], TR, rail[0][2][1]], [rail[1][2][0], TR, rail[1][2][1]], 0.05);
-    // (the backstay comes down to a post at the rail's middle, clear over the head of whoever's at the wheel)
-    seg(G.box, '#6b4528', [0, P, B.stern + 0.08], [0, TR + 0.25, B.stern + 0.08], 0.06);
-    // Lanterns sit over the stern rail, behind the permitted walking region.
-    for (const s of [-1, 1]) {
-      const x = s * 0.86, z = st - 0.025, y = boatGH(st) + 0.25;
-      seg(G.box, C.iron, [x, boatGH(st), z], [x, y + 0.28, z], 0.019);
-      part(G.box, '#d3ab5f', x, y, z, { sx: 0.14, sy: 0.19, sz: 0.14 });
-      for (const dy of [-0.12, 0.12]) part(G.box, C.iron, x, y + dy, z, { sx: 0.19, sy: 0.045, sz: 0.19 });
-      part(G.cone4, C.iron, x, y + 0.18, z, { sx: 0.23, sy: 0.12, sz: 0.23, ry: Math.PI / 4 });
-    }
-    part(G.box, C.dark, 0.9, 0.25, 3.4, { sx: 0.5, sy: 0.12, sz: 0.14 });
-  });
-  // (v499, Jordan) the stern lanterns' glass, lit while you're at the wheel: drawn over the glass in its own glowing
-  // material (boatGlowMat)
-  take('glow', () => {
-    for (const s of [-1, 1]) part(G.box, '#ffffff', s * 0.86, boatGH(B.stern) + 0.25, B.stern - 0.025, { sx: 0.15, sy: 0.2, sz: 0.15 });
-  });
-  take('sail', () => {
-    const nu = 10, nv = 8;
-    const pt = (u, v, offset = 0) => {
-      const width = 0.94 + 0.06 * v;
-      // Top edge stays exactly y=0, bottom exactly y=-1, for the existing furl animation.
-      return [(u - 0.5) * width, -v,
-        0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v) + offset];
-    };
-    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
-      const col = j === nv - 1 ? C.greenLight : i % 2 ? C.canvas : C.canvasShade;
-      quad(pt(i / nu, j / nv), pt((i + 1) / nu, j / nv),
-        pt((i + 1) / nu, (j + 1) / nv), pt(i / nu, (j + 1) / nv), shade(CC(col), 0.97 + j * 0.004));
-    }
-    // Clip the crest onto each cloth triangle so it follows the actual faceted surface.
-    // A single large decal quad would cut through the sail's curved belly.
-    const cross = (a, b, p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
-    const crest = (diamond, color, offset) => {
-      for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
-        const a = [i / nu, j / nv], b = [(i + 1) / nu, j / nv];
-        const c = [(i + 1) / nu, (j + 1) / nv], d = [i / nu, (j + 1) / nv];
-        for (const uv of [[a, b, c], [a, c, d]]) {
-          let poly = uv;
-          for (let k = 0; k < 4 && poly.length; k++) {
-            const p = diamond[k], q = diamond[(k + 1) % 4], next = [];
-            for (let n = 0; n < poly.length; n++) {
-              const u = poly[n], v = poly[(n + 1) % poly.length];
-              const du = cross(p, q, u), dv = cross(p, q, v);
-              if (du >= 0) next.push(u);
-              if ((du >= 0) !== (dv >= 0)) {
-                const t = du / (du - dv);
-                next.push([u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t]);
-              }
-            }
-            poly = next;
-          }
-          if (poly.length < 3) continue;
-          const abc = uv.map(p => pt(...p)), denom = cross(...uv);
-          const surface = p => {
-            const w0 = cross(uv[1], uv[2], p) / denom;
-            const w1 = cross(uv[2], uv[0], p) / denom, w2 = 1 - w0 - w1;
-            return abc[0].map((n, k) => n * w0 + abc[1][k] * w1 + abc[2][k] * w2 + (k === 2 ? offset : 0));
-          };
-          for (let k = 1; k + 1 < poly.length; k++)
-            tri(surface(poly[0]), surface(poly[k]), surface(poly[k + 1]), CC(color));
-        }
-      }
-    };
-    for (const face of [-1, 1]) {
-      crest([[0.5, 0.24], [0.61, 0.43], [0.5, 0.62], [0.39, 0.43]], C.green, face * 0.004);
-      crest([[0.5, 0.33], [0.555, 0.43], [0.5, 0.53], [0.445, 0.43]], C.gold, face * 0.008);
-    }
-  });
-  take('wheel', () => {
-    const R = B.wheelR, Rh = R + 0.1;
-    const wp = (a,r) => [Math.cos(a)*r, Math.sin(a)*r, 0];
-    for (let k=0;k<12;k++) seg(G.box, C.cap, wp(k*Math.PI/6,R), wp((k+1)*Math.PI/6,R),0.0225);
-    for (let k=0;k<8;k++) seg(G.cyl6,C.wood,wp(k*Math.PI/4,0.035),wp(k*Math.PI/4,Rh),0.021);
-    part(G.cyl8,C.gold,0,0,0,{sx:0.1,sy:0.07,sz:0.1,rx:Math.PI/2});
-  });
-  take('furl', () => {
-    part(G.cyl8, C.canvasShade, 0, 0, 0, { sx: 1, sy: 1, sz: 1, rz: Math.PI / 2 });
-    for (const x of [-0.32, 0, 0.32]) part(G.cyl8, C.rope, x, 0, 0, { sx: 1.035, sy: 0.025, sz: 1.035, rz: Math.PI / 2 });
-  });
-  take('anchor', () => {
-    // Ring top at the local origin; all metal hangs below it.
-    for (let k = 0; k < 8; k++) {
-      const p = a => [Math.cos(a) * 0.065, -0.065 + Math.sin(a) * 0.065, 0];
-      seg(G.cyl6, C.iron, p(k * Math.PI / 4), p((k + 1) * Math.PI / 4), 0.013);
-    }
-    seg(G.cyl6, C.iron, [0, -0.12, 0], [0, -0.85, 0], 0.035);
-    part(G.box, C.dark, 0, -0.23, 0, { sx: 0.055, sy: 0.065, sz: 0.52 });
-    for (const s of [-1, 1]) {
-      seg(G.cyl6, C.iron, [0, -0.85, 0], [s * 0.32, -0.72, 0], 0.035);
-      seg(G.cyl6, C.iron, [s * 0.32, -0.72, 0], [s * 0.4, -0.54, 0], 0.032);
-      part(G.cone4, C.iron, s * 0.38, -0.57, 0, { sx: 0.18, sy: 0.2, sz: 0.12, rz: -s * 0.4 });
-    }
-  });
-  take('chain', () => part(G.box, C.iron, 0, -0.5, 0, { sx: 0.035, sy: 1, sz: 0.035 }));
-  take('plank', () => {
-    // No raised rungs: the entire walking surface is flush at local y=0.
-    part(G.box, C.dark, 0.5, -0.059, 0, { sx: 1, sy: 0.062, sz: 0.62 });
-    for (let j = 0; j < 4; j++) part(G.box, j % 2 ? '#a77e50' : '#b48a58', 0.5, -0.014, -0.2325 + j * 0.155,
-      { sx: 1, sy: 0.028, sz: 0.145 });
-  });
-  return made;
-}
+// The Kinghaven merchant brig (v498): src/boats/brig.js (buildBrig), in a livery since v511
 // one boat at a dock: alongside it, bow out to sea, on whichever side has room
 function placeBoat(k) {
   const d = k.d, bc = k.base % N, br = (k.base - bc) / N, ox = bc + 0.5, oz = br + 0.5, h = Math.atan2(DC[d], DR[d]);
@@ -14195,7 +13879,8 @@ function placeBoat(k) {
     const x = ox + DC[d] * along + px * off, z = oz + DR[d] * along + pz * off;
     const ci = T(Math.floor(x), Math.floor(z)), wl = WL[ci];
     if (!wl || !boatFits(x, z, h, wl)) continue;
-    const b = { x, z, h, wl, speed: 0, notch: 0, sail: 0, anchor: 1, anchorGoal: 1, plank: 1, side: 0, endY: dockY, len: BOAT.plank, phase: hs(bc, br, 496) * 6.28, dock: k, g: null };
+    const b = { x, z, h, wl, speed: 0, notch: 0, sail: 0, anchor: 1, anchorGoal: 1, plank: 1, side: 0, endY: dockY, len: BOAT.plank, phase: hs(bc, br, 496) * 6.28, dock: k, g: null,
+      livery: rollLivery(1 + Math.floor(hs(bc, br, 511) * 999998)) };   // (v511: its own livery, the same each load of this world)
     // the gangplank goes down on the dock's side
     const [u] = boatLocal(b, x - px * off, z - pz * off);
     b.side = u > 0 ? 1 : -1;
@@ -14220,23 +13905,9 @@ function buildBoats() {
 }
 // a boat's model, from the shapes of BOAT.style: hull, a sail and furl roll on each yard, anchor and chain, gangplank, wheel
 function boatGroup(b) {
-  const S = boatShapes();
-  {
-    const g = new GFX.Group(), mesh = geo => shadowy(new GFX.Mesh(geo, boatMat));
-    g.add(mesh(S.hull));
-    b.sails = []; b.furls = [];
-    for (const m of BOAT.masts) for (const [y, w, hgt] of boatYards(m)) {
-      const s = shadowy(new GFX.Mesh(S.sail, sailMat)); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); b.sails.push(s);
-      const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); b.furls.push(f);
-    }
-    b.anchorM = mesh(S.anchor); b.anchorM.position.set(0.9, -0.4, 3.4); g.add(b.anchorM);
-    b.chainM = mesh(S.chain); b.chainM.position.set(0.9, 0.2, 3.4); g.add(b.chainM);
-    b.plankG = new GFX.Group(); b.plankM = mesh(S.plank); b.plankG.add(b.plankM); g.add(b.plankG);
-    b.wheelM = mesh(S.wheel); b.wheelM.position.set(0, BOAT.wheelY, BOAT.wheelV - 0.1); g.add(b.wheelM);
-    b.glowM = S.glow ? new GFX.Mesh(S.glow, boatGlowMat) : null;
-    if (b.glowM) { b.glowM.visible = false; g.add(b.glowM); }
-    b.g = g; scene.add(g);
-  }
+  const m = brigModel(boatShapes(b), BOAT, { boat: boatMat, sail: sailMat, glow: boatGlowMat });
+  Object.assign(b, m);
+  scene.add(b.g);
 }
 // (v498) T > Boats: every boat made again in the model picked, where it is and as it's set (sails, anchor, plank)
 function restyleBoats() {
@@ -24389,7 +24060,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 510, crashSeen = new Map();
+const GAME_VERSION = 511, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
