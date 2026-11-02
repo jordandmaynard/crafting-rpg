@@ -331,54 +331,55 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   return { mat, U };
 }
 
-// ---------- lettering ----------
-// (v518) a blocky 5 x 7 capital font for boat names: each glyph seven rows of five, '#' inked
-const FONT5 = (() => {
-  const src = {
-    A: '.###.#...##...#######...##...##...#', B: '####.#...##...#####.#...##...#####.', C: '.###.#...##....#....#....#...#.###.',
-    D: '####.#...##...##...##...##...#####.', E: '######....#....####.#....#....#####', F: '######....#....####.#....#....#....',
-    G: '.###.#...##....#.####...##...#.####', H: '#...##...##...#######...##...##...#', I: '.###...#....#....#....#....#...###.',
-    J: '..###...#....#....#....#.#..#..##..', K: '#...##..#.#.#..##...#.#..#..#.#...#', L: '#....#....#....#....#....#....#####',
-    M: '#...###.###.#.##.#.##...##...##...#', N: '#...###..##.#.##..###...##...##...#', O: '.###.#...##...##...##...##...#.###.',
-    P: '####.#...##...#####.#....#....#....', Q: '.###.#...##...##...##.#.##..#..##.#', R: '####.#...##...#####.#.#..#..#.#...#',
-    S: '.#####....#.....###.....#....#####.', T: '#####..#....#....#....#....#....#..', U: '#...##...##...##...##...##...#.###.',
-    V: '#...##...##...##...##...#.#.#...#..', W: '#...##...##...##.#.##.#.##.#.#.#.#.', X: '#...##...#.#.#...#...#.#.#...##...#',
-    Y: '#...##...#.#.#...#....#....#....#..', Z: '#####....#...#...#...#...#....#####',
-    "'": '..#....#...#.......................', '-': '...............###.................', ' ': '.'.repeat(35),
+// ---------- the name on the transom (v519) ----------
+// (Jordan) the boat's name painted across the transom's band in the map's book font (Spectral) with a round black
+// stroke, as the map's names are: drawn on a canvas into a texture, on a quad of its own (NAME_PLATE, transom space)
+export const NAME_PLATE = { hw: 0.88, y0: 0.05, y1: 0.53, W: 512, H: 140, weight: 600, stroke: 0.22, spacing: 0.04 };
+const nameInk = hex => { const [r, g, b] = hexRGB(hex); return 0.299 * r + 0.587 * g + 0.114 * b > 95 ? hex : '#e6dcc2'; };
+function drawName(data, name, ink) {
+  const P = NAME_PLATE, cv = document.createElement('canvas'); cv.width = P.W; cv.height = P.H;
+  const ctx = cv.getContext('2d'), font = px => `${P.weight} ${px}px Spectral, Georgia, serif`;
+  // one line, or two split at the space that comes out most even, whichever lets the letters be biggest
+  const fit = lines => {
+    let px = 100; ctx.font = font(px); ctx.letterSpacing = `${P.spacing * px}px`;
+    const wide = Math.max(...lines.map(t => ctx.measureText(t).width)) + px * P.stroke * 1.2;
+    return Math.min(px * (P.W - 8) / wide, (P.H - 6) / (lines.length * 1.02 + 0.08));
   };
-  return src;
-})();
-// the name's letters as rects on the transom (facing -z: read from behind the boat, so its lines run toward -x),
-// one line, or two balanced at a space when one would come out too small; within half widths `hw`, between y0 and y1
-export function nameRects(name, hw = 0.86, y0 = 0.08, y1 = 0.5) {
-  const text = name.toUpperCase().replace(/[^A-Z' -]/g, '');
-  const cols = t => t.length * 6 - 1;
-  const fit = lines => Math.min(2 * hw / Math.max(...lines.map(cols)), (y1 - y0) / (lines.length * 7 + (lines.length - 1) * 3), 0.05);
-  let lines = [text];
-  const sp = [...text].map((c, i) => c === ' ' ? i : -1).filter(i => i > 0);
-  if (sp.length && fit(lines) < 0.034) {
-    let best = null;
-    for (const i of sp) { const two = [text.slice(0, i), text.slice(i + 1)]; if (!best || fit(two) > fit(best)) best = two; }
-    if (fit(best) > fit(lines)) lines = best;
-  }
-  const k = fit(lines), H = lines.length * 7 + (lines.length - 1) * 3, top = (y0 + y1) / 2 + H * k / 2, out = [];
-  lines.forEach((t, li) => {
-    const x0 = cols(t) * k / 2;   // (the first letter at +x, which is the left as seen from astern)
-    [...t].forEach((ch, ci) => {
-      const g = FONT5[ch] || FONT5[' '];
-      for (let r = 0; r < 7; r++) for (let c = 0; c < 5;) {
-        if (g[r * 5 + c] !== '#') { c++; continue; }
-        let e = c; while (e < 5 && g[r * 5 + e] === '#') e++;
-        const xa = x0 - (ci * 6 + c) * k, xb = x0 - (ci * 6 + e) * k, ya = top - (li * 10 + r) * k, yb = ya - k;
-        out.push([xa, xb, yb, ya]);
-        c = e;
-      }
-    });
-  });
-  return out;
+  let lines = [name];
+  const words = name.split(' ');
+  for (let m = 1; m < words.length; m++) { const two = [words.slice(0, m).join(' '), words.slice(m).join(' ')]; if (fit(two) > fit(lines)) lines = two; }
+  const px = fit(lines);
+  ctx.font = font(px); ctx.letterSpacing = `${P.spacing * px}px`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; ctx.miterLimit = 2; ctx.lineWidth = px * P.stroke;
+  const lh = px * 1.02, top = P.H / 2 - (lines.length - 1) * lh / 2 + px * 0.04;
+  lines.forEach((t, k) => { ctx.strokeStyle = '#000'; ctx.strokeText(t, P.W / 2, top + k * lh); });
+  lines.forEach((t, k) => { ctx.fillStyle = ink; ctx.fillText(t, P.W / 2, top + k * lh); });
+  data.set(ctx.getImageData(0, 0, P.W, P.H).data);
 }
-function letterName(name, z, color) {
-  for (const [xa, xb, yb, ya] of nameRects(name)) quad([xa, yb, z], [xb, yb, z], [xb, ya, z], [xa, ya, z], color);
+// the name's texture: drawn now, and again once the book font has loaded (canvas text falls back until then)
+export function nameTexture(name, inkHex) {
+  if (typeof document === 'undefined') return null;
+  const P = NAME_PLATE, data = new Uint8Array(P.W * P.H * 4), ink = nameInk(inkHex);
+  const tex = new GFX.DataTexture(data, P.W, P.H);
+  drawName(data, name, ink);
+  const f = `${P.weight} 48px Spectral`;
+  if (document.fonts && !document.fonts.check(f)) document.fonts.load(f).then(() => { drawName(data, name, ink); tex.needsUpdate = true; }, () => 0);
+  return tex;
+}
+// the plate's material: the name's pixels lit as the hull is, nothing drawn where it's clear
+export function makeNameMat(tex) {
+  return new GFX.ShaderMaterial({ uniforms: { tName: { value: tex } }, attributes: { nUV: 'vec2f' }, side: GFX.DoubleSide, lit: true, code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) eye: vec3f, @location(2) uv: vec2f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, w - F.camPos.xyz, v.nUV);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let t = textureSample(tName, tNameS, i.uv);
+  if (t.a < 0.5) { discard; }
+  let c = shadeLit(t.rgb, vec3f(0.0), 0.0, 1.0, i.world, flatNormal(i.eye), O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}` });
 }
 
 // ---------- the brig's shapes in a livery ----------
@@ -488,10 +489,9 @@ export function buildBrig(L, B = BRIG_SHAPE) {
       part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.027, sy: 0.23, sz: 0.02 });
       part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.29, sy: 0.025, sz: 0.02 });
     }
-    // (v518, Jordan) the boat's name lettered across the transom's painted band in its trim colour, where the diamond
-    // crest was (no name: the crest)
-    if (L.name) letterName(L.name, st - 0.012, C.gold);
-    else part(G.box, C.gold, 0, 0.19, st - 0.045, { sx: 0.19, sy: 0.19, sz: 0.035, rz: Math.PI / 4 });
+    // (v518/v519, Jordan) the boat's name goes across the transom's band where the diamond crest was ('name', below);
+    // with no name (or nowhere to draw it), the crest
+    if (!L.name || typeof document === 'undefined') part(G.box, C.gold, 0, 0.19, st - 0.045, { sx: 0.19, sy: 0.19, sz: 0.035, rz: Math.PI / 4 });
     // Stem and compact bowsprit; no furniture on the walking plane.
     seg(G.box, C.dark, [0, KEEL(B.bow), B.bow], [0, GH(B.bow) + 0.2, B.bow + 0.055], 0.035);
     const sprit = [0, 1.7, B.bow + 1.65];
@@ -658,6 +658,15 @@ export function buildBrig(L, B = BRIG_SHAPE) {
     for (let j = 0; j < 4; j++) part(G.box, shade(deckC, j % 2 ? 1.52 : 1.8), 0.5, -0.014, -0.2325 + j * 0.155, { sx: 1, sy: 0.028, sz: 0.145 });
   });
   sailSlopes(made.sail, BRIG_SAIL_Z); sailSlopes(made.sailE, BRIG_SAIL_Z);
+  // (v519) the name's plate: a quad over the transom's band, a hair proud of it, mapped to the name's texture (seen
+  // from astern, so its u runs toward -x); its texture and material ride along with the shapes
+  made.nameTex = L.name ? nameTexture(L.name, L.trim[2]) : null;
+  if (made.nameTex) {
+    const P = NAME_PLATE, z = B.stern - 0.012, g = new GFX.BufferGeometry();
+    g.setAttribute('position', new GFX.BufferAttribute(new Float32Array([P.hw, P.y1, z, -P.hw, P.y1, z, -P.hw, P.y0, z, P.hw, P.y1, z, -P.hw, P.y0, z, P.hw, P.y0, z]), 3));
+    g.setAttribute('nUV', new GFX.BufferAttribute(new Float32Array([0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1]), 2));
+    made.name = g; made.nameMat = makeNameMat(made.nameTex);
+  }
   return made;
 }
 
@@ -694,6 +703,9 @@ export function brigModel(S, B, mats) {
   hangChain(chainM, B.hawse[1] + 0.4);
   const plankG = new GFX.Group(), plankM = mesh(S.plank); plankG.add(plankM); g.add(plankG);
   const wheelM = mesh(S.wheel); wheelM.position.set(0, B.wheelY, B.wheelV - 0.1); g.add(wheelM);
+  // (v519) the name across the transom
+  const nameM = S.name && S.nameMat ? new GFX.Mesh(S.name, S.nameMat) : null;
+  if (nameM) { nameM.receiveShadow = true; g.add(nameM); }
   const glowM = S.glow && mats.glow ? new GFX.Mesh(S.glow, mats.glow) : null;
   if (glowM) { glowM.visible = false; g.add(glowM); }
   return { g, sails, furls, anchorM, chainM, plankG, plankM, wheelM, glowM };
