@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v484:** The health bar settings now colour the top banner's bar as they do the bars over heads (Jordan): the empty part in Empty bar (HPBAR.back on .tc-in), the fill in Health with the kit's painted fill turned grey and multiplied over it for its shading, plus the part just lost and the hit flash as before (drawBar). The topRed swap (amber/red art) is gone: pick the Health colour instead.
+
 **v483:** A monster's top banner goes at once when it dies (or is gone), with no hold or fade (Jordan).
 
 **v482:** Jordan's health bar tuning: top banner bigWidth 538, bigHeight 19, bigY 4, nameSize 41, nameY 9, nameStroke 4.
