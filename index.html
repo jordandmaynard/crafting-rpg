@@ -2962,6 +2962,7 @@ function townTables(t, n) {
     if (smithy !== tan) smithy.color = '#5a5664';
     smithy.smithy = true; t.smithy = smithy;
   }
+  townClergy(t);
   townTrades(t, n);
   townBeds(t, n);
 }
@@ -2992,13 +2993,27 @@ function bedClear(h, k, i) {
   }
   return true;
 }
+// (v467, Jordan) the clergy's house: the plain house nearest the cathedral's door, where its bishop, priests and
+// choir sleep (it takes no trade and no one else lives there)
+function townClergy(t) {
+  const ca = t.houses.find(h => h.cathedral);
+  if (!ca) return;
+  const [cc, cr] = ca.inside;
+  let best = null, bd = 1e9;
+  for (const h of t.houses) {
+    if (h.cathedral || h.tannery || h.smithy || !h.inside) continue;
+    const d = Math.hypot(h.inside[0] - cc, h.inside[1] - cr);
+    if (d < bd) { bd = d; best = h; }
+  }
+  if (best) { best.clergy = true; t.clergyHouse = best; }
+}
 function townTrades(t, n) {
   const list = [...TOWN_TRADES[t.tier] || TOWN_TRADES[0]];
   if (t.tannery) t.tannery.trade = 'tanner';
   if (t.smithy && t.smithy !== t.tannery) t.smithy.trade = ['smith', 'armorer', 'masterSmith'][t.tier] || 'smith';
   else if (t.smithy) t.smithy.trade = 'tanner';
   for (const h of t.houses) {
-    if (h.trade || h.cathedral || !list.length) continue;
+    if (h.trade || h.cathedral || h.clergy || !list.length) continue;
     const [trade, kind] = list.shift();
     h.trade = trade;
     // the bench: the free tile farthest from the door
@@ -18825,7 +18840,7 @@ function spawnTick(dt) {
 // Drawing: each person's build is baked into one mesh of all the town's people (FolkBatch), every vertex tagged with
 // the joint it hangs from; the joints' matrices go to the shader each frame, so a whole town is one or two draws
 // with every person in their own colours. (Doors, going indoors, a day's schedule and empty streets at night next.)
-const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70, workMin: 25, workMax: 60, sayTime: 4.5, lieTime: 1.4, coverTime: 0.6, breathe: 0.05 };
+const FOLK = { on: 1, share: 0.5, wake: 40, speed: 1, stepRef: 0.65, stayMin: 5, stayMax: 18, talkR: 1.7, rad: 0.2, aside: 1.15, asideSpeed: 2.6, wave: 0.35, waveR: 3, waveTime: 4.5, show: 70, workMin: 25, workMax: 60, sayTime: 4.5, lieTime: 3.2, coverTime: 0.6, breathe: 0.05, sink: 15 };
 const FOLK_READ = { towns: 0, people: 0, shown: 0, draws: 0 };
 const FOLK_PER_HOUSE = [[1, 2], [2, 2], [2, 3]];          // (by town tier: least, most)
 const FOLK_TIERS = [['hamlet'], ['hamlet', 'medium'], ['hamlet', 'medium', 'large']];
@@ -18905,7 +18920,7 @@ function folkPeople(t) {
   // (v452) the night's watch, the lamplighter and the town's street trades: one each, in the plain houses' second places
   const extras = [...(FOLK_EXTRAS[t.tier] || FOLK_EXTRAS[0])];
   t.houses.forEach((h, hi0) => {
-    if (doorFront(h) < 0) return;
+    if (doorFront(h) < 0 || h.clergy) return;   // (v467: the clergy's house is the clergy's alone)
     const n = Math.max(lo + Math.floor(folkSeed(t.n, hi0, 7) / 4294967296 * (hi - lo + 1)), h.trade && !h.cathedral && extras.length ? 2 : 1);
     for (let k = 0; k < n; k++) {
       // (a workshop's first is its trade, the cathedral's all clergy)
@@ -19181,12 +19196,14 @@ function wakeTown(t) {
   // everyone where the clock says they'd be (v452): at home, at work, asleep, or out at one of the town's places
   for (const p of t.folk) {
     const u = folkSeed(t.n, p.home, p.d.seed & 0xffff, 77) / 4294967296, v = folkSeed(t.n, p.home, p.d.seed & 0xffff, 78) / 4294967296;
-    p.up = 5.5 + u * 1.5; p.bed = 20.5 + v * 1.5; p.sh = (u + v) % 1;
+    p.rise = 5.5 + u * 1.5; p.bed = 20.5 + v * 1.5; p.sh = (u + v) % 1;   // (v467: rise was p.up, which v454's on-a-stair flag overwrote)
     const H0 = t.houses[p.home];
     p.workHouse = p.worker ? H0 : null;
-    p.bedTile = H0.inTiles && H0.inTiles.length ? H0.inTiles[Math.floor(u * H0.inTiles.length)] : H0.front;
+    // (v467: the clergy sleep in their house by the cathedral)
+    const BH = H0.cathedral && t.clergyHouse ? t.clergyHouse : H0;
+    p.bedTile = BH.inTiles && BH.inTiles.length ? BH.inTiles[Math.floor(u * BH.inTiles.length)] : BH.front;
     // (a bed of their own if the house has one for them: else asleep out of sight, as before)
-    p.bedRec = H0.beds && H0.beds[p.slot] && H0.beds[p.slot].side >= 0 ? H0.beds[p.slot] : null;
+    p.bedRec = BH.beds && BH.beds[p.slot] && BH.beds[p.slot].side >= 0 ? BH.beds[p.slot] : null;
     if (p.bedRec) p.bedTile = p.bedRec.side;
     p.bedPh = null; p.bedK = 0; p.coverK = 0;
     p.route = null; p.opened = null; p.stuckT = 0; p.anim = 'idle'; p.face = Math.random() * 6.28;
@@ -19219,7 +19236,7 @@ function folkActivity(p) {
   const h = SKY.timeOfDay, j = p.d.job;
   if (j === 'guard' || j === 'captain') return inHours(h, 8 + p.sh, 15 + p.sh) ? 'sleep' : 'watch';
   if (j === 'lamplighter') return inHours(h, 18, 24) || inHours(h, 4.5, 6.5) ? 'lamps' : inHours(h, 0, 4.5) || inHours(h, 6.5, 11) ? 'sleep' : 'errand';
-  if (!inHours(h, p.up, p.bed)) return 'sleep';
+  if (!inHours(h, p.rise, p.bed)) return 'sleep';
   const work = inHours(h, 8 + p.sh * 0.5, 17 + p.sh * 0.5) && !inHours(h, 12, 13);
   if (work && (p.workHouse || FOLK_OUT_WORK[j])) return 'work';
   return inHours(h, p.bed - 1.5, p.bed) ? 'home' : 'errand';
@@ -19328,39 +19345,94 @@ function folkNear() {
 }
 // (v452) getting into bed: once they've reached the tile beside it, if it's theirs and it's bedtime
 function folkToBed(p) {
-  if (p.asleep && p.bedRec && p.at === p.bedRec.side && !p.bedPh) { p.bedPh = 'lie'; p.bedK = 0; p.coverK = 0; p.actT = 2; }
+  if (p.asleep && p.bedRec && p.at === p.bedRec.side && !p.bedPh) { p.bedPh = 'lie'; p.bedK = 0; p.coverK = 0; p.actT = 2; p.face0 = p.face; }
 }
 const ease = k => k * k * (3 - 2 * k);
-// someone lying down in bed, getting up or asleep: from standing beside it, turned toward it, to lying on their
-// back with their head on the pillow; breathing slow while asleep
+// (v467, Jordan) getting into bed and out again, over p.bedK 0 -> 1 (out: the same, backward):
+//   0 - .2   step to the bed's edge, turning their back to it
+//   .2 - .45 sit down on the edge (leaning forward as they go; getting out, it's standing up)
+//   .45 - .9 swing round and lie back, legs coming up off the floor, the head going down onto the pillow
+//   .9 - 1   sink into the mattress: the head stays on the pillow, the body tips FOLK.sink degrees feet-down
+// The hips are what's moved (and turned about) in between, so nothing slides or swings oddly.
+const bedQ0 = new GFX.Quaternion(), bedQ1 = new GFX.Quaternion(), bedE = new GFX.Euler(), bedV = new GFX.Vector3();
+function bedSlerp(a, b, t) {
+  let ax = a.x, ay = a.y, az = a.z, aw = a.w, bx = b.x, by = b.y, bz = b.z, bw = b.w, d = ax * bx + ay * by + az * bz + aw * bw;
+  if (d < 0) { bx = -bx; by = -by; bz = -bz; bw = -bw; d = -d; }
+  let k0 = 1 - t, k1 = t;
+  if (d < 0.9995) { const th = Math.acos(d), sn = Math.sin(th); k0 = Math.sin((1 - t) * th) / sn; k1 = Math.sin(t * th) / sn; }
+  const x = ax * k0 + bx * k1, y = ay * k0 + by * k1, z = az * k0 + bz * k1, w = aw * k0 + bw * k1, l = Math.hypot(x, y, z, w) || 1;
+  return [x / l, y / l, z / l, w / l];
+}
 function folkBedPose(p) {
-  const f = p.rig, b = p.bedRec, k = ease(p.bedK);
-  const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5;
-  const h = 1.05 * f.g.scale.y, top = bedFloorY(b) + 0.16 + 0.12 + 0.17;
-  // lying: feet toward the foot, the head on the pillow
-  const lx = mx + DC[b.d] * (h - 0.82), lz = mz + DR[b.d] * (h - 0.82), ly = top + 0.1;
-  const sx = p.x, sz = p.z, sy = p.y;
-  const toBed = Math.atan2(mx - sx, mz - sz);
-  const turn = Math.min(1, p.bedK * 2.5);   // (turned to the bed first, then down onto it)
-  const yaw = p.face + angDiff(toBed, p.face) * ease(turn);
-  const fy = yaw + angDiff(ry, yaw) * k;
-  f.g.position.set(sx + (lx - sx) * k, sy + (ly - sy) * k + Math.sin(Math.PI * k) * 0.25, sz + (lz - sz) * k);
-  f.g.rotation.set(-Math.PI / 2 * k, fy, 0, 'YXZ');
+  const f = p.rig, b = p.bedRec, k = p.bedK, sy = f.g.scale.y;
+  const F = [DC[b.d], DR[b.d]], ry = Math.atan2(F[0], F[1]), mx = b.c + 0.5 + F[0] * 0.5, mz = b.r + 0.5 + F[1] * 0.5;
+  const floorY = bedFloorY(b), seatY = floorY + 0.42, hipH = 0.36 * sy, h = 1.05 * sy;
+  // the side they get in from (toward where they stood), its edge, and where they stand to sit on it
+  const P0x = p.x, P0z = p.z, Px = -F[1], Pz = F[0], sg = (P0x - mx) * Px + (P0z - mz) * Pz >= 0 ? 1 : -1, Sx = Px * sg, Sz = Pz * sg;
+  const Ex = mx - F[0] * 0.1 + Sx * 0.3, Ez = mz - F[1] * 0.1 + Sz * 0.3, SPx = Ex + Sx * 0.27, SPz = Ez + Sz * 0.27;
+  const yawS = Math.atan2(Sx, Sz), face0 = p.face0 ?? p.face;
+  // lying, tipped by `sink` (0..1 of FOLK.sink): the head's middle on the pillow, the rest following
+  const lying = sink => {
+    bedQ1.setFromEuler(bedE.set(-Math.PI / 2 + sink * FOLK.sink * Math.PI / 180, ry, 0, 'YXZ'));
+    const up = bedV.set(0, 1, 0).applyQuaternion(bedQ1), hx = mx - F[0] * 0.62, hz = mz - F[1] * 0.62, hy = floorY + 0.6, r = h - 0.1 * sy;
+    return { q: bedQ1, ox: hx - up.x * r, oy: hy - up.y * r, oz: hz - up.z * r, ux: up.x, uy: up.y, uz: up.z };
+  };
+  let sitK = 0, lean = 0;
+  if (k < 0.2) {
+    const a = ease(k / 0.2);
+    f.g.position.set(P0x + (SPx - P0x) * a, p.y, P0z + (SPz - P0z) * a);
+    f.g.rotation.set(0, face0 + angDiff(yawS, face0) * a, 0, 'YXZ');
+  } else if (k < 0.45) {
+    const a = ease((k - 0.2) / 0.25), hy = floorY + hipH + (seatY - floorY - hipH) * a;
+    f.g.position.set(SPx + (Ex - SPx) * a, hy - hipH, SPz + (Ez - SPz) * a);
+    f.g.rotation.set(0, yawS, 0, 'YXZ');
+    sitK = a; lean = Math.sin(Math.PI * a) * 0.5;
+  } else if (k < 0.9) {
+    const a = ease((k - 0.45) / 0.45), L = lying(0);
+    const lhx = L.ox + L.ux * hipH, lhy = L.oy + L.uy * hipH, lhz = L.oz + L.uz * hipH;
+    bedQ0.setFromEuler(bedE.set(0, yawS, 0, 'YXZ'));
+    const q = bedSlerp(bedQ0, L.q, a);
+    f.g.quaternion.set(q[0], q[1], q[2], q[3]);
+    const up = bedV.set(0, 1, 0).applyQuaternion(f.g.quaternion);
+    const hx = Ex + (lhx - Ex) * a, hy = seatY + (lhy - seatY) * a + Math.sin(Math.PI * a) * 0.04, hz = Ez + (lhz - Ez) * a;
+    f.g.position.set(hx - up.x * hipH, hy - up.y * hipH, hz - up.z * hipH);
+    sitK = 1 - a;
+  } else {
+    const L = lying(ease(Math.min(1, (k - 0.9) / 0.1)));
+    f.g.quaternion.copy(L.q); f.g.position.set(L.ox, L.oy, L.oz);
+  }
+  f.sitK = sitK; f.lean = lean;
   folkKit.pose(f, 'idle', p.bedPh === 'sleep' ? 0 : p.animT * 0.2);
+  f.sitK = 0; f.lean = 0;
   if (p.bedPh === 'sleep') { p.sz0 = f.g.scale.z; f.g.scale.z = p.sz0 * (1 + FOLK.breathe * Math.sin(p.animT * 1.6)); }
   else p.sz0 = null;
-  if (p.bedK >= 1) p.face = ry + Math.PI;   // (when they get up again they're facing out of bed)
+  if (k <= 0) p.face = face0;
 }
-// the blanket's matrix: from the foot up over them, as far as their chest, pulled up as they settle
+// the blanket's matrix: from the foot up over them, as far as their chest, pulled up as they settle; low, now
+// they've sunk into the mattress (v467)
 const coverM = new GFX.Matrix4(), coverQ = new GFX.Quaternion(), coverP = new GFX.Vector3(), coverS = new GFX.Vector3(), coverY = new GFX.Vector3(0, 1, 0);
 function folkCoverMatrix(p) {
   const b = p.bedRec, ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5;
-  const top = bedFloorY(b) + 0.16 + 0.12 + 0.17, len = 1.25 * ease(p.coverK), footB = 0.9;
+  const top = bedFloorY(b) + 0.42, len = 1.25 * ease(p.coverK), footB = 0.9;
   const cb = footB - len / 2;   // (its middle, along the bed from its centre)
   const breath = p.bedPh === 'sleep' ? 1 + FOLK.breathe * 0.6 * Math.sin(p.animT * 1.6) : 1;
-  coverP.set(mx + DC[b.d] * cb, top + 0.13 * breath, mz + DR[b.d] * cb);
-  coverQ.setFromAxisAngle(coverY, ry); coverS.set(0.84, 0.26 * breath, Math.max(0.001, len));
+  coverP.set(mx + DC[b.d] * cb, top - 0.02 + 0.08 * breath, mz + DR[b.d] * cb);
+  coverQ.setFromAxisAngle(coverY, ry); coverS.set(0.84, 0.16 * breath, Math.max(0.001, len));
   return coverM.compose(coverP, coverQ, coverS).elements;
+}
+// (v467) moving someone about an upper floor (stepping aside, keeping apart): kept FOLK.rad off its walls and out of
+// whatever they can't stand on (beds, the stairwell, off the floor's edge)
+function folkUpMove(p, dx, dz) {
+  const rad = FOLK.rad, k = p.k, t = p.t, c = Math.floor(p.x), r = Math.floor(p.z);
+  const side = d => !upWallOn(c, r, d, k) && folkOpenK(t, k, T(c + DC[d], r + DR[d]));
+  let x = p.x + dx, z = p.z + dz;
+  if (!side(3)) x = Math.max(x, c + rad);
+  if (!side(1)) x = Math.min(x, c + 1 - rad);
+  if (!side(0)) z = Math.max(z, r + rad);
+  if (!side(2)) z = Math.min(z, r + 1 - rad);
+  const nc = Math.floor(x), nr = Math.floor(z);
+  if ((nc !== c || nr !== r) && !folkOpenK(t, k, T(nc, nr))) { x = p.x; z = p.z; }
+  const got = Math.hypot(x - p.x, z - p.z); p.x = x; p.z = z; return got;
 }
 const folkCells = new Map();
 let heroLastX = 0, heroLastZ = 0;
@@ -19441,7 +19513,9 @@ function updateFolk(dt) {
       }
       // out of your way: off to the side you're not heading (straight away if you're standing still)
       const hx = p.x - H.x, hz = p.z - H.z, hd = Math.hypot(hx, hz);
-      if (H.alive && !p.asleep && !p.bedPh && !p.up && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
+      // (v467, Jordan: upstairs too, where they're standing: not on a stair, and not while walking a route up there)
+      p.onStair = stairAt.has(p.k * SNN + T(Math.floor(p.x), Math.floor(p.z)));
+      if (H.alive && !p.asleep && !p.bedPh && !p.onStair && !(p.up && p.state === 'walk') && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
         let ax = hx / (hd || 1), az = hz / (hd || 1);
         if (heroMoving) {
           const l = Math.hypot(hvx, hvz), mx = hvx / l, mz = hvz / l, side = (-mz * hx + mx * hz) >= 0 ? 1 : -1;
@@ -19455,7 +19529,8 @@ function updateFolk(dt) {
       if (p.state !== 'walk') p.up = p.k > 0 || stairAt.has(p.k * SNN + T(Math.floor(p.x), Math.floor(p.z)));
       let got = 0;
       if (p.bedPh) got = 0;
-      else if (p.up) { p.x += vx * dt; p.z += vz * dt; got = Math.hypot(vx, vz) * dt; }
+      else if (p.up && (p.state === 'walk' || p.onStair)) { p.x += vx * dt; p.z += vz * dt; got = Math.hypot(vx, vz) * dt; }
+      else if (p.k) got = folkUpMove(p, vx * dt, vz * dt);
       else got = moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
       // stuck (someone in the way round a corner, say): after a while, off somewhere else
       if (p.state === 'walk') { if (want > 0 && got < want * 0.3) { p.stuckT += dt; if (p.stuckT > 2.5) folkNext(p); } else p.stuckT = 0; }
@@ -19473,9 +19548,9 @@ function updateFolk(dt) {
     for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
       const l = folkCells.get((c0 + dc) * 8192 + r0 + dr);
       if (l) for (const B of l) {
-        if (B.sepI <= A.sepI || A.bedPh || B.bedPh || A.up || B.up || A.k !== B.k) continue;
+        if (B.sepI <= A.sepI || A.bedPh || B.bedPh || A.onStair || B.onStair || A.k !== B.k) continue;
         const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = FOLK.rad * 2 + 0.08;
-        if (d < m && d > 1e-4) { const push = (m - d) / 2; moveEntity(A, -dx / d * push, -dz / d * push, FOLK.rad, true); moveEntity(B, dx / d * push, dz / d * push, FOLK.rad, true); }
+        if (d < m && d > 1e-4) { const push = (m - d) / 2, mv = (P, x, z) => P.k ? folkUpMove(P, x, z) : moveEntity(P, x, z, FOLK.rad, true); mv(A, -dx / d * push, -dz / d * push); mv(B, dx / d * push, dz / d * push); }
         // two standing side by side talk to each other
         if (d < FOLK.talkR && A.state === 'stay' && B.state === 'stay') { A.talkTo = B; B.talkTo = A; }
       }
@@ -21720,7 +21795,8 @@ const TUNING = [
     [FOLK, 'workMin', 'Least time at work before moving about the shop (s)', 1, 120, 1],
     [FOLK, 'workMax', 'Most time at work before moving about the shop (s)', 1, 240, 1],
     [FOLK, 'sayTime', 'How long what they say stays up (s)', 1, 15, 0.5],
-    [FOLK, 'lieTime', 'Lying down / getting up (s)', 0.3, 5, 0.1],
+    [FOLK, 'lieTime', 'Getting into bed / out of it (s)', 0.5, 8, 0.1],
+    [FOLK, 'sink', 'Asleep: body tipped feet-down into the mattress (degrees)', 0, 40, 1],
     [FOLK, 'coverTime', 'Pulling the blanket up / back (s)', 0.1, 3, 0.1],
     [FOLK, 'breathe', 'Breathing while asleep', 0, 0.2, 0.01],
     [FOLK_READ, 'towns', 'Towns awake', 'readout', 0, 1],
@@ -22751,7 +22827,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 466, crashSeen = new Map();
+const GAME_VERSION = 467, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

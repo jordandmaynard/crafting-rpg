@@ -1160,6 +1160,18 @@ export function pose(f, anim, t) {
     f.head.rotation.x = 0.22; f.head.rotation.y = 0.25 + sway * 0.08; f.head.rotation.z = -sway * 0.05;
     f.legL.rotation.z = f.legR.rotation.z = 0; f.body.rotation.z = sway * 0.02;
   }
+  // (v467) sitting, blended in by f.sitK (getting into bed): thighs out level, shins down, hands on the knees, and a
+  // lean forward by f.lean as they sit down or stand up
+  if (f.sitK > 0) {
+    const k = f.sitK, mix = (a, b) => a + (b - a) * k;
+    for (const L of [f.legL, f.legR]) { L.rotation.x = mix(L.rotation.x, -1.5); L.rotation.z *= 1 - k; }
+    for (const K of f.knees) K.rotation.x = mix(K.rotation.x, 1.45);
+    for (const A of [f.armL, f.armR]) A.rotation.x = mix(A.rotation.x, -0.55);
+    for (const E of f.elbows) E.rotation.x = mix(E.rotation.x, -0.75);
+    f.body.rotation.z *= 1 - k;
+    bodyY *= 1 - k;
+  }
+  if (f.lean) f.chest.rotation.x += f.lean;
   f.body.position.y = bodyY - crouch;
   // (breathing sinks the body: the legs rise as much, so the feet stay on the ground)
   f.legL.position.y = f.legR.position.y = 0.36 - Math.min(0, bodyY);
