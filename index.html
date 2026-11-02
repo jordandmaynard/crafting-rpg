@@ -19461,11 +19461,13 @@ function updateFolk(dt) {
         let tx = p.gx, tz = p.gz;
         if (p.ri < R.length) {
           tx = R[p.ri] % N + 0.5; tz = Math.floor(R[p.ri] / N) % N + 0.5;
-          if (!p.up) for (let j = Math.min(R.length, p.ri + 4) - 1; j > p.ri; j--) {
+          if (!p.up && !(p.noCut > 0)) for (let j = Math.min(R.length, p.ri + 4) - 1; j > p.ri; j--) {
             let ok = !folkTight(here); for (let q = p.ri; q <= j; q++) if (!plain(R[q]) || folkTight(R[q])) ok = false;
             if (!ok) continue;
             const cx = j === R.length - 1 ? p.gx : R[j] % N + 0.5, cz = j === R.length - 1 ? p.gz : Math.floor(R[j] / N) % N + 0.5;
-            if (walkLine(p.x, p.z, cx, cz)) { tx = cx; tz = cz; break; }
+            // (v468, Jordan: stuck on corners) the shortcut must clear their shoulders too, not just their middle
+            const lx = cx - p.x, lz = cz - p.z, ll = Math.hypot(lx, lz) || 1, ox = -lz / ll * (FOLK.rad + 0.06), oz = lx / ll * (FOLK.rad + 0.06);
+            if (walkLine(p.x, p.z, cx, cz) && walkLine(p.x + ox, p.z + oz, cx + ox, cz + oz) && walkLine(p.x - ox, p.z - oz, cx - ox, cz - oz)) { tx = cx; tz = cz; break; }
           }
         }
         // (v452) a shut door on the next step: opened, and shut again once they're through
@@ -19483,8 +19485,21 @@ function updateFolk(dt) {
           p.asleep = p.act === 'sleep'; folkToBed(p);
         } else {
           const sp = FOLK.speed * (p.carry ? 0.85 : 1);
-          vx = ex / (el || 1) * sp; vz = ez / (el || 1) * sp; want = sp * dt;
-          p.face += angDiff(Math.atan2(ex, ez), p.face) * (1 - Math.exp(-dt * 7));
+          p.hx = ex / (el || 1); p.hz = ez / (el || 1);
+          vx = p.hx * sp; vz = p.hz * sp; want = sp * dt;
+          // (v468) round anyone in the way: off to the side they aren't on, and to the right of anyone coming the
+          // other way (both keep right, so they pass)
+          if (!(p.ghostT > 0) && !p.up) for (const o of t.folk) {
+            if (o === p || o.k !== p.k || o.bedPh || (o.asleep && o.state !== 'walk')) continue;
+            const rx = o.x - p.x, rz = o.z - p.z, along = rx * p.hx + rz * p.hz;
+            if (along <= 0 || along > 1.0) continue;
+            const lat = -rx * p.hz + rz * p.hx, room = FOLK.rad * 2 + 0.15;
+            if (Math.abs(lat) > room) continue;
+            const headOn = o.state === 'walk' && (o.hx * p.hx + o.hz * p.hz) < -0.3;
+            const side = headOn ? -1 : lat > 0 ? -1 : 1;   // (+lat: they're to our left; side -1 = steer right)
+            const k = sp * 0.9 * (1 - along / 1.0) * (1 - Math.abs(lat) / room * 0.5);
+            vx += -p.hz * side * k; vz += p.hx * side * k;
+          }
         }
       } else if (p.bedPh) {
         // (v452) in bed: lying down, asleep (getting up when the hour comes), getting up
@@ -19525,6 +19540,16 @@ function updateFolk(dt) {
         vx += ax * k; vz += az * k;
         if (p.state === 'stay') p.face += angDiff(Math.atan2(-hx, -hz), p.face) * (1 - Math.exp(-dt * 4));
       }
+      // (v468) standing, out of the way of a townsperson walking at them, as for you
+      if (p.state === 'stay' && !p.bedPh && !p.asleep && !p.onStair) for (const o of t.folk) {
+        if (o === p || o.state !== 'walk' || o.k !== p.k || o.ghostT > 0 || o.hx == null) continue;
+        const rx = p.x - o.x, rz = p.z - o.z, along = rx * o.hx + rz * o.hz;
+        if (along <= 0 || along > 1.1) continue;
+        const lat = -rx * o.hz + rz * o.hx, room = FOLK.rad * 2 + 0.2;
+        if (Math.abs(lat) > room) continue;
+        const side = lat >= 0 ? 1 : -1, k = FOLK.asideSpeed * 0.7 * (1 - along / 1.1);
+        vx += -o.hz * side * k; vz += o.hx * side * k;
+      }
       if (p.bedPh) { vx = vz = 0; }
       if (p.state !== 'walk') p.up = p.k > 0 || stairAt.has(p.k * SNN + T(Math.floor(p.x), Math.floor(p.z)));
       let got = 0;
@@ -19533,7 +19558,18 @@ function updateFolk(dt) {
       else if (p.k) got = folkUpMove(p, vx * dt, vz * dt);
       else got = moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
       // stuck (someone in the way round a corner, say): after a while, off somewhere else
-      if (p.state === 'walk') { if (want > 0 && got < want * 0.3) { p.stuckT += dt; if (p.stuckT > 2.5) folkNext(p); } else p.stuckT = 0; }
+      // (v468) stuck: first take no shortcuts (tile middles only), then pass through other townsfolk a while, and
+      // only then give up and go somewhere else
+      if (p.state === 'walk') {
+        if (want > 0 && got < want * 0.3) {
+          p.stuckT += dt;
+          if (p.stuckT > 0.4) p.noCut = 2.5;
+          if (p.stuckT > 1.0) p.ghostT = 2.5;
+          if (p.stuckT > 3.5) { p.stuckT = 0; folkNext(p); }
+        } else p.stuckT = Math.max(0, p.stuckT - dt * 2);
+      }
+      if (p.noCut > 0) p.noCut -= dt;
+      if (p.ghostT > 0) p.ghostT -= dt;
       p.y = folkY(p);
       p.moving = p.state === 'walk' || Math.hypot(vx, vz) > 0.4;
       if (p.moving) p.walkT += dt * Math.max(0.5, Math.hypot(vx, vz)) / FOLK.stepRef;
@@ -19550,7 +19586,13 @@ function updateFolk(dt) {
       if (l) for (const B of l) {
         if (B.sepI <= A.sepI || A.bedPh || B.bedPh || A.onStair || B.onStair || A.k !== B.k) continue;
         const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = FOLK.rad * 2 + 0.08;
-        if (d < m && d > 1e-4) { const push = (m - d) / 2, mv = (P, x, z) => P.k ? folkUpMove(P, x, z) : moveEntity(P, x, z, FOLK.rad, true); mv(A, -dx / d * push, -dz / d * push); mv(B, dx / d * push, dz / d * push); }
+        // (v468: someone walking isn't shoved back by someone standing, who gives way instead; anyone getting
+        // themselves unstuck passes through)
+        if (d < m && d > 1e-4 && !(A.ghostT > 0) && !(B.ghostT > 0)) {
+          const mv = (P, x, z) => P.k ? folkUpMove(P, x, z) : moveEntity(P, x, z, FOLK.rad, true);
+          const aw = A.state === 'walk', bw = B.state === 'walk', fa = aw && !bw ? 0 : !aw && bw ? 1 : 0.5;
+          mv(A, -dx / d * (m - d) * fa, -dz / d * (m - d) * fa); mv(B, dx / d * (m - d) * (1 - fa), dz / d * (m - d) * (1 - fa));
+        }
         // two standing side by side talk to each other
         if (d < FOLK.talkR && A.state === 'stay' && B.state === 'stay') { A.talkTo = B; B.talkTo = A; }
       }
@@ -22827,7 +22869,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 467, crashSeen = new Map();
+const GAME_VERSION = 468, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
