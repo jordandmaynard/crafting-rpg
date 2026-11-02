@@ -680,9 +680,13 @@ export function makeFolkKit(GFX) {
     // (v9) war paint across the eyes, a cloth over the nose and mouth, or a bone skull mask
     if (d.warpaint && !(d.mask && d.mask.kind === 'skull')) box(head, 0.196, 0.03, 0.004, 0, 0.11, 0.0915, d.warpaint);
     if (d.mask && d.mask.kind === 'cloth') {
-      box(head, 0.2, 0.07, 0.014, 0, 0.058, 0.1, d.mask.color);
-      box(head, 0.21, 0.03, 0.17, 0, 0.072, 0.01, d.mask.color);
-      box(head, 0.04, 0.035, 0.03, 0, 0.065, -0.1, shade(d.mask.color, -0.2));
+      // (v10, Jordan: a bandit's kerchief, not a physician's mask) one angled cloth from the bridge of the nose down to a
+      // point below the chin, standing off the face over any beard; tied round the head, its knot's ends hanging behind
+      const MC = d.mask.color;
+      loft(head, [[-0.046, 0.008, 0.01, 0, 0.12], [0.03, 0.17, 0.014, 0, 0.114], [0.091, 0.206, 0.014, 0, 0.108]], MC);
+      box(head, 0.21, 0.022, 0.18, 0, 0.08, 0.008, shade(MC, -0.08));
+      box(head, 0.04, 0.032, 0.03, 0, 0.08, -0.1, shade(MC, -0.2));
+      for (const s of [1, -1]) taper(head, -0.005, 0.068, [0.006, 0.008, s * 0.03, -0.11], [0.028, 0.01, s * 0.008, -0.107], shade(MC, -0.12));
     } else if (d.mask) {
       // (v10, Jordan: less goofy, more sinister) a skull: the brow and cheeks full width, the jaw narrowing; deep sockets
       // slanted down at their inner corners by the brow ridge, an upside-down heart of a nose hole, and only the upper
