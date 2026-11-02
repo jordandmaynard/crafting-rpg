@@ -219,6 +219,8 @@ Jordan's Wanderer's Kit world map pack (art/deliveries/wanderers-kit-world-map-v
 
 The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The wheel zooms about the cursor, dragging pans, and a click picks a seen town for fast travel. Anything you haven't explored is cut out of the map down to opaque parchment, in hard 8-tile cells, and so is everything outside the world. Markers and names show only where you've been. A paper compass rose and a live scale (1 tile = 1.6 m) sit at the bottom right, and a paper footer carries the help and the fast travel button. The folio drags by its leather. While it's open the minimap hides (Jordan). The map's debug and seed tools (seed, PLOTS, BANDS, NEW WORLD, REVEAL ALL, LOAD SEED, EACH LOAD) moved into Options under WORLD, and N and P still work on the map.
 
+**v563:** (Jordan's tuning) Water: reflection reach 80 (was 47.5). Everything else in the paste already matched.
+
 **v562:** (Jordan's tuning) Auralith shimmer: bands 2.85, swirl 2, drift 0.14, sat 0.83, bright 1.35, glow 0.52.
 
 **v561:** (Jordan) The gauntlet (or the speech bubble) shows only while the mouse is over the thing F would use: the drop, door or gate, table, station, seat, wheel, bone pile or person, each tested as an upright box around it on screen. Then a left click does what F does instead of attacking. Anywhere else it's the weapon's cursor (or the fist) and the click attacks as before.
