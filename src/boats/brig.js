@@ -49,25 +49,114 @@ export const CLOTHS = [
   ['ochre', 'Ochre', '#c49f5a', 1], ['grey', 'Weathered grey', '#b8b3a6', 1], ['dun', 'Dun', '#d2c098', 1.5],
 ];
 export const PENNANTS = [['red', 'Red', '#a8322a'], ['blue', 'Blue', '#3a5276'], ['green', 'Green', '#3f6a4c'], ['gold', 'Gold', '#b8923a'], ['black', 'Black', '#2c2927'], ['white', 'White', '#d8d2c2']];
-// the emblems: each a few convex pieces (x across, y down, about -1..1), its field, and a charge inside it
+// (v513, Jordan) the sails' cloth: dyed cloths beside the plain ones, seams running down or across (or none), and a
+// pattern over it in a second dye: [id, name, colour]; patterns are made of the sail's cells (see buildBrig)
+export const CLOTHS_DYED = [
+  ['tarred', 'Tarred black', '#4d4844', 1], ['indigo', 'Indigo-dyed', '#6f7891', 1], ['rust', 'Rust', '#a35e44', 1],
+  ['sea', 'Sea green', '#8c9f8f', 1], ['saffron', 'Saffron', '#cca552', 1], ['rose', 'Faded rose', '#b38c80', 1],
+];
+export const SEAMS = [['vertical', 'Seams down', 3], ['horizontal', 'Seams across', 2], ['none', 'Seamless', 2]];
+export const SAIL_DYES = [
+  ['rust', 'Rust red', '#9a4c35'], ['indigo', 'Faded indigo', '#4f5d78'], ['moss', 'Moss', '#66704a'], ['ochre', 'Ochre', '#b38a45'],
+  ['charcoal', 'Charcoal', '#45423f'], ['cream', 'Cream', '#e6dcc2'], ['barked', 'Tan-bark', '#a9654a'], ['sea', 'Sea green', '#5e7d72'],
+  ['wine', 'Wine', '#6a3438'], ['bleached', 'Bleached', '#ede7d8'],
+];
+// each pattern: which cells (i across 0..13, j down 0..13 over the cloth, above the foot band) take the second dye
+export const SAIL_PATTERNS = {
+  plain: { name: 'Plain', w: 4, at: () => false },
+  pales: { name: 'Stripes down', w: 1.6, at: i => (i >> 1) % 2 === 1 },
+  pale: { name: 'Broad stripe down', w: 1, at: i => i >= 5 && i <= 8 },
+  bars: { name: 'Stripes across', w: 1.6, at: (i, j) => (j >> 1) % 2 === 1 },
+  fess: { name: 'Broad band across', w: 1, at: (i, j) => j >= 5 && j <= 8 },
+  chief: { name: 'Dyed head', w: 0.8, at: (i, j) => j < 3 },
+  halved: { name: 'Halved', w: 0.8, at: i => i < 7 },
+  quartered: { name: 'Quartered', w: 1, at: (i, j) => (i < 7) !== (j < 7) },
+  checky: { name: 'Checked', w: 0.6, at: (i, j) => ((i >> 1) + (j >> 1)) % 2 === 1 },
+  bordure: { name: 'Bordered', w: 1, at: (i, j) => i === 0 || i === 13 || j === 0 },
+};
+// the emblems (v513: on the two tallest sails only, bigger, each with a rim of its charge's colour): a few convex
+// pieces each (x across, y down, about -1..1) for its field, and for a charge over it. The rim is the field grown a little.
 const ngon = (n, r, a0 = 0, cx = 0, cy = 0) => Array.from({ length: n }, (_, k) => { const a = a0 + k / n * Math.PI * 2; return [cx + Math.sin(a) * r, cy - Math.cos(a) * r]; });
 const rect = (x0, y0, x1, y1) => [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-const bar = (a, len, w) => { const c = Math.cos(a), s = Math.sin(a); return [[-len, -w], [len, -w], [len, w], [-len, w]].map(([x, y]) => [x * c - y * s, x * s + y * c]); };
-const star = (r, k) => { const out = [ngon(5, r * k, Math.PI / 5)]; for (let j = 0; j < 5; j++) { const a = j / 5 * Math.PI * 2, b = a + Math.PI / 5, c = a - Math.PI / 5; out.push([[Math.sin(a) * r, -Math.cos(a) * r], [Math.sin(b) * r * k, -Math.cos(b) * r * k], [Math.sin(c) * r * k, -Math.cos(c) * r * k]]); } return out; };
-const sun = (r, n) => { const out = [ngon(12, r * 0.55)]; for (let j = 0; j < n; j++) { const a = j / n * Math.PI * 2, w = Math.PI / n * 0.55; out.push([[Math.sin(a) * r, -Math.cos(a) * r], [Math.sin(a + w) * r * 0.5, -Math.cos(a + w) * r * 0.5], [Math.sin(a - w) * r * 0.5, -Math.cos(a - w) * r * 0.5]]); } return out; };
-const chev = (k, w) => [[[-0.95 * k, 0.55 * k], [0, -0.45 * k], [0, -0.45 * k + w], [-0.95 * k, 0.55 * k + w]], [[0, -0.45 * k], [0.95 * k, 0.55 * k], [0.95 * k, 0.55 * k + w], [0, -0.45 * k + w]]];
+const star = (r, k, cx = 0, cy = 0, n = 5) => { const out = [ngon(n, r * k, Math.PI / n, cx, cy)]; for (let j = 0; j < n; j++) { const a = j / n * Math.PI * 2, b = a + Math.PI / n, c = a - Math.PI / n; out.push([[cx + Math.sin(a) * r, cy - Math.cos(a) * r], [cx + Math.sin(b) * r * k, cy - Math.cos(b) * r * k], [cx + Math.sin(c) * r * k, cy - Math.cos(c) * r * k]]); } return out; };
+// a ring round a convex shape: the band between it scaled by s0 and by s1 (about cx, cy), a quad an edge
+const ring = (poly, s0, s1, cx = 0, cy = 0) => poly.map((p, k) => { const q = poly[(k + 1) % poly.length], at = (v, s) => [cx + (v[0] - cx) * s, cy + (v[1] - cy) * s]; return [at(p, s1), at(q, s1), at(q, s0), at(p, s0)]; });
+// rays round a disc: n of them, long and short by turns
+const rays = (r0, long, short, n, w) => Array.from({ length: n }, (_, j) => {
+  const a = j / n * Math.PI * 2, R = j % 2 ? short : long, h = Math.PI / n * w;
+  return [[Math.sin(a) * R, -Math.cos(a) * R], [Math.sin(a + h) * r0, -Math.cos(a + h) * r0], [Math.sin(a - h) * r0, -Math.cos(a - h) * r0]];
+});
+// a compass rose's points: kites from the middle out to each tip, the four great ones longer
+const rose = (big, small, waist) => Array.from({ length: 8 }, (_, j) => {
+  const a = j * Math.PI / 4, p = (t, r) => [Math.sin(t) * r, -Math.cos(t) * r];
+  return [[0, 0], p(a - Math.PI / 8, waist), p(a, j % 2 ? small : big), p(a + Math.PI / 8, waist)];
+});
+// a chevron's two arms, its point at (0, top), the arms out to +-x1, w thick
+const chevron = (x1, top, w) => [[[-x1, top + x1], [0, top], [0, top + w], [-x1, top + x1 + w]], [[0, top], [x1, top + x1], [x1, top + x1 + w], [0, top + w]]];
+// a crescent opening to the right: the disc R less a disc r set over by off, in slices down it
+const crescent = (R, r, off, n) => {
+  const yi = Math.sqrt(Math.max(0, R * R - ((R * R - r * r + off * off) / (2 * off)) ** 2)), out = [];
+  const L = y => [-Math.sqrt(Math.max(0, R * R - y * y)), y], Rt = y => [off - Math.sqrt(Math.max(0, r * r - y * y)), y];
+  for (let k = 0; k < n; k++) {
+    const y0 = -yi * Math.cos(Math.PI * k / n), y1 = -yi * Math.cos(Math.PI * (k + 1) / n);
+    out.push([L(y0), Rt(y0), Rt(y1), L(y1)]);
+  }
+  return out;
+};
+const LOZ = [[0, -1], [0.7, 0], [0, 1], [-0.7, 0]];
 export const EMBLEMS = {
-  diamond: { name: 'Diamond', field: [[[0, -1], [0.8, 0], [0, 1], [-0.8, 0]]], charge: [[[0, -0.5], [0.4, 0], [0, 0.5], [-0.4, 0]]] },
-  roundel: { name: 'Roundel', field: [ngon(18, 0.85)], charge: [ngon(14, 0.42)] },
-  cross: { name: 'Cross', field: [rect(-0.28, -0.95, 0.28, 0.95), rect(-0.95, -0.28, 0.95, 0.28)], charge: [rect(-0.12, -0.8, 0.12, 0.8), rect(-0.8, -0.12, 0.8, 0.12)] },
-  saltire: { name: 'Saltire', field: [bar(Math.PI / 4, 1.05, 0.22), bar(-Math.PI / 4, 1.05, 0.22)], charge: [bar(Math.PI / 4, 0.9, 0.09), bar(-Math.PI / 4, 0.9, 0.09)] },
-  star: { name: 'Star', field: star(1, 0.45), charge: [ngon(5, 0.3)] },
-  chevron: { name: 'Chevron', field: chev(1, 0.42), charge: [[[-0.75, 0.48], [0, -0.28], [0, -0.17], [-0.75, 0.59]], [[0, -0.28], [0.75, 0.48], [0.75, 0.59], [0, -0.17]]] },
-  bars: { name: 'Two bars', field: [rect(-0.95, -0.6, 0.95, -0.15), rect(-0.95, 0.15, 0.95, 0.6)], charge: [rect(-0.8, -0.44, 0.8, -0.31), rect(-0.8, 0.31, 0.8, 0.44)] },
-  sun: { name: 'Sun', field: sun(1, 10), charge: [ngon(12, 0.3)] },
+  diamond: { name: 'Lozenge', field: [LOZ], charge: [...ring(LOZ, 0.58, 0.72), LOZ.map(([x, y]) => [x * 0.26, y * 0.26])] },
+  roundel: { name: 'Compass roundel', field: [ngon(32, 0.9)], charge: [...ring(ngon(32, 1), 0.7, 0.78), ...rose(0.64, 0.4, 0.12)] },
+  star: { name: 'Star', field: star(1, 0.42, 0, 0.08), charge: star(0.42, 0.42, 0, 0.08) },
+  chevron: { name: 'Chevrons', field: [...chevron(0.9, -0.92, 0.34), ...chevron(0.9, -0.28, 0.34)], charge: [...chevron(0.78, -0.79, 0.08), ...chevron(0.78, -0.15, 0.08)] },
+  sun: { name: 'Sun', field: [ngon(28, 0.52), ...rays(0.49, 1, 0.74, 16, 0.62)], charge: [...ring(ngon(24, 1), 0.3, 0.38), ngon(18, 0.17)] },
+  // (the star in the crescent's arms is of its field, rimmed, so it never fades into the cloth)
+  crescent: { name: 'Crescent and star', field: [...crescent(0.92, 0.74, 0.4, 18), ...star(0.3, 0.42, 0.42, 0.04)].map(q => q.map(([x, y]) => [x + 0.1, y])), charge: [] },
+  anchor: { name: 'Anchor', field: [...ring(ngon(14, 1, 0, 0, 0), 0.13, 0.25).map(q => q.map(([x, y]) => [x, y - 0.74])), rect(-0.08, -0.52, 0.08, 0.82), rect(-0.46, -0.42, 0.46, -0.3),
+    ...Array.from({ length: 12 }, (_, k) => { const p = (a, r) => [Math.sin(a) * r, 0.12 - Math.cos(a) * r], a = Math.PI * (0.6 + 0.8 * k / 12), b = Math.PI * (0.6 + 0.8 * (k + 1) / 12); return [p(a, 0.76), p(b, 0.76), p(b, 0.62), p(a, 0.62)]; }),
+    [[0.8, -0.02], [0.86, 0.4], [0.52, 0.3]], [[-0.8, -0.02], [-0.52, 0.3], [-0.86, 0.4]]], charge: [] },
+  // (v511's cross, saltire and two bars are gone: a seed that rolled one takes another emblem)
+  cross: { name: 'Cross', gone: true }, saltire: { name: 'Saltire', gone: true }, bars: { name: 'Two bars', gone: true },
   none: { name: 'Plain', field: [], charge: [] },
 };
+// (the first roll keeps v511's weights so other seeds keep theirs; the gone ones roll again from EMBLEM_AGAIN)
 const EMBLEM_W = [['diamond', 3], ['roundel', 2], ['cross', 1.5], ['saltire', 1.2], ['star', 1.5], ['chevron', 1.2], ['bars', 1], ['sun', 1], ['none', 0.8]];
+const EMBLEM_AGAIN = [['crescent', 2], ['anchor', 2], ['diamond', 1], ['roundel', 1], ['star', 1], ['chevron', 1], ['sun', 1], ['none', 0.4]];
+// a convex piece grown by d all round (corners sharper than 120 degrees bevelled, so a star's points stay short)
+export function growPiece(poly0, d) {
+  const poly = poly0.filter((p, k) => { const q = poly0[(k + 1) % poly0.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]) > 1e-6; }), n = poly.length;
+  if (n < 3) return poly;
+  let A = 0; for (let k = 0; k < n; k++) { const p = poly[k], q = poly[(k + 1) % n]; A += p[0] * q[1] - q[0] * p[1]; }
+  const s = A > 0 ? 1 : -1;
+  const nrm = k => { const p = poly[k], q = poly[(k + 1) % n], dx = q[0] - p[0], dy = q[1] - p[1], L = Math.hypot(dx, dy); return [s * dy / L, -s * dx / L]; };
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const a = nrm((k + n - 1) % n), b = nrm(k), p = poly[k], dot = a[0] * b[0] + a[1] * b[1];
+    if (dot > -0.5) { const t = d / (1 + dot); out.push([p[0] + (a[0] + b[0]) * t, p[1] + (a[1] + b[1]) * t]); }
+    else { out.push([p[0] + a[0] * d, p[1] + a[1] * d], [p[0] + b[0] * d, p[1] + b[1] * d]); }
+  }
+  return out;
+}
+// (v513, Jordan) every boat its name
+const SHIP = {
+  adj: ['Grey', 'Salt', 'Silver', 'Wandering', 'Restless', 'Drowned', 'Gilded', 'Black', 'Morning', 'Evening', 'Hollow', 'Lucky', 'Weeping', 'Laughing',
+    'Crimson', 'Last', 'Lonely', 'Merry', 'Swift', 'Wild', 'Faithful', 'Sleeping', 'Golden', 'Starlit', 'Storm-born', 'Briny', 'Thrice-drowned', 'Lantern-lit', 'Far-faring', 'Moonlit'],
+  noun: ['Gull', 'Heron', 'Kestrel', 'Cormorant', 'Petrel', 'Albatross', 'Maiden', 'Widow', 'Siren', 'Selkie', 'Leviathan', 'Wyrm', 'Kraken', 'Mermaid',
+    'Lantern', 'Tide', 'Rose', 'Duchess', 'Pilgrim', 'Rover', 'Hart', 'Swan', 'Otter', 'Conch', 'Crown', 'Fortune', 'Wanderer', 'Herald', 'Bell', 'Oyster'],
+  who: ['Maren', 'Tobin', 'Elsbeth', 'Aldric', 'Wenna', 'Corwin', 'Isolde', 'Bram', 'Hesper', 'Rowan', 'Edda', 'Garrick', 'Liesl', 'Osric', 'Thessaly', 'Alba', 'Old Jory', 'Mother Brine'],
+  owns: ['Fortune', 'Promise', 'Lantern', 'Folly', 'Luck', 'Revenge', 'Rose', 'Pride', 'Delight', 'Hope', 'Lament', 'Wager', 'Secret', 'Daughter'],
+  title: ['Pride', 'Star', 'Queen', 'Lady', 'Spirit', 'Wrath', 'Light', 'Jewel', 'Song', 'Ghost', 'Bride', 'Herald'],
+  place: ['Kinghaven', 'the Westmere', 'Saltreach', 'the Shallows', 'Gullcliff', 'the Nine Isles', 'Mornhold', 'the Deep', 'Brineholt', 'Stormwatch', 'the Sunken Bell', 'Thornmouth', 'the Far Shoals', 'Ashport'],
+  head: ['Storm', 'Brine', 'Wave', 'Tide', 'Gale', 'Mist', 'Salt', 'Foam', 'Star', 'Moon', 'Dawn', 'Sea', 'Wind', 'Spray', 'Kelp', 'Squall', 'Swell', 'Reef'],
+  tail: ['runner', 'caller', 'singer', 'breaker', 'dancer', 'wyrm', 'maiden', 'rider', 'strider', 'whisper', 'warden', 'seeker', 'song', 'chaser', 'heart', 'wing', 'drake', 'mare'],
+};
+function shipName(r) {
+  const pick = list => list[Math.floor(r() * list.length) % list.length], u = r();
+  if (u < 0.36) return `The ${pick(SHIP.adj)} ${pick(SHIP.noun)}`;
+  if (u < 0.56) return `${pick(SHIP.who)}'s ${pick(SHIP.owns)}`;
+  if (u < 0.76) return `${pick(SHIP.title)} of ${pick(SHIP.place)}`;
+  return pick(SHIP.head) + pick(SHIP.tail);
+}
 const hexRGB = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const far = (a, b, d) => { const x = hexRGB(a), y = hexRGB(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]) > d; };
 export function mulberry32(a) {
@@ -86,18 +175,34 @@ export function rollLivery(seed) {
   const paint = pick(PAINTS);
   let trim = pick(TRIMS); for (let n = 0; n < 8 && !far(trim[2], paint[2], 70); n++) trim = pick(TRIMS);
   const cloth = wpick(CLOTHS);
-  const emblem = wpick(EMBLEM_W)[0];
+  let emblem = wpick(EMBLEM_W)[0];
   // the field: often the hull's paint; never lost against the cloth. The charge: clear of the field.
   const all = [...PAINTS, ...TRIMS];
   let field = r() < 0.5 ? paint : pick(all); for (let n = 0; n < 12 && !far(field[2], cloth[2], 95); n++) field = pick(all);
   let charge = r() < 0.5 ? trim : pick(all); for (let n = 0; n < 12 && !far(charge[2], field[2], 80); n++) charge = pick(all);
   const pennant = pick(PENNANTS);
-  return { seed: seed | 0, hull, deck, paint, trim, cloth, emblem, field, charge, pennant };
+  // (v515, Jordan: rolled after all of v511's, so those stay as they were) an emblem that's gone rolls again; a
+  // dyed cloth now and then (the emblem's colours picked again if they'd be lost on it); the seams, a pattern in a
+  // second dye, and the boat's name
+  if (EMBLEMS[emblem].gone || (emblem === 'diamond' && r() < 0.4)) emblem = wpick(EMBLEM_AGAIN)[0];   // (fewer lozenges than v511's)
+  let cloth2 = cloth;
+  if (r() < 0.3) {
+    cloth2 = wpick(CLOTHS_DYED);
+    for (let n = 0; n < 12 && !far(field[2], cloth2[2], 95); n++) field = pick(all);
+    for (let n = 0; n < 12 && !far(charge[2], field[2], 80); n++) charge = pick(all);
+  }
+  const seams = wpick(SEAMS);
+  const pattern = wpick(Object.entries(SAIL_PATTERNS).map(([id, P]) => [id, P.w]))[0];
+  let dye = r() < 0.25 ? paint : pick(SAIL_DYES);
+  for (let n = 0; n < 16 && !(far(dye[2], cloth2[2], 75) && (emblem === 'none' || far(dye[2], field[2], 55))); n++) dye = pick(SAIL_DYES);
+  const name = shipName(r);
+  return { seed: seed | 0, hull, deck, paint, trim, cloth: cloth2, emblem, field, charge, pennant, seams, pattern, dye, name };
 }
 // the livery as rows for a panel: [what, its name, its colour]
 export const describeLivery = L => [
   ['Hull', L.hull[1] + ' stain', L.hull[2]], ['Deck', L.deck[1], L.deck[2]], ['Paint', L.paint[1], L.paint[2]], ['Trim', L.trim[1], L.trim[2]],
-  ['Sails', L.cloth[1], L.cloth[2]], ['Emblem', EMBLEMS[L.emblem].name + (L.emblem === 'none' ? '' : ` in ${L.field[1].toLowerCase()}`), L.emblem === 'none' ? null : L.field[2]],
+  ['Sails', L.cloth[1] + (L.seams ? ', ' + L.seams[1].toLowerCase() : ''), L.cloth[2]],
+  ...(L.pattern && L.pattern !== 'plain' ? [['Pattern', `${SAIL_PATTERNS[L.pattern].name} in ${L.dye[1].toLowerCase()}`, L.dye[2]]] : []), ['Emblem', EMBLEMS[L.emblem].name + (L.emblem === 'none' ? '' : ` in ${L.field[1].toLowerCase()}`), L.emblem === 'none' ? null : L.field[2]],
   ...(L.emblem === 'none' ? [] : [['Charge', L.charge[1], L.charge[2]]]), ['Pennant', L.pennant[1], L.pennant[2]],
 ];
 // a short name for the livery: its paint and its emblem
@@ -219,7 +324,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }
 
 // ---------- the brig's shapes in a livery ----------
-// { hull, glow, sail, wheel, furl, anchor, chain, plank }: geometries, the sail with its slopes (sailSlopes)
+// { hull, glow, sail, sailE (with the emblem), wheel, furl, anchor, chain, plank }: geometries, the sails with their slopes (sailSlopes)
 export function buildBrig(L, B = BRIG_SHAPE) {
   prims();
   const made = {}, HB = v => hullHB(B, v), GH = hullGH, KEEL = v => hullKeel(B, v);
@@ -394,23 +499,37 @@ export function buildBrig(L, B = BRIG_SHAPE) {
   take('glow', () => {
     for (const s of [-1, 1]) part(G.box, '#ffffff', s * 0.86, GH(B.stern) + 0.25, B.stern - 0.025, { sx: 0.15, sy: 0.2, sz: 0.15 });
   });
-  take('sail', () => {
-    const nu = 10, nv = 8;
-    // Top edge stays exactly y=0, bottom exactly y=-1, for the furl animation.
-    const pt = (u, v, offset = 0) => [(u - 0.5) * (0.94 + 0.06 * v), -v, 0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v) + offset];
-    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
-      const c = j === nv - 1 ? C.band : i % 2 ? C.canvas : C.canvasShade;
-      quad(pt(i / nu, j / nv), pt((i + 1) / nu, j / nv), pt((i + 1) / nu, (j + 1) / nv), pt(i / nu, (j + 1) / nv), shade(c, 0.97 + j * 0.004));
-    }
+  // (v515, Jordan) the sails: 14 cells across, 14 down over the cloth and the foot band under them; the seams shade
+  // every other cell down or across (or none), and the pattern dyes the cells it takes. Two shapes: 'sail' plain, and
+  // 'sailE' with the emblem, for the two tallest sails (brigModel)
+  const nu = 14, nv = 14, rowV = j => j < nv ? j / nv * 0.875 : j === nv ? 0.875 : 1;
+  // Top edge stays exactly y=0, bottom exactly y=-1, for the furl animation.
+  const pt = (u, v, offset = 0) => [(u - 0.5) * (0.94 + 0.06 * v), -v, 0.3 * (1 - (2 * u - 1) ** 2) * Math.sin(Math.PI * v) + offset];
+  const PAT = SAIL_PATTERNS[L.pattern] || SAIL_PATTERNS.plain, dye = L.dye ? CC(L.dye[2]) : null, seam = L.seams ? L.seams[0] : 'vertical';
+  const cellC = (i, j) => {
+    if (j === nv) return C.band;
+    const k = seam === 'vertical' ? (i % 2 ? 1 : 0.9) : seam === 'horizontal' ? (j % 2 ? 1 : 0.9) : 0.96;
+    return shade(dye && PAT.at(i, j) ? dye : C.canvas, k * (0.97 + j * 0.003));
+  };
+  const cloth = () => {
+    for (let i = 0; i < nu; i++) for (let j = 0; j <= nv; j++)
+      quad(pt(i / nu, rowV(j)), pt((i + 1) / nu, rowV(j)), pt((i + 1) / nu, rowV(j + 1)), pt(i / nu, rowV(j + 1)), cellC(i, j));
+  };
+  take('sail', cloth);
+  take('sailE', () => {
+    cloth();
     // The emblem, clipped onto each cloth triangle so it follows the sail's curve (a flat decal would cut through
-    // its belly): each convex piece of its field, then of its charge, a little proud of the cloth on both faces
+    // its belly): each convex piece of its rim, its field, then its charge, a little proud of the cloth on both faces
     const cross = (a, b, p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
     const piece = (poly0, color, offset) => {
+      if (poly0.length < 3) return;
       // (each piece wound the way the clip takes as inside)
       let area = 0; for (let k = 0; k < poly0.length; k++) area += cross([0, 0], poly0[k], poly0[(k + 1) % poly0.length]);
       const shape = area < 0 ? [...poly0].reverse() : poly0;
-      for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
-        const a = [i / nu, j / nv], b = [(i + 1) / nu, j / nv], c = [(i + 1) / nu, (j + 1) / nv], d = [i / nu, (j + 1) / nv];
+      let x0 = 1, x1 = 0, y0 = 1, y1 = 0; for (const [x, y] of shape) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+      for (let i = 0; i < nu; i++) for (let j = 0; j <= nv; j++) {
+        if ((i + 1) / nu < x0 || i / nu > x1 || rowV(j + 1) < y0 || rowV(j) > y1) continue;
+        const a = [i / nu, rowV(j)], b = [(i + 1) / nu, rowV(j)], c = [(i + 1) / nu, rowV(j + 1)], d = [i / nu, rowV(j + 1)];
         for (const uv of [[a, b, c], [a, c, d]]) {
           let poly = uv;
           for (let k = 0; k < shape.length && poly.length; k++) {
@@ -432,12 +551,16 @@ export function buildBrig(L, B = BRIG_SHAPE) {
         }
       }
     };
-    // (the emblem's middle a little over the sail's; across, squeezed by 0.72 so its shapes come out about as wide as
-    // tall on the sail, which is wider than it hangs)
-    const E = EMBLEMS[L.emblem] || EMBLEMS.diamond, R = 0.19, toUV = poly => poly.map(([x, y]) => [0.5 + x * R * 0.72, 0.43 + y * R]);
+    // (big on the tall sails: 0.6 of the cloth's height; across, squeezed so its shapes come out as wide as tall on
+    // those sails, which are wider than they hang)
+    const tall = B.masts.map(m => brigYards(m)[1]), fix = tall.reduce((s, [, w, h]) => s + h / (w * 0.95), 0) / tall.length;
+    const E = EMBLEMS[L.emblem] && !EMBLEMS[L.emblem].gone ? EMBLEMS[L.emblem] : EMBLEMS.diamond, R = 0.3;
+    const toUV = poly => poly.map(([x, y]) => [0.5 + x * R * fix, 0.44 + y * R]);
+    const rimC = CC(L.charge[2]), fieldC = CC(L.field[2]);
     for (const face of [-1, 1]) {
-      for (const p of E.field) piece(toUV(p), CC(L.field[2]), face * 0.004);
-      for (const p of E.charge) piece(toUV(p), CC(L.charge[2]), face * 0.008);
+      for (const p of E.field) piece(toUV(growPiece(p, 0.08)), rimC, face * 0.004);
+      for (const p of E.field) piece(toUV(p), fieldC, face * 0.008);
+      for (const p of E.charge) piece(toUV(p), rimC, face * 0.012);
     }
   });
   take('wheel', () => {
@@ -467,7 +590,7 @@ export function buildBrig(L, B = BRIG_SHAPE) {
     part(G.box, C.dark, 0.5, -0.059, 0, { sx: 1, sy: 0.062, sz: 0.62 });
     for (let j = 0; j < 4; j++) part(G.box, shade(deckC, j % 2 ? 1.52 : 1.8), 0.5, -0.014, -0.2325 + j * 0.155, { sx: 1, sy: 0.028, sz: 0.145 });
   });
-  sailSlopes(made.sail, BRIG_SAIL_Z);
+  sailSlopes(made.sail, BRIG_SAIL_Z); sailSlopes(made.sailE, BRIG_SAIL_Z);
   return made;
 }
 
@@ -479,8 +602,10 @@ export function brigModel(S, B, mats) {
   const mesh = geo => lit(new GFX.Mesh(geo, mats.boat));
   g.add(mesh(S.hull));
   const sails = [], furls = [];
+  // (v515: the emblem on the two tallest sails only)
+  const hs = B.masts.flatMap(m => brigYards(m).map(y => y[2])).sort((a, b) => b - a), tallest = hs[Math.min(1, hs.length - 1)];
   for (const m of B.masts) for (const [y, w, hgt] of brigYards(m)) {
-    const s = lit(new GFX.Mesh(S.sail, mats.sail)); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); sails.push(s);
+    const s = lit(new GFX.Mesh(hgt >= tallest && S.sailE ? S.sailE : S.sail, mats.sail)); s.position.set(0, y - 0.04, m.v + 0.2); s.scale.set(w, hgt, 1); s.userData.h0 = hgt; g.add(s); sails.push(s);
     const f = mesh(S.furl); f.position.set(0, y - 0.07, m.v + 0.22); f.scale.set(w * 0.94, 0.2, 0.2); g.add(f); furls.push(f);
   }
   const anchorM = mesh(S.anchor); anchorM.position.set(0.9, -0.4, 3.4); g.add(anchorM);
