@@ -2990,8 +2990,10 @@ function townBeds(t, n) {
   for (const h of t.houses) {
     h.beds = [];
     if (h.cathedral) continue;
+    // (v454, Jordan) in a two-story house the beds go upstairs, the work below; any that don't fit come down
+    if (h.up) townBedsUp(h, want, n);
     const [ic, ir] = h.inside || h.tiles[0];
-    for (let b = 0; b < want; b++) {
+    for (let b = h.beds.length; b < want; b++) {
       let best = null, bd = -1;
       for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
         // head at (c, r) against the wall behind it, foot a tile on toward d
@@ -3002,7 +3004,7 @@ function townBeds(t, n) {
         const score = Math.hypot(c - ic, r - ir) + hs(c, r, 460 + d) * 0.5;
         if (score <= bd) continue;
         OB[i] = O.BED; OB[j] = O.BEDX;
-        const ok = bedsReachable(h, [...h.beds, { i, j }]);
+        const ok = bedsReachable(h, [...h.beds.filter(e => !e.k), { i, j }]);
         OB[i] = 0; OB[j] = 0;
         if (ok) { bd = score; best = { c, r, d, i, j }; }
       }
@@ -3011,6 +3013,42 @@ function townBeds(t, n) {
       const bed = { ...best, color: BLANKETS[Math.floor(hs(best.c, best.r, 470) * BLANKETS.length)], house: h, town: n };
       BEDS.set(best.i, bed); BEDS.set(best.j, bed); h.beds.push(bed);
     }
+  }
+}
+// the upstairs beds (story 1, kept in BEDS by 1 * SNN + tile, drawn with the story's pieces): the head against a
+// wall, farthest first from the stair's landing, the room left walkable from it
+function townBedsUp(h, want, n) {
+  const st = h.tiles.map(([c, r]) => stairAt.get(T(c, r))).find(Boolean);
+  if (!st) return;
+  const U = new Set(h.up.tiles.map(([c, r]) => T(c, r)).filter(i => UP[1].FL.has(i) && !BALCONY.has(i))), land = st.land;
+  if (!U.has(land)) return;
+  const lc = land % N, lr = Math.floor(land / N), taken = new Set();
+  const free = i => U.has(i) && !taken.has(i);
+  const reachable = beds => {
+    const seen = new Set([land]), q = [land];
+    while (q.length) {
+      const i = q.pop(), c = i % N, r = Math.floor(i / N);
+      for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (!seen.has(j) && free(j) && !upWallOn(c, r, d, 1)) { seen.add(j); q.push(j); } }
+    }
+    for (const i of U) if (free(i) && !seen.has(i)) return false;
+    return beds.every(b => [b.i, b.j].some(i => { const c = i % N, r = Math.floor(i / N); for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (seen.has(j) && j !== land && !upWallOn(c, r, d, 1)) return true; } return false; }));
+  };
+  for (let b = 0; b < want; b++) {
+    let best = null, bd = -1;
+    for (const i of U) for (let d = 0; d < 4; d++) {
+      const c = i % N, r = Math.floor(i / N), j = T(c + DC[d], r + DR[d]), back = upWallOn(c, r, (d + 2) & 3, 1);
+      if (i === land || j === land || !free(i) || !free(j) || !back || isDoorVal(back) || isFenceVal(back) || upWallOn(c, r, d, 1)) continue;
+      const score = Math.hypot(c - lc, r - lr) + hs(c, r, 480 + d) * 0.5;
+      if (score <= bd) continue;
+      taken.add(i); taken.add(j);
+      const ok = reachable([...h.beds, { i, j }]);
+      taken.delete(i); taken.delete(j);
+      if (ok) { bd = score; best = { c, r, d, i, j }; }
+    }
+    if (!best) break;
+    taken.add(best.i); taken.add(best.j);
+    const bed = { ...best, k: 1, color: BLANKETS[Math.floor(hs(best.c, best.r, 470) * BLANKETS.length)], house: h, town: n };
+    BEDS.set(SNN + best.i, bed); BEDS.set(SNN + best.j, bed); h.beds.push(bed);
   }
 }
 // with these beds down, can the house still be got about (every free tile reached from inside the door), and has
@@ -10177,8 +10215,9 @@ const partShrink = new GFX.Matrix4();
 // (v452, Jordan) a town bed, 2 x 1: a wooden frame on short legs, a tall headboard against the wall and a low
 // footboard, the mattress, a pillow at the head, and a blanket of the bed's own colour over the rest, its top
 // turned down in a band and its sides hanging over the frame
+const bedFloorY = b => b.k ? storyY(b.k, b.i) + 0.06 : surfaceY(b.c + 0.5 + DC[b.d] * 0.5, b.r + 0.5 + DR[b.d] * 0.5);
 function townBed(b) {
-  const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5, y = surfaceY(mx, mz);
+  const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5, y = bedFloorY(b);
   const at = stationAt(mx, mz, ry), wood = '#6a4a30', dark = '#43301f', sheet = '#e8e2d2', pillow = '#f4f0e6';
   const W = 0.86, L = 1.9, legH = 0.16, frameY = y + legH;
   for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * (W / 2 - 0.05), sb * (L / 2 - 0.05)); part(G.box, dark, px, y + legH / 2, pz, { sx: 0.08, sy: legH, sz: 0.08, ry }); }
@@ -11591,6 +11630,8 @@ function buildPieces(cx, cz, ch, only = null) {
         const st = stairs.get(k * SNN + i);
         if (st) drawStair(st);
         if (k === 1) { const ca = cathAt.get(i); if (ca) cathUpper(ca); }
+        const bd = BEDS.get(k * SNN + i);   // (v454: a town bed upstairs, drawn at its head)
+        if (bd && bd.i === i) townBed(bd);
       }
     } finally { PDY = 0; PCUT = 0; }
     ch['up' + k] = bufBuild.mesh(buildMat);
@@ -12957,7 +12998,7 @@ function enterOpen(c, r, d, k, b) {
   const below = k ? stairAt.get((k - 1) * SNN + b) : null;
   if (below) return b === below.t1 && d === ((below.d + 2) & 3) && wallOpen(c, r, d, k);
   if (!k) return groundStep(c, r, d, false);
-  return UP[k].FL.has(b) && wallOpen(c, r, d, k);
+  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && wallOpen(c, r, d, k);
 }
 function heroStep(c, r, d) {
   const nc = c + DC[d], nr = r + DR[d];
@@ -17132,7 +17173,7 @@ function pickFolk() {
   for (const t of folkTowns) {
     if (!t.batches) continue;
     for (const p of t.folk) {
-      if (p.asleep || Math.abs(p.x - H.x) > 40 || Math.abs(p.z - H.z) > 40) continue;
+      if (p.asleep || p.k > shownStory || Math.abs(p.x - H.x) > 40 || Math.abs(p.z - H.z) > 40) continue;
       if (PAD.on) {
         const dx = p.x - H.x, dz = p.z - H.z, along = dx * aim.x + dz * aim.z, off = Math.abs(dx * aim.z - dz * aim.x);
         if (along > 0 && along <= 10 && off <= 0.5 + FOLK.rad + along * 0.12 && along < bd) { bd = along; best = p; }
@@ -18752,7 +18793,7 @@ function folkPeople(t) {
       // (v449, Jordan) anyone known as "of" a place is of this town
       if (d.name.last.startsWith('of ')) { const of = 'of ' + titleCase(t.name); d.name.full = d.name.full.slice(0, -d.name.last.length) + of; d.name.last = of; }
       used.add(d.job);
-      out.push({ must: want ? (extra ? 1 : 2) : 0, worker: !!want && !extra && !!(h.trade || h.cathedral), keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, slot: k, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
+      out.push({ must: want ? (extra ? 1 : 2) : 0, worker: !!want && !extra && !!(h.trade || h.cathedral), keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, slot: k, k: 0, up: false, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
         moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
     }
   });
@@ -18812,17 +18853,20 @@ function folkPlaces(t) {
     }
   }
   // (v452) beside each bed, where its sleeper gets in and out: along its side, nearer the head
+  // (v454: a bed upstairs has its side tile upstairs: keys are k * SNN + tile)
   for (const h of t.houses) for (const b of h.beds || []) {
-    const hs0 = new Set(h.tiles.map(([c, r]) => T(c, r)));
+    const bk = b.k || 0, hs0 = new Set((bk ? h.up.tiles : h.tiles).map(([c, r]) => T(c, r)));
     b.side = -1;
     for (const e of [b.i, b.j]) {
       const c = e % N, r = Math.floor(e / N);
       for (const d of [(b.d + 1) & 3, (b.d + 3) & 3, (b.d + 2) & 3, b.d]) {
         const k = T(c + DC[d], r + DR[d]);
-        if (b.side < 0 && hs0.has(k) && folkOpen(t, k) && !wallOn(c, r, d)) b.side = k;
+        if (b.side < 0 && hs0.has(k) && folkOpenK(t, bk, k) && !upWallOn(c, r, d, bk)) b.side = bk * SNN + k;
       }
     }
   }
+  // (v454) the upstairs room's open tiles, to be at home in
+  for (const h of t.houses) h.upTiles = h.up && !h.cathedral ? h.up.tiles.map(([c, r]) => T(c, r)).filter(i => folkOpenK(t, 1, i)).map(i => SNN + i) : [];
   if (t.fount) for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) if (Math.max(Math.abs(dc), Math.abs(dr)) === 2 && (dc === 0 || dr === 0 || Math.abs(dc) === Math.abs(dr))) add(T(t.c + dc, t.r + dr), 'fountain');
   const beside = (c, r, kind) => { for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (folkStreet(j)) { add(j, kind); return; } } };
   for (const i of t.lampAt || []) beside(i % N, Math.floor(i / N), 'lamp');
@@ -18843,38 +18887,70 @@ function folkRoute(t, a, b) {
   if (!t.routes) t.routes = new Map();
   const key = a + '>' + b;
   if (t.routes.has(key)) return t.routes.get(key);
-  const R = t.R + 2, W = R * 2 + 1, ox = t.c - R, oz = t.r - R, own = t.n + 1;
-  const loc = i => { const c = i % N - ox, r = Math.floor(i / N) - oz; return c < 0 || r < 0 || c >= W || r >= W ? -1 : r * W + c; };
-  const g = new Float32Array(W * W).fill(Infinity), from = new Int32Array(W * W).fill(-1), shut = new Uint8Array(W * W), heap = [];
-  const gc = b % N, gr = Math.floor(b / N);
+  // (v454) a node is a story and a tile, k * SNN + tile, as stairs are keyed; on a stair's tiles you're on its story
+  const R = t.R + 2, W = R * 2 + 1, WW2 = W * W, ox = t.c - R, oz = t.r - R, KS = STORY_MAX + 1;
+  const loc = q => { const k = Math.floor(q / SNN), i = q % SNN, c = i % N - ox, r = Math.floor(i / N) - oz; return c < 0 || r < 0 || c >= W || r >= W || k >= KS ? -1 : k * WW2 + r * W + c; };
+  const glob = q => { const k = Math.floor(q / WW2), l = q % WW2; return k * SNN + T(l % W + ox, Math.floor(l / W) + oz); };
+  const g = new Float32Array(WW2 * KS).fill(Infinity), from = new Int32Array(WW2 * KS).fill(-1), shut = new Uint8Array(WW2 * KS), heap = [];
+  const gc = b % N, gr = Math.floor(b / N) % N;
   const est = (c, r) => { const ax = Math.abs(c - gc), az = Math.abs(r - gr); return Math.max(ax, az) + 0.414 * Math.min(ax, az); };
   const push = (k, f) => { const h = heap; let i = h.length; h.push([f, k]); while (i > 0) { const p = (i - 1) >> 1; if (h[p][0] <= h[i][0]) break; [h[p], h[i]] = [h[i], h[p]]; i = p; } };
   const pop = () => { const h = heap, top = h[0], last = h.pop(); if (h.length) { h[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, rr = l + 1; let m = i; if (l < h.length && h[l][0] < h[m][0]) m = l; if (rr < h.length && h[rr][0] < h[m][0]) m = rr; if (m === i) break; [h[m], h[i]] = [h[i], h[m]]; i = m; } } return top; };
   const s = loc(a), goal = loc(b);
   let out = null;
   if (s >= 0 && goal >= 0) {
-    g[s] = 0; push(s, est(a % N, Math.floor(a / N)));
+    g[s] = 0; push(s, est(a % N, Math.floor(a / N) % N));
     const open = (c, r, d) => folkStep(c, r, d) && folkOpen(t, T(c + DC[d], r + DR[d]));
     while (heap.length) {
-      const [, k] = pop();
-      if (shut[k]) continue;
-      shut[k] = 1;
-      if (k === goal) { out = []; for (let q = k; q !== s; q = from[q]) out.push(T(q % W + ox, Math.floor(q / W) + oz)); out.reverse(); break; }
-      const c = k % W + ox, r = Math.floor(k / W) + oz, op = [0, 1, 2, 3].map(d => open(c, r, d));
-      const step = (nc, nr, len) => {
-        const q = loc(T(nc, nr)); if (q < 0 || shut[q]) return;
-        const cost = g[k] + len * (folkStreet(T(nc, nr)) ? 1 : 1.8);
-        if (cost < g[q]) { g[q] = cost; from[q] = k; push(q, cost + est(nc, nr)); }
+      const [, q0] = pop();
+      if (shut[q0]) continue;
+      shut[q0] = 1;
+      if (q0 === goal) { out = []; for (let q = q0; q !== s; q = from[q]) out.push(glob(q)); out.reverse(); break; }
+      const k = Math.floor(q0 / WW2), i = glob(q0) % SNN, c = i % N, r = Math.floor(i / N);
+      const step = (nk, nc, nr, len) => {
+        const q = loc(nk * SNN + T(nc, nr)); if (q < 0 || shut[q]) return;
+        const cost = g[q0] + len * (nk || folkStreet(T(nc, nr)) ? 1 : 1.8);
+        if (cost < g[q]) { g[q] = cost; from[q] = q0; push(q, cost + est(nc, nr)); }
       };
-      for (let d = 0; d < 4; d++) if (op[d]) step(c + DC[d], r + DR[d], 1);
-      for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-        const dH = dx > 0 ? 1 : 3, dV = dz > 0 ? 2 : 0;
-        if (op[dH] && op[dV] && open(c + dx, r, dV) && open(c, r + dz, dH)) step(c + dx, r + dz, 1.414);
+      const on = stairAt.get(k * SNN + i);
+      if (on) {
+        // on a stair: up or down it, off at its foot (backward) or onto its landing at the top
+        if (i === on.t0) { const j = on.t1; step(k, j % N, Math.floor(j / N), 1); const bc = c - DC[on.d], br = r - DR[on.d]; if (folkOpenK(t, k, T(bc, br)) && !upWallOn(c, r, (on.d + 2) & 3, k)) step(k, bc, br, 1); }
+        else { const j = on.t0; step(k, j % N, Math.floor(j / N), 1); const lc = c + DC[on.d], lr = r + DR[on.d]; if (folkOpenK(t, k + 1, T(lc, lr))) step(k + 1, lc, lr, 1); }
+        continue;
+      }
+      for (let d = 0; d < 4; d++) {
+        const nc = c + DC[d], nr = r + DR[d], n = T(nc, nr), st = stairAt.get(k * SNN + n);
+        // onto a stair's foot, walking up it
+        if (st) { if (n === st.t0 && d === st.d && !upWallOn(c, r, d, k)) step(k, nc, nr, 1); continue; }
+        // down from a landing onto the top of a stair below
+        const below = k ? stairAt.get((k - 1) * SNN + n) : null;
+        if (below) { if (n === below.t1 && d === ((below.d + 2) & 3)) step(k - 1, nc, nr, 1); continue; }
+        if (k ? folkOpenK(t, k, n) && !upWallOn(c, r, d, k) : open(c, r, d)) step(k, nc, nr, 1);
+      }
+      if (!k) {
+        const op = [0, 1, 2, 3].map(d => open(c, r, d));
+        for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const dH = dx > 0 ? 1 : 3, dV = dz > 0 ? 2 : 0;
+          if (op[dH] && op[dV] && open(c + dx, r, dV) && open(c, r + dz, dH)) step(0, c + dx, r + dz, 1.414);
+        }
       }
     }
   }
   t.routes.set(key, out);
   return out;
+}
+// (v454) can townsfolk stand on tile i of story k: the ground as folkOpen says; above, the town's upper floors (not
+// a balcony, not a bed)
+function folkOpenK(t, k, i) {
+  if (!k) return folkOpen(t, i);
+  return TN[i] === t.n + 1 && UP[k].FL.has(i) && !BALCONY.has(i) && !BEDS.has(k * SNN + i) && !stairAt.has(k * SNN + i);
+}
+// how high someone stands: on a stair, up its flight; on an upper story, its floor; else the ground
+function folkY(p) {
+  const i = T(Math.floor(p.x), Math.floor(p.z)), st = stairAt.get(p.k * SNN + i);
+  if (st) return st.y0 + 0.06 + stairT(st, p.x, p.z) * WALL_H;
+  return p.k ? storyY(p.k, i) + 0.06 : surfaceY(p.x, p.z);
 }
 
 // ----- building and drawing them -----
@@ -19025,10 +19101,12 @@ function folkNext(p, place = false) {
   const t = p.t, P = t.places, H0 = t.houses[p.home], act = folkActivity(p);
   const placesOf = (...kinds) => { const l = P.filter(q => kinds.includes(q.kind)); return l.length ? l : P; };
   const inside = h => h.inTiles && h.inTiles.length ? pickOf(h.inTiles) : h.front;
+  // (v454) home: downstairs or, where there's one, up in the bedroom
+  const atHome = h => h.upTiles && h.upTiles.length && Math.random() < 0.5 ? pickOf(h.upTiles) : inside(h);
   let goal = H0.front, stay = FOLK.stayMin + Math.random() * (FOLK.stayMax - FOLK.stayMin);
   p.look = null;
   if (act === 'sleep') { goal = p.bedTile; stay = 20 + Math.random() * 20; }
-  else if (act === 'home') { goal = inside(H0); stay = 15 + Math.random() * 25; }
+  else if (act === 'home') { goal = atHome(H0); stay = 15 + Math.random() * 25; }
   else if (act === 'work' && p.workHouse) {
     const W = p.workHouse;
     goal = W.workSpot >= 0 ? W.workSpot : inside(W);
@@ -19037,31 +19115,33 @@ function folkNext(p, place = false) {
   } else if (act === 'work') {
     const k = FOLK_OUT_WORK[p.d.job];
     goal = pickOf(k === 'fountain' && t.fount ? placesOf('fountain') : k === 'street' ? placesOf('street', 'planter') : k === 'door' ? placesOf('door') : P.length ? P : [{ i: H0.front }]).i;
+    // (v454, Jordan) the busker plays a good while at each spot round the fountain
+    if (p.d.job === 'busker') stay = 40 + Math.random() * 50;
   } else if (act === 'watch') { goal = pickOf(placesOf('street', 'lamp', 'fountain', 'door')).i; stay = 3 + Math.random() * 6; }
   else if (act === 'lamps') { goal = pickOf(placesOf('lamp')).i; stay = 2 + Math.random() * 3; }
   else {
     // an errand: calling in at a workshop, home for a while, or out about the town
     const u = Math.random(), shops = t.houses.filter(h => (h.trade || h.cathedral) && h !== H0 && h.inTiles && h.inTiles.length);
     if (u < 0.3 && shops.length) goal = inside(pickOf(shops));
-    else if (u < 0.42) goal = inside(H0);
+    else if (u < 0.42) goal = atHome(H0);
     else if (P.length) goal = pickOf(P).i;
   }
   if (goal == null || goal < 0) goal = H0.front;
   p.act = act; p.asleep = false; p.actT = 2 + Math.random() * 2;
   const jx = 0.25 + Math.random() * 0.5, jz = 0.25 + Math.random() * 0.5;
   if (place) {
-    p.x = goal % N + jx; p.z = Math.floor(goal / N) + jz; p.y = surfaceY(p.x, p.z);
+    p.k = Math.floor(goal / SNN); p.x = goal % N + jx; p.z = Math.floor(goal / N) % N + jz; p.y = folkY(p);
     p.state = 'stay'; p.at = goal; p.stayT = Math.random() * stay; p.asleep = act === 'sleep'; p.route = null;
     if (p.asleep && p.bedRec && goal === p.bedRec.side) { p.bedPh = 'sleep'; p.bedK = 1; p.coverK = 1; }
     return;
   }
-  const here = T(Math.floor(p.x), Math.floor(p.z));
+  const here = p.k * SNN + T(Math.floor(p.x), Math.floor(p.z));
   if (goal === here) { p.state = 'stay'; p.at = goal; p.stayT = stay; p.asleep = act === 'sleep'; folkToBed(p); return; }
   const route = folkRoute(t, here, goal);
   if (!route || !route.length) { p.state = 'stay'; p.stayT = 2 + Math.random() * 3; return; }
   p.state = 'walk'; p.route = route; p.ri = 0; p.goal = goal; p.stuckT = 0; p.stayFor = stay;
   p.carry = p.d.job === 'carter' ? Math.random() < 0.7 : p.d.prop === 'none' && Math.random() < 0.08;
-  p.gx = goal % N + jx; p.gz = Math.floor(goal / N) + jz;
+  p.gx = goal % N + jx; p.gz = Math.floor(goal / N) % N + jz;
 }
 // what they say when you talk to them (F)
 const FOLK_SAY = {
@@ -19127,7 +19207,7 @@ const ease = k => k * k * (3 - 2 * k);
 function folkBedPose(p) {
   const f = p.rig, b = p.bedRec, k = ease(p.bedK);
   const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5;
-  const h = 1.05 * f.g.scale.y, top = surfaceY(mx, mz) + 0.16 + 0.12 + 0.17;
+  const h = 1.05 * f.g.scale.y, top = bedFloorY(b) + 0.16 + 0.12 + 0.17;
   // lying: feet toward the foot, the head on the pillow
   const lx = mx + DC[b.d] * (h - 0.82), lz = mz + DR[b.d] * (h - 0.82), ly = top + 0.1;
   const sx = p.x, sz = p.z, sy = p.y;
@@ -19146,7 +19226,7 @@ function folkBedPose(p) {
 const coverM = new GFX.Matrix4(), coverQ = new GFX.Quaternion(), coverP = new GFX.Vector3(), coverS = new GFX.Vector3(), coverY = new GFX.Vector3(0, 1, 0);
 function folkCoverMatrix(p) {
   const b = p.bedRec, ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5;
-  const top = surfaceY(mx, mz) + 0.16 + 0.12 + 0.17, len = 1.25 * ease(p.coverK), footB = 0.9;
+  const top = bedFloorY(b) + 0.16 + 0.12 + 0.17, len = 1.25 * ease(p.coverK), footB = 0.9;
   const cb = footB - len / 2;   // (its middle, along the bed from its centre)
   const breath = p.bedPh === 'sleep' ? 1 + FOLK.breathe * 0.6 * Math.sin(p.animT * 1.6) : 1;
   coverP.set(mx + DC[b.d] * cb, top + 0.13 * breath, mz + DR[b.d] * cb);
@@ -19169,20 +19249,27 @@ function updateFolk(dt) {
       p.animT += dt;
       let vx = 0, vz = 0, want = 0;
       if (p.state === 'walk') {
-        const fc = Math.floor(p.x), fr = Math.floor(p.z), R = p.route;
-        // past tiles on the route dropped, then the farthest of the next few that's in a straight line
-        for (let j = Math.min(R.length, p.ri + 4) - 1; j >= p.ri; j--) if (R[j] === T(fc, fr)) { p.ri = j + 1; break; }
+        const fc = Math.floor(p.x), fr = Math.floor(p.z), R = p.route, here = T(fc, fr);
+        // past tiles on the route dropped (v454: the next node when you're on its tile, so onto a landing or a stair,
+        // a later one only on your story), then the farthest of the next few that's in a straight line
+        for (let j = Math.min(R.length, p.ri + 4) - 1; j >= p.ri; j--) if (R[j] % SNN === here && (j === p.ri || Math.floor(R[j] / SNN) === p.k)) { p.ri = j + 1; p.k = Math.floor(R[j] / SNN); break; }
+        // (on a stair or upstairs, or about to be: tile to tile, straight, nothing to collide with but what the
+        // route already keeps them from)
+        const plain = q => q < SNN && !stairAt.has(q);
+        p.up = p.k > 0 || stairAt.has(p.k * SNN + here) || (p.ri < R.length && !plain(R[p.ri]));
         let tx = p.gx, tz = p.gz;
         if (p.ri < R.length) {
-          tx = R[p.ri] % N + 0.5; tz = Math.floor(R[p.ri] / N) + 0.5;
-          for (let j = Math.min(R.length, p.ri + 4) - 1; j > p.ri; j--) {
-            const cx = j === R.length - 1 ? p.gx : R[j] % N + 0.5, cz = j === R.length - 1 ? p.gz : Math.floor(R[j] / N) + 0.5;
+          tx = R[p.ri] % N + 0.5; tz = Math.floor(R[p.ri] / N) % N + 0.5;
+          if (!p.up) for (let j = Math.min(R.length, p.ri + 4) - 1; j > p.ri; j--) {
+            let ok = true; for (let q = p.ri + 1; q <= j; q++) if (!plain(R[q])) ok = false;
+            if (!ok) continue;
+            const cx = j === R.length - 1 ? p.gx : R[j] % N + 0.5, cz = j === R.length - 1 ? p.gz : Math.floor(R[j] / N) % N + 0.5;
             if (walkLine(p.x, p.z, cx, cz)) { tx = cx; tz = cz; break; }
           }
         }
         // (v452) a shut door on the next step: opened, and shut again once they're through
-        if (p.ri < R.length && !p.opened) {
-          const dc = R[p.ri] % N - fc, dr = Math.floor(R[p.ri] / N) - fr;
+        if (p.ri < R.length && !p.opened && !p.up) {
+          const dc = R[p.ri] % N - fc, dr = Math.floor(R[p.ri] / N) % N - fr;
           if (Math.abs(dc) + Math.abs(dr) === 1) {
             const q = doorAcross(fc, fr, dc ? (dc > 0 ? 1 : 3) : (dr > 0 ? 2 : 0));
             if (q && !q.open && !q.gate) { setDoor(q, true, p.x, p.z); p.opened = q; sfx.door(); }
@@ -19225,7 +19312,7 @@ function updateFolk(dt) {
       }
       // out of your way: off to the side you're not heading (straight away if you're standing still)
       const hx = p.x - H.x, hz = p.z - H.z, hd = Math.hypot(hx, hz);
-      if (H.alive && !p.asleep && !p.bedPh && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
+      if (H.alive && !p.asleep && !p.bedPh && !p.up && hd < FOLK.aside && Math.abs(H.y - p.y) < 1.5) {
         let ax = hx / (hd || 1), az = hz / (hd || 1);
         if (heroMoving) {
           const l = Math.hypot(hvx, hvz), mx = hvx / l, mz = hvz / l, side = (-mz * hx + mx * hz) >= 0 ? 1 : -1;
@@ -19236,10 +19323,14 @@ function updateFolk(dt) {
         if (p.state === 'stay') p.face += angDiff(Math.atan2(-hx, -hz), p.face) * (1 - Math.exp(-dt * 4));
       }
       if (p.bedPh) { vx = vz = 0; }
-      const got = p.bedPh ? 0 : moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
+      if (p.state !== 'walk') p.up = p.k > 0 || stairAt.has(p.k * SNN + T(Math.floor(p.x), Math.floor(p.z)));
+      let got = 0;
+      if (p.bedPh) got = 0;
+      else if (p.up) { p.x += vx * dt; p.z += vz * dt; got = Math.hypot(vx, vz) * dt; }
+      else got = moveEntity(p, vx * dt, vz * dt, FOLK.rad, true);
       // stuck (someone in the way round a corner, say): after a while, off somewhere else
       if (p.state === 'walk') { if (want > 0 && got < want * 0.3) { p.stuckT += dt; if (p.stuckT > 2.5) folkNext(p); } else p.stuckT = 0; }
-      p.y = surfaceY(p.x, p.z);
+      p.y = folkY(p);
       p.moving = p.state === 'walk' || Math.hypot(vx, vz) > 0.4;
       if (p.moving) p.walkT += dt * Math.max(0.5, Math.hypot(vx, vz)) / FOLK.stepRef;
     }
@@ -19253,7 +19344,7 @@ function updateFolk(dt) {
     for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
       const l = folkCells.get((c0 + dc) * 8192 + r0 + dr);
       if (l) for (const B of l) {
-        if (B.sepI <= A.sepI || A.bedPh || B.bedPh) continue;
+        if (B.sepI <= A.sepI || A.bedPh || B.bedPh || A.up || B.up || A.k !== B.k) continue;
         const dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz), m = FOLK.rad * 2 + 0.08;
         if (d < m && d > 1e-4) { const push = (m - d) / 2; moveEntity(A, -dx / d * push, -dz / d * push, FOLK.rad, true); moveEntity(B, dx / d * push, dz / d * push, FOLK.rad, true); }
         // two standing side by side talk to each other
@@ -19271,6 +19362,7 @@ function updateFolk(dt) {
     else if (p.state === 'walk') p.anim = p.carry ? 'carry' : 'walk';
     else if (p.moving) p.anim = 'walk';
     else if (p.d.job === 'sweeper' && p.at >= 0 && folkStreet(p.at) && p.act === 'work') p.anim = 'sweep';
+    else if (p.d.job === 'busker' && p.act === 'work') p.anim = 'play';   // (v454, Jordan: by the fountain by day)
     else if (hd < FOLK.waveR && p.waved === 0 && H.alive) { p.waved = Math.random() < FOLK.wave ? 1 : 2; if (p.waved === 1) p.waveT = p.animT; p.anim = p.waved === 1 ? 'wave' : 'idle'; }
     else if (p.waved === 1 && p.animT - p.waveT < FOLK.waveTime) p.anim = 'wave';
     else if (near) { p.anim = 'talk'; if (!p.moving) p.face += angDiff(Math.atan2(near.x - p.x, near.z - p.z), p.face) * (1 - Math.exp(-dt * 3)); }
@@ -19283,12 +19375,13 @@ function updateFolk(dt) {
 const ZERO16 = new Float32Array(16);
 function drawFolk() {
   let shown = 0;
+  const view = folkBatches.length ? storyView() : STORY_MAX;   // (v454: anyone on a story hidden over you is hidden too)
   const cx = camTarget.x, cz = camTarget.z;
   for (const b of folkBatches) {
     const M = b.mat.uniforms.bones.value;
     for (const p of b.people) {
       const f = p.rig, far = Math.max(Math.abs(p.x - cx), Math.abs(p.z - cz)) > FOLK.show;
-      if (far || (p.asleep && !p.bedPh)) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); continue; }
+      if (far || (p.asleep && !p.bedPh) || p.k > view) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); continue; }
       if (p.bedPh) folkBedPose(p);
       else {
         f.g.position.set(p.x, p.y, p.z); f.g.rotation.set(0, p.face, 0);
@@ -22526,7 +22619,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 453, crashSeen = new Map();
+const GAME_VERSION = 454, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

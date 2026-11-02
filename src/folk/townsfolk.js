@@ -767,7 +767,9 @@ export function makeFolkKit(GFX) {
     });
     if (P === 'lute') {
       // on the back, slung across, neck up over the right shoulder
-      const lute = pivot(chest, 0, 0.53 - CH, -(frontAt(0.53) + 0.04)); lute.rotation.z = 0.6;
+      var lute = pivot(chest, 0, 0.53 - CH, -(frontAt(0.53) + 0.04)); lute.rotation.z = 0.6;
+      // (played: held across the front, the body at the right of the belly, the neck up to the left)
+      var luteBack = [0, 0.53 - CH, -(frontAt(0.53) + 0.04)], luteFront = [-0.03, 0.5 - CH, frontAt(0.5) + 0.06];
       box(lute, 0.17, 0.2, 0.06, 0, -0.04, 0, '#a8703a');
       box(lute, 0.14, 0.06, 0.06, 0, 0.08, 0, '#a8703a');
       box(lute, 0.04, 0.04, 0.008, 0, -0.02, -0.032, '#3a2416');
@@ -778,7 +780,7 @@ export function makeFolkKit(GFX) {
     // a soft round shadow on the ground
     const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
     g.scale.set(1.12 * d.build * (fem ? 0.98 : 1), 1.12 * d.height * (fem ? 0.97 : 1), 1.12 * d.build);
-    return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, tool, staff, shadow };
+    return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, tool, staff, shadow, lute, luteBack, luteFront };
   }
   return { design, build, pose, describe };
 }
@@ -787,7 +789,7 @@ export function makeFolkKit(GFX) {
 // The walk is the hero's (legSwing's planted half linear, knees bending on the swing, the foot kept level), a little
 // slower and shorter in the step; the rest are made for standing about in town.
 export const FOLK_WALK = { rate: 4.2, stride: 0.6, arms: 0.45, knee: 1.4, foot: 0.6, elbow: 0.3, bob: 0.025, twist: 0.08 };
-export const ANIMS = ['idle', 'walk', 'talk', 'wave', 'carry', 'sweep'];
+export const ANIMS = ['idle', 'walk', 'talk', 'wave', 'carry', 'sweep', 'play'];
 function legSwing(ph) {
   const u = ((ph % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), sn = Math.sin(u);
   const w = u > 1.5 * Math.PI ? u - 2 * Math.PI : u;
@@ -796,6 +798,7 @@ function legSwing(ph) {
 // ---- two-handed grips (the sweep's broom) ----
 // shoulder to elbow, and elbow to the middle of the grip (forearm 0.1 plus the hand's centre 0.033)
 const ARM_A = 0.1, ARM_B = 0.133;
+const LUTE_TILT = 1.13;   // (the played lute's neck: tipped this far from upright toward the left hand)
 const rotX = (p, a) => [p[0], p[1] * Math.cos(a) - p[2] * Math.sin(a), p[1] * Math.sin(a) + p[2] * Math.cos(a)];
 const rotY = (p, a) => [p[0] * Math.cos(a) + p[2] * Math.sin(a), p[1], -p[0] * Math.sin(a) + p[2] * Math.cos(a)];
 const rotZ = (p, a) => [p[0] * Math.cos(a) - p[1] * Math.sin(a), p[0] * Math.sin(a) + p[1] * Math.cos(a), p[2]];
@@ -828,7 +831,13 @@ function holdBroom(f, top, low, bodyY) {
 export function pose(f, anim, t) {
   const W = FOLK_WALK, z3 = o => o.rotation.set(0, 0, 0);
   [f.body, f.chest, f.head, f.legL, f.legR, f.armL, f.armR, ...f.knees, ...f.ankles, ...f.elbows, ...f.wrists, ...f.flaps, ...f.fronts, ...f.backs, f.tool].forEach(z3);
-  f.tool.visible = anim !== 'carry' && anim !== 'sweep';
+  f.tool.visible = anim !== 'carry' && anim !== 'sweep' && anim !== 'play';
+  // (the busker's lute: on the back, or across the front to be played)
+  if (f.lute) {
+    const L = f.lute, at = anim === 'play' ? f.luteFront : f.luteBack;
+    L.position.set(at[0], at[1], at[2]);
+    if (anim === 'play') L.rotation.set(0, Math.PI, LUTE_TILT); else L.rotation.set(0, 0, 0.6);
+  }
   f.broom.rotation.set(0, 0, 0);
   f.broom.visible = anim === 'sweep'; f.crate.visible = anim === 'carry';
   const walking = anim === 'walk' || anim === 'carry';
@@ -890,6 +899,18 @@ export function pose(f, anim, t) {
     holdBroom(f, top, low, bodyY);
     f.head.rotation.x = 0.2; f.head.rotation.y = s * 0.1;
     f.legL.rotation.x = -0.12; f.legR.rotation.x = 0.1; f.knees[0].rotation.x = 0.12; f.knees[1].rotation.x = 0.16;
+  }
+  else if (anim === 'play' && f.lute) {
+    // (Jordan) playing the lute: the left hand on the neck, sliding along it now and then, the right strumming over
+    // the body; the head bent to the strings, swaying to the tune
+    const F = f.luteFront, neck = rotY(rotZ([0, 0.2 + Math.sin(t * 0.8) * 0.02, 0], LUTE_TILT), Math.PI);
+    const sway = Math.sin(t * 1.3);
+    f.chest.rotation.x = 0.05; f.chest.rotation.z = sway * 0.035; f.chest.rotation.y = 0.08;
+    reach(f.armL, f.elbows[0], [F[0] + neck[0], F[1] + neck[1], F[2] + 0.03]);
+    reach(f.armR, f.elbows[1], [F[0] - 0.01, F[1] + 0.01 + Math.sin(t * 9) * 0.03, F[2] + 0.05]);
+    f.wrists[1].rotation.x = Math.sin(t * 9) * 0.25;
+    f.head.rotation.x = 0.22; f.head.rotation.y = 0.25 + sway * 0.08; f.head.rotation.z = -sway * 0.05;
+    f.legL.rotation.z = f.legR.rotation.z = 0; f.body.rotation.z = sway * 0.02;
   }
   f.body.position.y = bodyY;
   // (breathing sinks the body: the legs rise as much, so the feet stay on the ground)
