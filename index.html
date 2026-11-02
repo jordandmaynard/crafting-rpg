@@ -3227,10 +3227,10 @@ const PROP_KITS = {
   // (v555, Jordan: the tavern and inn set) the bar (counter, the barrel rack behind it, stools before it: propBar) goes
   // in first as the innkeeper's work; guest rooms upstairs; the sign and kegs outside (tavernFront)
   tavern: [null,
-    [{ id: 'hearth' }, { id: 'longTable', seats: 'bench', n: 2 }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'mugShelf' }, { id: 'keg' }, { id: 'barrel' },
+    [{ id: 'hearth' }, { id: 'keg' }, { id: 'longTable', seats: 'bench', n: 2 }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'mugShelf' }, { id: 'barrel' },
       { id: 'chest', at: 'bed' }, { id: 'bed', up: true, n: 2 }, { id: 'washstand', up: true, n: 2 }, { id: 'chest', up: true }, { hang: 'antlers' }, { hang: 'shield' }],
-    [{ id: 'hearth' }, { id: 'feastTable', seats: 'chair' }, { id: 'longTable', seats: 'bench' }, { id: 'roundTable', seats: 'stool', n: 3 }, { id: 'roundTable', seats: 'stool', n: 2 },
-      { id: 'mugShelf', n: 2 }, { id: 'keg', n: 2 }, { id: 'cupboard' }, { id: 'chandelier' }, { id: 'candleStand' }, { id: 'chest', at: 'bed' },
+    [{ id: 'hearth' }, { id: 'keg', n: 2 }, { id: 'feastTable', seats: 'chair' }, { id: 'longTable', seats: 'bench' }, { id: 'roundTable', seats: 'stool', n: 3 }, { id: 'roundTable', seats: 'stool', n: 2 },
+      { id: 'mugShelf', n: 2 }, { id: 'cupboard' }, { id: 'chandelier' }, { id: 'candleStand' }, { id: 'chest', at: 'bed' },
       { id: 'bed', up: true, n: 3 }, { id: 'washstand', up: true, n: 2 }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'antlers' }, { hang: 'shield', n: 2 }, { hang: 'tapestry', up: true }],
   ],
   bank: [null, null,
@@ -3251,6 +3251,8 @@ const PROP_KITS = {
 };
 // (each building's work prop, for a trade kept in a building of its own)
 const PROP_WORK = { tavern: 'barrelRack', bank: 'desk', guard: 'desk' };
+// (v558, Jordan: kegs as well as the barrel rack in a tavern) floor props that stand against a wall, out of the way
+const PROP_BY_WALL = new Set(['keg', 'barrel']);
 // the buildings a town keeps, by town size, by their place in the order the houses go up (after the tannery and smithy)
 const PROP_ROLES = [[], [null, null, 'tavern'], [null, null, 'tavern', 'bank', 'guard']];
 const ROLE_TRADE = { tavern: 'innkeeper', bank: 'banker', guard: 'guard' };
@@ -3356,12 +3358,12 @@ function propCands(h, k, id, ctx) {
   if (!tiles.length) return out;
   const start = k ? R.up.land : R.ins, sc = start % N, sr = Math.floor(start / N);
   let mx = 0, mz = 0; for (const [c, r] of tiles) { mx += c + 0.5; mz += r + 0.5; } mx /= tiles.length; mz /= tiles.length;
-  const tall = propTall(id);
+  const tall = propTall(id), byWall = P.wall || PROP_BY_WALL.has(id);
   for (const [c, r] of tiles) for (let f = 0; f < 4; f++) {
     const foot = propFoot(h, k, P, c, r, f, P.rug);
     if (!foot) continue;
     let wallV = 0;
-    if (P.wall) {
+    if (byWall) {
       const back = (f + 2) & 3;
       let ok = true;
       for (let a = 0; a < P.tiles[0] && ok; a++) {
@@ -3370,9 +3372,10 @@ function propCands(h, k, id, ctx) {
         else wallV = Math.max(wallV, v === 13 ? 1 : v === 14 ? 4 : v);
       }
       if (!ok) continue;
+      if (!P.wall) wallV = 0;   // (stood by the wall, not backed onto it)
     }
     let cx = 0, cz = 0; for (const [a, b] of foot) { cx += a + 0.5; cz += b + 0.5; } cx /= foot.length; cz /= foot.length;
-    const score = P.wall ? Math.hypot(cx - sc - 0.5, cz - sr - 0.5) : -Math.hypot(cx - mx, cz - mz);
+    const score = byWall ? Math.hypot(cx - sc - 0.5, cz - sr - 0.5) : -Math.hypot(cx - mx, cz - mz);
     out.push({ foot, f, wallV, score: score + hs(c, r, 610 + f + propHash(id) + ctx.n * 13) * 0.8 });
   }
   return out.sort((a, b) => b.score - a.score);
@@ -25176,7 +25179,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 557, crashSeen = new Map();
+const GAME_VERSION = 558, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
