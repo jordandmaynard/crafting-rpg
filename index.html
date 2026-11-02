@@ -8481,6 +8481,17 @@ fn ssrTrace(wp: vec3f, dir: vec3f, frag: vec2f) -> vec4f {
         // its hidden side stands in, the colour darkened by ssrC.x (0: no reflection there at all, the sky's)
         if (ssrFacingAway(hp, dims, dir) > U.ssrC.y) {
           if (U.ssrC.x <= 0.0) { return vec4f(0.0); }
+          // (v524, Jordan: the planks came out as straight vertical lines) the underside the ray really meets is
+          // under the point where it crosses the surface's height, not under the pixel it was hidden behind: the
+          // surface's world point at the hit pixel gives that height; the top seen at the crossing gives the colour
+          let vzb = (F.view * vec4f(b, 1.0)).z;
+          let S = F.camPos.xyz + (b - F.camPos.xyz) * (ssrView(hp, dims).z / vzb);
+          if (dir.y > 0.02 && F.camPos.w < 0.5) {
+            let Q = wp + dir * max(0.0, (S.y - wp.y) / dir.y);
+            let cq = F.viewProj * vec4f(Q, 1.0);
+            let uq = cq.xy / cq.w * vec2f(0.5, -0.5) + 0.5;
+            if (all(uq >= vec2f(0.0)) && all(uq <= vec2f(1.0)) && cq.w > 0.0) { col = textureLoad(tRefr, clamp(vec2i(uq * vec2f(dims)), vec2i(0), dims - 1), 0).rgb; }
+          }
           col = col * U.ssrC.x;
         }
         return vec4f(col, edge * (1.0 - smoothstep(U.ssrA.z * 0.6, U.ssrA.z, travel)));
@@ -24118,7 +24129,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 523, crashSeen = new Map();
+const GAME_VERSION = 524, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
