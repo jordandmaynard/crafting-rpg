@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v472:** Windows blinking lit and dark as you walk at night (Jordan): the glass shader's lamp glow (lamps and fires shining through a pane) only read the first 8 point lights, and the lit lamps' order in the light list shifts as the nearest 12 change, so a pane lit by the 9th or later light popped off. It now reads all of them (MAX_POINTS 16), so a pane's glow fades with its lamp's light.
+
 **v471:** The framed toast (discoveries, entering places, the day turns) moved under the minimap's watch strip, centred on the case and as wide as it (toastScale 0.565 = 315 / 558). Its frame is turned upside down (a scaleY(-1) ::before) so the crest sits at the bottom; the badge (242,70) and title (35,36) stay upright. Plain toasts stay above the centre panel. The dev buttons and frame rate went back to the minimap's top left.
 
 **v470:** Townsfolk face where they're walking again (Jordan: they were moonwalking). v468's steering change dropped the line that turns a walker to face their way; it's back, turning toward their actual heading, steering included.
