@@ -962,6 +962,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 <script type="module">
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_WHERE } from './src/folk/townsfolk.js';
+import { PROPS, buildProp, rollProp, WALL_IN } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 await (async () => {
 const $ = id => document.getElementById(id);
@@ -3002,14 +3003,15 @@ function townTables(t, n) {
   townClergy(t);
   townTrades(t, n);
   townBeds(t, n);
+  townProps(t, n);
 }
 // (v452) The towns' other trades: after the tannery and smithy, each plain house in turn takes the next of its town
 // size's trades, with a workbench for its keeper to stand at (TOWN_PROP: a saw table, grinder, smelter, alchemy
 // table or crate, drawn as the station would be but only for show: nothing's refined at them).
 const TOWN_TRADES = [
   [['woodcutter', 'saw'], ['goodfolk', 'grinder']],
-  [['ironmonger', 'smelter'], ['herbalist', 'alchemy'], ['innkeeper', 'crate'], ['glazier', 'smelter'], ['mason', 'grinder'], ['woodcutter', 'saw'], ['carter', 'crate']],
-  [['innkeeper', 'crate'], ['herbalist', 'alchemy'], ['jeweller', 'crate'], ['merchant', 'crate'], ['glazier', 'smelter'], ['ironmonger', 'smelter'], ['mason', 'grinder'], ['banker', 'crate'], ['cartographer', 'crate'], ['goodfolk', 'grinder'], ['woodcutter', 'saw']],
+  [['ironmonger', 'smelter'], ['herbalist', 'alchemy'], ['glazier', 'smelter'], ['mason', 'grinder'], ['woodcutter', 'saw'], ['carter', 'crate']],
+  [['herbalist', 'alchemy'], ['jeweller', 'crate'], ['merchant', 'crate'], ['glazier', 'smelter'], ['ironmonger', 'smelter'], ['mason', 'grinder'], ['cartographer', 'crate'], ['goodfolk', 'grinder'], ['woodcutter', 'saw']],
 ];
 // a free ground-floor tile of a house: not its stair, its doorway's inside or kept clear, nothing on it
 function houseFree(h, i) {
@@ -3038,7 +3040,7 @@ function townClergy(t) {
   const [cc, cr] = ca.inside;
   let best = null, bd = 1e9;
   for (const h of t.houses) {
-    if (h.cathedral || h.tannery || h.smithy || !h.inside) continue;
+    if (h.cathedral || h.tannery || h.smithy || h.role || !h.inside) continue;
     const d = Math.hypot(h.inside[0] - cc, h.inside[1] - cr);
     if (d < bd) { bd = d; best = h; }
   }
@@ -3049,6 +3051,15 @@ function townTrades(t, n) {
   if (t.tannery) t.tannery.trade = 'tanner';
   if (t.smithy && t.smithy !== t.tannery) t.smithy.trade = ['smith', 'armorer', 'masterSmith'][t.tier] || 'smith';
   else if (t.smithy) t.smithy.trade = 'tanner';
+  // (2026-11-02) the tavern, bank and guard house: their keeper's work prop (the barrel rack, the desk) against a
+  // wall far from the door, the house left walkable
+  for (const h of t.houses) {
+    if (!h.role || h.trade) continue;
+    h.trade = ROLE_TRADE[h.role];
+    const id = PROP_WORK[h.role], ctx = { wood: PROP_WOOD[t.tier] || 'pine', n: n * 31 + 7 };
+    const q = propTryList(h, 0, id, propCands(h, 0, id, ctx), ctx);
+    if (q) h.work = q.tiles[Math.floor(q.tiles.length / 2)];
+  }
   for (const h of t.houses) {
     if (h.trade || h.cathedral || h.clergy || !list.length) continue;
     const [trade, kind] = list.shift();
@@ -3099,6 +3110,7 @@ function townBeds(t, n) {
       const bed = { ...best, color: BLANKETS[Math.floor(hs(best.c, best.r, 470) * BLANKETS.length)], house: h, town: n };
       BEDS.set(best.i, bed); BEDS.set(best.j, bed); h.beds.push(bed);
     }
+    for (const b of h.beds) { b.wood = PROP_WOOD[t.tier] || 'pine'; b.bunk = h.role === 'guard'; }
   }
 }
 // the upstairs beds (story 1, kept in BEDS by 1 * SNN + tile, drawn with the story's pieces): the head against a
@@ -3153,6 +3165,301 @@ function bedsReachable(h, beds) {
   if (h.work != null && !beside([h.work])) return false;
   return beds.every(b => beside([b.i, b.j]));
 }
+// ---------- Town props (2026-11-02, Jordan) ----------
+// The furniture of src/props/props.js (tweaked in the random model generator) set out in the towns' houses, the farms'
+// farmhouses and the snow cabins: a kit for each sort of building and town size, simpler in a hamlet, finer in a large
+// town (PROP_KITS). A prop stands on whole tiles (OB O.PROP, solid like a bed; upstairs PROP_AT keeps folk and you
+// off it); rugs are walked over, wall hangings take no floor tile. Every prop is checked as it goes down so the house
+// can still be got about: every free tile reached from inside the door (the stair's foot among them, kept clear), and
+// upstairs from the stair's landing (the doors out onto a balcony or terrace kept clear too), each bed and the
+// workbench with a free tile beside it. Drawn into the chunk's buffers like any object (drawProp): floor props with
+// the objects (their flames glowing), wall hangings and everything upstairs with the building pieces, so a hanging is
+// lowered with its wall by the cutaway (it goes with the wall) and an upper story's props hide with it.
+const PROP_AT = new Map();     // k * SNN + tile -> the prop standing there (rugs and hangings not)
+const PROP_DRAW = new Map();   // k * SNN + its first tile -> the props drawn from there
+const PROP_WOOD = ['pine', 'oak', 'darkOak'];   // (by town size)
+// (a wall's half thickness by its value, as WALL_HALF has it: a wall prop stands off a thicker wall)
+const PROP_WALL_HALF = [0, 0.11, 0.06, 0.13, 0.16, 0.06, 0.21, 0.05, 0.05, 0.05, 0.06, 0.06, 0.16, 0.11, 0.16];
+const PROP_PLAIN_WALL = v => v === 1 || v === 3 || v === 4 || v === 12;
+// what each sort of building is furnished with, by town size (hamlet, medium, large): in order, each skipped if it
+// won't fit. { id } a prop; seats: chairs, benches or stools round a table; at: 'bed' one at each bed's foot; up: on
+// the upper story if there's one; hang: on a wall; n: how many
+const PROP_KITS = {
+  home: [
+    [{ id: 'shelf' }, { id: 'chest', at: 'bed' }, { id: 'hearth' }, { id: 'barrel' }, { id: 'roundTable', seats: 'stool', n: 2 }],
+    [{ id: 'hearth' }, { id: 'longTable', seats: 'bench' }, { id: 'cupboard' }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'shelf' }, { id: 'barrel' }, { id: 'washtub' }, { hang: 'antlers' }],
+    [{ id: 'hearth' }, { id: 'longTable', seats: 'chair' }, { id: 'cupboard' }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'bookcase' }, { id: 'candleStand' },
+      { id: 'rug' }, { id: 'rug', up: true }, { hang: 'tapestry' }, { hang: 'shield', up: true }],
+  ],
+  trade: [
+    [{ id: 'shelf' }, { id: 'chest', at: 'bed' }, { id: 'barrel' }, { id: 'hearth' }, { id: 'stool', n: 1 }],
+    [{ id: 'hearth' }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'shelf', n: 2 }, { id: 'crate' }, { id: 'barrel' }],
+    [{ id: 'hearth' }, { id: 'roundTable', seats: 'chair', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'shelf', n: 2 }, { id: 'crate' }, { id: 'rug', up: true }, { hang: 'shield' }],
+  ],
+  tavern: [null,
+    [{ id: 'hearth' }, { id: 'longTable', seats: 'bench', n: 2 }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'barrel', n: 2 }, { id: 'cupboard' }, { id: 'chest', at: 'bed' }, { hang: 'antlers' }, { hang: 'shield' }],
+    [{ id: 'hearth' }, { id: 'feastTable', seats: 'chair' }, { id: 'longTable', seats: 'bench' }, { id: 'roundTable', seats: 'stool', n: 3 }, { id: 'barrel', n: 2 }, { id: 'cupboard' },
+      { id: 'chandelier' }, { id: 'candleStand' }, { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'antlers' }, { hang: 'shield', n: 2 }, { hang: 'tapestry', up: true }],
+  ],
+  bank: [null, null,
+    [{ id: 'bookcase', n: 2 }, { id: 'chest', n: 2 }, { id: 'chair', n: 1 }, { id: 'bench' }, { id: 'shelf' }, { id: 'candleStand', n: 2 }, { id: 'chandelier' }, { id: 'runner' }, { id: 'rug' },
+      { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'tapestry' }, { hang: 'shield' }, { hang: 'wallMap' }],
+  ],
+  guard: [null, null,
+    [{ id: 'longTable', seats: 'bench' }, { id: 'hearth' }, { id: 'chair', n: 1 }, { id: 'barrel', n: 2 }, { id: 'crate', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'shelf' }, { id: 'crate', up: true },
+      { hang: 'wallMap' }, { hang: 'shield', n: 3 }, { hang: 'shield', up: true }],
+  ],
+  clergy: [null,
+    [{ id: 'longTable', seats: 'bench' }, { id: 'bookcase', n: 2 }, { id: 'candleStand' }, { id: 'hearth' }, { id: 'chest', at: 'bed' }],
+    [{ id: 'feastTable', seats: 'chair' }, { id: 'bookcase', n: 2 }, { id: 'candleStand', n: 2 }, { id: 'hearth' }, { id: 'chest', at: 'bed' }, { id: 'rug', up: true }, { hang: 'tapestry' }],
+  ],
+  // (one of each sort, whatever the size: oak for the farms, pine for the cabins)
+  farm: [{ id: 'bed' }, { id: 'hearth' }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'chest' }, { id: 'barrel', n: 2 }, { id: 'shelf' }, { id: 'washtub' }],
+  cabin: [{ id: 'bed' }, { id: 'hearth' }, { id: 'roundTable', seats: 'chair', n: 1 }, { id: 'chest' }, { id: 'barrel' }, { id: 'rug' }, { hang: 'antlers' }],
+};
+// (each building's work prop, for a trade kept in a building of its own)
+const PROP_WORK = { tavern: 'barrelRack', bank: 'desk', guard: 'desk' };
+// the buildings a town keeps, by town size, by their place in the order the houses go up (after the tannery and smithy)
+const PROP_ROLES = [[], [null, null, 'tavern'], [null, null, 'tavern', 'bank', 'guard']];
+const ROLE_TRADE = { tavern: 'innkeeper', bank: 'banker', guard: 'guard' };
+const propTall = (() => { const m = new Map(); return id => { if (!m.has(id)) { const g = buildProp(id, rollProp(id, 1)).solid, a = g.attributes.position.array; let hi = 0; for (let i = 1; i < a.length; i += 3) hi = Math.max(hi, a[i]); m.set(id, hi > 1); } return m.get(id); }; })();
+const propHash = id => { let s = 7; for (const ch of id) s = (s * 31 + ch.charCodeAt(0)) | 0; return Math.abs(s) % 997; };
+// the house's rooms for props: its upper story's tiles, the stair's landing, and what must stay clear up there
+function propRooms(h) {
+  if (h.propRooms) return h.propRooms;
+  const st = h.tiles.map(([c, r]) => stairAt.get(T(c, r))).find(Boolean);
+  const R = { ins: h.inside ? T(h.inside[0], h.inside[1]) : -1, up: null };
+  if (h.up && st) {
+    const tiles = h.up.tiles.filter(([c, r]) => UP[1].FL.has(T(c, r)) && !BALCONY.has(T(c, r))), set = new Set(tiles.map(([c, r]) => T(c, r))), clear = new Set([st.land]);
+    for (const [ec, er, ew] of h.up.doors || []) for (const [c, r] of ew ? [[ec - 1, er], [ec, er]] : [[ec, er - 1], [ec, er]]) if (set.has(T(c, r))) clear.add(T(c, r));
+    if (set.has(st.land)) R.up = { tiles, set, clear, land: st.land };
+  }
+  return h.propRooms = R;
+}
+// can a prop stand on tile i of story k (not a rug: those only need an empty floor)?
+function propFree(h, k, i) {
+  if (!k) return houseFree(h, i) && bedClear(h, 0, i);
+  const U = propRooms(h).up;
+  return !!U && U.set.has(i) && !U.clear.has(i) && !BEDS.has(SNN + i) && !PROP_AT.has(SNN + i) && !stairAt.has(SNN + i) && bedClear(h, 1, i);
+}
+// with what's down, can the floor still be got about from its way in, and has each bed (and the workbench) a free
+// tile beside it?
+function propReach(h, k) {
+  const R = propRooms(h), U = R.up;
+  if (k && !U) return false;
+  const set = k ? U.set : new Set(h.tiles.map(([c, r]) => T(c, r))), start = k ? U.land : R.ins;
+  if (!set.has(start)) return false;
+  const open = k ? i => set.has(i) && !BEDS.has(SNN + i) && !PROP_AT.has(SNN + i) : i => set.has(i) && (i === start || stairAt.has(i) || OB[i] === 0);
+  const seen = new Set([start]), q = [start];
+  while (q.length) {
+    const i = q.pop(), c = i % N, r = Math.floor(i / N);
+    for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (!seen.has(j) && open(j) && !upWallOn(c, r, d, k)) { seen.add(j); q.push(j); } }
+  }
+  for (const i of set) if (open(i) && !seen.has(i)) return false;
+  const beside = i => { const c = i % N, r = Math.floor(i / N); for (let d = 0; d < 4; d++) { const j = T(c + DC[d], r + DR[d]); if (seen.has(j) && !stairAt.has(j) && !upWallOn(c, r, d, k)) return true; } return false; };
+  if (!k && h.work != null && !beside(h.work)) return false;
+  return (h.beds || []).filter(b => (b.k || 0) === k).every(b => beside(b.i) || beside(b.j));
+}
+// the tiles a prop w x d covers set down from tile (c, r) (its back left) facing f, or null where one isn't free;
+// its front row faces f, its back row against the side (f + 2) & 3
+function propFoot(h, k, P, c, r, f, rug) {
+  const [w, d] = P.tiles, g = (f + 3) & 3, tiles = [];
+  for (let b = 0; b < d; b++) for (let a = 0; a < w; a++) {
+    const tc = c + DC[g] * a + DC[f] * b, tr = r + DR[g] * a + DR[f] * b, i = T(tc, tr);
+    if (P.hang && !P.wall ? !propOverFree(h, k, i) : rug ? !propRugFree(h, k, i) : !propFree(h, k, i)) return null;
+    // (no wall between it and the tile before it in its row or column)
+    if (a && upWallOn(tc, tr, (g + 2) & 3, k)) return null;
+    if (b && upWallOn(tc, tr, (f + 2) & 3, k)) return null;
+    tiles.push([tc, tr]);
+  }
+  return tiles;
+}
+function propRugFree(h, k, i) {
+  if (!k) return h.tiles.some(([c, r]) => T(c, r) === i) && OB[i] === 0 && !stairAt.has(i) && !PROP_RUG.has(i);
+  const U = propRooms(h).up;
+  return !!U && U.set.has(i) && !BEDS.has(SNN + i) && !PROP_AT.has(SNN + i) && !PROP_RUG.has(SNN + i);
+}
+const PROP_RUG = new Set();
+// (a chandelier hangs over any tile of the room but a stair's, one to a tile)
+const PROP_OVER = new Set();
+function propOverFree(h, k, i) {
+  const R = propRooms(h);
+  if (k ? !(R.up && R.up.set.has(i)) : !h.tiles.some(([c, r]) => T(c, r) === i)) return false;
+  return !stairAt.has(k * SNN + i) && !(k && stairAt.has(i)) && !PROP_OVER.has(k * SNN + i);
+}
+// set a prop down: the record drawProp draws, its tiles marked taken
+function propPut(h, k, id, tiles, f, wallV, ctx, opts = {}) {
+  const P = PROPS[id], [w, d] = P.tiles, g = (f + 3) & 3, [c, r] = tiles[0], i0 = T(c, r);
+  const seed = 1 + Math.floor(hs(c + k * 7, r, 600 + propHash(id)) * 99998), look = rollProp(id, seed);
+  let x = c + 0.5 + DC[g] * (w - 1) / 2 + DC[f] * (d - 1) / 2, z = r + 0.5 + DR[g] * (w - 1) / 2 + DR[f] * (d - 1) / 2;
+  if (wallV) { const off = (PROP_WALL_HALF[wallV] ?? 0.16) - WALL_IN; x += DC[f] * off; z += DR[f] * off; }
+  const y = (k ? storyY(k, i0) : LV[i0] * STEP) + 0.06 + (P.rug ? 0.002 : 0);
+  const q = { id, look, wood: ctx.wood, key: `${id}:${look ? seed : 0}:${ctx.wood}`, k, x, y, z, ry: Math.atan2(DC[f], DR[f]), f, tiles: tiles.map(([a, b]) => k * SNN + T(a, b)), house: h, hang: !!P.hang, rug: !!P.rug };
+  if (opts.cut != null) q.cut = opts.cut;
+  if (P.hang && !P.wall) for (const t of q.tiles) PROP_OVER.add(t);
+  if (!P.hang) for (const t of q.tiles) {
+    if (P.rug) PROP_RUG.add(t);
+    else { PROP_AT.set(t, q); if (!k) OB[t] = O.PROP; }
+  }
+  const dk = k * SNN + i0;
+  if (!PROP_DRAW.has(dk)) PROP_DRAW.set(dk, []);
+  PROP_DRAW.get(dk).push(q);
+  (h.props || (h.props = [])).push(q);
+  return q;
+}
+function propTake(q) {
+  for (const t of q.tiles) { if (q.hang) PROP_OVER.delete(t); if (q.rug) PROP_RUG.delete(t); else if (!q.hang) { PROP_AT.delete(t); if (t < SNN) OB[t] = 0; } }
+  const dk = q.tiles[0], list = PROP_DRAW.get(dk);
+  if (list) { list.splice(list.indexOf(q), 1); if (!list.length) PROP_DRAW.delete(dk); }
+  q.house.props.splice(q.house.props.indexOf(q), 1);
+}
+// every way the prop could go on story k, best first: wall props against a wall (tall ones never over a window), far
+// from the way in; the rest toward the room's middle; rugs on open floor
+function propCands(h, k, id, ctx) {
+  const P = PROPS[id], R = propRooms(h), tiles = k ? (R.up ? R.up.tiles : []) : h.tiles, out = [];
+  if (!tiles.length) return out;
+  const start = k ? R.up.land : R.ins, sc = start % N, sr = Math.floor(start / N);
+  let mx = 0, mz = 0; for (const [c, r] of tiles) { mx += c + 0.5; mz += r + 0.5; } mx /= tiles.length; mz /= tiles.length;
+  const tall = propTall(id);
+  for (const [c, r] of tiles) for (let f = 0; f < 4; f++) {
+    const foot = propFoot(h, k, P, c, r, f, P.rug);
+    if (!foot) continue;
+    let wallV = 0;
+    if (P.wall) {
+      const back = (f + 2) & 3;
+      let ok = true;
+      for (let a = 0; a < P.tiles[0] && ok; a++) {
+        const [tc, tr] = foot[a], v = upWallOn(tc, tr, back, k);
+        if (!v || isDoorVal(v) || isFenceVal(v) || (tall && isWindowVal(v))) ok = false;
+        else wallV = Math.max(wallV, v === 13 ? 1 : v === 14 ? 4 : v);
+      }
+      if (!ok) continue;
+    }
+    let cx = 0, cz = 0; for (const [a, b] of foot) { cx += a + 0.5; cz += b + 0.5; } cx /= foot.length; cz /= foot.length;
+    const score = P.wall ? Math.hypot(cx - sc - 0.5, cz - sr - 0.5) : -Math.hypot(cx - mx, cz - mz);
+    out.push({ foot, f, wallV, score: score + hs(c, r, 610 + f + propHash(id) + ctx.n * 13) * 0.8 });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+// try the candidates in turn till one leaves the house walkable
+function propTryList(h, k, id, cands, ctx, opts) {
+  const P = PROPS[id];
+  for (const cd of cands.slice(0, 40)) {
+    const q = propPut(h, k, id, cd.foot, cd.f, cd.wallV, ctx, opts);
+    if (P.rug || P.hang || propReach(h, k)) return q;
+    propTake(q);
+  }
+  return null;
+}
+// the seats round a table: on the tiles before and behind its long side (a bench the table's width), facing it
+function propSeats(h, k, tq, kind, n, ctx) {
+  const T0 = PROPS[tq.id], [w] = T0.tiles, f = tq.f, g = (f + 3) & 3, [c0, r0] = [tq.tiles[0] % SNN % N, Math.floor(tq.tiles[0] % SNN / N)];
+  const id = kind === 'bench' ? 'bench' : kind === 'stool' ? 'stool' : 'chair', want = n || (kind === 'bench' ? 2 : w * 2);
+  const spots = [];
+  if (id === 'bench') {
+    // (a bench to a table at least as wide; two on a feast table)
+    for (const s of [1, -1]) for (let a = 0; a + 2 <= Math.max(2, w); a += 2) spots.push({ c: c0 + DC[g] * a + DC[f] * s, r: r0 + DR[g] * a + DR[f] * s, f });
+  } else if (id === 'stool' && w === 1) {
+    for (const d of [f, (f + 2) & 3, g, (g + 2) & 3]) spots.push({ c: c0 + DC[d], r: r0 + DR[d], f: (d + 2) & 3 });
+  } else {
+    for (const s of [1, -1]) for (let a = 0; a < w; a++) spots.push({ c: c0 + DC[g] * a + DC[f] * s, r: r0 + DR[g] * a + DR[f] * s, f: s > 0 ? (f + 2) & 3 : f });
+  }
+  let got = 0;
+  for (const sp of spots) {
+    if (got >= want) break;
+    const foot = propFoot(h, k, PROPS[id], sp.c, sp.r, sp.f, false);
+    if (foot && propTryList(h, k, id, [{ foot, f: sp.f, wallV: 0 }], ctx)) got++;
+  }
+}
+// a wall hanging: on a plain stretch of wall inside (as wide as it is), not behind anything tall or a bed's head
+function propHang(h, k, id, ctx) {
+  const P = PROPS[id], R = propRooms(h), tiles = k ? (R.up ? R.up.tiles : []) : h.tiles, w = P.tiles[0], out = [];
+  const used = ctx.hung || (ctx.hung = new Set());
+  const behind = (i, s) => {
+    const q = PROP_AT.get(k * SNN + i);
+    if (q && PROPS[q.id].wall && ((q.f + 2) & 3) === s) return true;
+    const b = BEDS.get(k * SNN + i);
+    return !!b && b.i === i && ((b.d + 2) & 3) === s;
+  };
+  const set = new Set(tiles.map(([c, r]) => T(c, r)));
+  for (const [c, r] of tiles) for (let s = 0; s < 4; s++) {
+    const f = (s + 2) & 3, g = (f + 3) & 3, foot = [];
+    let ok = true, v0 = 0;
+    for (let a = 0; a < w && ok; a++) {
+      const tc = c + DC[g] * a, tr = r + DR[g] * a, i = T(tc, tr), v = upWallOn(tc, tr, s, k), [ec, er, ew] = edgeOf(tc, tr, s);
+      if (!set.has(i) || !PROP_PLAIN_WALL(v) || behind(i, s) || used.has(dKey(ec, er, ew, k))) ok = false;
+      else { foot.push([tc, tr]); v0 = Math.max(v0, v); }
+    }
+    if (!ok) continue;
+    out.push({ foot, f, wallV: v0, score: hs(c, r, 640 + s + propHash(id)) });
+  }
+  out.sort((a, b) => b.score - a.score);
+  const cd = out[0];
+  if (!cd) return null;
+  const [ec, er, ew] = edgeOf(cd.foot[0][0], cd.foot[0][1], (cd.f + 2) & 3);
+  for (const [tc, tr] of cd.foot) { const [a, b, e] = edgeOf(tc, tr, (cd.f + 2) & 3); used.add(dKey(a, b, e, k)); }
+  return propPut(h, k, id, cd.foot, cd.f, cd.wallV, ctx, { cut: dKey(ec, er, ew, k) + 1 });
+}
+// furnish a building from its kit: ctx { wood, n (a number for its hashes) }
+function furnish(h, kit, ctx) {
+  if (!kit) return;
+  for (const it of kit) {
+    const k = it.up && propRooms(h).up ? 1 : 0;
+    for (let m = 0; m < (it.n && !it.seats ? it.n : 1); m++) {
+      if (it.hang) { propHang(h, k, it.hang, ctx); continue; }
+      if (it.at === 'bed') {
+        for (const b of h.beds || []) {
+          const bk = b.k || 0, c = (b.j % N) + DC[b.d], r = Math.floor(b.j / N) + DR[b.d];
+          const foot = propFoot(h, bk, PROPS[it.id], c, r, b.d, false);
+          if (foot) propTryList(h, bk, it.id, [{ foot, f: b.d, wallV: 0 }], ctx);
+        }
+        continue;
+      }
+      const q = propTryList(h, k, it.id, propCands(h, k, it.id, ctx), ctx);
+      if (q && it.seats) propSeats(h, k, q, it.seats, it.n, ctx);
+    }
+  }
+}
+// a town's buildings, once their beds are in
+function townProps(t, n) {
+  const wood = PROP_WOOD[t.tier] || 'pine';
+  t.houses.forEach((h, j) => {
+    if (h.cathedral) return;
+    const kind = h.role || (h.clergy ? 'clergy' : h.trade ? 'trade' : 'home');
+    const kit = PROP_KITS[kind] && PROP_KITS[kind][t.tier];
+    furnish(h, kit || PROP_KITS.home[t.tier], { wood, n: n * 31 + j });
+  });
+}
+// a farmhouse or a cabin: one room, no beds of the town's
+function furnishLone(tiles, inside, kind, wood, n) {
+  const h = { tiles, inside, clear: new Set(), beds: [], up: null };
+  furnish(h, PROP_KITS[kind], { wood, n });
+  return h;
+}
+// draw a prop (its shapes made once a look and wood), turned and set in place, into the buffer being built; its
+// flames into the glow buffer if glowOk, else with the rest
+const PROP_GEOS = new Map();
+function drawProp(q, glowOk) {
+  let g = PROP_GEOS.get(q.key);
+  if (!g) { g = buildProp(q.id, q.look, q.wood); PROP_GEOS.set(q.key, g); }
+  const n0 = OUT.n;
+  if (g.solid) propEmit(g.solid, q, OUT);
+  if (g.glow) propEmit(g.glow, q, glowOk ? GLOW : OUT);
+  if (q.cut != null) cutTag(OUT, n0, q.cut, 1);
+}
+function propEmit(geo, q, B) {
+  const a = geo.attributes.position.array, col = geo.attributes.color.array, m = a.length, cs = Math.cos(q.ry), sn = Math.sin(q.ry);
+  B.need(m);
+  const p = B.p, cl = B.c, v0 = B.n / 3;
+  let n = B.n;
+  for (let i = 0; i < m; i += 3) {
+    const x = a[i], y = a[i + 1], z = a[i + 2];
+    p[n] = q.x + cs * x + sn * z; p[n + 1] = q.y + y; p[n + 2] = q.z - sn * x + cs * z;
+    cl[n] = col[i]; cl[n + 1] = col[i + 1]; cl[n + 2] = col[i + 2]; n += 3;
+  }
+  if (B.dl) for (let v = v0; v < n / 3; v++) { B.dl.fill(0, v * 4, v * 4 + 4); B.dh.fill(0, v * 3, v * 3 + 3); B.dq[v * 4] = B.dq[v * 4 + 1] = B.dq[v * 4 + 2] = 0; B.dq[v * 4 + 3] = 1; }
+  B.n = n;
+}
 // Houses of the medium and large towns (v407), from the same tileset as the player's: each fronts a street (or
 // the plaza) with its door on it, a tile of yard round it clear of the next. Styles: stone (stone walls, stone
 // windows, flagstones), timber (timber walls and windows, planks), and two stories (wooden stairs inside up to a
@@ -3194,7 +3501,13 @@ function raiseTownHouses(t, n) {
     }
     if (!fit) continue;
     const { w, dep, o0, a1 } = fit, roll = hs(c0, r0, 330 + d);
-    let style = TOWN_STYLE[t.tier].find(([, v]) => roll < v)[0], two = style.endsWith('2');
+    let style = TOWN_STYLE[t.tier].find(([, v]) => roll < v)[0];
+    // (2026-11-02, Jordan) the town's own buildings, in the order the houses go up: a tavern (two stories, rooms
+    // over it) in a medium or large town, a bank and a guard house in a large one, both of stone
+    const role = PROP_ROLES[t.tier]?.[t.houses.length] || null;
+    if (role === 'tavern') style = 'timber2';
+    else if (role) style = style.endsWith('2') ? 'stone2' : 'stone1';
+    let two = style.endsWith('2');
     const stone = style.startsWith('stone');
     let plan = townPlan(w, dep, o0, two, c0 * 7 + r0 * 13 + d);
     if (!plan) { two = false; style = style.replace('2', '1'); plan = townPlan(w, dep, o0, false, c0 * 7 + r0 * 13 + d); }
@@ -3264,7 +3577,7 @@ function raiseTownHouses(t, n) {
         up.doors.push([ec, er, ew]);
       }
     }
-    t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up });
+    t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up, role });
   }
   if (cath) t.houses.push(cath);   // (last, so the tannery and smithy stay the first two houses; a medium town's chapel likewise)
   townLamps(t, own);
@@ -4013,6 +4326,7 @@ function placeFarms() {
           if (door) f.door = [ec, er, ew];
         }
       }
+      f.room = furnishLone(house, [dc, dr], 'farm', 'oak', 900 + k);   // (2026-11-02: its furniture)
       for (const i of yard) {
         const c = i % N, r = (i - c) / N;
         for (let d = 0; d < 4; d++) {
@@ -4366,6 +4680,7 @@ function placeCabins() {
         piece(ec, er);
         if (door) m.door = [ec, er, ew];
       }
+      m.room = furnishLone(m.house, tileAt(m.doorA, 1), 'cabin', 'pine', 950 + k);   // (2026-11-02: its furniture)
       // the porch rail: along its front and ends, open in front of the door for the steps
       for (const [c, r] of m.porch) for (let dd = 0; dd < 4; dd++) {
         const n = T(c + DC[dd], r + DR[dd]);
@@ -5286,7 +5601,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60, WORKPROP: 61, BED: 62, BEDX: 63,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60, WORKPROP: 61, BED: 62, BEDX: 63, PROP: 64,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -5354,6 +5669,7 @@ def(O.ALCHEMY, { built: true, name: 'alchemy table', tile: true });
 def(O.WORKPROP, { built: true, name: 'workbench', tile: true });   // (v452: a town workshop's, for show)
 def(O.BED, { built: true, name: 'bed', tile: true });
 def(O.BEDX, { built: true, name: 'bed', tile: true });
+def(O.PROP, { built: true, name: 'furniture', tile: true });   // (a town prop's tile: see Town props)
 // the stations you build to refine raw materials (see Stations), what each takes in and what it makes of it
 const STATION_KIND = {
   sawtable: { o: O.SAWTABLE, name: 'SAW TABLE', refine: { wood: 'planks' } },
@@ -10706,23 +11022,11 @@ const partShrink = new GFX.Matrix4();
 // turned down in a band and its sides hanging over the frame
 const bedFloorY = b => b.k ? storyY(b.k, b.i) + 0.06 : surfaceY(b.c + 0.5 + DC[b.d] * 0.5, b.r + 0.5 + DR[b.d] * 0.5);
 function townBed(b) {
-  const ry = Math.atan2(DC[b.d], DR[b.d]), mx = b.c + 0.5 + DC[b.d] * 0.5, mz = b.r + 0.5 + DR[b.d] * 0.5, y = bedFloorY(b);
-  const at = stationAt(mx, mz, ry), wood = '#6a4a30', dark = '#43301f', sheet = '#e8e2d2', pillow = '#f4f0e6';
-  const W = 0.86, L = 1.9, legH = 0.16, frameY = y + legH;
-  for (const sa of [-1, 1]) for (const sb of [-1, 1]) { const [px, pz] = at(sa * (W / 2 - 0.05), sb * (L / 2 - 0.05)); part(G.box, dark, px, y + legH / 2, pz, { sx: 0.08, sy: legH, sz: 0.08, ry }); }
-  part(G.box, wood, mx, frameY + 0.06, mz, { sx: W, sy: 0.12, sz: L, ry });
-  // headboard (at the head: -b along the bed) and footboard
-  { const [px, pz] = at(0, -L / 2 + 0.04); part(G.box, wood, px, y + 0.47, pz, { sx: W + 0.04, sy: 0.94, sz: 0.08, ry }); }
-  { const [px, pz] = at(0, -L / 2 + 0.04); part(G.box, dark, px, y + 0.96, pz, { sx: W + 0.1, sy: 0.06, sz: 0.12, ry }); }
-  { const [px, pz] = at(0, L / 2 - 0.04); part(G.box, wood, px, y + 0.34, pz, { sx: W + 0.04, sy: 0.4, sz: 0.08, ry }); }
-  const top = frameY + 0.12;
-  part(G.box, sheet, mx, top + 0.07, mz, { sx: W - 0.06, sy: 0.14, sz: L - 0.14, ry });
-  { const [px, pz] = at(0, -L / 2 + 0.3); part(G.box, pillow, px, top + 0.18, pz, { sx: W - 0.24, sy: 0.1, sz: 0.3, ry }); }
-  // the blanket: over the foot two thirds, a lighter band where it's turned down, the sides hanging
-  const blanket = CC(b.color), bl = L * 0.64, bc = L / 2 - 0.07 - bl / 2;
-  { const [px, pz] = at(0, bc); part(G.box, blanket, px, top + 0.155, pz, { sx: W + 0.02, sy: 0.03, sz: bl, ry }); }
-  for (const sa of [-1, 1]) { const [px, pz] = at(sa * (W / 2 + 0.005), bc); part(G.box, shade(blanket, 0.85), px, top + 0.04, pz, { sx: 0.025, sy: 0.24, sz: bl, ry }); }
-  { const [px, pz] = at(0, bc - bl / 2 + 0.07); part(G.box, shade(blanket, 1.25), px, top + 0.175, pz, { sx: W + 0.03, sy: 0.03, sz: 0.14, ry }); }
+  // (2026-11-02: the props' bed, as tweaked in the model generator, in the town's wood; a guard house's are bunks)
+  const ry = Math.atan2(DC[b.d], DR[b.d]), x = b.c + 0.5 + DC[b.d] * 0.5, z = b.r + 0.5 + DR[b.d] * 0.5, wood = b.wood || 'oak';
+  const id = b.bunk ? 'bunk' : 'bed', high = BLANKETS[(BLANKETS.indexOf(b.color) + 5) % BLANKETS.length];
+  const look = b.bunk ? { low: [b.color, ''], high: [high, ''] } : { blanket: [b.color, ''] };
+  drawProp({ id, look, wood, key: `${id}:${b.color}:${wood}`, x, y: bedFloorY(b), z, ry }, !b.k);
 }
 function stationParts(draw, x, z, c, r) {
   const y = surfaceY(x, z), s = STATION_LOOK.size;
@@ -11063,6 +11367,7 @@ function drawObject(o, c, r) {
     }
     case O.BED: return BEDS.has(T(c, r)) && townBed(BEDS.get(T(c, r)));
     case O.BEDX: return;
+    case O.PROP: return;   // (drawn from PROP_DRAW: objRows, buildPieces)
     case O.CRATE: return storeBody(c, r, () => crate(c, r));
     case O.CHEST: return storeBody(c, r, () => ironChest(x + 0.5, z + 0.5, c, r));
     case O.HOUSE: {
@@ -11256,6 +11561,8 @@ function objRows(cx, cz, ra, rb) {
   for (let r = r0 + ra; r < r0 + rb; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r), o = OB[i];
     if (o && !detached.has(i)) drawObject(o, c, r);
+    const pd = PROP_DRAW.get(i);   // (a town prop's floor pieces and rugs; wall hangings go with the building pieces)
+    if (pd) for (const q of pd) if (!q.hang) drawProp(q, true);
     if (BR[i]) (DOCK[i] ? dockDeck : bridgeDeck)(c, r, i);
     else if (RIM[i] & 255) cliffRocks(c, r, i);
     if (FIELD[i]) furrows(c, r, i);
@@ -12115,6 +12422,8 @@ function buildPieces(cx, cz, ch, only = null) {
     if (ca) cathExtras(ca);
     const st = stairs.get(i);
     if (st) drawStair(st);
+    const pd = PROP_DRAW.get(i);   // (the ground floor's wall hangings, lowered with their wall by the cutaway)
+    if (pd) for (const q of pd) if (q.hang) drawProp(q, false);
   }
   ch.build = bufBuild.mesh(buildMat);
   ch.buildGI = ch.build ? giGeo(bufBuild, giCuts, bufGIProxy) : null;
@@ -12141,6 +12450,8 @@ function buildPieces(cx, cz, ch, only = null) {
         if (k === 1) { const ca = cathAt.get(i); if (ca && !ca.chapel) cathUpper(ca); }
         const bd = BEDS.get(k * SNN + i);   // (v454: a town bed upstairs, drawn at its head)
         if (bd && bd.i === i) townBed(bd);
+        const pd = PROP_DRAW.get(k * SNN + i);   // (its props, hidden with it)
+        if (pd) for (const q of pd) drawProp(q, false);
       }
     } finally { PDY = 0; PCUT = 0; }
     ch['up' + k] = bufBuild.mesh(buildMat);
@@ -13511,7 +13822,7 @@ function enterOpen(c, r, d, k, b) {
   const below = k ? stairAt.get((k - 1) * SNN + b) : null;
   if (below) return b === below.t1 && d === ((below.d + 2) & 3) && wallOpen(c, r, d, k);
   if (!k) return groundStep(c, r, d, false);
-  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && wallOpen(c, r, d, k);
+  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && !PROP_AT.has(k * SNN + b) && wallOpen(c, r, d, k);
 }
 function heroStep(c, r, d) {
   const nc = c + DC[d], nr = r + DR[d];
@@ -20137,7 +20448,7 @@ function folkRoute(t, a, b) {
 // a balcony, not a bed)
 function folkOpenK(t, k, i) {
   if (!k) return folkOpen(t, i);
-  return TN[i] === t.n + 1 && UP[k].FL.has(i) && !BALCONY.has(i) && !BEDS.has(k * SNN + i) && !stairAt.has(k * SNN + i);
+  return TN[i] === t.n + 1 && UP[k].FL.has(i) && !BALCONY.has(i) && !BEDS.has(k * SNN + i) && !PROP_AT.has(k * SNN + i) && !stairAt.has(k * SNN + i);
 }
 // how high someone stands: on a stair, up its flight; on an upper story, its floor; else the ground
 function folkY(p) {
@@ -24284,6 +24595,14 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
+  // (tests) the town props: per house its role, props down and whether it's still walkable (door to the stair's
+  // foot and every free tile; landing to every upstairs door), and the farms' and cabins' rooms
+  props: () => {
+    const walk = h => { const R = propRooms(h); return { down: propReach(h, 0), up: R.up ? propReach(h, 1) : null }; };
+    const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), beds: (h.beds || []).length, work: h.work != null, ...walk(h) });
+    return { towns: towns.map(t => ({ tier: t.tier, houses: t.houses.filter(h => !h.cathedral).map(one) })),
+      farms: farms.map(f => f.room ? one(f.room) : null), cabins: cabins.map(m => m.room ? one(m.room) : null), total: [...PROP_DRAW.values()].reduce((s, l) => s + l.length, 0) };
+  },
   // (tests) townsfolk: towns awake, people, places and routes; folkTown(n) wakes town n's people at once
   folk: () => ({ ...FOLK_READ, batches: folkBatches.map(b => ({ people: b.people.length, verts: b.mesh.geometry.attributes.position.count, bones: b.people.reduce((s, p) => s + p.bones.length, 0) })),
     awake: [...folkTowns].map(t => ({ name: t.name, tier: t.tier, people: t.folk.length, places: t.places.length, routes: t.routes ? t.routes.size : 0, built: t.building, jobs: t.folk.map(p => p.d.job) })) }),
