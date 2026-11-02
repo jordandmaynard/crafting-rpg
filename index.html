@@ -5781,7 +5781,7 @@ const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 
   poolAway: 0.17, poolReach: 0.5,
   arrowWake: 0.22, arrowClear: 2.5, arrowPush: 2, arrowDrag: 6, landRadius: 0.35, landClear: 3, landPush: 5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400',
-  lake: 0.44, lakeColor: '#ababab'};   // (v499, Jordan: mist over lakes and ponds, not seas or rivers; the graveyards' for now)
+  lake: 0.44, lakeColor: '#ababab'};   // (v499, Jordan: mist over lakes and ponds, and v501 bays, inlets, straits and shallows; not seas, oceans or rivers; the graveyards' for now)
 const hazeStirs = [];   // arrows passing through it this frame (stirHaze)
 // on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T),
 // and no black point, which is there to take back the lit haze's washout
@@ -5817,7 +5817,7 @@ function poolNear(c, r, lava) {
 // (a swamp pool's too, over its sunken bed)
 function ghGround(x, z) {
   const ti = T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1));
-  if (!LV[ti]) return WT[ti] >= 2 ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;
+  if (!LV[ti]) return WT[ti] >= 2 || WL[ti] ? WL[ti] * STEP - (LAVA[ti] ? LAVA_DROP : 0.1) : GL[ti] * STEP;   // (v501: the open sea's surface too)
   if (WT[ti] === 1) return Math.max(surfH(x, z), LV[ti] * STEP - BOG_SURF);
   return surfH(x, z);
 }
@@ -5838,9 +5838,9 @@ function* groundHazeSiteJob(cx, cz) {
     let s = Math.max(0, share(b)), cb = b;
     // in swamps and the Wastes, thickest by the water and over lava, thinning away from them
     if (s > 0 && (b === SWAMP || b === WASTES)) s *= poolNear(tc, tr, b === WASTES);
-    // none over rivers or the sea (lava and swamp pools keep their haze), nor inside a closed-in building; lakes and
-    // ponds have their own mist (v499)
-    const wi = T(tc, tr), lake = WT[wi] === 2 && !LAVA[wi] && !SEA[wi] && !LV[wi];
+    // none over rivers or the open sea (lava and swamp pools keep their haze), nor inside a closed-in building; lakes,
+    // ponds, bays, inlets, straits and shallows have their own mist (v499, v501: MIST)
+    const wi = T(tc, tr), lake = MIST[wi] === 1;
     if (lake) { s = Math.max(0, G.lake); cb = 'lake'; land[c + r * W] = 1; }
     else if ((WT[wi] >= 2 && !LAVA[wi]) || roomOf.has(wi)) s = 0; else land[c + r * W] = 1;
     if (s > 0) { m[k] = s; m[k + 1] = col[cb][0] * s; m[k + 2] = col[cb][1] * s; m[k + 3] = col[cb][2] * s; }
@@ -13499,30 +13499,23 @@ const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 
   helmP: 0.45, helmFront: -3.42, helmV: -3.47, rampV: -2.6, rampU: 0.42, wheelY: 0.85, wheelR: 0.26, wheelTurn: 0.9, wheelRate: 2.2, grip: 0.6,
   masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }], style: 1 };
 const boats = [];
-// (v499, Jordan) Seas and oceans (still water in bodies of SEA_AT tiles or more) swell up to SEA_SWELL.height (a half
-// tile, crest to trough) away from their coasts, easing down to the water's usual swell within `reach` tiles of any
-// land; the boats ride them. Two long waves crossing (tiles per wave: 13 and 8.5, times length), in the water's
-// shader and here (seaSwell) alike. OPEN: each tile's 0..1 (smooth over reach); SEA: still water that's sea.
+// (v499, Jordan) Seas and oceans swell up to SEA_SWELL.height (a half tile, crest to trough) away from their edges,
+// easing down to the water's usual swell within `reach` tiles of land or of the calmer named water (bays, inlets,
+// straits, shallows, lakes: v501); the boats ride them. Two long waves crossing (tiles per wave: 13 and 8.5, times
+// length), in the water's shader and here (seaSwell) alike. By each tile's feature (nameFeatures / nameSeas):
+// SEA: water named a sea or an ocean (inland seas too); MIST: lakes and ponds, and the bays, inlets, straits and
+// shallows of the open sea, which take the lake mist (GROUND_HAZE.lake); OPEN: each sea tile's 0..1, smooth over reach.
 const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 1 };
-const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N);
+const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N), MIST = new Uint8Array(N * N);
+const MIST_KINDS = new Set(['lake', 'bay', 'inlet', 'strait', 'shallows']);
 function computeOpenSea() {
-  const NN = N * N, q = new Int32Array(NN), seen = new Uint8Array(NN), d = new Uint16Array(NN).fill(65535);
-  SEA.fill(0); OPEN.fill(0);
-  // (v500: the open sea round the landmasses is LANDID 0 water with no WT, as nameSeas has it: oceans, seas, bays,
-  // inlets, straits and shallows, all of it; and still water inland in bodies of SEA_AT tiles or more)
-  for (let i = 0; i < NN; i++) if (!LANDID[i] && !LV[i] && !WT[i] && WL[i] && !LAVA[i]) { SEA[i] = 1; seen[i] = 1; }
-  const still = i => WT[i] === 2 && !LAVA[i] && (!LV[i] || BR[i]);
-  for (let s = 0; s < NN; s++) {
-    if (!still(s) || seen[s]) continue;
-    let n = 1; q[0] = s; seen[s] = 1;
-    for (let h = 0; h < n; h++) {
-      const i = q[h], c = i % N, r = (i - c) / N;
-      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-        const cc = c + dc, rr = r + dr, j = rr * N + cc;
-        if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && still(j) && !seen[j]) { seen[j] = 1; q[n++] = j; }
-      }
-    }
-    if (n >= SEA_AT) for (let h = 0; h < n; h++) SEA[q[h]] = 1;
+  const NN = N * N, q = new Int32Array(NN), d = new Uint16Array(NN).fill(65535);
+  SEA.fill(0); OPEN.fill(0); MIST.fill(0);
+  for (let i = 0; i < NN; i++) {
+    if (!WL[i] || LV[i] || LAVA[i] || !(WT[i] === 2 || (!WT[i] && !LANDID[i]))) continue;
+    const k = FEAT[i] >= 0 ? features[FEAT[i]].kind : WT[i] === 2 ? 'lake' : null;
+    if (k === 'sea' || k === 'ocean') SEA[i] = 1;
+    else if (MIST_KINDS.has(k)) MIST[i] = 1;
   }
   // how far each sea tile is from anything that isn't sea (land, a lake, a river, a dock), step by step outward
   let n = 0;
@@ -14065,9 +14058,11 @@ function boatTilt(b) {
   const L = 3.2, W = 1.1, K = SEA_SWELL.pitch;
   const at = (u, v) => { const [x, z] = boatWorld(b, u, v); return waterSwell(x, z); };
   const fwd = at(0, L), aft = at(0, -L), port = at(W, 0), stbd = at(-W, 0);
-  b.swell = (fwd + aft + port + stbd) / 4;
-  b.pitch = -Math.atan2(fwd - aft, 2 * L) * K;
-  b.rollW = Math.atan2(port - stbd, 2 * W) * K;
+  // (v501, Jordan) held still while its gangplank's out (as it goes out and in, eased by how far it is)
+  const ride = 1 - clamp(b.plank, 0, 1);
+  b.swell = (fwd + aft + port + stbd) / 4 * ride;
+  b.pitch = -Math.atan2(fwd - aft, 2 * L) * K * ride;
+  b.rollW = Math.atan2(port - stbd, 2 * W) * K * ride;
 }
 // a point (u, v) of the deck's height over boatDeckY, tilted as the boat is
 const boatTiltY = (b, u, v) => u * Math.sin(b.rollW || 0) - v * Math.sin(b.pitch || 0);
@@ -23126,8 +23121,8 @@ const TUNING = [
     [GROUND_HAZE, 'graveColor', 'Graveyards: colour', 'color'],
     [GROUND_HAZE, 'wastes', 'Blasted Wastes: how much', 0, 2, 0.01],
     [GROUND_HAZE, 'wastesColor', 'Blasted Wastes: colour', 'color'],
-    [GROUND_HAZE, 'lake', 'Lakes and ponds: how much', 0, 2, 0.01],
-    [GROUND_HAZE, 'lakeColor', 'Lakes and ponds: colour', 'color'],
+    [GROUND_HAZE, 'lake', 'Lakes, ponds, bays, inlets, straits, shallows: mist', 0, 2, 0.01],
+    [GROUND_HAZE, 'lakeColor', 'Lakes, ponds, bays, inlets, straits, shallows: mist colour', 'color'],
     [GROUND_HAZE, 'poolAway', 'Swamps and Wastes: share left away from water and lava', 0, 1, 0.01],
     [GROUND_HAZE, 'poolReach', 'Swamps and Wastes: thins over this many tiles off them', 0.5, 12, 0.5],
     [GROUND_HAZE, 'amount', 'Amount everywhere', 0, 3, 0.01],
@@ -24158,7 +24153,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 500, crashSeen = new Map();
+const GAME_VERSION = 501, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
