@@ -25,9 +25,10 @@ const JACOBI = 20;        // pressure solver iterations (pairs of passes)
 const MAX_STIRS = 32;     // arrows and such passing through the haze in one frame
 const MAX_DT = 1 / 30;    // the sim never steps further than this in one frame
 const CELL_BYTES = 32;    // two vec4f
-export const GROUND_HAZE_SITE = 128;   // site map texels across (64 tiles)
+export const GROUND_HAZE_SITE = 208;   // site map texels across (104 tiles; v502, was 64: drawn out further for the boats' wider view)
 export const GROUND_HAZE_SITE_TPT = 2; // site map texels a tile
-const DRAW_TILES = 56;    // tiles across the drawn slices
+const DRAW_TILES = 96;    // tiles across the drawn slices (v502, was 56), fading out over the last EDGE_FADE of them
+const EDGE_FADE = 8;
 const DRAW_VPT = 4;       // their vertices a tile (fine enough to follow the site map's bends closely)
 
 const NOISE = /* wgsl */ `
@@ -356,6 +357,10 @@ fn stateHaze(uv: vec2f) -> f32 {
     if (d < 0.0) { through = (f32(k - 1) + was / max(was - d, 1e-5)) / 16.0; break; }
     was = d;
   }
+  // (v502) fading out toward the drawn slices' edge, so it never stops at a hard line
+  let fromMid = abs(wp - vec2f(O.model[3].x, O.model[3].z));
+  let rim = smoothstep(0.0, ${EDGE_FADE}.0, ${DRAW_TILES / 2}.0 - max(fromMid.x, fromMid.y));
+  if (rim <= 0.0) { discard; }
   // inside the grid the sim, easing near its edge into the resting haze that lies beyond
   let uv = (wp * CPM - U.grid.xy) / U.grid.zw;
   let edge = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * U.grid.z / CPM;
@@ -365,6 +370,7 @@ fn stateHaze(uv: vec2f) -> f32 {
   if (inside > 0.0) {
     haze = mix(haze, stateHaze(uv), inside);
   }
+  haze *= rim;
   let H = max(U.look.x, 0.02);
   // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
   let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * U.look.y;

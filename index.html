@@ -5914,7 +5914,7 @@ function updateGroundHaze(dt) {
   if (on) {
     // anew when the camera's moved three tiles on, every couple of seconds (trees felled, things built), or retuned
     const cx = Math.round(camTarget.x), cz = Math.round(camTarget.z), now = performance.now();
-    const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor, G.poolAway, G.poolReach].join();
+    const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor, G.lake, G.lakeColor, G.poolAway, G.poolReach].join();
     if (!ghJob && (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || now - ghAt > 2000 || key !== ghKey)) {
       const first = !ghCentre;
       ghCentre = [cx, cz]; ghAt = now; ghKey = key;
@@ -13505,7 +13505,7 @@ const boats = [];
 // length), in the water's shader and here (seaSwell) alike. By each tile's feature (nameFeatures / nameSeas):
 // SEA: water named a sea or an ocean (inland seas too); MIST: lakes and ponds, and the bays, inlets, straits and
 // shallows of the open sea, which take the lake mist (GROUND_HAZE.lake); OPEN: each sea tile's 0..1, smooth over reach.
-const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 1 };
+const SEA_SWELL = { height: 0.5, reach: 6, length: 1, pitch: 0.75 };
 const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N), MIST = new Uint8Array(N * N);
 const MIST_KINDS = new Set(['lake', 'bay', 'inlet', 'strait', 'shallows']);
 function computeOpenSea() {
@@ -13555,7 +13555,11 @@ const boatYards = m => [[m.h * 0.5, m.w, m.h * 0.5 - 2.1], [m.h * 0.82, m.w * 0.
 const boatMat = flatMat({ vertexColors: true, side: GFX.DoubleSide });
 // (v499) the brig's stern lanterns, lit while you're at its wheel: the glass glows (BOAT_LAMP.color, eased in and out
 // over fade seconds) and one warm light hangs between them (strength, range, falloff). T > Boats.
-const BOAT_LAMP = { color: '#ffc46a', light: 1.4, range: 6, decay: 2, fade: 0.5 };
+const BOAT_LAMP = { color: '#ffc46a', light: 2.3, range: 4, decay: 2, fade: 0.5 };
+// (v502, Jordan) the boats' wake through the ground haze: the hull, stern to bow, clears it (radius tiles, clear a
+// frame), pushes it out to the sides (push) and drags it along as it goes (drag × speed), so a boat under way leaves
+// a broad trail behind it. T > Boats.
+const BOAT_WAKE = { radius: 1.0, clear: 1.6, push: 2.5, drag: 0.6 };
 const boatGlowMat = new GFX.MeshBasicMaterial({ color: '#3a2a18' });
 const boatLight = addLight(new GFX.PointLight(BOAT_LAMP.color, 0, BOAT_LAMP.range, BOAT_LAMP.decay));
 boatLight.layers.enableAll(); boatLight.visible = false;
@@ -14162,6 +14166,11 @@ function updateBoats(dt) {
       else { if (b.speed > 1.5) sfx.thunk(); b.speed = 0; }
     }
     if (H.boat === b || Math.hypot(b.x - H.x, b.z - H.z) < BOAT.see) boatTilt(b);
+    // (v502) its wake through the ground haze, along the hull below the waterline's width
+    if (hazeStirs.length < 32 && Math.hypot(b.x - camTarget.x, b.z - camTarget.z) < 36) {
+      const [sx, sz] = boatWorld(b, 0, BOAT.stern + 0.6), [fx, fz] = boatWorld(b, 0, BOAT.bow - 0.8), W = BOAT_WAKE;
+      hazeStirs.push([sx, sz, fx, fz, W.radius, W.clear, W.push, W.drag * b.speed]);
+    }
     // (v499) the lanterns lit while you're at this boat's wheel
     b.lamp = clamp((b.lamp || 0) + (mine ? dt : -dt) / Math.max(0.05, BOAT_LAMP.fade), 0, 1);
     if (b.glowM) b.glowM.visible = b.lamp > 0.01;
@@ -21156,10 +21165,14 @@ function update(dt) {
     regionT = 0.3;
     const i = T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1));
     const g = BI[i] === TOWN ? null : regions[REG[i]];
-    const name = BI[i] === TOWN ? towns[TN[i] - 1].name : g ? g.name : BIOMES[BI[i]].name;
+    // (v502, Jordan) out on the water (aboard, or over a sea, lake or river's tile), the water's own name
+    const wf = FEAT[i] >= 0 && (H.boat || (!LV[i] && WL[i])) ? features[FEAT[i]] : null, water = wf && wf.kind !== 'road' ? wf : null;
+    const name = water ? water.name : BI[i] === TOWN ? towns[TN[i] - 1].name : g ? g.name : BIOMES[BI[i]].name;
     if (name !== regionName) {
-      const glyph = BIOME_GLYPH[g ? g.biome : BI[i]] || '';
-      if (g && !g.found) { g.found = true; toast('Discovered ' + titleCase(name) + '!', 'good', true, 'compass', glyph); }
+      const glyph = water ? FEATURE_GLYPH[water.kind] || '' : BIOME_GLYPH[g ? g.biome : BI[i]] || '';
+      if (water && !water.found) { water.found = true; toast('Discovered ' + titleCase(name) + '!', 'good', true, 'compass', glyph); }
+      else if (water) toast('Entering ' + titleCase(name), 'calm', true, glyph ? '' : 'diamond', glyph);
+      else if (g && !g.found) { g.found = true; toast('Discovered ' + titleCase(name) + '!', 'good', true, 'compass', glyph); }
       else if (regionName) toast('Entering ' + titleCase(name), 'calm', true, glyph ? '' : 'diamond', glyph);
       regionName = name; setPlace(plateName(name));
     }
@@ -22959,6 +22972,10 @@ const TUNING = [
     [BOAT_LAMP, 'light', 'Brig lanterns at the wheel: light strength', 0, 6, 0.05],
     [BOAT_LAMP, 'range', 'Brig lanterns: light reach (tiles)', 1, 20, 0.5],
     [BOAT_LAMP, 'color', 'Brig lanterns: colour', 'color'],
+    [BOAT_WAKE, 'radius', 'Wake through the mist: width (tiles either side of the keel)', 0.2, 3, 0.05],
+    [BOAT_WAKE, 'clear', 'Wake: how hard it clears the mist', 0, 6, 0.05],
+    [BOAT_WAKE, 'push', 'Wake: how hard it pushes the mist aside', 0, 8, 0.1],
+    [BOAT_WAKE, 'drag', 'Wake: how much it drags the mist along (× speed)', 0, 2, 0.05],
   ]],
   ['Hero light', [
     [HERO_LIGHT, 'night', 'Strength at night', 0, 6, 0.05],
@@ -24153,7 +24170,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 501, crashSeen = new Map();
+const GAME_VERSION = 502, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
