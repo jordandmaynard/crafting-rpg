@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v520:** (Jordan's badge) The boarding toast wears the boat badge (ui/top3/crest-board-boat.webp, lossless from board-boat-badge-96.png, kept in art/deliveries).
+
 **v519:** (Jordan) The transom name is now painted in the map's book font (Spectral 600) with a round black stroke, as the map's names are: drawn on a canvas into a 512 x 140 texture (redrawn once the font loads) on a quad of its own over the band (NAME_PLATE, makeNameMat, discards where clear). Ink: the trim colour, or cream when the trim is too dark to read. One line or two, whichever lets the letters be biggest. The blocky lettering is gone.
 
 **v518:** (Jordan) A framed toast "Boarded <name>" when you come aboard a boat (compass badge until the boat badge arrives; BOAT_TOAST_ICON). The boat's name is lettered across the transom's painted band in its trim colour, in place of the diamond crest: a blocky 5 x 7 capital font (FONT5 in src/boats/brig.js), geometry like the emblems, one line or two split at a space, sized to fit (long names come out small).
