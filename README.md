@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v518:** (Jordan) A framed toast "Boarded <name>" when you come aboard a boat (compass badge until the boat badge arrives; BOAT_TOAST_ICON). The boat's name is lettered across the transom's painted band in its trim colour, in place of the diamond crest: a blocky 5 x 7 capital font (FONT5 in src/boats/brig.js), geometry like the emblems, one line or two split at a space, sized to fit (long names come out small).
+
 **v517:** (Jordan) All four sails a quarter bigger each way (BRIG_SHAPE.sailK 1.25; the lower sails' feet stay 2.1 over the deck, the masts stand taller, 8 and 8.8, to carry them). The anchor hangs on a real chain: interlocking iron links (an InstancedMesh of one link, every other turned a quarter) from the cathead block down to the ring, paid out as the anchor drops and hauled in as it rises (hangChain).
 
 **v516:** (Jordan's tuning) Water ripple size 1; reflections boost 20, steps 32, reach 47.5, thick 0.75, jitter 0, calm 0.72.

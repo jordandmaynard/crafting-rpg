@@ -331,6 +331,56 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   return { mat, U };
 }
 
+// ---------- lettering ----------
+// (v518) a blocky 5 x 7 capital font for boat names: each glyph seven rows of five, '#' inked
+const FONT5 = (() => {
+  const src = {
+    A: '.###.#...##...#######...##...##...#', B: '####.#...##...#####.#...##...#####.', C: '.###.#...##....#....#....#...#.###.',
+    D: '####.#...##...##...##...##...#####.', E: '######....#....####.#....#....#####', F: '######....#....####.#....#....#....',
+    G: '.###.#...##....#.####...##...#.####', H: '#...##...##...#######...##...##...#', I: '.###...#....#....#....#....#...###.',
+    J: '..###...#....#....#....#.#..#..##..', K: '#...##..#.#.#..##...#.#..#..#.#...#', L: '#....#....#....#....#....#....#####',
+    M: '#...###.###.#.##.#.##...##...##...#', N: '#...###..##.#.##..###...##...##...#', O: '.###.#...##...##...##...##...#.###.',
+    P: '####.#...##...#####.#....#....#....', Q: '.###.#...##...##...##.#.##..#..##.#', R: '####.#...##...#####.#.#..#..#.#...#',
+    S: '.#####....#.....###.....#....#####.', T: '#####..#....#....#....#....#....#..', U: '#...##...##...##...##...##...#.###.',
+    V: '#...##...##...##...##...#.#.#...#..', W: '#...##...##...##.#.##.#.##.#.#.#.#.', X: '#...##...#.#.#...#...#.#.#...##...#',
+    Y: '#...##...#.#.#...#....#....#....#..', Z: '#####....#...#...#...#...#....#####',
+    "'": '..#....#...#.......................', '-': '...............###.................', ' ': '.'.repeat(35),
+  };
+  return src;
+})();
+// the name's letters as rects on the transom (facing -z: read from behind the boat, so its lines run toward -x),
+// one line, or two balanced at a space when one would come out too small; within half widths `hw`, between y0 and y1
+export function nameRects(name, hw = 0.86, y0 = 0.08, y1 = 0.5) {
+  const text = name.toUpperCase().replace(/[^A-Z' -]/g, '');
+  const cols = t => t.length * 6 - 1;
+  const fit = lines => Math.min(2 * hw / Math.max(...lines.map(cols)), (y1 - y0) / (lines.length * 7 + (lines.length - 1) * 3), 0.05);
+  let lines = [text];
+  const sp = [...text].map((c, i) => c === ' ' ? i : -1).filter(i => i > 0);
+  if (sp.length && fit(lines) < 0.034) {
+    let best = null;
+    for (const i of sp) { const two = [text.slice(0, i), text.slice(i + 1)]; if (!best || fit(two) > fit(best)) best = two; }
+    if (fit(best) > fit(lines)) lines = best;
+  }
+  const k = fit(lines), H = lines.length * 7 + (lines.length - 1) * 3, top = (y0 + y1) / 2 + H * k / 2, out = [];
+  lines.forEach((t, li) => {
+    const x0 = cols(t) * k / 2;   // (the first letter at +x, which is the left as seen from astern)
+    [...t].forEach((ch, ci) => {
+      const g = FONT5[ch] || FONT5[' '];
+      for (let r = 0; r < 7; r++) for (let c = 0; c < 5;) {
+        if (g[r * 5 + c] !== '#') { c++; continue; }
+        let e = c; while (e < 5 && g[r * 5 + e] === '#') e++;
+        const xa = x0 - (ci * 6 + c) * k, xb = x0 - (ci * 6 + e) * k, ya = top - (li * 10 + r) * k, yb = ya - k;
+        out.push([xa, xb, yb, ya]);
+        c = e;
+      }
+    });
+  });
+  return out;
+}
+function letterName(name, z, color) {
+  for (const [xa, xb, yb, ya] of nameRects(name)) quad([xa, yb, z], [xb, yb, z], [xb, ya, z], [xa, ya, z], color);
+}
+
 // ---------- the brig's shapes in a livery ----------
 // { hull, glow, sail, sailE (with the emblem), wheel, furl, anchor, chain, plank }: geometries, the sails with their slopes (sailSlopes)
 export function buildBrig(L, B = BRIG_SHAPE) {
@@ -438,7 +488,10 @@ export function buildBrig(L, B = BRIG_SHAPE) {
       part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.027, sy: 0.23, sz: 0.02 });
       part(G.box, C.gold, x, -0.25, st - 0.055, { sx: 0.29, sy: 0.025, sz: 0.02 });
     }
-    part(G.box, C.gold, 0, 0.19, st - 0.045, { sx: 0.19, sy: 0.19, sz: 0.035, rz: Math.PI / 4 });
+    // (v518, Jordan) the boat's name lettered across the transom's painted band in its trim colour, where the diamond
+    // crest was (no name: the crest)
+    if (L.name) letterName(L.name, st - 0.012, C.gold);
+    else part(G.box, C.gold, 0, 0.19, st - 0.045, { sx: 0.19, sy: 0.19, sz: 0.035, rz: Math.PI / 4 });
     // Stem and compact bowsprit; no furniture on the walking plane.
     seg(G.box, C.dark, [0, KEEL(B.bow), B.bow], [0, GH(B.bow) + 0.2, B.bow + 0.055], 0.035);
     const sprit = [0, 1.7, B.bow + 1.65];
