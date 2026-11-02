@@ -7801,6 +7801,8 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
       const cc = c + dc, rr = r + dr;
       if (cc >= 0 && rr >= 0 && cc < N && rr < N && SH[T(cc, rr)] && LV[T(cc, rr)]) { nearRamp = true; break; }
     }
+    // (v506) under open water (a lake, river or the sea; not a swamp pool): its bed takes no sun shadow, see groundShapeMat
+    const wet = WL[i] && !LV[i] && !LAVA[i];
     const open = kind && LV[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk);
     const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
     for (let q = 0; q < 4; q++) {
@@ -7828,9 +7830,9 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
       // (each quarter keeps its ground's middle; an uncovered one's lets the layer's edge dip under it)
       const y = (ph[(lz + 1) * W + lx + 1] + ph[(lz + 1) * W + lx + 2] + ph[(lz + 2) * W + lx + 1] + ph[(lz + 2) * W + lx + 2]) / 4;
       const e = clamp(Math.round((y + 16) * 1024), 0, 65535), t = ((r * 2 + (q >> 1)) * N2 + c * 2 + (q & 1)) * 4;
-      // (a: the kind, 1 snow 2 sand; 8 smooth ground (see grassChunk's smoothQ), 4 that and near a ramp)
+      // (a: the kind, 1 snow 2 sand; 8 smooth ground (see grassChunk's smoothQ), 4 that and near a ramp, 16 under water)
       const sm = smoothQ(lx, lz);
-      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0);
+      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0) | (wet ? 16 : 0);
     }
   }
   driftTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
@@ -8167,7 +8169,10 @@ fn gsJoin(a: u32, b: u32) -> bool {
       }
     }
   }
-  let c = shadeLit(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  // (v506, Jordan) the bed under open water takes no sun shadow: a boat's shadow lies on the water and its mist, not
+  // down on the bottom, where it made the boat look to be flying (the water's own surface still shows shadows)
+  let wq = u32(round(textureLoad(tDrift, clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), vec2i(${N * 2 - 1})), 0).a * 255.0));
+  let c = shadeLit(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5 && (wq & 16u) == 0u);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
@@ -24310,7 +24315,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 506, crashSeen = new Map();
+const GAME_VERSION = 507, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
