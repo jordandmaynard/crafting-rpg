@@ -2958,6 +2958,20 @@ function houseFree(h, i) {
   const ins = h.inside ? T(h.inside[0], h.inside[1]) : -1;
   return OB[i] === 0 && i !== ins && !stairAt.has(i) && !h.clear?.has(i) && !BALCONY.has(i);
 }
+// (v455, Jordan: beds never block stairs or doors) can a bed lie on tile i of story k: no door on any of its sides,
+// and not on a stair's way: its tiles, the tile at its foot, its landing, or any tile beside the foot or the landing
+function bedClear(h, k, i) {
+  const c = i % N, r = Math.floor(i / N);
+  for (let d = 0; d < 4; d++) { const w = upWallOn(c, r, d, k); if (w && isDoorVal(w)) return false; }
+  for (const [a, e] of h.tiles) {
+    const st = stairAt.get(T(a, e));
+    if (!st || st.t0 !== T(a, e)) continue;
+    const foot = T(st.c - DC[st.d], st.r - DR[st.d]), ends = k ? [st.land] : [foot];
+    if (i === st.t0 || i === st.t1 || ends.includes(i)) return false;
+    for (const q of ends) { const qc = q % N, qr = Math.floor(q / N); if (Math.abs(qc - c) + Math.abs(qr - r) === 1) return false; }
+  }
+  return true;
+}
 function townTrades(t, n) {
   const list = [...TOWN_TRADES[t.tier] || TOWN_TRADES[0]];
   if (t.tannery) t.tannery.trade = 'tanner';
@@ -2998,7 +3012,7 @@ function townBeds(t, n) {
       for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
         // head at (c, r) against the wall behind it, foot a tile on toward d
         const i = T(c, r), j = T(c + DC[d], r + DR[d]);
-        if (!houseFree(h, i) || !houseFree(h, j) || !h.tiles.some(([a, e]) => T(a, e) === j)) continue;
+        if (!houseFree(h, i) || !houseFree(h, j) || !h.tiles.some(([a, e]) => T(a, e) === j) || !bedClear(h, 0, i) || !bedClear(h, 0, j)) continue;
         if (!wallOn(c, r, (d + 2) & 3) || wallOn(c, r, d)) continue;
         if (isDoorVal(wallOn(c, r, (d + 2) & 3))) continue;
         const score = Math.hypot(c - ic, r - ir) + hs(c, r, 460 + d) * 0.5;
@@ -3037,7 +3051,7 @@ function townBedsUp(h, want, n) {
     let best = null, bd = -1;
     for (const i of U) for (let d = 0; d < 4; d++) {
       const c = i % N, r = Math.floor(i / N), j = T(c + DC[d], r + DR[d]), back = upWallOn(c, r, (d + 2) & 3, 1);
-      if (i === land || j === land || !free(i) || !free(j) || !back || isDoorVal(back) || isFenceVal(back) || upWallOn(c, r, d, 1)) continue;
+      if (i === land || j === land || !free(i) || !free(j) || !bedClear(h, 1, i) || !bedClear(h, 1, j) || !back || isDoorVal(back) || isFenceVal(back) || upWallOn(c, r, d, 1)) continue;
       const score = Math.hypot(c - lc, r - lr) + hs(c, r, 480 + d) * 0.5;
       if (score <= bd) continue;
       taken.add(i); taken.add(j);
@@ -22619,7 +22633,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 454, crashSeen = new Map();
+const GAME_VERSION = 455, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
