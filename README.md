@@ -219,6 +219,8 @@ Jordan's Wanderer's Kit world map pack (art/deliveries/wanderers-kit-world-map-v
 
 The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The wheel zooms about the cursor, dragging pans, and a click picks a seen town for fast travel. Anything you haven't explored is cut out of the map down to opaque parchment, in hard 8-tile cells, and so is everything outside the world. Markers and names show only where you've been. A paper compass rose and a live scale (1 tile = 1.6 m) sit at the bottom right, and a paper footer carries the help and the fast travel button. The folio drags by its leather. While it's open the minimap hides (Jordan). The map's debug and seed tools (seed, PLOTS, BANDS, NEW WORLD, REVEAL ALL, LOAD SEED, EACH LOAD) moved into Options under WORLD, and N and P still work on the map.
 
+**v533:** (Jordan's water tuning) Docks and boats reflection strength (SSR.proxyBoost) 13.
+
 **v331:** the map zooms out only as far as the world filling the opening's width, so the parchment past the sea at the world's edge never shows (it zooms in 16 times further than that).
 
 **v332 (HUD layout):** the action bar (attack, Q, E, dash) sits along the bottom left with the hotbar just above it, and Pack / Build / Map sit in a row under the health plate. The inventory now opens higher (top 56) so it covers that row and clears the hotbar. In build mode the hotbar hides and the build bar sits bottom centre.
