@@ -929,7 +929,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 
 <script type="module">
 import * as GFX from './src/gfx/index.js';
-import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade } from './src/folk/townsfolk.js';
+import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_WHERE } from './src/folk/townsfolk.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 const hash = (a, b, k) => { const s = Math.sin(a * 12.9898 + b * 78.233 + k * 37.719) * 43758.5453; return s - Math.floor(s); };
@@ -6020,6 +6020,7 @@ function renderWorld() {
   if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
   drawCrowds();
   drawFolk();
+  drawHumans();
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
   const on = depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
@@ -13049,6 +13050,10 @@ const FOE = {
   spider: { make: makeSpider, name: 'Giant spider', hp: 24, dmg: 7, speed: 4.4, reach: 0.8, aggro: 9, rad: 0.3 },
   // rooted: never moves, only turns to face you and lunges its head out to bite
   mantrap: { make: makeMantrap, name: 'Mantrap', hp: 44, dmg: 12, speed: 0, reach: 1.55, aggro: 3.4, rad: 0.3, rooted: true },
+  // (v477) people met on the road, drawn from the townsfolk designs (human: no make; see Hostile folk) and spawned on
+  // roads by humanTick, not by the biomes; loot: [item, chance, most] dropped on a kill
+  footpad: { human: true, name: 'Footpad', hp: 30, dmg: 7, speed: 3.1, reach: 0.9, aggro: 8, rad: 0.22, loot: [['bread', 0.35, 1]] },
+  bandit: { human: true, name: 'Bandit', hp: 42, dmg: 9, speed: 2.9, reach: 0.95, aggro: 9, rad: 0.24, loot: [['bread', 0.3, 2], ['leather', 0.3, 2]] },
 };
 
 // ---------- Movement and collision ----------
@@ -13549,7 +13554,7 @@ function drawCrowds() {
   crowdOrder.forEach((f, i) => {
     const p = f.shadow.position, o = i * 16;
     sm.fill(0, o, o + 16); sm[o] = sm[o + 5] = sm[o + 10] = sm[o + 15] = 1; sm[o + 12] = p.x; sm[o + 13] = p.y; sm[o + 14] = p.z;
-    if (!f.g.visible) return;
+    if (!f.g.visible || !f.crowd) return;   // (people are drawn with the townsfolk's shader: drawHumans)
     const C = f.crowd, k = C.n++;
     f.g.updateMatrixWorld();
     for (const pc of C.pieces) { pc.mesh.reserve(k + 1); pc.mesh.instanceMatrix.set(f.joints[pc.joint].matrixWorld.elements, k * 16); }
@@ -13562,16 +13567,18 @@ function drawCrowds() {
 const FOE_HP = { perLevel: 0.35 };
 const foeMaxHp = (d, lvl) => Math.round(d.hp * (1 + FOE_HP.perLevel * (Math.max(1, lvl) - 1)));
 function spawnFoe(kind, x, z) {
-  const d = FOE[kind], f = rigFor(crowdOf(kind)), lvl = bandAt(x, z), mhp = foeMaxHp(d, lvl);
+  const d = FOE[kind], f = d.human ? humanRig(kind) : rigFor(crowdOf(kind)), lvl = bandAt(x, z), mhp = foeMaxHp(d, lvl);
   f.g.position.set(x, surfaceY(x, z), z);
   const sh = new GFX.Object3D(); sh.position.set(x, surfaceY(x, z) + 0.02, z);
   const foe = Object.assign(f, { kind, def: d, level: lvl, x, z, y: surfaceY(x, z), hp: mhp, maxHp: mhp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
     home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
+  if (d.human) humanFoe(foe);
   foes.push(foe);
   return foe;
 }
 function removeFoe(f) {
   foes.splice(foes.indexOf(f), 1);
+  if (f.hmesh) freeHuman(f);
 }
 
 // ---------- HUD ----------
@@ -15652,7 +15659,9 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
   sfx.hit();
   if (f.hp <= 0) {
     sfx.kill();
-    shatter(f, new GFX.Vector3(dx / l, 0, dz / l));
+    // (v477: a person falls down dead, where a monster flies apart)
+    if (f.rig) fellHuman(f, dx / l, dz / l);
+    else shatter(f, new GFX.Vector3(dx / l, 0, dz / l));
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats();
     if (Math.random() < 0.35) dropOrb(f.x, f.z);
@@ -15667,6 +15676,8 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
     };
     if (f.def.hide) leave('hide');
     if (f.def.bone && Math.random() < f.def.bone) leave('bone');
+    // (v477) what a person had on them
+    for (const [id, p, most] of f.def.loot || []) if (Math.random() < p) dropLoot(id, 1 + Math.floor(Math.random() * most), f.x + (Math.random() - 0.5) * 0.5, f.z + (Math.random() - 0.5) * 0.5);
   }
 }
 // a sword stroke: foes in the arc, and the one nearest tree or rock in front
@@ -19705,6 +19716,189 @@ function drawFolk() {
   FOLK_READ.shown = shown; FOLK_READ.draws = folkBatches.length;
 }
 
+// ---------- Hostile folk (v477: footpads and bandits) ----------
+// People met on the road who fight you: FOE kinds marked human. Each is a seed whose townsfolk design (design(seed,
+// 'wilds'), as the village generator's Hostiles make them) is of its kind, baked as the townsfolk are (bakeFolk) into
+// a mesh of its own drawn with their bone shader, its weapon in the right hand as the hero holds one. Otherwise each is
+// a foe like any other (aggro, chase, the wind-up and strike, knockback, bleeds, stuns, the harpoon). The moves are
+// the hero's: the walk (the townsfolk's, which is the hero's, at the hero's cadence), and for a blow what it holds
+// says which of the hero's strokes (poseHuman): a sword, axe or club the sword's three-blow combo (two sweeps, then the
+// overhead chop), a dagger the punch's straight jab, a spear a level poke. Seen you, they square up (the brandish);
+// hit, they flinch; killed, they fall back and lie a while, then sink away. They come along the roads (humanTick):
+// footpads alone in danger bands 1-3, bandits 2-4 together in bands 2-6, in the meadows and forests (WILD_WHERE).
+// cap: people about at once; every: seconds between tries; lie, sink: seconds a body lies, and sinks
+const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 4, sink: 1.5 };
+const HUMAN_KINDS = Object.keys(FOE).filter(k => FOE[k].human && WILD_WHERE[k]);
+const WILD_BIOME = { meadow: MEADOW, forest: FOREST, swamp: SWAMP, graveyard: GRAVE, snow: SNOW, desert: DESERT, 'deep forest': DEEP, 'blasted wastes': WASTES };
+const humanFallen = [];
+// a person of this kind: their build, baked, in a mesh of their own
+function humanRig(kind) {
+  let d = null;
+  for (let a = 0; a < 2000 && !d; a++) { const e = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds'); if (e.job === kind) d = e; }
+  const p = { d: d || folkKit.design(1, 'wilds') };
+  bakeFolk(p);
+  const M = p.mesh, geo = new GFX.BufferGeometry();
+  geo.setAttribute('position', new GFX.BufferAttribute(M.pos, 3));
+  geo.setAttribute('color', new GFX.BufferAttribute(M.col, 3));
+  geo.setAttribute('bone', new GFX.BufferAttribute(M.bone, 1));
+  geo.setIndex(new GFX.BufferAttribute(M.idx, 1));
+  const mat = folkMat(), mesh = new GFX.Mesh(geo, mat);
+  mesh.frustumCulled = false; mesh.castShadow = mesh.receiveShadow = true; mesh.matrixAutoUpdate = false;
+  mat.uniforms.bones.value.fill(0);
+  scene.add(mesh);
+  return { g: p.rig.g, rig: p.rig, folk: p, hmesh: mesh, hmat: mat };
+}
+// what spawnFoe's foe needs besides: its own reach (a spear's longer), the bar's height, the walk and the combo
+function humanFoe(f) {
+  const r = f.rig;
+  if (r.d.prop === 'spear') f.def = { ...f.def, reach: f.def.reach + 0.35 };
+  f.base = 1; f.topH = r.g.scale.y * 0.95; f.walkT = Math.random() * 9; f.animT = Math.random() * 20; f.combo = 2; f.lastAtk = -9;
+  f.who = r.d.name.full;
+}
+function freeHuman(f) {
+  scene.remove(f.hmesh); f.hmesh.geometry.dispose(); folkMats.push(f.hmat);
+  f.hmesh = f.hmat = null;
+}
+// killed: knocked down backward (away from the blow), arms flung up, lying there a while, then sinking into the ground
+function fellHuman(f, dx, dz) {
+  humanFallen.push({ f, t: 0, face: Math.atan2(-dx, -dz), x: f.x, z: f.z, y: f.y, dx, dz });
+}
+function updateFallen(dt) {
+  for (let k = humanFallen.length - 1; k >= 0; k--) {
+    const b = humanFallen[k], f = b.f, r = f.rig;
+    b.t += dt;
+    if (b.t > HUMAN.lie + HUMAN.sink) { freeHuman(f); humanFallen.splice(k, 1); continue; }
+    const u = smooth(0, 0.55, b.t), slide = 0.35 * smooth(0, 0.4, b.t), sink = smooth(HUMAN.lie, HUMAN.lie + HUMAN.sink, b.t);
+    folkKit.pose(r, 'idle', 0);
+    r.head.rotation.set(-0.3 * u, 0.4 * u, 0);
+    r.armL.rotation.set(-2.6 * u, 0, 0.5 * u); r.armR.rotation.set(-2.4 * u, 0, -0.7 * u);
+    r.elbows[0].rotation.x = -0.4 * u; r.elbows[1].rotation.x = -0.9 * u;
+    r.legL.rotation.x = -0.35 * u; r.knees[0].rotation.x = 0.6 * u; r.legR.rotation.x = 0.1 * u;
+    r.tool.rotation.x = 0.8 * u;
+    // (about the feet, back by a quarter turn, lifted by the body's depth so it lies on the ground, not in it)
+    r.g.rotation.set(-Math.PI / 2 * u * u, b.face, 0, 'YXZ');
+    r.g.position.set(b.x + b.dx * slide, b.y + 0.1 * u - 0.35 * sink, b.z + b.dz * slide);
+    r.g.updateMatrixWorld();
+    humanBones(f, true);
+  }
+}
+// a person's joints into their mesh's matrices (the hit flash hides them, as the crowds' foes)
+function humanBones(f, shown) {
+  const P = f.folk, M = f.hmat.uniforms.bones.value;
+  P.bones.forEach((o, j) => M.set(shown && P.chains[j].every(q => q.visible) ? o.matrixWorld.elements : ZERO16, j * 16));
+}
+function drawHumans() {
+  for (const f of foes) if (f.hmesh) { f.rig.g.updateMatrixWorld(); humanBones(f, f.g.visible); }
+}
+// The hero's strokes on a person's rig: f.atk runs 0 .. 0.85 with the blow landing at 0.45, so u (0 .. 1 over it) winds
+// up to HUMAN_POSE.windup and cuts through to .cut, the sword's own shape (SWORD_POSE) at that timing.
+const HUMAN_POSE = { windup: 0.42, cut: 0.62 };
+function poseHuman(f, dt, sp) {
+  const r = f.rig, moving = sp > 0.05 && f.atk < 0, wp = r.d.prop;
+  f.animT += dt;
+  // (the walk at the hero's cadence: WALK.cadence of the cycle a tile)
+  if (moving) f.walkT += dt * sp * WALK.cadence / 4.2;
+  folkKit.pose(r, f.atk >= 0 ? 'idle' : moving ? 'walk' : f.aggro ? 'brandish' : 'idle', moving ? f.walkT : f.animT);
+  if (f.atk >= 0) {
+    const P = SWORD_POSE, u = Math.min(1, f.atk / 0.85), W = HUMAN_POSE.windup, S = HUMAN_POSE.cut;
+    let ax = 0, ay = 0, az = -0.08, elbowR = 0, elbowL = 0, chestX = 0, chestY = 0, hips = 0, offX = -0.25, offZ = 0.08;
+    const legAdd = [0, 0], kneeAdd = [0, 0], wr = [0, 0, 0];
+    if (wp === 'dagger' || wp === 'ritualKnife') {
+      // the punch's straight jab, the knife point first: drawn back to the hip, then driven out from the shoulder, the
+      // other fist up on guard, the shoulders turned into it and a step onto the front foot
+      const draw = smooth(0, W, u) * (1 - smooth(W, 0.53, u)), jab = smooth(W, 0.53, u) * (1 - smooth(0.62, 1, u));
+      ax = -0.6 - 0.95 * jab + 0.45 * draw; elbowR = -1.05 + 1.0 * jab - 0.35 * draw;
+      offX = -0.6; offZ = 0.12; elbowL = -1.2;
+      hips = 0.3 * jab - 0.15 * draw; chestY = 0.25 * jab - 0.2 * draw; chestX = 0.15 * jab;
+      legAdd[0] -= 0.3 * jab; kneeAdd[0] += 0.4 * jab; legAdd[1] += 0.15 * jab;
+    } else if (wp === 'spear') {
+      // a poke: the spear laid level at the hip and drawn back, then driven out at arm's length, leaning into it
+      const draw = smooth(0, W, u) * (1 - smooth(W, 0.53, u)), out = smooth(W, 0.53, u) * (1 - smooth(0.62, 1, u));
+      ax = -0.55 + 0.35 * draw - 0.75 * out; elbowR = -1.0 - 0.2 * draw + 0.85 * out;
+      offX = -0.9 - 0.3 * out; offZ = -0.15; elbowL = -0.9;
+      chestX = 0.25 * out - 0.05 * draw; chestY = -0.35 + 0.3 * out; hips = -0.2 + 0.15 * out;
+      legAdd[0] -= 0.45 * out + 0.15; kneeAdd[0] += 0.5 * out + 0.2; legAdd[1] += 0.25 * out;
+    } else {
+      // the sword's strokes (animateHero's, at this timing): the sweeps from one side to the other (the first right to
+      // left, the second back), then the third raised high behind the head and brought down with a step and a lean
+      const combo = f.combo || 0, cut = smooth(W, S, u), back = smooth(S, 1, u), wind = u < W ? smooth(0, 1, u / W) : 1 - cut, on2 = 1 - back;
+      const crouch = P.crouch * (u < W ? 0.4 * wind : 0.4 + 0.6 * cut) * on2;
+      if (combo === 2) {
+        ax = u < W ? -1.45 - 1.65 * smooth(0, 1, u / W) : -3.1 + 2.4 * cut;
+        elbowR = -P.elbow * 1.3 * wind;
+        wr[0] = P.wrist * (wind - 0.5 * cut * on2);
+        chestX = P.lean * (-0.6 * wind + 1.4 * cut * on2);
+        chestY = P.twist * (-0.5 * wind + 0.3 * cut * on2);
+        legAdd[0] -= crouch * 1.6; kneeAdd[0] += crouch * 2.2; legAdd[1] += crouch * 0.4; kneeAdd[1] += crouch * 0.8;
+      } else {
+        const from = combo ? 1.4 : -1.5, to = -from * 0.9, dir = Math.sign(to - from), start = from * (1 + 0.15 * P.windup / 0.25);
+        ax = -1.45 - 0.3 * wind; ay = u < W ? from + (start - from) * smooth(0, 1, u / W) : start + (to - start) * cut;
+        elbowR = -0.1 - P.elbow * wind;
+        wr[1] = dir * P.wrist * (-wind + 0.6 * cut * on2);
+        chestX = P.lean * cut * on2 * 0.6;
+        chestY = P.twist * (Math.sign(from) * wind + Math.sign(to) * 0.8 * cut * on2);
+        for (const k of [0, 1]) { legAdd[k] -= crouch; kneeAdd[k] += crouch * 2; }
+        hips = -ay * 0.25;
+      }
+      // the free arm thrown out the other way for balance
+      const o = P.offArm * (combo === 2 ? cut * on2 : Math.max(wind, cut * on2));
+      offX = -0.25 - 0.35 * o; offZ = 0.08 + 0.5 * o; elbowL = -0.7 * o;
+    }
+    r.armR.rotation.set(ax, ay, az); r.elbows[1].rotation.x = elbowR; r.wrists[1].rotation.set(wr[0], wr[2], wr[1]);
+    r.armL.rotation.set(offX, 0, offZ); r.elbows[0].rotation.x = elbowL;
+    r.chest.rotation.set(chestX, chestY, 0); r.body.rotation.set(0, hips, 0);
+    r.head.rotation.set(-chestX * 0.5, -(chestY + hips) * 0.7, 0);
+    r.legL.rotation.x += legAdd[0]; r.legR.rotation.x += legAdd[1];
+    r.knees[0].rotation.x += kneeAdd[0]; r.knees[1].rotation.x += kneeAdd[1];
+    r.body.position.y -= legDrop(r.legL.rotation.x, r.knees[0].rotation.x, r.legR.rotation.x, r.knees[1].rotation.x);
+    r.ankles[0].rotation.x = -(r.legL.rotation.x + r.knees[0].rotation.x);
+    r.ankles[1].rotation.x = -(r.legR.rotation.x + r.knees[1].rotation.x);
+    // a spear lies level, pointing ahead; the rest hang from the fist along the arm
+    r.tool.rotation.set(wp === 'spear' ? Math.PI / 2 - (chestX + ax + elbowR + wr[0]) : 0, 0, 0);
+  }
+  // hit: a flinch back from the blow
+  if (f.hitT < 0.3) {
+    const k = Math.sin(f.hitT / 0.3 * Math.PI);
+    r.chest.rotation.x -= 0.3 * k; r.head.rotation.x -= 0.25 * k;
+  }
+  r.g.position.set(f.x, f.y, f.z); r.g.rotation.set(0, f.face, 0);
+  f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
+  f.shadow.position.set(f.x, f.y + 0.02, f.z);
+}
+// people along the roads: now and then a road tile some way off (in a biome and danger band one of HUMAN_KINDS keeps
+// to, out of town) gets a footpad, or a band of bandits
+let humanT = 6;
+function humanTick(dt) {
+  humanT -= dt;
+  if (humanT > 0) return;
+  humanT = HUMAN.every * (0.6 + Math.random() * 0.8);
+  if (heroInTown() || !HUMAN_KINDS.length) return;
+  const have = foes.reduce((n, f) => n + (f.rig ? 1 : 0), 0);
+  if (have >= HUMAN.cap) return;
+  for (let tries = 0; tries < 40; tries++) {
+    const a = Math.random() * Math.PI * 2, d = HUMAN.near + Math.random() * (HUMAN.far - HUMAN.near);
+    const c = Math.floor(H.x + Math.cos(a) * d), r = Math.floor(H.z + Math.sin(a) * d);
+    if (c < 2 || r < 2 || c >= N - 2 || r >= N - 2) continue;
+    const i = T(c, r);
+    if (!PATH[i] || !humanOpen(i)) continue;
+    const band = BAND[i] || 1, kinds = HUMAN_KINDS.filter(k => { const w = WILD_WHERE[k]; return band >= w.bands[0] && band <= w.bands[1] && w.biomes.some(b => WILD_BIOME[b] === BI[i]); });
+    if (!kinds.length) continue;
+    const kind = kinds[Math.floor(Math.random() * kinds.length)], [lo, hi] = WILD_WHERE[kind].group;
+    const n = Math.min(HUMAN.cap - have, lo + Math.floor(Math.random() * (hi - lo + 1)));
+    for (let k = 0; k < n; k++) {
+      // (the rest of a band about the first, on open ground beside the road)
+      let x = c + 0.5, z = r + 0.5;
+      if (k) for (let t = 0; t < 8; t++) {
+        const b = k * 2.1 + t * 0.8, x1 = c + 0.5 + Math.cos(b) * 0.9, z1 = r + 0.5 + Math.sin(b) * 0.9;
+        if (humanOpen(T(Math.floor(x1), Math.floor(z1))) && LV[T(Math.floor(x1), Math.floor(z1))] === LV[i]) { x = x1; z = z1; break; }
+      }
+      spawnFoe(kind, x, z);
+    }
+    return;
+  }
+}
+const humanOpen = i => !!LV[i] && !SH[i] && !LAVA[i] && !WT[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && BI[i] !== TOWN && !roomOf.has(i) && !FL[i];
+
 
 // ---------- Update ----------
 // a leg's swing over the walk cycle, -1 .. 1 (v411, Jordan felt the walk speed change at each end of the cycle):
@@ -19873,7 +20067,8 @@ function update(dt) {
   updateGhostSpears(dt);
   updateAimDecal();
   separateFoes();
-  if (H.alive) spawnTick(dt);
+  updateFallen(dt);
+  if (H.alive) { spawnTick(dt); humanTick(dt); }
 
   spikes.exit(); spikes.enter('update: townsfolk');
   updateFolk(dt);
@@ -20650,7 +20845,11 @@ function updateFoe(f, dt, night) {
     }
     if (f.atk > 0.85) { f.atk = -1; f.cd = 0.9 + Math.random() * 0.5; }
   } else if (f.aggro) {
-    if (dist < d.reach && f.cd <= 0 && H.alive && see) { f.atk = 0; f.struck = false; }
+    if (dist < d.reach && f.cd <= 0 && H.alive && see) {
+      f.atk = 0; f.struck = false;
+      // (a person's blows run through the sword's three-blow combo: two sweeps and the overhead chop, begun again after a pause)
+      if (f.rig) { f.combo = time - (f.lastAtk || -9) > 2.6 ? 0 : (f.combo + 1) % 3; f.lastAtk = time; }
+    }
     else if (d.rooted) f.face += angDiff(Math.atan2(dx, dz), f.face) * (1 - Math.exp(-dt * 4));
     else if (dist > d.reach * 0.75 || !see) {
       // straight at you when nothing's in the way, otherwise along a path round whatever is
@@ -20699,6 +20898,7 @@ function updateFoe(f, dt, night) {
   f.y = surfaceY(f.x, f.z);
 
   // pose
+  if (f.rig) { poseHuman(f, dt, want > 0 ? want / dt : 0); return; }
   f.squish = Math.max(0, f.squish - dt * 4);
   const sq = Math.sin(f.squish * Math.PI) * 0.3, sc = f.base, moving = want > 0;
   let lift = 0, lean = 0, fwd = 0;
@@ -22916,7 +23116,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 476, crashSeen = new Map();
+const GAME_VERSION = 477, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -23238,6 +23438,10 @@ window.GAME = {
   simFoes: (sec, night = false) => { for (let t = 0; t < sec; t += 1 / 30) for (const f of foes.slice()) updateFoe(f, 1 / 30, night); return GAME.foeList(); },
   findPath: (c0, r0, c1, r1) => { const p = findPath(c0, r0, c1, r1); return p && p.length; },
   clearFoes: () => foes.slice().forEach(removeFoe),
+  // (v477) people on the road: spawn some of a kind beside you, or list who's about
+  spawnHuman: (kind = 'bandit', n = 1, d = 4) => { const out = []; for (let k = 0; k < n; k++) out.push(spawnFoe(kind, H.x + Math.sin(H.face) * d + (k - (n - 1) / 2) * 0.8, H.z + Math.cos(H.face) * d)); return out.map(f => f.who); },
+  humans: () => foes.filter(f => f.rig).map(f => ({ kind: f.kind, who: f.who, prop: f.rig.d.prop, level: f.level, hp: f.hp, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), combo: f.combo })),
+  fallen: () => humanFallen.length,
   face: a => { H.face = a; },
   aimAt: (x, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, surfaceY(x, z) + 0.5, z).project(camera); mouse.x = rect.left + (v3.x + 1) / 2 * rect.width; mouse.y = rect.top + (1 - v3.y) / 2 * rect.height; },
   screenOf: (x, y, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, y, z).project(camera); return [rect.left + (v3.x + 1) / 2 * rect.width, rect.top + (1 - v3.y) / 2 * rect.height]; },

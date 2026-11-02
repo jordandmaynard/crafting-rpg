@@ -882,8 +882,10 @@ export function makeFolkKit(GFX) {
     for (const s of [1, -1]) box(crate, 0.04, 0.23, 0.25, s * 0.13, 0, 0, '#5a3a22');
     broom.visible = crate.visible = false;
     // (v7) the job's tool, in the left hand (a frame hanging with the hand: -y down, +z ahead). Staffs are kept upright
-    // by the pose; a lute rides on the back.
-    const tool = pivot(wrists[0], 0, -0.045, 0.0);
+    // by the pose; a lute rides on the back. (v14) The hostile folk hold their weapons in the right hand as the hero
+    // does (a bow or crossbow stays in the left, as the hero's bow does), so the game can give them the hero's strokes.
+    const hand = d.hostile && !['shortbow', 'crossbow'].includes(d.prop) ? 1 : 0;
+    const tool = pivot(wrists[hand], 0, -0.045, 0.0);
     const WOOD = '#8a6440', DARK = '#4e3220', STEEL = '#b8bec8', GOLD = '#c8a048', WICKER = '#a8844e';
     const basket = fill => {
       box(tool, 0.16, 0.09, 0.12, 0, -0.14, 0.03, WICKER);
@@ -1010,7 +1012,7 @@ export function makeFolkKit(GFX) {
     // a soft round shadow on the ground
     const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
     g.scale.set(1.12 * d.build * (fem ? 0.98 : 1), 1.12 * d.height * (fem ? 0.97 : 1), 1.12 * d.build);
-    return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, tool, staff, shadow, lute, luteBack, luteFront };
+    return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, tool, hand, staff, shadow, lute, luteBack, luteFront };
   }
   return { design, build, pose, describe };
 }
@@ -1145,8 +1147,11 @@ export function pose(f, anim, t) {
       f.armR.rotation.set(-1.35, 0, -0.55); f.elbows[1].rotation.x = -1.7;
       f.head.rotation.y = 0.3;
     } else {
-      f.armL.rotation.set(-1.25 - jab * 0.55 + s * 0.06, 0, 0.12); f.elbows[0].rotation.x = -0.95 + jab * 0.75;
-      f.armR.rotation.set(-0.55, 0, -0.3); f.elbows[1].rotation.x = -1.2;
+      // (v14) the weapon in whichever hand holds it (the right, for the hostile folk), the other on guard: mirrored
+      const m = f.hand ? -1 : 1, W = f.hand ? f.armR : f.armL, G = f.hand ? f.armL : f.armR;
+      W.rotation.set(-1.25 - jab * 0.55 + s * 0.06, 0, 0.12 * m); f.elbows[f.hand].rotation.x = -0.95 + jab * 0.75;
+      G.rotation.set(-0.55, 0, -0.3 * m); f.elbows[1 - f.hand].rotation.x = -1.2;
+      f.chest.rotation.y *= m; f.head.rotation.y *= m;
     }
   }
   else if (anim === 'play' && f.lute) {
@@ -1187,9 +1192,10 @@ export function pose(f, anim, t) {
   for (const p of f.fronts) p.rotation.x = Math.min(0, f.legL.rotation.x, f.legR.rotation.x) * k;
   for (const p of f.backs) p.rotation.x = Math.max(0, f.legL.rotation.x, f.legR.rotation.x) * k;
   // a staff stands upright whatever the arm does: held a little forward when standing, its swing taken back out
+  const hk = f.hand || 0, HA = hk ? f.armR : f.armL;
   if (f.staff && f.tool.visible) {
-    if (anim === 'idle') { f.armL.rotation.x = -0.25; f.elbows[0].rotation.x = -0.55; }
-    f.tool.rotation.x = -(f.chest.rotation.x + f.armL.rotation.x + f.elbows[0].rotation.x + f.wrists[0].rotation.x);
+    if (anim === 'idle') { HA.rotation.x = -0.25; f.elbows[hk].rotation.x = -0.55; }
+    f.tool.rotation.x = -(f.chest.rotation.x + HA.rotation.x + f.elbows[hk].rotation.x + f.wrists[hk].rotation.x);
   }
   // (v9) a bow stands upright and a crossbow lies level when levelled at you
   if (anim === 'brandish' && (f.d.prop === 'shortbow' || f.d.prop === 'crossbow'))
