@@ -70,7 +70,7 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
   <div id="stage">
     <canvas id="view"></canvas>
     <div id="names"></div>
-    <div id="hint">Drag to turn · <kbd>[</kbd> <kbd>]</kbd> seeds · <kbd>1</kbd>–<kbd>6</kbd> moves · <kbd>A</kbd> <kbd>D</kbd> facing · <kbd>Space</kbd> pause</div>
+    <div id="hint">Drag to turn · <kbd>[</kbd> <kbd>]</kbd> seeds · <kbd>1</kbd>–<kbd>8</kbd> moves · <kbd>H</kbd> hostile · <kbd>A</kbd> <kbd>D</kbd> facing · <kbd>Space</kbd> pause</div>
   </div>
   <div id="panel">
     <h1>Townsfolk</h1>
@@ -84,6 +84,11 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
       <input id="seed" type="number" min="1" step="1">
       <button id="next" title="Next seed (])">▶</button>
       <button id="rand" title="Random seed (R)">Random</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <span class="muted">People</span>
+      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button>
+      <button id="randWild" title="A random bandit, cultist, poacher… (H)">Generate hostile</button>
     </div>
     <div class="row" style="margin-top:6px">
       <span class="muted">Body</span>
@@ -138,7 +143,7 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 </script>
 <script type="module">
 import * as GFX from './src/gfx/index.js';
-import { makeFolkKit, design, describe, ANIMS, JOBS, TIERS, jobTitle } from './src/folk/townsfolk.js';
+import { makeFolkKit, design as folkDesign, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
 
 const $ = id => document.getElementById(id);
 const store = { get(k, d) { try { const v = localStorage.getItem('emberwild.folk.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -163,8 +168,14 @@ const S = {
   seed: 1, body: 'any', job: 'any', mode: 'one', anim: 'idle', speed: 1, paused: false, facing: 0, spin: false,
   px: store.get('px', 3), tilt: store.get('tilt', 17), zoom: store.get('zoom', 1), kept: store.get('kept', []),
 };
-const hashSeed = parseInt((location.hash.match(/seed=(\d+)/) || [])[1], 10);
-S.seed = hashSeed > 0 ? hashSeed : store.get('seed', 1);
+// (v9) two lists of people: the towns' folk, and the hostile folk of the road and the wilds (their own seeds: kept
+// as 'w' + number, and in the link as #wild=number)
+const hashM = location.hash.match(/(seed|wild)=(\d+)/);
+S.pool = hashM ? (hashM[1] === 'wild' ? 'wilds' : 'town') : store.get('pool', 'town');
+S.seed = hashM ? +hashM[2] : store.get(S.pool === 'wilds' ? 'wildSeed' : 'seed', 1);
+const design = s => folkDesign(s, S.pool);
+const tag = s => (S.pool === 'wilds' ? 'w' : '') + s;
+const untag = k => { const m = String(k).match(/^(w?)(\d+)$/); return m ? { pool: m[1] ? 'wilds' : 'town', seed: +m[2] } : null; };
 let folks = [], yawDrag = 0, t = 0;
 
 const fits = s => { const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || d.job === S.job); };
@@ -173,8 +184,8 @@ function randomSeed() { let s; for (let n = 0; n < 3000; n++) { s = 1 + Math.flo
 function lineSeeds() { const out = [S.seed]; let s = S.seed; while (out.length < 7 && s < S.seed + 4000) { s++; if (fits(s)) out.push(s); } return out; }
 
 function setSeed(s) {
-  S.seed = Math.max(1, s | 0); store.set('seed', S.seed);
-  history.replaceState(null, '', '#seed=' + S.seed);
+  S.seed = Math.max(1, s | 0); store.set(S.pool === 'wilds' ? 'wildSeed' : 'seed', S.seed);
+  history.replaceState(null, '', (S.pool === 'wilds' ? '#wild=' : '#seed=') + S.seed);
   $('seed').value = S.seed;
   rebuild();
   keptList();
@@ -200,9 +211,10 @@ function outfit(d) {
     + `<tr><td>Skin</td><td><span class="sw" style="background:${d.skin}"></span>${d.skin}</td></tr>`;
 }
 function keptList() {
-  $('kept').innerHTML = S.kept.map(s => `<span class="chip"><button data-load="${s}">${s}</button><button class="x" data-drop="${s}" aria-label="Remove ${s}">×</button></span>`).join('');
+  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : '') + u.seed;
+    return `<span class="chip"><button data-load="${k}" title="${u.pool === 'wilds' ? 'Hostile' : 'Townsfolk'} ${u.seed}">${label}</button><button class="x" data-drop="${k}" aria-label="Remove ${label}">×</button></span>`; }).join('');
   $('keptNote').style.display = S.kept.length ? 'none' : '';
-  $('keep').textContent = S.kept.includes(S.seed) ? 'Kept' : 'Keep this seed';
+  $('keep').textContent = S.kept.includes(tag(S.seed)) ? 'Kept' : 'Keep this seed';
 }
 
 // ---------- controls ----------
@@ -219,10 +231,24 @@ document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
 });
 $('names').onclick = e => { const b = e.target.closest('[data-s]'); if (b) { document.querySelector('[data-mode="one"]').click(); setSeed(+b.dataset.s); } };
 // jobs grouped by where they're found
-$('job').innerHTML = '<option value="any">Any job</option>' + Object.entries(TIERS).map(([t, label]) =>
-  `<optgroup label="${label}">${Object.entries(JOBS).filter(([, J]) => J.tier === t).map(([k, J]) => `<option value="${k}">${J.title}</option>`).join('')}</optgroup>`).join('');
+function jobList() {
+  $('job').innerHTML = `<option value="any">${S.pool === 'wilds' ? 'Any kind' : 'Any job'}</option>` + POOLS[S.pool].map(t =>
+    `<optgroup label="${TIERS[t]}">${Object.entries(JOBS).filter(([, J]) => J.tier === t).map(([k, J]) => `<option value="${k}">${J.title}</option>`).join('')}</optgroup>`).join('');
+  $('job').value = S.job;
+}
+// switch between the towns' folk and the hostiles (each list remembers its own last seed)
+function setPool(pool, seed) {
+  if (pool !== S.pool) { S.pool = pool; S.job = 'any'; store.set('pool', pool); }
+  document.querySelectorAll('[data-pool]').forEach(x => x.classList.toggle('on', x.dataset.pool === S.pool));
+  jobList();
+  setSeed(seed ?? store.get(pool === 'wilds' ? 'wildSeed' : 'seed', 1));
+}
+document.querySelectorAll('[data-pool]').forEach(b => b.onclick = () => setPool(b.dataset.pool));
+$('randWild').onclick = () => { setPool('wilds', S.seed); randomSeed(); };
+jobList();
+document.querySelectorAll('[data-pool]').forEach(x => x.classList.toggle('on', x.dataset.pool === S.pool));
 $('job').onchange = e => { S.job = e.target.value; if (!fits(S.seed)) step(1); else rebuild(); };
-const animNames = { idle: 'Idle', walk: 'Walk', talk: 'Talk', wave: 'Wave', carry: 'Carry', sweep: 'Sweep' };
+const animNames = { idle: 'Idle', walk: 'Walk', talk: 'Talk', wave: 'Wave', carry: 'Carry', sweep: 'Sweep', play: 'Play lute', brandish: 'Menace' };
 $('anims').innerHTML = ANIMS.map((a, i) => `<button data-anim="${a}" title="${i + 1}">${animNames[a]}</button>`).join('');
 const setAnim = a => { S.anim = a; document.querySelectorAll('[data-anim]').forEach(x => x.classList.toggle('on', x.dataset.anim === a)); };
 document.querySelectorAll('[data-anim]').forEach(b => b.onclick = () => setAnim(b.dataset.anim));
@@ -244,16 +270,17 @@ $('spin').onclick = () => { S.spin = !S.spin; $('spin').classList.toggle('on', S
 faceUi();
 const slider = (id, key, fmt) => { const el = $(id); el.value = S[key]; const show = () => { if ($(id + 'v')) $(id + 'v').textContent = fmt(S[key]); }; show(); el.oninput = () => { S[key] = +el.value; store.set(key, S[key]); show(); }; };
 slider('px', 'px', v => v); slider('tilt', 'tilt', v => v + '°'); slider('zoom', 'zoom', v => v);
-$('keep').onclick = () => { if (!S.kept.includes(S.seed)) S.kept.push(S.seed); else S.kept = S.kept.filter(s => s !== S.seed); store.set('kept', S.kept); keptList(); };
+S.kept = S.kept.map(String);                                 // (older lists kept plain numbers: townsfolk)
+$('keep').onclick = () => { const k = tag(S.seed); if (!S.kept.includes(k)) S.kept.push(k); else S.kept = S.kept.filter(s => s !== k); store.set('kept', S.kept); keptList(); };
 $('kept').onclick = e => {
   const d = e.target.dataset;
-  if (d.load) setSeed(+d.load);
-  else if (d.drop) { S.kept = S.kept.filter(s => s !== +d.drop); store.set('kept', S.kept); }
+  if (d.load) { const u = untag(d.load); if (u) { S.job = 'any'; setPool(u.pool, u.seed); } }
+  else if (d.drop) { S.kept = S.kept.filter(s => s !== d.drop); store.set('kept', S.kept); }
   keptList();
 };
 $('copy').onclick = async () => {
-  const text = S.kept.length ? S.kept.join(', ') : String(S.seed);
-  try { await navigator.clipboard.writeText(text); $('copy').textContent = 'Copied'; } catch (e) { prompt('Seeds:', text); }
+  const text = S.kept.length ? S.kept.join(', ') : tag(S.seed);
+  try { await navigator.clipboard.writeText(text); $('copy').textContent = 'Copied'; } catch (e) { $('keptNote').style.display = ''; $('keptNote').textContent = text; }
   setTimeout(() => $('copy').textContent = 'Copy list', 1200);
 };
 addEventListener('keydown', e => {
@@ -262,7 +289,8 @@ addEventListener('keydown', e => {
   if (k === '[') step(-1); else if (k === ']') step(1); else if (k === 'r') randomSeed();
   else if (k === 'a' || k === 'arrowleft') setFace(S.facing + 1); else if (k === 'd' || k === 'arrowright') setFace(S.facing - 1);
   else if (k === ' ') { setPause(!S.paused); e.preventDefault(); }
-  else if (k >= '1' && k <= '6') setAnim(ANIMS[+k - 1]);
+  else if (k >= '1' && k <= String(ANIMS.length)) setAnim(ANIMS[+k - 1]);
+  else if (k === 'h') $('randWild').click();
   else if (k === 'k') $('keep').click();
 });
 // drag across the picture to turn them freely

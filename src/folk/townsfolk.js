@@ -137,8 +137,50 @@ export const JOBS = {
   pickpocket: j('Pickpocket', 'large', { ages: [['young', 4], ['adult', 1]], head: [['hood', 4], ['cap', 1]], torso: [['tunic', 2], ['shirt', 2], ['vest', 1], ['bodice', 1]], legs: [['trousers', 3], ['breeches', 1]], feet: [['wraps', 2], ['shoes', 1]],
     dye: { torso: ['charcoal', 'umber', 'grey', 'black'], under: ['grey', 'oat'], legs: ['charcoal', 'umber', 'black'], head: ['charcoal', 'black', 'umber'], cloak: ['charcoal', 'black'] }, x: { cloak: 0.5, belt: 0.5 }, prop: 'none', surnames: ['Fingers', 'Quickley', 'Nab'] }),
 };
-export const TIERS = { hamlet: 'Hamlet', medium: 'Medium town', large: 'Large town' };
-const JOB_LIST = Object.keys(JOBS).map(k => [k, 1]);
+// (v9, Jordan) the hostile folk met on the road and in the wilds: their own list, never drawn for a town's people (a
+// town's seeds stay as they were), made with design(seed, 'wilds'). Props can be a weighted list; extras add masks,
+// furs, a quiver or a shield on the back, a cult sigil, war paint; a cult hood shadows the face, its eyes glowing.
+const JOB_LIST = Object.keys(JOBS).map(k => [k, 1]);        // (the towns' jobs only: the wilds' are added after)
+const ROUGH = ['brown', 'umber', 'charcoal', 'grey', 'moss', 'russet', 'wool', 'oat'];
+Object.assign(DYES, { hide: ['#6e4a2e', 0], darkHide: ['#3e2c20', 0], bone: ['#d8ceb0', 0], ash: ['#8e8a82', 0] });
+const wj = (title, tier, o) => j(title, tier, Object.assign({ hostile: true }, o));
+export const WILDS = {
+  footpad: wj('Footpad', 'road', { ages: [['young', 4], ['adult', 3]], head: [['hood', 3], ['cap', 2], ['none', 2]], torso: [['tunic', 3], ['shirt', 2], ['vest', 1], ['bodice', 1]], legs: [['trousers', 3], ['breeches', 1]], feet: [['wraps', 2], ['shoes', 1], ['boots', 1]],
+    dye: { torso: ROUGH, under: ['oat', 'grey', 'linen'], legs: ROUGH, head: ['charcoal', 'umber', 'grey'], mask: ['charcoal', 'umber', 'madder', 'grey'] }, x: { belt: 0.7, mask: 0.5 }, prop: [['dagger', 3], ['club', 2]], surnames: ['Cutpurse', 'Nimble', 'Shank', 'Lightfinger'] }),
+  bandit: wj('Bandit', 'road', { head: [['hood', 3], ['none', 2], ['cap', 1], ['slouchHat', 1]], torso: [['jerkin', 3], ['tunic', 2], ['gambeson', 2], ['vest', 1]], legs: [['trousers', 3], ['breeches', 1]], feet: [['boots', 3], ['wraps', 1]],
+    dye: { torso: [...ROUGH, 'hide', 'darkHide'], under: ['oat', 'wool', 'grey', 'linen'], legs: ROUGH, head: ['charcoal', 'umber', 'moss', 'russet', 'madder'], mask: ['madder', 'charcoal', 'black', 'russet'] },
+    x: { belt: 0.9, mask: 0.6, gloves: 0.3, quiver: 0.15 }, prop: [['club', 2], ['axe', 2], ['dagger', 2], ['swordDrawn', 1], ['spear', 1]], surnames: ['Blackhand', 'Crowe', 'Grimsby', 'Redcap'] }),
+  banditChief: wj('Bandit Chief', 'road', { ages: [['adult', 3], ['old', 1]], head: [['slouchHat', 3], ['featherCap', 2], ['none', 2]], torso: [['jerkin', 2], ['doublet', 2], ['gambeson', 1]], legs: [['trousers', 2], ['breeches', 2]], feet: [['boots', 1]],
+    dye: { torso: ['crimson', 'madder', 'darkHide', 'black', 'forest'], under: ['linen', 'white', 'grey'], trim: ['gold', 'weld'], legs: ['black', 'charcoal', 'umber'], head: ['black', 'crimson', 'umber'], cloak: ['crimson', 'black', 'forest', 'umber'] },
+    x: { belt: 1, gloves: 0.8, cloak: 0.7, chain: 0.5, furs: 0.3 }, prop: [['swordDrawn', 1]], surnames: ['the Red', 'Ironjaw', 'Blackwood', 'Grimmond'] }),
+  highwayman: wj('Highwayman', 'road', { femTitle: 'Highwaywoman', head: [['slouchHat', 4], ['featherCap', 1]], torso: [['doublet', 2], ['jerkin', 2], ['gambeson', 1]], legs: [['breeches', 2], ['trousers', 2]], feet: [['boots', 1]],
+    dye: { torso: ['black', 'navy', 'crimson', 'darkHide', 'charcoal'], under: ['white', 'linen'], trim: ['gold', 'grey', 'white'], legs: ['black', 'charcoal', 'umber'], head: ['black', 'charcoal', 'navy'], cloak: ['black', 'charcoal', 'navy', 'crimson'], mask: ['black', 'charcoal', 'crimson'] },
+    x: { mask: 1, cloak: 0.85, belt: 1, gloves: 0.9 }, prop: [['crossbow', 2], ['swordDrawn', 2]], surnames: ['Nightingale', 'Duskwell', 'Ravenshaw', 'Gallowby'] }),
+  deserter: wj('Deserter', 'road', { head: [['kettleHat', 3], ['nasalHelm', 2], ['none', 1]], torso: [['tabard', 2], ['gambeson', 3]], legs: [['trousers', 4], ['breeches', 1]], feet: [['boots', 1]],
+    dye: { torso: ['woad', 'madder', 'grey', 'wool', 'navy'], under: ['grey', 'wool', 'charcoal'], trim: ['wool', 'oat', 'grey'], legs: ['charcoal', 'grey', 'brown'], head: ['grey'], shield: ['woad', 'madder', 'grey'] },
+    x: { belt: 1, gloves: 0.6, shield: 0.4 }, prop: [['spear', 2], ['swordDrawn', 2], ['axe', 1]], surnames: ['Turncoat', 'Oathless', 'Ward', 'Runwell'] }),
+  poacher: wj('Poacher', 'wilds', { head: [['hood', 4], ['cap', 2], ['none', 1]], torso: [['jerkin', 3], ['tunic', 3], ['vest', 1], ['bodice', 1]], legs: [['trousers', 3], ['breeches', 2]], feet: [['boots', 2], ['wraps', 1]],
+    dye: { torso: ['moss', 'green', 'forest', 'brown', 'hide'], under: ['oat', 'wool', 'moss'], legs: ['brown', 'umber', 'moss'], head: ['moss', 'forest', 'brown'] },
+    x: { quiver: 1, belt: 0.9, satchel: 0.3, furs: 0.3 }, prop: [['shortbow', 3], ['axe', 1]], surnames: ['Fletcher', 'Snare', 'Huntley', 'Doe'] }),
+  raider: wj('Raider', 'wilds', { head: [['nasalHelm', 3], ['none', 3], ['hood', 1]], torso: [['gambeson', 3], ['jerkin', 2], ['shortSleeve', 1]], legs: [['trousers', 4]], feet: [['boots', 2], ['wraps', 2]],
+    dye: { torso: ['umber', 'grey', 'russet', 'darkHide', 'wool', 'madder'], under: ['wool', 'oat'], legs: ['umber', 'grey', 'brown', 'charcoal'], head: ['charcoal', 'umber'], shield: ['madder', 'woad', 'ochre', 'charcoal', 'bone'] },
+    x: { furs: 0.8, shield: 0.6, belt: 1, warpaint: 0.6 }, prop: [['axe', 3], ['spear', 2], ['club', 1]], surnames: ['Grimbeard', 'Wolfsbane', 'Ashborn', 'Ravenson'] }),
+  graveRobber: wj('Grave Robber', 'wilds', { head: [['hood', 3], ['cap', 2], ['kerchief', 1]], torso: [['tunic', 2], ['shirt', 2], ['vest', 1], ['bodice', 1]], legs: [['trousers', 3], ['breeches', 1]], feet: [['boots', 2], ['wraps', 1]],
+    dye: { torso: ['grey', 'charcoal', 'umber', 'black', 'ash'], under: ['grey', 'oat'], legs: ['charcoal', 'umber', 'black'], head: ['charcoal', 'black', 'grey'], mask: ['grey', 'linen', 'charcoal'] },
+    x: { mask: 0.5, gloves: 0.8, satchel: 0.6, belt: 0.7 }, prop: [['shovel', 3], ['torch', 1]], surnames: ['Digby', 'Mould', 'Barrowman', 'Grubb'] }),
+  cultAcolyte: wj('Cult Acolyte', 'cult', { ages: [['young', 3], ['adult', 2]], head: [['cultHood', 4], ['hood', 1]], torso: [['robe', 1]], feet: [['wraps', 2], ['shoes', 1]],
+    dye: { torso: ['black', 'charcoal', 'crimson', 'plum'], head: ['black', 'crimson', 'charcoal'], trim: ['crimson', 'scarlet', 'bone'] }, x: { belt: 0.8, sigil: 1 }, prop: [['torch', 2], ['ritualKnife', 2], ['none', 1]], surnames: ['the Hollow', 'the Ashen', 'Emberkin'] }),
+  cultist: wj('Cult Zealot', 'cult', { head: [['cultHood', 3], ['none', 1]], torso: [['robe', 2], ['gambeson', 1], ['tunic', 1]], legs: [['trousers', 3], ['breeches', 1]], feet: [['wraps', 2], ['boots', 1]],
+    dye: { torso: ['crimson', 'black', 'scarlet', 'plum'], under: ['black', 'charcoal'], trim: ['black', 'bone', 'gold'], legs: ['black', 'charcoal'], head: ['crimson', 'black'], mask: ['bone'] },
+    x: { sigil: 1, warpaint: 0.5, mask: 0.3, belt: 0.8 }, maskKind: 'skull', prop: [['sickle', 3], ['ritualKnife', 2], ['club', 1]], surnames: ['the Hollow', 'the Ashen', 'Emberkin'] }),
+  cultPriest: wj('Cult Hierophant', 'cult', { ages: [['adult', 2], ['old', 2]], head: [['cultHood', 1]], torso: [['robe', 1]], feet: [['shoes', 1]],
+    dye: { torso: ['black', 'crimson', 'plum'], head: ['black', 'crimson', 'plum'], trim: ['gold', 'bone'], stole: ['crimson', 'gold', 'bone'], mask: ['bone'] },
+    x: { sigil: 1, stole: 1, chain: 0.6, mask: 1 }, maskKind: 'skull', prop: [['cultStaff', 1]], pre: 'Hierophant' }),
+};
+const WILD_LIST = Object.keys(WILDS).map(k => [k, 1]);
+Object.assign(JOBS, WILDS);
+export const TIERS = { hamlet: 'Hamlet', medium: 'Medium town', large: 'Large town', road: 'On the road', wilds: 'In the wilds', cult: 'Cults' };
+export const POOLS = { town: ['hamlet', 'medium', 'large'], wilds: ['road', 'wilds', 'cult'] };
 export const jobTitle = d => (d.body === 'fem' && JOBS[d.job].femTitle) || JOBS[d.job].title;
 
 // ---------- names ----------
@@ -169,7 +211,7 @@ function makeName(r, body, J) {
   else last = (r() < 0.5 ? oneOf(r, NAMES.masc.whole) : join(oneOf(r, NAMES.masc.pre), oneOf(r, NAMES.masc.suf))) + 'son';
   // churchmen go by their first name and a place (of Ashford), soldiers by rank
   if (J === JOBS.bishop || J === JOBS.priest || J === JOBS.choir) last = 'of ' + join(oneOf(r, NAMES.place.pre), oneOf(r, NAMES.place.suf));
-  const pre = J === JOBS.bishop ? 'Bishop' : J === JOBS.captain ? 'Captain' : J === JOBS.priest ? (body === 'fem' ? 'Mother' : 'Father') : J === JOBS.elder ? (body === 'fem' ? 'Old Mother' : 'Old') : '';
+  const pre = J.pre ? J.pre : J === JOBS.bishop ? 'Bishop' : J === JOBS.captain ? 'Captain' : J === JOBS.priest ? (body === 'fem' ? 'Mother' : 'Father') : J === JOBS.elder ? (body === 'fem' ? 'Old Mother' : 'Old') : '';
   return { first, last, full: [pre, first, last].filter(Boolean).join(' ') };
 }
 
@@ -178,10 +220,10 @@ export const HAIR_STYLES = {
   masc: [['short', 6], ['crop', 4], ['bald', 2], ['shaggy', 3], ['ponytail', 1], ['long', 1]],
   fem: [['long', 5], ['bob', 3], ['bun', 4], ['braid', 4], ['ponytail', 3], ['short', 1]],
 };
-export function design(seed) {
+export function design(seed, pool = 'town') {
   const r = folkRand(seed);
   const body = r() < 0.5 ? 'masc' : 'fem';
-  const job = pick(r, JOB_LIST), J = JOBS[job];
+  const job = pick(r, pool === 'wilds' ? WILD_LIST : JOB_LIST), J = JOBS[job];
   const age = pick(r, J.ages || [['young', 4], ['adult', 6], ['old', 2]]);
   const d = { seed, body, age, job, tier: J.tier };
   d.height = 0.95 + r() * 0.1;
@@ -203,14 +245,14 @@ export function design(seed) {
   d.feet = { item: pick(r, J.feet) };
   Object.assign(d.torso, tint(D.torso));
   // what shows under a vest, bodice or tabard, and the surplice's white over its cassock
-  if (['vest', 'bodice', 'tabard', 'surplice'].includes(d.torso.item)) d.torso.under = tint(D.under || ['linen', 'linen', 'wool', 'oat']);
+  if (['vest', 'bodice', 'tabard', 'surplice', 'jerkin'].includes(d.torso.item)) d.torso.under = tint(D.under || ['linen', 'linen', 'wool', 'oat']);
   d.torso.trim = D.trim ? tint(D.trim).color : shade(d.torso.color, -0.35);
   if (WHOLE.includes(d.legs.item)) Object.assign(d.legs, { dye: d.torso.dye, color: d.torso.color });
   else { let t = tint(D.legs || PLAIN); for (let n = 0; n < 4 && t.dye === d.torso.dye && (D.legs || PLAIN).length > 1; n++) t = tint(D.legs || PLAIN); Object.assign(d.legs, t); }
   d.legs.stockings = r() < 0.6 ? jitter(r, pick(r, [[DYES.linen[0], 3], [DYES.wool[0], 3], [DYES.grey[0], 1], [DYES.umber[0], 1]])) : shade(d.legs.color, -0.25);
   const hat = d.head.item;
   if (hat === 'strawHat') Object.assign(d.head, { dye: 'straw', color: jitter(r, STRAW, 0.05), band: tint(D.head || EARTH).color });
-  else if (hat === 'kettleHat') Object.assign(d.head, { dye: 'iron', color: jitter(r, '#8e949e', 0.05) });
+  else if (hat === 'kettleHat' || hat === 'nasalHelm') Object.assign(d.head, { dye: 'iron', color: jitter(r, '#8e949e', 0.05) });
   else if (hat !== 'none') Object.assign(d.head, tint(D.head || D.torso), { trim: D.trim ? tint(D.trim).color : null, feather: tint(['white', 'scarlet', 'weld', 'teal', 'black']).color });
   d.feet.color = d.feet.item === 'wraps' ? tint(D.legs || PLAIN).color : jitter(r, LEATHER[Math.floor(r() * LEATHER.length)], 0.05);
   d.feet.sole = shade(d.feet.color, -0.4);
@@ -227,14 +269,25 @@ export function design(seed) {
   d.stole = roll(X.stole) ? tint(D.stole || ['white']).color : null;
   d.cloak = roll(X.cloak) ? tint(D.cloak || D.torso).color : null;
   d.sword = !!X.sword;
-  d.shawl = body === 'fem' && hat !== 'hood' && roll(X.shawl ?? 0.1) ? { color: tint(D.head || D.torso).color } : null;
-  d.neckerchief = body === 'masc' && hat !== 'hood' && roll(X.neckerchief ?? 0.1) ? { color: tint(['madder', 'weld', 'woad', 'scarlet', 'white']).color } : null;
-  d.prop = J.prop || 'none';
+  d.shawl = body === 'fem' && hat !== 'hood' && hat !== 'cultHood' && roll(X.shawl ?? 0.1) ? { color: tint(D.head || D.torso).color } : null;
+  d.neckerchief = body === 'masc' && hat !== 'hood' && hat !== 'cultHood' && roll(X.neckerchief ?? 0.1) ? { color: tint(['madder', 'weld', 'woad', 'scarlet', 'white']).color } : null;
+  d.prop = Array.isArray(J.prop) ? pick(r, J.prop) : J.prop || 'none';
   d.eyes = pick(r, [['#1e1814', 6], ['#2a3a5a', 2], ['#3a4a2a', 2], ['#4a3020', 2]]);
   // the bust's size, lift and sag, each 0..1; sag comes from age (Jordan): young 0-0.25, adult 0.25-0.6, old 0.6-1
   const SAG = { young: [0, 0.25], adult: [0.25, 0.6], old: [0.6, 1] }[age];
   if (body === 'fem') d.bust = { size: r(), lift: r(), sag: SAG[0] + r() * (SAG[1] - SAG[0]) };
   d.name = makeName(r, body, J);
+  // (v9) the hostile folk's own pieces, rolled after everything else
+  if (J.hostile) {
+    d.hostile = true;
+    d.mask = roll(X.mask) ? { kind: J.maskKind || 'cloth', color: tint(D.mask || ['charcoal']).color } : null;
+    d.furs = roll(X.furs) ? jitter(r, pick(r, [['#8a7a64', 3], ['#5e4e3e', 3], ['#a8a090', 2], ['#3e342a', 2], ['#c8c0b0', 1]]), 0.05) : null;
+    d.quiver = roll(X.quiver) ? leather() : null;
+    d.shield = roll(X.shield) ? { color: tint(D.shield || ['umber']).color, trim: tint(['bone', 'charcoal', 'ochre', 'madder']).color } : null;
+    d.sigil = roll(X.sigil) ? (D.trim ? tint(D.trim).color : '#b8282a') : null;
+    d.warpaint = roll(X.warpaint) ? tint(['woad', 'ochre', 'black', 'crimson', 'white']).color : null;
+    if (hat === 'cultHood') d.head.glow = pick(r, [['#ff5a2a', 3], ['#ffd24a', 1], ['#7ae0ff', 1], ['#c070ff', 1]]);
+  }
   return d;
 }
 // a design in words, for the viewer's readout
@@ -250,7 +303,9 @@ export function describe(d) {
   ];
   if (d.bust) rows.splice(1, 0, ['Bust', `size ${d.bust.size.toFixed(2)}, lift ${d.bust.lift.toFixed(2)}, sag ${d.bust.sag.toFixed(2)}`]);
   const extra = [d.apron && (d.apron.heavy ? 'leather apron' : 'apron'), d.cloak && 'cloak', d.stole && 'stole', d.chain && 'chain of office', d.gloves && 'gloves',
-    d.satchel && 'satchel', d.sword && 'sword', d.shawl && 'shawl', d.neckerchief && 'neckerchief', d.belt && (d.belt.sash ? 'sash' : d.belt.cord ? 'cord belt' : 'belt')].filter(Boolean);
+    d.satchel && 'satchel', d.sword && 'sword', d.shawl && 'shawl', d.neckerchief && 'neckerchief',
+    d.mask && (d.mask.kind === 'skull' ? 'skull mask' : 'face cloth'), d.furs && 'fur mantle', d.quiver && 'quiver', d.shield && 'shield on the back',
+    d.sigil && 'cult sigil', d.warpaint && 'war paint', d.head.glow && 'glowing eyes', d.belt && (d.belt.sash ? 'sash' : d.belt.cord ? 'cord belt' : 'belt')].filter(Boolean);
   if (extra.length) rows.push(['Extras', extra.join(', ')]);
   if (d.prop !== 'none') rows.push(['Holding', nice(d.prop)]);
   return rows;
@@ -311,7 +366,7 @@ export function makeFolkKit(GFX) {
     const skirted = ['skirt', 'longSkirt', ...WHOLE].includes(L.item);
     const hem = L.item === 'skirt' ? 0.17 : ['robe', 'surplice', 'gown'].includes(L.item) ? 0.05 : 0.07;
     const upper = T.under ? T.under.color : T.color;      // (the sleeves: the shirt's under a vest, bodice or tabard)
-    const overUnder = ['vest', 'bodice', 'tabard', 'surplice'].includes(T.item);
+    const overUnder = ['vest', 'bodice', 'tabard', 'surplice', 'jerkin'].includes(T.item);
 
     const body = pivot(g, 0, 0, 0);
     // ---- legs: hip, knee, ankle (the hero's joints) ----
@@ -337,12 +392,12 @@ export function makeFolkKit(GFX) {
       } else {
         // cloth foot wraps, bound with two darker bands
         box(foot, B.leg, 0.11, 0.14, 0, -0.005, 0.015, F.color);
-        for (const y of [0.0, 0.035]) box(foot, B.leg + 0.006, 0.014, B.leg + 0.012, 0, y, 0, shade(F.color, -0.35));
+        for (const y of [0.0, 0.035]) box(foot, B.leg + 0.008, 0.014, B.leg + 0.014, 0, y, 0, shade(F.color, -0.35));
         box(foot, B.leg + 0.006, 0.014, 0.145, 0, -0.045, 0.015, shade(F.color, -0.35));
       }
     }
     // ---- hips and waist ----
-    const hipC = skirted ? L.color : T.item === 'tunic' ? T.color : L.color;
+    const hipC = skirted ? L.color : T.item === 'tunic' || T.item === 'gambeson' ? T.color : L.color;
     // the feminine torso narrows from the hips to the waist and widens again to the shoulders; torsoAt(y) gives its
     // width and depth at a height (chest pieces), hipAt(y) the hips'
     const lerp = (a, b, u) => a + (b - a) * u, clampU = u => Math.max(0, Math.min(1, u));
@@ -384,6 +439,7 @@ export function makeFolkKit(GFX) {
     };
     if (skirted) skirtHalves(L.color, hem, L.item === 'skirt' ? 0.07 : ['dress', 'gown'].includes(L.item) ? 0.12 : 0.1);
     else if (T.item === 'tunic') skirtHalves(T.color, 0.25, 0.02);
+    else if (T.item === 'gambeson') skirtHalves(T.color, 0.25, 0.02);
     else if (T.item === 'doublet') skirtHalves(T.color, 0.3, 0.03);
     // the surplice: a white over-skirt to the knee on the cassock (its skirt kept for the sash and apron below)
     if (T.item === 'surplice') { const keep = skirtP; skirtHalves(T.under.color, 0.24, 0.14, 0.016); skirtP = keep; }
@@ -477,6 +533,26 @@ export function makeFolkKit(GFX) {
     } else if (T.item === 'surplice') {
       // the white surplice's yoke over the cassock
       box(chest, 0.09, 0.025, 0.006, 0, 0.65 - CH, frontAt(0.65) + 0.003, T.color);
+    } else if (T.item === 'jerkin') {
+      // (v9) a sleeveless leather jerkin over the shirt, closed, with a dark laced seam down the front
+      if (fem) {
+        const yt = BUST[0][0] + 0.004, [w0, d0] = torsoAt(0.4), [w1, d1] = torsoAt(yt);
+        taper(chest, 0.4 - CH, yt - CH, [w0 + 0.014, d0 + 0.012], [w1 + 0.014, d1 + 0.012], T.color);
+        chestPanel(0, B.sh - 0.05, yt - 0.006, 0.655, T.color, 0.006, 0.012);
+        chestPanel(0, 0.012, 0.41, 0.65, shade(T.color, -0.4), 0.014, 0.006);
+      } else {
+        box(chest, B.sh + 0.012, 0.155, B.dep + 0.012, 0, 0.5975 - CH, 0, T.color);
+        box(chest, B.wa + 0.012, 0.17, B.dep + 0.006, 0, 0.445 - CH, 0, T.color);
+        chestPanel(0, 0.012, 0.37, 0.66, shade(T.color, -0.4), 0.008, 0.006);
+      }
+    } else if (T.item === 'gambeson') {
+      // (v9) a quilted gambeson: darker stitched lines across front and back, and a padded collar
+      for (const y of [0.44, 0.49, 0.54, 0.59, 0.635]) {
+        const w = (fem ? torsoAt(y)[0] : y > 0.51 ? B.sh : B.wa) - 0.036;
+        chestPanel(0, w, y, y + 0.008, shade(T.color, -0.28), 0.004, 0.006);
+        box(chest, w * 0.9, 0.008, 0.006, 0, y + 0.004 - CH, -(frontAt(y) + 0.004), shade(T.color, -0.28));
+      }
+      box(chest, B.sh - 0.05, 0.03, B.dep + 0.016, 0, 0.662 - CH, 0, shade(T.color, 0.08));
     } else if (T.item === 'tunic' || T.item === 'shirt') {
       // a slit neck, laced
       box(chest, 0.03, 0.07, 0.006, 0, 0.625 - CH, frontAt(0.625) + 0.003, shade(T.color, -0.3));
@@ -530,9 +606,42 @@ export function makeFolkKit(GFX) {
     // a satchel on the back, its strap over the left shoulder
     if (d.satchel) {
       box(chest, 0.022, 0.27, 0.01, 0.075, 0.53 - CH, -(frontAt(0.53) + 0.006), d.satchel);
-      box(chest, 0.022, 0.012, B.dep + 0.02, 0.075, 0.672 - CH, 0, d.satchel);
+      box(chest, 0.022, 0.012, B.dep + 0.02, 0.075, 0.675 - CH, 0, d.satchel);
       box(chest, 0.12, 0.1, 0.05, 0.075, 0.38 - CH, -(frontAt(0.45) + 0.03), d.satchel);
       box(chest, 0.128, 0.04, 0.058, 0.075, 0.415 - CH, -(frontAt(0.45) + 0.03), shade(d.satchel, -0.25));
+    }
+    // (v9) a fur mantle over the shoulders, ragged tufts hanging from its edge
+    if (d.furs) {
+      const dz = Math.max(B.dep / 2 + 0.047, chestFront(0.64) + 0.016);
+      box(chest, B.sh + 0.08, 0.075, 2 * dz, 0, 0.66 - CH, 0, d.furs);
+      for (let k = 0; k < 7; k++) {
+        const x = (k - 3) / 3 * (B.sh / 2 + 0.02), long = k % 2 === 0;
+        box(chest, 0.05, long ? 0.05 : 0.035, 2 * dz + (long ? 0.006 : -0.008), x, (long ? 0.6 : 0.612) - CH, 0, shade(d.furs, long ? -0.12 : 0.06));
+      }
+    }
+    // a quiver on the back, arrows up over the right shoulder, its strap over that shoulder
+    if (d.quiver) {
+      const q = pivot(chest, -0.06, 0.5 - CH, -(frontAt(0.5) + 0.05)); q.rotation.z = 0.35;
+      box(q, 0.07, 0.3, 0.07, 0, 0, 0, d.quiver);
+      box(q, 0.078, 0.03, 0.078, 0, -0.13, 0, shade(d.quiver, -0.3));
+      box(q, 0.078, 0.02, 0.078, 0, 0.13, 0, shade(d.quiver, -0.3));
+      [[-0.016, -0.012, '#e8e2d4'], [0.016, 0.0, '#b8282a'], [0, 0.016, '#e8e2d4']].forEach(([x, z, c]) => {
+        box(q, 0.008, 0.06, 0.008, x, 0.17, z, '#8a6440'); box(q, 0.004, 0.05, 0.022, x, 0.21, z, c);
+      });
+      box(chest, 0.022, 0.012, B.dep + 0.026, -0.075, 0.675 - CH, 0, d.quiver);
+    }
+    // a round shield slung on the back: an eight-sided board, a painted cross and an iron boss
+    if (d.shield) {
+      const sh = pivot(chest, 0, 0.5 - CH, -(frontAt(0.5) + 0.046));
+      box(sh, 0.24, 0.24, 0.025, 0, 0, 0, d.shield.color);
+      box(sh, 0.24, 0.24, 0.02, 0, 0, 0, shade(d.shield.color, -0.15), 0, Math.PI / 4);
+      box(sh, 0.234, 0.05, 0.031, 0, 0, 0, d.shield.trim); box(sh, 0.05, 0.234, 0.031, 0, 0, 0, d.shield.trim);
+      box(sh, 0.06, 0.06, 0.04, 0, 0, -0.008, '#6a6e78');
+    }
+    // a cult's sigil on the breast: a diamond with a dark eye
+    if (d.sigil) {
+      box(chest, 0.06, 0.06, 0.008, 0, 0.5 - CH, chestFront(0.5) + 0.014, d.sigil, 0, Math.PI / 4);
+      box(chest, 0.028, 0.012, 0.008, 0, 0.5 - CH, chestFront(0.5) + 0.018, '#1a1214');
     }
     // a sword at the left hip, hilt forward
     if (d.sword) {
@@ -558,7 +667,7 @@ export function makeFolkKit(GFX) {
       else box(head, 0.05, 0.014, 0.012, s * 0.045, 0.142, 0.094, shade(d.hair, -0.15));
     }
     if (fem) box(head, 0.04, 0.012, 0.008, 0, 0.05, 0.092, shade(skin, -0.28));
-    if (d.age === 'old') for (const s of [1, -1]) box(head, 0.02, 0.008, 0.006, s * 0.072, 0.1, 0.091, shade(skin, -0.15));
+    if (d.age === 'old' && !d.warpaint) for (const s of [1, -1]) box(head, 0.02, 0.008, 0.006, s * 0.072, 0.1, 0.091, shade(skin, -0.15));
     // beards
     const bc = d.age === 'old' ? d.hair : shade(d.hair, -0.05);
     if (d.beard === 'full') {
@@ -568,8 +677,21 @@ export function makeFolkKit(GFX) {
       box(head, 0.08, 0.02, 0.012, 0, 0.068, 0.096, bc);
     } else if (d.beard === 'moustache') box(head, 0.09, 0.022, 0.014, 0, 0.065, 0.095, bc);
     else if (d.beard === 'stubble') box(head, 0.176, 0.058, 0.03, 0, 0.036, 0.078, shade(skin, -0.18));
+    // (v9) war paint across the eyes, a cloth over the nose and mouth, or a bone skull mask
+    if (d.warpaint) box(head, 0.196, 0.03, 0.004, 0, 0.11, 0.0915, d.warpaint);
+    if (d.mask && d.mask.kind === 'cloth') {
+      box(head, 0.2, 0.07, 0.014, 0, 0.058, 0.1, d.mask.color);
+      box(head, 0.21, 0.03, 0.17, 0, 0.072, 0.01, d.mask.color);
+      box(head, 0.04, 0.035, 0.03, 0, 0.065, -0.1, shade(d.mask.color, -0.2));
+    } else if (d.mask) {
+      box(head, 0.2, 0.15, 0.016, 0, 0.095, 0.1, d.mask.color);
+      for (const s of [1, -1]) box(head, 0.042, 0.036, 0.008, s * 0.045, 0.115, 0.107, '#1a1214');
+      box(head, 0.022, 0.024, 0.008, 0, 0.08, 0.107, '#1a1214');
+      box(head, 0.1, 0.008, 0.008, 0, 0.045, 0.107, '#3a3030');
+      for (const x of [-0.03, 0, 0.03]) box(head, 0.006, 0.02, 0.009, x, 0.045, 0.107, '#3a3030');
+    }
     // hair, then whatever's on the head over it
-    const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif';
+    const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif' || hat === 'cultHood';
     const hc = d.hair, hs = d.hairStyle;
     const top = (h = 0.06) => { if (!covered) box(head, 0.2, h, 0.196, 0, 0.185 + h / 2, -0.002, hc); };
     const back = (h = 0.15, y = 0.13) => { if (!hood) box(head, 0.2, h, 0.05, 0, y, -0.08, hc); };
@@ -588,13 +710,13 @@ export function makeFolkKit(GFX) {
       if (!hood) for (const s of [1, -1]) box(head, 0.03, 0.15, 0.15, s * 0.1, 0.11, -0.01, hc);
     } else if (hs === 'bun') {
       top(); back(0.13, 0.14);
-      if (hat !== 'hood' && hat !== 'strawHat') box(head, 0.1, 0.09, 0.08, 0, hat === 'none' ? 0.2 : 0.17, -0.12, hc);
+      if (hat !== 'hood' && hat !== 'cultHood' && hat !== 'strawHat') box(head, 0.1, 0.09, 0.08, 0, hat === 'none' ? 0.2 : 0.17, -0.12, hc);
     } else if (hs === 'braid') {
       top(); back(0.15, 0.13); fringe();
-      if (hat !== 'hood') { box(head, 0.045, 0.03, 0.04, 0, 0.07, -0.115, shade(hc, -0.25)); for (let k = 0; k < 3; k++) box(head, 0.05 - k * 0.004, 0.055, 0.045, 0, 0.035 - k * 0.06, -0.115 - k * 0.006, hc, -0.08); }
+      if (hat !== 'hood' && hat !== 'cultHood') { box(head, 0.045, 0.03, 0.04, 0, 0.07, -0.115, shade(hc, -0.25)); for (let k = 0; k < 3; k++) box(head, 0.05 - k * 0.004, 0.055, 0.045, 0, 0.035 - k * 0.06, -0.115 - k * 0.006, hc, -0.08); }
     } else if (hs === 'ponytail') {
       top(); back(0.13, 0.14);
-      if (hat !== 'hood') { box(head, 0.05, 0.03, 0.04, 0, 0.13, -0.11, shade(hc, -0.25)); box(head, 0.06, 0.18, 0.05, 0, 0.03, -0.125, hc, -0.12); }
+      if (hat !== 'hood' && hat !== 'cultHood') { box(head, 0.05, 0.03, 0.04, 0, 0.13, -0.11, shade(hc, -0.25)); box(head, 0.06, 0.18, 0.05, 0, 0.03, -0.125, hc, -0.12); }
     }
     const H = d.head;
     if (hat === 'hood') {
@@ -664,6 +786,31 @@ export function makeFolkKit(GFX) {
       // (bands and lappets stand clear of the mitre's faces and of the hair at the back: flush they z-fought)
       for (const sz of [1, -1]) taper(head, 0.23, 0.42, [0.035, 0.006, 0, sz * 0.089], [0.02, 0.006, 0, sz * 0.059], H.trim || '#c8a048');
       for (const sx of [1, -1]) box(head, 0.03, 0.18, 0.008, sx * 0.05, 0.1, -0.114, H.trim || '#c8a048');
+    } else if (hat === 'cultHood') {
+      // (v9) a cult's deep hood: the plain hood's crown, back and sides, a tall point leaning back, a brim drooping over
+      // a face lost in shadow (eyes glowing out of it, unless a mask is worn), and a long capelet
+      box(head, 0.225, 0.05, 0.215, 0, 0.215, -0.008, H.color);
+      box(head, 0.225, 0.22, 0.05, 0, 0.1, -0.095, H.color);
+      for (const s of [1, -1]) box(head, 0.03, 0.22, 0.2, s * 0.11, 0.1, -0.005, H.color);
+      taper(head, 0.235, 0.37, [0.17, 0.15, 0, -0.03], [0.02, 0.02, 0, -0.12], H.color);
+      box(head, 0.234, 0.03, 0.04, 0, 0.203, 0.105, shade(H.color, -0.15));
+      if (!d.mask) {
+        box(head, 0.19, 0.12, 0.008, 0, 0.13, 0.101, '#0c0a0c');
+        if (H.glow) for (const s of [1, -1]) box(head, 0.026, 0.012, 0.004, s * 0.045, 0.115, 0.107, H.glow);
+      }
+      box(chest, B.sh + 0.05, 0.1, B.dep + 0.062, 0, 0.65 - CH, -0.008, H.color);
+      box(chest, B.sh - 0.02, 0.05, B.dep + 0.03, 0, 0.6 - CH, -0.005, shade(H.color, -0.15));
+    } else if (hat === 'nasalHelm') {
+      // (v9) an iron helm: a domed cap, a riveted rim and a bar down the nose
+      taper(head, 0.2, 0.3, [0.205, 0.2], [0.1, 0.1], H.color);
+      box(head, 0.214, 0.026, 0.216, 0, 0.2, 0, shade(H.color, -0.2));
+      box(head, 0.022, 0.085, 0.012, 0, 0.145, 0.108, shade(H.color, -0.1));
+    } else if (hat === 'slouchHat') {
+      // (v9) a wide-brimmed slouch hat, the brim drooping at the front, a band round the crown
+      box(head, 0.2, 0.08, 0.2, 0, 0.245, 0, H.color);
+      box(head, 0.34, 0.014, 0.3, 0, 0.205, -0.02, H.color);
+      box(head, 0.3, 0.014, 0.09, 0, 0.19, 0.16, shade(H.color, -0.08), 0.3);
+      box(head, 0.206, 0.024, 0.206, 0, 0.222, 0, H.trim || shade(H.color, -0.35));
     } else if (hat === 'skullcap') {
       box(head, 0.14, 0.03, 0.13, 0, 0.255, -0.02, H.color);
     }
@@ -713,7 +860,57 @@ export function makeFolkKit(GFX) {
       fill();
     };
     const P = d.prop;
-    if (['staff', 'lampPole', 'crozier', 'spear', 'broomHeld'].includes(P)) {
+    if (P === 'torch') {
+      // (v9, kept upright like a staff) a pitch torch, burning
+      box(tool, 0.035, 0.42, 0.035, 0, 0.1, 0, WOOD);
+      box(tool, 0.05, 0.07, 0.05, 0, 0.3, 0, '#4a3a2e');
+      box(tool, 0.06, 0.09, 0.06, 0, 0.375, 0, '#ff8a2a');
+      box(tool, 0.034, 0.08, 0.034, 0, 0.44, 0, '#ffd24a');
+    } else if (P === 'shovel') {
+      box(tool, 0.03, 1.0, 0.03, 0, 0.12, 0, WOOD);
+      box(tool, 0.09, 0.025, 0.04, 0, 0.62, 0, DARK);
+      taper(tool, -0.56, -0.37, [0.1, 0.014], [0.13, 0.018], '#6a6e78');
+    } else if (P === 'cultStaff') {
+      box(tool, 0.03, 1.25, 0.03, 0, 0.23, 0, '#2a2226');
+      box(tool, 0.08, 0.075, 0.085, 0, 0.9, 0, '#d8ceb0');
+      box(tool, 0.06, 0.03, 0.06, 0, 0.85, 0.008, '#c4b898');
+      for (const s of [1, -1]) {
+        box(tool, 0.022, 0.02, 0.008, s * 0.018, 0.905, 0.044, '#1a1010');
+        box(tool, 0.015, 0.07, 0.015, s * 0.045, 0.95, 0, '#3a3030', 0, -s * 0.4);
+      }
+    } else if (P === 'club') {
+      box(tool, 0.03, 0.14, 0.03, 0, -0.03, 0.027, DARK);
+      taper(tool, -0.3, -0.08, [0.075, 0.075, 0, 0.02], [0.045, 0.045, 0, 0.02], '#7a5a3a');
+      for (const [x, y, z] of [[0.04, -0.24, 0.02], [-0.04, -0.2, 0.02], [0, -0.26, 0.062]]) box(tool, 0.016, 0.016, 0.016, x, y, z, '#6a6e78');
+    } else if (P === 'dagger' || P === 'ritualKnife') {
+      const rit = P === 'ritualKnife';
+      box(tool, 0.024, 0.07, 0.024, 0, 0.0, 0.02, rit ? '#5a1418' : DARK);
+      box(tool, 0.034, 0.022, 0.034, 0, 0.05, 0.022, rit ? GOLD : STEEL);
+      box(tool, 0.07, 0.014, 0.028, 0, -0.042, 0.02, rit ? GOLD : STEEL);
+      taper(tool, -0.19, -0.049, [0.006, 0.006, 0, 0.02], [0.026, 0.008, 0, 0.02], rit ? '#2a2430' : STEEL);
+    } else if (P === 'swordDrawn') {
+      box(tool, 0.026, 0.09, 0.026, 0, 0.0, 0.02, DARK);
+      box(tool, 0.036, 0.026, 0.036, 0, 0.056, 0.02, STEEL);
+      box(tool, 0.12, 0.02, 0.032, 0, -0.054, 0.02, STEEL);
+      box(tool, 0.036, 0.38, 0.012, 0, -0.254, 0.02, STEEL);
+      taper(tool, -0.5, -0.444, [0.004, 0.004, 0, 0.02], [0.036, 0.012, 0, 0.02], STEEL);
+    } else if (P === 'sickle') {
+      box(tool, 0.026, 0.11, 0.026, 0, -0.02, 0.02, WOOD);
+      box(tool, 0.012, 0.07, 0.018, 0, -0.1, 0.035, '#9aa0a8', -0.35);
+      box(tool, 0.012, 0.07, 0.018, 0, -0.148, 0.07, '#9aa0a8', -1.05);
+      box(tool, 0.012, 0.06, 0.018, 0, -0.16, 0.122, '#9aa0a8', -1.8);
+    } else if (P === 'shortbow') {
+      // held at the grip, the limbs bending back at the tips, the string between them
+      box(tool, 0.03, 0.08, 0.03, 0, 0, 0.042, DARK);
+      taper(tool, 0.03, 0.3, [0.022, 0.022, 0, 0.05], [0.012, 0.012, 0, 0.012], '#8a6440');
+      taper(tool, -0.3, -0.03, [0.012, 0.012, 0, 0.012], [0.022, 0.022, 0, 0.05], '#8a6440');
+      box(tool, 0.004, 0.58, 0.004, 0, 0, 0.01, '#e8e2d4');
+    } else if (P === 'crossbow') {
+      box(tool, 0.04, 0.04, 0.32, 0, -0.03, 0.1, WOOD);
+      box(tool, 0.34, 0.026, 0.03, 0, -0.012, 0.23, DARK);
+      box(tool, 0.3, 0.006, 0.006, 0, -0.012, 0.2, '#e8e2d4');
+      box(tool, 0.012, 0.012, 0.2, 0, -0.005, 0.15, '#6a4a2a');
+    } else if (['staff', 'lampPole', 'crozier', 'spear', 'broomHeld'].includes(P)) {
       box(tool, 0.03, 1.25, 0.03, 0, 0.23, 0, P === 'crozier' ? GOLD : P === 'spear' ? DARK : WOOD);
       if (P === 'staff') box(tool, 0.05, 0.06, 0.05, 0, 0.85, 0, DARK);
       if (P === 'lampPole') {
@@ -731,7 +928,7 @@ export function makeFolkKit(GFX) {
     } else if (P === 'axe') {
       box(tool, 0.026, 0.34, 0.026, 0, -0.12, 0.02, WOOD);
       box(tool, 0.016, 0.1, 0.1, 0, -0.26, 0.07, STEEL);
-      box(tool, 0.03, 0.05, 0.04, 0, -0.26, 0.02, '#6a6e78');
+      box(tool, 0.034, 0.05, 0.044, 0, -0.26, 0.02, '#6a6e78');
     } else if (P === 'scraper') {
       box(tool, 0.03, 0.08, 0.03, 0, -0.03, 0, WOOD);
       box(tool, 0.12, 0.012, 0.03, 0, -0.08, 0, STEEL);
@@ -776,7 +973,7 @@ export function makeFolkKit(GFX) {
       box(lute, 0.035, 0.24, 0.025, 0, 0.22, 0, '#5a3a22');
       box(lute, 0.05, 0.06, 0.03, 0, 0.36, 0, '#3a2416', -0.4);
     }
-    const staff = ['staff', 'lampPole', 'crozier', 'spear', 'broomHeld'].includes(P);
+    const staff = ['staff', 'lampPole', 'crozier', 'spear', 'broomHeld', 'torch', 'shovel', 'cultStaff'].includes(P);
     // a soft round shadow on the ground
     const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
     g.scale.set(1.12 * d.build * (fem ? 0.98 : 1), 1.12 * d.height * (fem ? 0.97 : 1), 1.12 * d.build);
@@ -789,7 +986,7 @@ export function makeFolkKit(GFX) {
 // The walk is the hero's (legSwing's planted half linear, knees bending on the swing, the foot kept level), a little
 // slower and shorter in the step; the rest are made for standing about in town.
 export const FOLK_WALK = { rate: 4.2, stride: 0.6, arms: 0.45, knee: 1.4, foot: 0.6, elbow: 0.3, bob: 0.025, twist: 0.08 };
-export const ANIMS = ['idle', 'walk', 'talk', 'wave', 'carry', 'sweep', 'play'];
+export const ANIMS = ['idle', 'walk', 'talk', 'wave', 'carry', 'sweep', 'play', 'brandish'];
 function legSwing(ph) {
   const u = ((ph % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), sn = Math.sin(u);
   const w = u > 1.5 * Math.PI ? u - 2 * Math.PI : u;
@@ -841,7 +1038,7 @@ export function pose(f, anim, t) {
   f.broom.rotation.set(0, 0, 0);
   f.broom.visible = anim === 'sweep'; f.crate.visible = anim === 'carry';
   const walking = anim === 'walk' || anim === 'carry';
-  let bodyY = Math.sin(t * 1.8) * 0.006;
+  let bodyY = Math.sin(t * 1.8) * 0.006, crouch = 0;
   if (walking) {
     const ph = t * W.rate;
     f.legL.rotation.x = legSwing(ph) * W.stride;
@@ -900,6 +1097,24 @@ export function pose(f, anim, t) {
     f.head.rotation.x = 0.2; f.head.rotation.y = s * 0.1;
     f.legL.rotation.x = -0.12; f.legR.rotation.x = 0.1; f.knees[0].rotation.x = 0.12; f.knees[1].rotation.x = 0.16;
   }
+  else if (anim === 'brandish') {
+    // (v9) squared up to fight: crouched, the weapon hand up and jabbing now and then, the other fist up on guard; a
+    // bow or crossbow is levelled at you, the draw hand back at the string
+    const s = Math.sin(t * 3.2), jab = Math.pow(Math.max(0, Math.sin(t * 1.6)), 6), P = f.d.prop;
+    crouch = 0.012;
+    f.legL.rotation.x = -0.35; f.legR.rotation.x = 0.2; f.knees[0].rotation.x = 0.45; f.knees[1].rotation.x = 0.2;
+    f.chest.rotation.x = 0.16; f.chest.rotation.y = -0.22 + s * 0.04;
+    f.head.rotation.x = -0.12; f.head.rotation.y = 0.18;
+    if (P === 'shortbow' || P === 'crossbow') {
+      f.chest.rotation.y = -0.3;
+      f.armL.rotation.set(-1.45, 0, 0.12); f.elbows[0].rotation.x = -0.08;
+      f.armR.rotation.set(-1.35, 0, -0.55); f.elbows[1].rotation.x = -1.7;
+      f.head.rotation.y = 0.3;
+    } else {
+      f.armL.rotation.set(-1.25 - jab * 0.55 + s * 0.06, 0, 0.12); f.elbows[0].rotation.x = -0.95 + jab * 0.75;
+      f.armR.rotation.set(-0.55, 0, -0.3); f.elbows[1].rotation.x = -1.2;
+    }
+  }
   else if (anim === 'play' && f.lute) {
     // (Jordan) playing the lute: the left hand on the neck, sliding along it now and then, the right strumming over
     // the body; the head bent to the strings, swaying to the tune
@@ -912,7 +1127,7 @@ export function pose(f, anim, t) {
     f.head.rotation.x = 0.22; f.head.rotation.y = 0.25 + sway * 0.08; f.head.rotation.z = -sway * 0.05;
     f.legL.rotation.z = f.legR.rotation.z = 0; f.body.rotation.z = sway * 0.02;
   }
-  f.body.position.y = bodyY;
+  f.body.position.y = bodyY - crouch;
   // (breathing sinks the body: the legs rise as much, so the feet stay on the ground)
   f.legL.position.y = f.legR.position.y = 0.36 - Math.min(0, bodyY);
   // feet kept level with the ground, and skirts swinging with their legs
@@ -928,4 +1143,7 @@ export function pose(f, anim, t) {
     if (anim === 'idle') { f.armL.rotation.x = -0.25; f.elbows[0].rotation.x = -0.55; }
     f.tool.rotation.x = -(f.chest.rotation.x + f.armL.rotation.x + f.elbows[0].rotation.x + f.wrists[0].rotation.x);
   }
+  // (v9) a bow stands upright and a crossbow lies level when levelled at you
+  if (anim === 'brandish' && (f.d.prop === 'shortbow' || f.d.prop === 'crossbow'))
+    f.tool.rotation.x = -(f.chest.rotation.x + f.armL.rotation.x + f.elbows[0].rotation.x + f.wrists[0].rotation.x);
 }
