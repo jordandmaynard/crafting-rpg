@@ -219,6 +219,8 @@ Jordan's Wanderer's Kit world map pack (art/deliveries/wanderers-kit-world-map-v
 
 The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The wheel zooms about the cursor, dragging pans, and a click picks a seen town for fast travel. Anything you haven't explored is cut out of the map down to opaque parchment, in hard 8-tile cells, and so is everything outside the world. Markers and names show only where you've been. A paper compass rose and a live scale (1 tile = 1.6 m) sit at the bottom right, and a paper footer carries the help and the fast travel button. The folio drags by its leather. While it's open the minimap hides (Jordan). The map's debug and seed tools (seed, PLOTS, BANDS, NEW WORLD, REVEAL ALL, LOAD SEED, EACH LOAD) moved into Options under WORLD, and N and P still work on the map.
 
+**v550:** (Jordan's tuning) Health bars: flash 1.3, flashFade 10, lost #6b0000, hot #ff0000, hotBright 2. XP sparks glow 1.6.
+
 **v549:** (Jordan) T > Levels: Spark glow (XP_FLY.glow, 0-4, 1 as made) sets how far and how strongly the flying XP sparks' blue halo shines.
 
 **v548:** (Jordan's health bar tuning) HPBAR delay 0.4 (was 0.6).
