@@ -13464,12 +13464,13 @@ const surfaceY = (x, z) => heightAt(x, z) + (FL[T(clamp(Math.floor(x), 0, N - 1)
 // ---------- Boats ----------
 // (v494, Jordan) A two-masted boat moored beside every dock: not part of the world's tiles, but its own moving model.
 // Walk up its gangplank to the wheel and press F: you take the wheel and the anchor comes up. W and S set the sails
-// (furled, half, full), which sets the speed (no wind yet); the boat always turns toward where the camera looks, at a
-// fixed rate. F again leaves the wheel and drops the anchor; the gangplank comes down where there's ground to reach.
-// The boat's own frame: u across (+ to starboard), v along (+ toward the bow), y up from the deck. World from the
+// (furled, half, full), which sets the speed (no wind yet); A and D turn it at a fixed rate, moving or not (v495,
+// Jordan: no longer toward the camera). F again leaves the wheel and drops the anchor; the gangplank reaches out to
+// ground or a dock up to BOAT.reach beyond the gangway (v495), else stays in.
+// The boat's own frame: u across (+ to port), v along (+ toward the bow), y up from the deck. World from the
 // boat: x = b.x + cos(h) u + sin(h) v, z = b.z - sin(h) u + cos(h) v (h the heading, as H.face: atan2(dx, dz)).
 const BOAT = { stern: -4.2, bow: 4.6, mid: -0.6, beam: 1.35, free: 0.75, speed: 7, accel: 1.2, turn: 0.5, notches: 2, sailRate: 0.8,
-  anchorTime: 1.6, gangV: -0.2, plank: 1.2, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
+  anchorTime: 1.6, gangV: -0.2, plank: 1.2, reach: 2, onto: 0.6, wheelV: -3.2, bowWalk: 3.4, gap: 0.45, along: 5.4, see: 80,
   masts: [{ v: 1.7, h: 7.0, w: 3.2 }, { v: -1.0, h: 7.8, w: 3.6 }] };
 const boats = [];
 // a mast's two yards: [height, width, how far its sail hangs] (the lower sail stops clear over your head)
@@ -13596,12 +13597,12 @@ function placeBoat(k) {
     const x = ox + DC[d] * along + px * off, z = oz + DR[d] * along + pz * off;
     const ci = T(Math.floor(x), Math.floor(z)), wl = WL[ci];
     if (!wl || !boatFits(x, z, h, wl)) continue;
-    const b = { x, z, h, wl, speed: 0, notch: 0, sail: 0, anchor: 1, anchorGoal: 1, plank: 1, side: 0, endY: dockY, phase: hs(bc, br, 496) * 6.28, dock: k, g: null };
+    const b = { x, z, h, wl, speed: 0, notch: 0, sail: 0, anchor: 1, anchorGoal: 1, plank: 1, side: 0, endY: dockY, len: BOAT.plank, phase: hs(bc, br, 496) * 6.28, dock: k, g: null };
     // the gangplank goes down on the dock's side
     const [u] = boatLocal(b, x - px * off, z - pz * off);
     b.side = u > 0 ? 1 : -1;
-    const [ex, ez] = boatWorld(b, b.side * (boatHB(BOAT.gangV) + BOAT.plank - 0.3), BOAT.gangV);
-    b.endY = surfaceY(ex, ez);
+    const land = boatLanding(b);
+    if (land) { b.side = land.side; b.endY = land.y; b.len = land.len; } else { b.plank = 0; b.plankGoal = 0; }
     return b;
   }
   return null;
@@ -13643,22 +13644,30 @@ function poseBoat(b, dt) {
   b.anchorM.position.y = ay; b.chainM.scale.y = Math.max(0.05, 0.2 - ay - 0.6);
   b.chainM.visible = b.anchor > 0.02;
   // the gangplank: out from the deck's edge on its side, sloping down to the ground it rests on
-  const hb = boatHB(BOAT.gangV), L = BOAT.plank * b.plank;
+  const hb = boatHB(BOAT.gangV), L = b.len * b.plank;
   b.plankG.visible = b.plank > 0.02;
   b.plankG.position.set(b.side * (hb + 0.02), 0.03, BOAT.gangV);
-  b.plankG.rotation.set(0, b.side > 0 ? 0 : Math.PI, Math.atan2(clamp(b.endY - y, -1.6, 1.6), BOAT.plank));
+  b.plankG.rotation.set(0, b.side > 0 ? 0 : Math.PI, Math.atan2(clamp(b.endY - y, -1.6, 1.6), b.len));
   b.plankM.scale.set(Math.max(0.01, L), 1, 1);
 }
-// the gangplank's foot, where it can go down: ground (or a dock) beside the gangway at about deck height
+// the gangplank's foot, where it can go down: ground (or a dock) out from the gangway, within BOAT.reach of the
+// hull, at about deck height; the plank runs out to it and BOAT.onto further, the nearer side first (then the one
+// it was on)
 function boatLanding(b) {
-  const y = boatDeckY(b), hb = boatHB(BOAT.gangV);
+  const y = boatDeckY(b), hb = boatHB(BOAT.gangV), ground = (x, z) => { const i = T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1)); return (LV[i] > 0 || BR[i]) && !LAVA[i]; };
+  let best = null;
   for (const sg of b.side ? [b.side, -b.side] : [1, -1]) {
-    const [x, z] = boatWorld(b, sg * (hb + BOAT.plank - 0.3), BOAT.gangV), i = T(Math.floor(x), Math.floor(z));
-    if (!(LV[i] > 0 || BR[i]) || LAVA[i]) continue;
-    const gy = surfaceY(x, z);
-    if (Math.abs(gy - y) < 1.6) return { side: sg, y: gy };
+    for (let d = 0.05; d <= BOAT.reach + 1e-3; d += 0.05) {
+      const [x, z] = boatWorld(b, sg * (hb + d), BOAT.gangV);
+      if (!ground(x, z)) continue;
+      const len = d + BOAT.onto, [fx, fz] = boatWorld(b, sg * (hb + len - 0.25), BOAT.gangV);
+      if (!ground(fx, fz)) break;
+      const gy = surfaceY(fx, fz);
+      if (Math.abs(gy - y) < 1.6 && (!best || len < best.len)) best = { side: sg, y: gy, len };
+      break;
+    }
   }
-  return null;
+  return best;
 }
 // F at the wheel: take it (the anchor comes up, the gangplank in) or leave it (the anchor drops, the sails furl, and
 // the gangplank goes down if there's ground beside the gangway)
@@ -13668,12 +13677,12 @@ function boatHelm() {
   if (!H.helm) {
     H.helm = true; b.anchorGoal = 0; b.notch = 0; b.plankGoal = 0;
     H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null;
-    toast('You take the wheel. W and S set the sails; the boat turns where you look. F lets go and drops anchor.', 'calm');
+    toast('You take the wheel. W and S set the sails, A and D steer. F lets go and drops anchor.', 'calm');
     sfx.equip();
   } else {
     H.helm = false; b.anchorGoal = 1; b.notch = 0;
     const land = boatLanding(b);
-    if (land) { b.side = land.side; b.endY = land.y; b.plankGoal = 1; } else b.plankGoal = 0;
+    if (land) { b.side = land.side; b.endY = land.y; b.len = land.len; b.plankGoal = 1; } else b.plankGoal = 0;
     sfx.door();
   }
 }
@@ -13695,9 +13704,11 @@ function updateBoats(dt) {
     b.speed += clamp(want - b.speed, -dt * BOAT.accel * 2, dt * BOAT.accel);
     b.turnRate = 0;
     if (mine) {
-      // toward the way the camera looks, at a fixed rate
-      const goal = Math.atan2(-Math.sin(yaw), -Math.cos(yaw)), dh = clamp(angDiff(goal, b.h), -BOAT.turn * dt, BOAT.turn * dt);
-      if (Math.abs(dh) > 1e-5 && boatFits(b.x, b.z, b.h + dh, b.wl)) { b.h += dh; b.turnRate = dh / Math.max(dt, 1e-4) / BOAT.turn; }
+      // (v495, Jordan) A and D turn it at a fixed rate, whatever its speed (so slower is a tighter circle, and stopped
+      // it turns on the spot); a heading that grows turns it to port, so A adds and D takes away
+      const steer = (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0) - (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0);
+      const dh = steer * BOAT.turn * dt;
+      if (dh && boatFits(b.x, b.z, b.h + dh, b.wl)) { b.h += dh; b.turnRate = steer; }
     }
     if (b.speed > 0.01) {
       const nx = b.x + Math.sin(b.h) * b.speed * dt, nz = b.z + Math.cos(b.h) * b.speed * dt;
@@ -13716,7 +13727,7 @@ function updateBoats(dt) {
 }
 function boatHeroY(b) {
   const y = boatDeckY(b), hb = boatHB(BOAT.gangV), s = H.bu * b.side;
-  if (b.plank > 0.5 && Math.abs(H.bv - BOAT.gangV) < 0.4 && s > hb) return y + 0.03 + (b.endY - y) * clamp((s - hb) / BOAT.plank, 0, 1);
+  if (b.plank > 0.5 && Math.abs(H.bv - BOAT.gangV) < 0.4 && s > hb) return y + 0.03 + (b.endY - y) * clamp((s - hb) / b.len, 0, 1);
   return y + 0.02;
 }
 // a step on the deck (or the gangplank), kept inside the bulwarks and clear of the masts and the wheel; off the
@@ -13727,7 +13738,7 @@ function boatWalk(dx, dz) {
   const hbG = boatHB(BOAT.gangV), onPlank = b.plank > 0.98 && Math.abs(v - BOAT.gangV) < 0.32 && u * b.side > hbG - 0.45;
   if (onPlank) {
     if (u * b.side > hbG - 0.3) v = clamp(v, BOAT.gangV - 0.24, BOAT.gangV + 0.24);
-    if (u * b.side > hbG + BOAT.plank) {
+    if (u * b.side > hbG + b.len) {
       // ashore
       const [x, z] = boatWorld(b, u, v);
       H.boat = null; H.helm = false; H.x = x; H.z = z; H.story = 0; H.stair = null;
@@ -13752,7 +13763,7 @@ function boatBoard() {
   if (H.boat || H.flip) return;
   for (const b of boats) {
     if (b.plank < 0.98 || Math.abs(b.x - H.x) > 9 || Math.abs(b.z - H.z) > 9) continue;
-    const [u, v] = boatLocal(b, H.x, H.z), hb = boatHB(BOAT.gangV), s = u * b.side, end = hb + BOAT.plank;
+    const [u, v] = boatLocal(b, H.x, H.z), hb = boatHB(BOAT.gangV), s = u * b.side, end = hb + b.len;
     if (Math.abs(v - BOAT.gangV) < 0.3 && s > end - 0.55 && s <= end && Math.abs(H.y - b.endY) < 0.8) {
       H.boat = b; H.helm = false; H.bu = u; H.bv = v; H.story = 0; H.stair = null;
       return;
@@ -16218,7 +16229,7 @@ addEventListener('keydown', e => {
   // (v494) at a boat's wheel: W and S raise and lower the sails; no walking, rolling, jumping or abilities
   if (H.helm && mode === 'play') {
     if (/^(KeyW|ArrowUp|KeyS|ArrowDown)$/.test(e.code)) { e.preventDefault(); if (!e.repeat) boatSails(e.code === 'KeyW' || e.code === 'ArrowUp' ? 1 : -1); return; }
-    if (/^(Space|ShiftLeft|ShiftRight|KeyQ|KeyE|KeyA|KeyD|ArrowLeft|ArrowRight)$/.test(e.code)) { e.preventDefault(); return; }
+    if (/^(Space|ShiftLeft|ShiftRight|KeyQ|KeyE)$/.test(e.code)) { e.preventDefault(); return; }
   }
   if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) toggleInv(); return; }
   if (e.code === 'Escape' && craftAt) { toggleCraft(null); return; }
@@ -23627,7 +23638,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 494, crashSeen = new Map();
+const GAME_VERSION = 495, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
