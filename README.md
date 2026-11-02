@@ -290,6 +290,8 @@ Everything is now made of refined materials: floors and doors of planks, stone f
 
 **v354:** the minimap plate capitalises a place name's first word (plateName). **v355:** refining slot counts sit inside the slot's well (right 24, bottom 19), clear of the corner rivets. Character view defaults from Jordan's tuning (fov 20, dist 4.15, lift 1.23).
 
+**v464:** Stray townsperson banners (Jordan: a name showing with the cursor over empty grass): in the tilted view, people in a town behind the camera projected mirrored back onto the screen, so pickFolk could match the cursor to someone out of sight. pickFolk and pickFoe now skip anyone whose projected depth is past 1 (behind the camera).
+
 **v463:** Townsfolk no longer walk into the cathedral's towers and buttresses (Jordan). Routes (A*) knew walls but not the round things in `pillars` (towers, buttresses, columns), which can reach over a tile's edge: folkOpen now refuses a tile with one on it, and next to one (folkTight) a route takes no diagonal and walkers take no straight-line shortcut, going tile centre to tile centre instead.
 
 **v462:** Top-centre HUD kit v3 (art/deliveries/wanderers-kit-top-center-hud-v3.zip) replaces the patched v2 art: ui/top3/*.webp (enemy frame 1088 x 144, NPC frame 896 x 144, toast 558 x 151 with a whole crest ring, level medallion, HP track back/rim, amber and red fills, cap/notch/repeat modules, six crest badges). The banner uses the v3 layout (medallion 164,38; name and track from x 260; modules W = 448 + 64n). Framed toasts carry a crest badge: the 8-point compass for a first discovery, the diamond star for entering a place again, and four day-turn toasts from sunHours(): Dawn Breaks on Day N, Day Rises, Dusk Approaches, Night Falls. ui/top/ removed.
