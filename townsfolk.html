@@ -57,7 +57,7 @@ td:first-child { color: var(--dim); width: 58px; }
 .chip button { border: none; background: none; padding: 2px 6px; }
 .chip .x { color: var(--dim); }
 .muted { color: var(--dim); font-size: 12px; }
-body.boats .folkOnly, body:not(.boats) .boatOnly { display: none; }
+body.boats .folkOnly, body:not(.boats) .boatOnly, body.props .folkOnly, body:not(.props) .propOnly, body.props .notProp { display: none; }
 kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 #err { position: fixed; left: 8px; right: 8px; bottom: 8px; background: var(--errBg); color: var(--errInk); padding: 8px 10px; border-radius: 6px; font: 12px ui-monospace, monospace; white-space: pre-wrap; z-index: 9; }
 @media (max-width: 760px) {
@@ -72,11 +72,11 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
   <div id="stage">
     <canvas id="view"></canvas>
     <div id="names"></div>
-    <div id="hint">Drag to turn · <kbd>[</kbd> <kbd>]</kbd> seeds · <kbd>1</kbd>–<kbd>8</kbd> moves · <kbd>H</kbd> hostile · <kbd>B</kbd> boat · <kbd>A</kbd> <kbd>D</kbd> facing · <kbd>Space</kbd> pause</div>
+    <div id="hint">Drag to turn · <kbd>[</kbd> <kbd>]</kbd> seeds · <kbd>1</kbd>–<kbd>8</kbd> moves · <kbd>H</kbd> hostile · <kbd>B</kbd> boat · <kbd>P</kbd> next prop · <kbd>A</kbd> <kbd>D</kbd> facing · <kbd>Space</kbd> pause</div>
   </div>
   <div id="panel">
     <h1>Random Model Generator</h1>
-    <p class="sub">Each number is one person, or one boat's livery. Keep the ones you like.</p>
+    <p class="sub">Each number is one person, one boat's livery, or one prop's look. Keep the ones you like.</p>
 
     <div id="who"><div id="whoName"></div><div id="whoJob"></div></div>
 
@@ -89,11 +89,24 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     </div>
     <div class="row" style="margin-top:6px">
       <span class="muted">Models</span>
-      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button><button data-pool="boats">Boats</button>
+      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button><button data-pool="boats">Boats</button><button data-pool="props">Props</button>
     </div>
     <div class="row" style="margin-top:6px">
       <button id="randWild" title="A random bandit, cultist, poacher… (H)">Generate hostile</button>
       <button id="randBoat" title="A random boat livery (B)">Generate livery</button>
+      <button id="randProp" title="A random prop and look">Generate prop</button>
+    </div>
+    <div class="row propOnly" style="margin-top:6px">
+      <label class="muted" for="prop">Prop</label>
+      <select id="prop"></select>
+    </div>
+    <div class="row propOnly" style="margin-top:6px">
+      <span class="muted">Wood</span>
+      <button data-wood="pine" title="Hamlets">Pine</button><button data-wood="oak" title="Medium towns">Oak</button><button data-wood="darkOak" title="Large towns">Dark oak</button>
+    </div>
+    <div class="row propOnly" style="margin-top:6px">
+      <span class="muted">Show</span>
+      <button id="wallBtn" title="The wall a wall prop backs onto">Wall</button><button id="personBtn" title="A townsperson beside it, for scale">Person for scale</button>
     </div>
     <div class="row folkOnly" style="margin-top:6px">
       <span class="muted">Body</span>
@@ -105,7 +118,7 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     </div>
     <div class="row" style="margin-top:6px">
       <span class="muted">Show</span>
-      <button data-mode="one" class="on">One</button><button data-mode="line">Lineup of 7</button>
+      <button data-mode="one" class="on">One</button><button data-mode="line" id="lineBtn">Lineup of 7</button>
     </div>
 
     <h2 class="folkOnly">Move</h2>
@@ -153,6 +166,7 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 <script type="module">
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, design as folkDesign, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
+import { PROPS, PROP_IDS, PROP_GROUPS, WOODS, seeded, rollProp, describeProp, buildProp, propStage } from './src/props/props.js';
 import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat, hangChain } from './src/boats/brig.js';
 
 const $ = id => document.getElementById(id);
@@ -177,6 +191,9 @@ const boatMat = new GFX.MeshStandardMaterial({ flatShading: true, roughness: 1, 
 const wind = { value: { x: 0.8, y: 0.6, z: 0.02, w: 0 } };
 const { mat: sailMat } = makeSailMat(wind);
 const brigGeos = new Map();
+// (v20) the town props: the shared indoor set, lit like the boats, their flames unlit
+const glowMat = new GFX.MeshBasicMaterial({ vertexColors: true });
+const stageMat = new GFX.MeshStandardMaterial({ flatShading: true, roughness: 1, metalness: 0, vertexColors: true });
 const brigShapes = L => { if (!brigGeos.has(L.seed)) { if (brigGeos.size > 40) brigGeos.clear(); brigGeos.set(L.seed, buildBrig(L, BRIG_SHAPE)); } return brigGeos.get(L.seed); };
 
 // ---------- state ----------
@@ -187,28 +204,37 @@ const S = {
 // (v9) two lists of people: the towns' folk, and the hostile folk of the road and the wilds (their own seeds: kept
 // as 'w' + number, and in the link as #wild=number)
 // (v14) and boats: a livery a seed (kept as 'b' + number, #boat=number)
-const hashM = location.hash.match(/(seed|wild|boat)=(\d+)/);
-const POOL_OF = { seed: 'town', wild: 'wilds', boat: 'boats' }, LINK = { town: '#seed=', wilds: '#wild=', boats: '#boat=' };
-const SEED_KEY = { town: 'seed', wilds: 'wildSeed', boats: 'boatSeed' }, TAG = { town: '', wilds: 'w', boats: 'b' };
+// (v20) and props: a prop and a look a seed (kept as 'p:' + prop + ':' + number, #prop=prop:number)
+const hashM = location.hash.match(/(seed|wild|boat|prop)=(?:(\w+):)?(\d+)/);
+const POOL_OF = { seed: 'town', wild: 'wilds', boat: 'boats', prop: 'props' }, LINK = { town: '#seed=', wilds: '#wild=', boats: '#boat=', props: '#prop=' };
+const SEED_KEY = { town: 'seed', wilds: 'wildSeed', boats: 'boatSeed', props: 'propSeed' }, TAG = { town: '', wilds: 'w', boats: 'b', props: 'p:' };
 S.pool = hashM ? POOL_OF[hashM[1]] : store.get('pool', 'town');
+S.prop = hashM && hashM[1] === 'prop' && PROPS[hashM[2]] ? hashM[2] : store.get('prop', 'bed');
+if (!PROPS[S.prop]) S.prop = 'bed';
+S.wood = WOODS[store.get('wood', 'oak')] ? store.get('wood', 'oak') : 'oak';
+S.wall = store.get('wall', true); S.person = store.get('person', false);
 S.sails = 1;
 // (v19) the anchor: 0 stowed under the cathead .. 1 dropped, easing to anchorGoal over the game's 1.6 s
 S.anchor = 0; S.anchorGoal = 0;
-S.seed = hashM ? +hashM[2] : store.get(SEED_KEY[S.pool], 1);
-const isBoats = () => S.pool === 'boats';
+S.seed = hashM ? +hashM[3] : store.get(SEED_KEY[S.pool], 1);
+const isBoats = () => S.pool === 'boats', isProps = () => S.pool === 'props';
 const design = s => isBoats() ? rollLivery(s) : folkDesign(s, S.pool);
-const tag = s => TAG[S.pool] + s;
-const untag = k => { const m = String(k).match(/^([wb]?)(\d+)$/); return m ? { pool: m[1] === 'w' ? 'wilds' : m[1] === 'b' ? 'boats' : 'town', seed: +m[2] } : null; };
+const tag = s => isProps() ? `p:${S.prop}:${s}` : TAG[S.pool] + s;
+const untag = k => {
+  const q = String(k).match(/^p:(\w+):(\d+)$/);
+  if (q) return PROPS[q[1]] ? { pool: 'props', prop: q[1], seed: +q[2] } : null;
+  const m = String(k).match(/^([wb]?)(\d+)$/); return m ? { pool: m[1] === 'w' ? 'wilds' : m[1] === 'b' ? 'boats' : 'town', seed: +m[2] } : null;
+};
 let folks = [], yawDrag = 0, t = 0;
 
-const fits = s => { if (isBoats()) return true; const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || d.job === S.job); };
+const fits = s => { if (isBoats() || isProps()) return true; const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || d.job === S.job); };
 function step(dir) { let s = S.seed; for (let n = 0; n < 3000; n++) { s = Math.max(1, s + dir); if (fits(s)) break; if (s === 1 && dir < 0) break; } setSeed(s); }
 function randomSeed() { let s; for (let n = 0; n < 3000; n++) { s = 1 + Math.floor(Math.random() * 999999); if (fits(s)) break; } setSeed(s); }
 function lineSeeds() { const out = [S.seed]; let s = S.seed; while (out.length < (isBoats() ? 3 : 7) && s < S.seed + 4000) { s++; if (fits(s)) out.push(s); } return out; }
 
 function setSeed(s) {
   S.seed = Math.max(1, s | 0); store.set(SEED_KEY[S.pool], S.seed);
-  history.replaceState(null, '', LINK[S.pool] + S.seed);
+  history.replaceState(null, '', LINK[S.pool] + (isProps() ? S.prop + ':' : '') + S.seed);
   $('seed').value = S.seed;
   rebuild();
   keptList();
@@ -216,11 +242,14 @@ function setSeed(s) {
 function rebuild() {
   for (const f of folks) scene.remove(f.g);
   document.body.classList.toggle('boats', isBoats());
-  $('outfitH').textContent = isBoats() ? 'Livery' : 'Outfit';
+  document.body.classList.toggle('props', isProps());
+  $('outfitH').textContent = isBoats() ? 'Livery' : isProps() ? 'Prop' : 'Outfit';
+  $('lineBtn').textContent = isProps() ? `All ${PROPS[S.prop].group.toLowerCase()}` : isBoats() ? 'Lineup of 3' : 'Lineup of 7';
+  if (isProps()) return rebuildProps();
   if (isBoats()) return rebuildBoats();
   const seeds = S.mode === 'one' ? [S.seed] : lineSeeds(), gap = 0.78;
   folks = seeds.map((s, i) => {
-    const f = kit.build(design(s));
+    const f = kit.build(design(s)); f.isFolk = true;
     f.g.position.x = (i - (seeds.length - 1) / 2) * gap;
     f.offset = S.mode === 'one' ? 0 : (s * 0.618) % 1 * 5;   // (each in the lineup out of step with the rest)
     scene.add(f.g);
@@ -247,6 +276,45 @@ function rebuildBoats() {
   $('whoJob').textContent = `Merchant brig · ${liveryName(L)} · livery ${S.seed}`;
   $('outfit').innerHTML = describeLivery(L).map(([k, v, c]) => `<tr><td>${k}</td><td>${c ? `<span class="sw" style="background:${c}"></span>` : ''}${v}</td></tr>`).join('');
 }
+// (v20) a prop on its tiles (and the wall behind it), or every prop of its group side by side, all in this seed's
+// looks and the picked wood; a townsperson beside it for scale if asked
+const propGeos = new Map();
+function propShapes(id, seed) {
+  const k = `${id}:${seeded(id) ? seed : 0}:${S.wood}`;
+  if (!propGeos.has(k)) { if (propGeos.size > 80) propGeos.clear(); propGeos.set(k, buildProp(id, rollProp(id, seed), S.wood)); }
+  return propGeos.get(k);
+}
+function propModel(id, seed) {
+  const g = new GFX.Group(), sh = propShapes(id, seed);
+  const add = (geo, mat) => { if (!geo) return; const m = new GFX.Mesh(geo, mat); m.castShadow = m.receiveShadow = true; g.add(m); };
+  add(propStage(id, { wall: S.wall }), stageMat); add(sh.solid, boatMat); add(sh.glow, glowMat);
+  return { g, prop: id };
+}
+const propSpan = id => { const [w, d] = PROPS[id].tiles; return Math.max(w, d) + 2; };
+function rebuildProps() {
+  const P = PROPS[S.prop], ids = S.mode === 'one' ? [S.prop] : PROP_IDS.filter(k => PROPS[k].group === P.group);
+  let x = -ids.reduce((s, k) => s + propSpan(k), 0) / 2;
+  folks = ids.map(id => { const m = propModel(id, S.seed); x += propSpan(id) / 2; m.g.position.x = x; m.span = propSpan(id); x += propSpan(id) / 2; scene.add(m.g); return m; });
+  if (S.person && S.mode === 'one') {
+    // (parented to the prop, so it turns with it)
+    const f = kit.build(folkDesign(S.seed, 'town'));
+    f.g.position.x = P.tiles[0] / 2 + 0.5; f.g.position.z = P.wall ? 0 : 0.3; folks[0].g.add(f.g); folks[0].person = f;
+  }
+  S.propSpan = S.mode === "one" ? propSpan(S.prop) + (S.person ? 1 : 0) : x * 2;
+  $('names').innerHTML = S.mode === 'one' ? '' : ids.map(id => `<button data-p="${id}" title="${PROPS[id].name}">${PROPS[id].name}</button>`).join('');
+  $('whoName').textContent = P.name;
+  $('whoJob').textContent = `${P.group} · ${P.tiles.join(' x ')} tiles · ${seeded(S.prop) ? 'look ' + S.seed : 'no seeded looks'}${P.inGame ? ' · in the game' : ''}`;
+  $('outfit').innerHTML = describeProp(S.prop, rollProp(S.prop, S.seed), S.wood).map(([k, v, c]) => `<tr><td>${k}</td><td>${c ? `<span class="sw" style="background:${c}"></span>` : ''}${v}</td></tr>`).join('');
+  document.querySelectorAll('[data-wood]').forEach(x => x.classList.toggle('on', x.dataset.wood === S.wood));
+  $('wallBtn').classList.toggle('on', S.wall); $('personBtn').classList.toggle('on', S.person);
+  $('prop').value = S.prop;
+}
+$('prop').innerHTML = PROP_GROUPS.map(gr => `<optgroup label="${gr}">${PROP_IDS.filter(k => PROPS[k].group === gr).map(k => `<option value="${k}">${PROPS[k].name}${seeded(k) ? ' ✦' : ''}</option>`).join('')}</optgroup>`).join('');
+const setProp = id => { S.prop = id; store.set('prop', id); setSeed(S.seed); };
+$('prop').onchange = e => setProp(e.target.value);
+document.querySelectorAll('[data-wood]').forEach(b => b.onclick = () => { S.wood = b.dataset.wood; store.set('wood', S.wood); rebuild(); });
+$('wallBtn').onclick = () => { S.wall = !S.wall; store.set('wall', S.wall); rebuild(); };
+$('personBtn').onclick = () => { S.person = !S.person; store.set('person', S.person); rebuild(); };
 function boatSails() {
   for (const m of folks) {
     if (!m.sails) continue;
@@ -273,8 +341,8 @@ function outfit(d) {
     + `<tr><td>Skin</td><td><span class="sw" style="background:${d.skin}"></span>${d.skin}</td></tr>`;
 }
 function keptList() {
-  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : u.pool === 'boats' ? '⛵ ' : '') + u.seed;
-    return `<span class="chip"><button data-load="${k}" title="${u.pool === 'wilds' ? 'Hostile' : u.pool === 'boats' ? 'Boat livery' : 'Townsfolk'} ${u.seed}">${label}</button><button class="x" data-drop="${k}" aria-label="Remove ${label}">×</button></span>`; }).join('');
+  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : u.pool === 'boats' ? '⛵ ' : u.pool === 'props' ? PROPS[u.prop].name + ' ' : '') + u.seed;
+    return `<span class="chip"><button data-load="${k}" title="${u.pool === 'wilds' ? 'Hostile' : u.pool === 'boats' ? 'Boat livery' : u.pool === 'props' ? PROPS[u.prop].name : 'Townsfolk'} ${u.seed}">${label}</button><button class="x" data-drop="${k}" aria-label="Remove ${label}">×</button></span>`; }).join('');
   $('keptNote').style.display = S.kept.length ? 'none' : '';
   $('keep').textContent = S.kept.includes(tag(S.seed)) ? 'Kept' : 'Keep this seed';
 }
@@ -291,10 +359,13 @@ document.querySelectorAll('[data-body]').forEach(b => b.onclick = () => {
 document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
   S.mode = b.dataset.mode; document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x === b)); rebuild();
 });
-$('names').onclick = e => { const b = e.target.closest('[data-s]'); if (b) { document.querySelector('[data-mode="one"]').click(); setSeed(+b.dataset.s); } };
+$('names').onclick = e => {
+  const p = e.target.closest('[data-p]'); if (p) { S.mode = 'one'; document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x.dataset.mode === 'one')); setProp(p.dataset.p); return; }
+  const b = e.target.closest('[data-s]'); if (b) { document.querySelector('[data-mode="one"]').click(); setSeed(+b.dataset.s); }
+};
 // jobs grouped by where they're found
 function jobList() {
-  if (isBoats()) return;
+  if (isBoats() || isProps()) return;
   $('job').innerHTML = `<option value="any">${S.pool === 'wilds' ? 'Any kind' : 'Any job'}</option>` + POOLS[S.pool].map(t =>
     `<optgroup label="${TIERS[t]}">${Object.entries(JOBS).filter(([, J]) => J.tier === t).map(([k, J]) => `<option value="${k}">${J.title}</option>`).join('')}</optgroup>`).join('');
   $('job').value = S.job;
@@ -309,6 +380,7 @@ function setPool(pool, seed) {
 document.querySelectorAll('[data-pool]').forEach(b => b.onclick = () => setPool(b.dataset.pool));
 $('randWild').onclick = () => { setPool('wilds', S.seed); randomSeed(); };
 $('randBoat').onclick = () => { setPool('boats', S.seed); randomSeed(); };
+$('randProp').onclick = () => { S.prop = PROP_IDS[Math.floor(Math.random() * PROP_IDS.length)]; store.set('prop', S.prop); setPool('props', S.seed); randomSeed(); };
 jobList();
 document.querySelectorAll('[data-pool]').forEach(x => x.classList.toggle('on', x.dataset.pool === S.pool));
 $('job').onchange = e => { S.job = e.target.value; if (!fits(S.seed)) step(1); else rebuild(); };
@@ -338,7 +410,7 @@ S.kept = S.kept.map(String);                                 // (older lists kep
 $('keep').onclick = () => { const k = tag(S.seed); if (!S.kept.includes(k)) S.kept.push(k); else S.kept = S.kept.filter(s => s !== k); store.set('kept', S.kept); keptList(); };
 $('kept').onclick = e => {
   const d = e.target.dataset;
-  if (d.load) { const u = untag(d.load); if (u) { S.job = 'any'; setPool(u.pool, u.seed); } }
+  if (d.load) { const u = untag(d.load); if (u) { S.job = 'any'; if (u.prop) { S.prop = u.prop; store.set('prop', u.prop); } setPool(u.pool, u.seed); } }
   else if (d.drop) { S.kept = S.kept.filter(s => s !== d.drop); store.set('kept', S.kept); }
   keptList();
 };
@@ -356,6 +428,7 @@ addEventListener('keydown', e => {
   else if (k >= '1' && k <= String(ANIMS.length)) setAnim(ANIMS[+k - 1]);
   else if (k === 'h') $('randWild').click();
   else if (k === 'b') $('randBoat').click();
+  else if (k === 'p') { if (!isProps()) setPool('props'); else setProp(PROP_IDS[(PROP_IDS.indexOf(S.prop) + (e.shiftKey ? PROP_IDS.length - 1 : 1)) % PROP_IDS.length]); }
   else if (k === 'k') $('keep').click();
 });
 // drag across the picture to turn them freely
@@ -375,15 +448,15 @@ function frame(now) {
   const w = Math.max(16, Math.round(r.width * k)), h = Math.max(16, Math.round(r.height * k));
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const yaw = S.spin ? spinYaw : -S.facing * Math.PI / 4 + yawDrag;
-  for (const f of folks) { if (!f.sails) kit.pose(f, S.anim, t + f.offset); f.g.rotation.y = yaw; }
+  for (const f of folks) { if (f.isFolk) kit.pose(f, S.anim, t + f.offset); if (f.person) kit.pose(f.person, 'idle', t); f.g.rotation.y = yaw; }
   wind.value.w = (wind.value.w + (S.paused ? 0 : dt * 2 * S.speed)) % 1e4;
   if (S.anchor !== S.anchorGoal) { S.anchor += Math.max(-dt / 1.6, Math.min(dt / 1.6, S.anchorGoal - S.anchor)); boatAnchor(); }
   // frame the figure (or the lineup) whatever the canvas's shape, from DOLL_VIEW's height and aim (a boat: its
   // length and its masts)
-  const boatsOn = isBoats();
-  const aspect = w / h, span = boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = boatsOn ? 10 : 1.45;
+  const boatsOn = isBoats(), propsOn = isProps();
+  const aspect = w / h, span = propsOn ? S.propSpan : boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = propsOn ? 2.6 : boatsOn ? 10 : 1.45;
   const vf = 20 * Math.PI / 180, need = Math.max(tall / 2 / Math.tan(vf / 2), span / 2 / (Math.tan(vf / 2) * aspect));
-  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = boatsOn ? 3 : 0.6;
+  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = propsOn ? 0.9 : boatsOn ? 3 : 0.6;
   cam.fov = 20; cam.aspect = aspect; cam.updateProjectionMatrix();
   cam.position.set(0, aimY + Math.sin(a) * dist, Math.cos(a) * dist);
   cam.lookAt(0, aimY, 0); cam.updateMatrixWorld();
@@ -401,7 +474,7 @@ keptList();
 rebuild();
 requestAnimationFrame(frame);
 // (a hook for checks)
-window.FOLK = { S, design, folks: () => folks, setSeed, setAnim };
+window.FOLK = { S, design, folks: () => folks, setSeed, setAnim, setProp };
 </script>
 </body>
 </html>
