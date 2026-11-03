@@ -5450,7 +5450,7 @@ const TOWN_WOOD = {
   oak: { wood: '#6a4a30', dark: '#43301f', light: '#8a6440' },
   darkOak: { wood: '#4a3424', dark: '#2a1c12', light: '#6a4a30' },
 };
-const TOWN_LOOK = { near: 6, far: 46, desert: 0.18, wastes: 0.12 };   // (desert/wastes: the share of the land round it that makes it so)
+const TOWN_LOOK = { near: 6, far: 46, desert: 0.18, wastes: 0.12, snow: 0.18 };   // (v662 snow: the share of snowfield round it that makes it an alpine town)   // (desert/wastes: the share of the land round it that makes it so)
 function townLook(t) {
   if (t.look) return t.look;
   const n = new Float32Array(9);
@@ -5464,16 +5464,21 @@ function townLook(t) {
   }
   const des = land ? n[DESERT] / land : 0, ash = land ? n[WASTES] / land : 0;
   const stone = ash >= TOWN_LOOK.wastes && ash >= des ? 'ash' : des >= TOWN_LOOK.desert ? 'sand' : 'grey';
+  // (v662, Jordan) an alpine town: snow on its ground (deep snow, pushed off its streets) and frost pines
+  const snowy = stone === 'grey' && land > 0 && n[SNOW] / land >= TOWN_LOOK.snow;
   const woods = { pine: n[SNOW], oak: n[FOREST] + n[MEADOW], darkOak: n[DEEP] + n[SWAMP] + n[GRAVE] };
   let wood = 'oak';
   for (const k of ['pine', 'darkOak']) if (woods[k] > woods[wood]) wood = k;
-  t.look = { stone, wood, S: TOWN_STONE[stone], W: TOWN_WOOD[wood] };
+  t.look = { stone, wood, S: TOWN_STONE[stone], W: TOWN_WOOD[wood], snow: snowy };
   return t.look;
 }
 // the look of the town whose ground is on either side of an edge (tiles i, j); null outside every town
 function lookAt(i, j) { const k = TN[i] || TN[j]; return k && towns[k - 1] ? townLook(towns[k - 1]) : null; }
 // (v653, Jordan) tile i is in a town walled in sandstone: desert ground and deep sand lie over it (it is still town)
 function sandTown(i) { const k = TN[i]; return k > 0 && BI[i] === TOWN && !!towns[k - 1] && townLook(towns[k - 1]).stone === 'sand'; }
+// (v662) or an alpine town's, under snow; townGround: the biome a town's ground is laid as (DESERT, SNOW, or 0: its own)
+function snowTown(i) { const k = TN[i]; return k > 0 && BI[i] === TOWN && !!towns[k - 1] && !!townLook(towns[k - 1]).snow; }
+function townGround(i) { return sandTown(i) ? DESERT : snowTown(i) ? SNOW : 0; }
 // a street, lane, plaza or road tile (the sand is cleared off it)
 function streetTile(i) { return !!PATH[i] || (!!TN[i] && townCell(i % N, Math.floor(i / N)) !== 'yard'); }
 const ARCHES = new Map();      // tile of an archway's middle edge -> { c, r, w, o, y, key }
@@ -7220,8 +7225,8 @@ function placeScenery(c, r) {
       // keep the step outside each door clear
       for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2 || wallOn(c, r, e) === 11) return;
       // (v654, Jordan: a town walled in sandstone grows palms, and dry scrub)
-      if (d >= t.R - 2 && k2 > 0.7) OB[i] = sandTown(i) ? O.PALM : O.OAK;
-      else if (k2 < 0.05) OB[i] = sandTown(i) ? O.DRYBUSH : O.BUSH;
+      if (d >= t.R - 2 && k2 > 0.7) OB[i] = sandTown(i) ? O.PALM : snowTown(i) ? O.SNOWPINE : O.OAK;
+      else if (k2 < 0.05) OB[i] = sandTown(i) ? O.DRYBUSH : snowTown(i) ? O.SNOWBUSH : O.BUSH;
       return;
     }
     case FOREST: {
@@ -8455,8 +8460,8 @@ function groundColor(c, r, i, j) {
   if (GROT[t] === 1) return shade(GROT_BED, 0.8 + hs(c, r, i * 2 + j) * 0.35);   // pebbles under a grotto's pool
   if (WT[t] === 1) return shade(BOG_MUD, 0.85 + hs(c, r, i * 2 + j) * 0.2);   // mud under swamp water
   if (FIELD[t]) return shade(TILLED, 0.9 + hs(c, r, i * 2 + j) * 0.12);   // a field's tilled earth (its ridges: furrows)
-  const sandy = sandTown(t);
-  let b = sandy ? DESERT : BI[t];
+  const sandy = townGround(t);
+  let b = sandy || BI[t];
   // dither into the neighbouring biome near a border, as Bone Road does
   if (hs(c, r, i * 2 + j + 3) > 0.55) {
     const nc = c + (i ? 1 : -1), nr = r + (j ? 1 : -1);
@@ -8673,7 +8678,7 @@ function* groundSteps(cx, cz, ch) {
   for (let r = r0; r < r0 + CH; r++) {
     if (r > r0 && (r - r0) % 4 === 0) { yield; OUT = bufGround; }
     for (let c = c0; c < c0 + CH; c++) {
-      const i = T(c, r), s = SH[i], pal = PAL[sandTown(i) ? DESERT : BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
+      const i = T(c, r), s = SH[i], pal = PAL[townGround(i) || BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
       if (!L && WL[i]) { if (LAVA[i]) molten = true; else wet = true; }
       if (SHOAL[i]) wet = true;   // (the water over a shoal)
       // the tile's 3 x 3 points, and which of them its higher neighbours lift
@@ -9338,7 +9343,7 @@ function grassChunk(cx, cz) {
     let kind = 0, mask = 0, y = 0;
     if (WT[i] === 1 && LV[i] && !BR[i]) { if (!GROT[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; } }
     else if (FIELD[i]) { if (LV[i] && !SH[i]) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
-    else if (GRASS_KIND[b] && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || (townCell(c, r) === 'yard' && !sandTown(i)))) {
+    else if (GRASS_KIND[b] && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || (townCell(c, r) === 'yard' && !townGround(i)))) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
         // a quarter grows grass if it's smooth ground (flat or a ramp's slope: see smoothQ), clear of a solid
@@ -9733,7 +9738,8 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     // (v653: a town walled in sandstone lies under sand too, but its streets are cleared, the sand heaped in banks
     // along them (128 in a: a covered quarter a quarter tile from a street's), and nothing is buried round its props)
-    const i = T(c, r), b = BI[i], sandy = b === TOWN && sandTown(i), kind = b === SNOW ? 1 : b === DESERT || sandy ? 2 : 0;
+    // (v662: an alpine town under deep snow the same way)
+    const i = T(c, r), b = BI[i], tg = b === TOWN ? townGround(i) : 0, sandy = !!tg, kind = b === SNOW || tg === SNOW ? 1 : b === DESERT || tg === DESERT ? 2 : 0;
     // (a ramp on this tile or one beside it: the ground's light is smoothed round here, see groundShapeMat)
     let nearRamp = false;
     for (let dr = -1; dr <= 1 && !nearRamp; dr++) for (let dc = -1; dc <= 1; dc++) {
@@ -29211,7 +29217,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 661, crashSeen = new Map();
+const GAME_VERSION = 662, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

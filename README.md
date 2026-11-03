@@ -327,6 +327,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v661:** (Jordan) The mosque has a minaret on all four corners; its stairs sit two rows further in, clear of the back pair.
 
+**v662:** (Jordan) Alpine towns. A grey-stone town with snowfield on at least TOWN_LOOK.snow (18%) of the land around it gets snow ground and deep snow over the whole town, cleared off streets, plazas, props and stairs with banks heaped along them as in sand towns. Its trees are frost pines and its bushes snowy ones. Townsfolk plough the snow as they walk.
+
 **v657:** (Jordan) In sand towns the bank and the guard house are built in the desert sandstone too (stoneOf puts DESERT_WALLS first; they keep their doors, props, lantern and yard), and the cathedral becomes a mosque (ca.mosque): the same hall and gallery in sandstone with lattice windows and the teal band, one minaret at a front corner (a sandstone block, a slender shaft, a railed balcony, an open lantern and a small gold dome), a mihrab niche and a wooden minbar for the altar, and mosqueRoof: flat terracotta behind a sandstone cornice, a drum with arched lattice windows, a ribbed gold dome (goldDome). No buttresses, rose or awnings on it.
 
 **v658:** (Jordan) Stairs against a wall keep their place and width (running a little into the wall is fine), but the handrail (wood) or parapet (stone, desert sandstone too) on the side with a wall, fence, door or window along either of their two tiles on their story is left off, so it no longer sticks out through the wall.
