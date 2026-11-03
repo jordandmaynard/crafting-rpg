@@ -153,6 +153,7 @@ struct VOut {
   @location(6) glow: f32,
   @location(7) cover: f32,
   @location(8) extra: f32,     // a ring's thickness, a glint's twinkle, a flame's heat
+  @location(9) rad: f32,       // a ball's radius (puffs and flames: see fs), else 0
 }
 @vertex fn vs(v: VIn, @builtin(instance_index) ii: u32) -> VOut {
   var o: VOut;
@@ -220,11 +221,18 @@ struct VOut {
     fade = (1.0 - smoothstep(0.4, 1.0, k)) * (0.65 + 0.35 * fxHash(floor(U.now.x * 30.0) + q.g.y * 91.0));
     cover = 0.0;
   }
-  // (a puff is a ball: its flat card stands at the ball's front, so the half of it that leans away from us doesn't
-  // sink into a roof or a wall the ball only touches, and get cut off by it)
-  if (st == ${FX.PUFF} || st == ${FX.FLAME}) { w += toEye(at) * size * 0.9; }
   o.pos = F.viewProj * vec4f(w, 1.0);
-  o.uv = corner; o.st = st; o.wpos = at; o.pix = w;
+  o.uv = corner; o.st = st; o.wpos = at; o.pix = w; o.rad = 0.0;
+  // (v615, Jordan: the smoke cut off along straight lines by the wall or roof behind it) a puff or a flame is a ball,
+  // not its flat card: the card, square-on to us and leaning back as we look down, ran into a wall or roof the ball
+  // was only near and was cut along the line they crossed. So its depth is the ball's front (nothing just behind
+  // the ball hides any of it) and the fragment shader works out how much of the ball's depth there lies in front of
+  // what's behind it (see fs)
+  if (st == ${FX.PUFF} || st == ${FX.FLAME}) {
+    let f = F.viewProj * vec4f(at + toEye(at) * size, 1.0);
+    o.pos.z = clamp(f.z / f.w, 0.0, 1.0) * o.pos.w;
+    o.pix = at; o.rad = size;
+  }
   o.col = fxRamp(ramp, tone);
   let fog = 1.0 - fogAmount(viewDepth(at));
   o.a = fade * q.f.w * fog;
@@ -306,7 +314,14 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
     let P = F.proj;
     let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
     let vz = (F.view * vec4f(i.pix, 1.0)).z;
-    m *= smoothstep(0.0, 0.3, vz - vb);
+    if (i.rad > 0.0) {
+      // a ball: of its depth here (front to back, half of it each side of its middle), the share in front of what's
+      // behind it, softened a little more for a small one
+      let th = sqrt(max(1.0 - r2, 0.0)) * i.rad + 0.04;
+      m *= smoothstep(0.0, 1.0, sat((vz + th - vb) / (2.0 * th)));
+    } else {
+      m *= smoothstep(0.0, 0.3, vz - vb);
+    }
   }
   let al = sat(m * i.a);
   return vec4f(lit * al, al * i.cover);
