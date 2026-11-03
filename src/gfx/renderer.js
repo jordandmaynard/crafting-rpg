@@ -220,7 +220,8 @@ class Renderer {
   }
   // a copy of a render target's colour and depth as they stand at this point in the frame, for a later pass to
   // read what lies behind it (the water, the bed under it): { color, depth } textures, kept while the size holds
-  snapshot(rt) {
+  // (color false: the depth only, for soft particles when nothing reads the colour)
+  snapshot(rt, color = true) {
     this._targetViews(rt);
     const g = this._rts.get(rt), w = Math.max(1, rt.width | 0), h = Math.max(1, rt.height | 0), T = GPUTextureUsage;
     let s = this._snaps.get(rt);
@@ -235,7 +236,7 @@ class Renderer {
     this._runPendingClear();
     this._closePass();
     if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
-    this._enc.copyTextureToTexture({ texture: g.color }, { texture: s.colorT }, [w, h]);
+    if (color) this._enc.copyTextureToTexture({ texture: g.color }, { texture: s.colorT }, [w, h]);
     this._enc.copyTextureToTexture({ texture: g.depth }, { texture: s.depthT }, [w, h]);
     return s;
   }
