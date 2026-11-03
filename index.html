@@ -1150,6 +1150,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 <script type="module">
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_WHERE } from './src/folk/townsfolk.js';
+import { Ragdoll, RAGDOLL } from './src/ragdoll.js';
 import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 await (async () => {
@@ -17574,6 +17575,7 @@ const sfx = {
   hit: () => { beep(180, 0.06, { type: 'sawtooth', vol: 0.05, slide: -60 }); beep(90, 0.05, { vol: 0.04, at: 0.02 }); },
   chop: () => { beep(150, 0.05, { type: 'triangle', vol: 0.09 }); beep(95, 0.07, { type: 'square', vol: 0.03, at: 0.02 }); },
   clink: () => { beep(1100, 0.04, { vol: 0.035 }); beep(700, 0.06, { type: 'triangle', vol: 0.05, at: 0.02 }); },
+  thud: (g = 1) => { beep(85, 0.09, { type: 'triangle', slide: -30, vol: 0.06 * g }); beep(60, 0.07, { vol: 0.03 * g, at: 0.01 }); },
   fell: () => { beep(120, 0.3, { type: 'sawtooth', slide: -70, vol: 0.05 }); beep(60, 0.25, { type: 'triangle', vol: 0.09, at: 0.35 }); },
   kill: () => { beep(330, 0.08, { slide: -200 }); beep(160, 0.18, { type: 'sawtooth', vol: 0.04, at: 0.05, slide: -100 }); },
   hurt: () => { beep(200, 0.15, { type: 'sawtooth', slide: -120, vol: 0.06 }); beep(90, 0.2, { vol: 0.05, at: 0.08 }); },
@@ -23325,7 +23327,7 @@ function drawFolk() {
 // (v544) Poachers, raiders, grave robbers and highwaymen too, each where WILD_WHERE says (HUMAN_SPOT); a bow or
 // crossbow shoots from range (HUMAN_RANGED, humanShoot: arrows in `arrows`, marked hostile, that hit the hero).
 // cap: people about at once; every: seconds between tries; lie, sink: seconds a body lies, and sinks
-const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 4, sink: 1.5 };
+const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 5, sink: 1.5 };
 const HUMAN_KINDS = Object.keys(FOE).filter(k => FOE[k].human && WILD_WHERE[k]);
 const WILD_BIOME = { meadow: MEADOW, forest: FOREST, swamp: SWAMP, graveyard: GRAVE, snow: SNOW, desert: DESERT, 'deep forest': DEEP, 'blasted wastes': WASTES };
 const humanFallen = [];
@@ -23376,26 +23378,112 @@ function freeHuman(f) {
   scene.remove(f.hmesh); f.hmesh.geometry.dispose(); folkMats.push(f.hmat);
   f.hmesh = f.hmat = null;
 }
-// killed: knocked down backward (away from the blow), arms flung up, lying there a while, then sinking into the ground
-function fellHuman(f, dx, dz) {
-  humanFallen.push({ f, t: 0, face: Math.atan2(-dx, -dz), x: f.x, z: f.z, y: f.y, dx, dz });
+// killed (v604, Jordan: "ragdoll using the system from my crafting-and-conquest repo"): the person goes limp and
+// tumbles as crafting-and-conquest's villagers do (src/ragdoll.js): knocked away from the blow by the weapon that
+// killed them, arms and legs flopping on their joints, knees and elbows folding, now and then the head coming off,
+// and whatever was in their hands flung down beside them. They lie where they come to rest a while (HUMAN.lie), then
+// sink into the ground. Monsters and beasts still shatter into their pieces.
+const ragWorld = {
+  ground: (x, z) => {
+    const i = T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1));
+    return LV[i] ? surfaceY(x, z) : (WL[i] || 0) * STEP - 0.6;   // (in deep water: its bed, a little under the surface)
+  },
+  water: (x, z) => {
+    const i = T(clamp(Math.floor(x), 0, N - 1), clamp(Math.floor(z), 0, N - 1));
+    return !LV[i] && WL[i] && !LAVA[i] ? WL[i] * STEP : -Infinity;
+  },
+};
+// the way a joint's -y points now, in the rig's frame (the rig only turned about y while alive)
+function rigDir(r, o, face) {
+  const e = o.matrixWorld.elements, l = Math.hypot(e[4], e[5], e[6]) || 1, wx = -e[4] / l, wy = -e[5] / l, wz = -e[6] / l;
+  const c = Math.cos(face), s = Math.sin(face);
+  return [c * wx - s * wz, wy, s * wx + c * wz];
 }
+// what's in a person's hand as a box round it, in the tool's own frame (from the baked mesh: every joint under the tool)
+function toolBox(f) {
+  const P = f.folk, r = f.rig, M = P.mesh, inv = new GFX.Matrix4().copy(r.tool.matrixWorld).invert(), m = new GFX.Matrix4(), v = new GFX.Vector3();
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  P.bones.forEach((o, j) => {
+    if (!o || !P.chains[j].includes(r.tool)) return;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    for (let k = 0; k < M.bone.length; k++) if (M.bone[k] === j) {
+      v.set(M.pos[k * 3], M.pos[k * 3 + 1], M.pos[k * 3 + 2]).applyMatrix4(m);
+      lo[0] = Math.min(lo[0], v.x); lo[1] = Math.min(lo[1], v.y); lo[2] = Math.min(lo[2], v.z);
+      hi[0] = Math.max(hi[0], v.x); hi[1] = Math.max(hi[1], v.y); hi[2] = Math.max(hi[2], v.z);
+    }
+  });
+  return lo[0] === Infinity ? null : { mid: lo.map((a, k) => (a + hi[k]) / 2), half: lo.map((a, k) => (hi[k] - a) / 2) };
+}
+function fellHuman(f, dx, dz) {
+  const r = f.rig, S = r.g.scale, sc = v => [v[0] * S.x, v[1] * S.y, v[2] * S.z], face = f.face;
+  r.g.updateMatrixWorld();
+  const legX = Math.abs(r.legL.position.x), legY = r.legL.position.y, sh = Math.abs(r.armL.position.x), armY = r.chest.position.y + r.armL.position.y;
+  // (the body's frame: left is +x, so each left limb's roll reaches out the + way)
+  const limb = (o, x, y, len, upper, lo, hi, rlo, rhi, bend, now) => ({ pivot: sc([x, y, 0]), len: len * S.y, upper: upper * S.y, lo, hi, rlo, rhi, bend, dir: rigDir(r, o, face), bendNow: now });
+  const shape = {
+    bodyY: 0.5 * S.y, bodyHalf: sc([0.2, 0.2, 0.09]), headY: 0.8 * S.y, headHalf: sc([0.1, 0.1, 0.095]),
+    limbs: [
+      limb(r.legL, legX, legY, 0.36, 0.14, -1.9, 0.5, -0.15, 0.7, [0, 2, 0.15], r.knees[0].rotation.x),
+      limb(r.legR, -legX, legY, 0.36, 0.14, -1.9, 0.5, -0.7, 0.15, [0, 2, 0.15], r.knees[1].rotation.x),
+      limb(r.armL, sh, armY, 0.27, 0.1, -3.1, 0.9, -1.6, 2.6, [-2, 0, -0.3], r.elbows[0].rotation.x),
+      limb(r.armR, -sh, armY, 0.27, 0.1, -3.1, 0.9, -2.6, 1.6, [-2, 0, -0.3], r.elbows[1].rotation.x),
+    ],
+  };
+  // the weapon or tool in hand, dropped: its box where it is now, in the body's frame
+  const held = [], tb = toolBox(f);
+  if (tb) {
+    const c = new GFX.Vector3(...tb.mid).applyMatrix4(r.tool.matrixWorld), q = new GFX.Quaternion();
+    r.tool.getWorldQuaternion(q);
+    const cx = c.x - f.x, cz = c.z - f.z, co = Math.cos(face), si = Math.sin(face), yq = [0, Math.sin(-face / 2), 0, Math.cos(-face / 2)];
+    const qq = [q.x, q.y, q.z, q.w], rq = [yq[3] * qq[0] + yq[0] * qq[3] + yq[1] * qq[2] - yq[2] * qq[1], yq[3] * qq[1] - yq[0] * qq[2] + yq[1] * qq[3] + yq[2] * qq[0],
+      yq[3] * qq[2] + yq[0] * qq[1] - yq[1] * qq[0] + yq[2] * qq[3], yq[3] * qq[3] - yq[0] * qq[0] - yq[1] * qq[1] - yq[2] * qq[2]];
+    held.push({ centre: [co * cx - si * cz, c.y - f.y, si * cx + co * cz], half: sc(tb.half), q: rq, mid: tb.mid });
+  }
+  const weapon = GEAR.weapon ? ITEMS[GEAR.weapon].kind : 'fist';
+  const rd = new Ragdoll(ragWorld, shape, { pos: [f.x, f.y, f.z], yaw: face, from: [f.x - dx, f.y, f.z - dz], weapon }, held);
+  const b = { f, t: 0, rd, sinkT: 0, held: held[0], nod: [(Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 1.2] };
+  // (a thud on landing, near the hero)
+  const thud = hit => { if (Math.hypot(rd.body.pos[0] - H.x, rd.body.pos[2] - H.z) < 14) sfx.thud(Math.min(1, hit / 4)); };
+  rd.body.landed = thud;
+  // the head, if it came off, and what was held each tumble on a joint group of their own
+  if (rd.popped) {
+    b.hg = new GFX.Group(); b.hg.scale.copy(S); b.hg.add(r.head);
+    r.head.position.set(0, -0.1, 0); r.head.rotation.set(0, 0, 0);
+    rd.head.landed = h => thud(h * 0.5);
+  }
+  if (held.length) {
+    b.ig = new GFX.Group(); b.ig.scale.copy(S); b.ig.add(r.tool);
+    r.tool.position.set(-held[0].mid[0], -held[0].mid[1], -held[0].mid[2]); r.tool.rotation.set(0, 0, 0);
+  }
+  humanFallen.push(b);
+}
+const placeGroup = (g, o, y) => { g.position.set(o.pos[0], o.pos[1] + y, o.pos[2]); g.quaternion.set(o.q[0], o.q[1], o.q[2], o.q[3]); g.updateMatrixWorld(); };
 function updateFallen(dt) {
   for (let k = humanFallen.length - 1; k >= 0; k--) {
-    const b = humanFallen[k], f = b.f, r = f.rig;
+    const b = humanFallen[k], f = b.f, r = f.rig, rd = b.rd;
     b.t += dt;
-    if (b.t > HUMAN.lie + HUMAN.sink) { freeHuman(f); humanFallen.splice(k, 1); continue; }
-    const u = smooth(0, 0.55, b.t), slide = 0.35 * smooth(0, 0.4, b.t), sink = smooth(HUMAN.lie, HUMAN.lie + HUMAN.sink, b.t);
+    rd.step(dt);
+    // (lying still a while, then sinking out of sight)
+    if (b.t > HUMAN.lie && (rd.asleep || b.t > HUMAN.lie + 4)) b.sinkT += dt;
+    if (b.sinkT > HUMAN.sink) { freeHuman(f); humanFallen.splice(k, 1); continue; }
+    const sink = -0.4 * smooth(0, HUMAN.sink, b.sinkT);
     folkKit.pose(r, 'idle', 0);
-    r.head.rotation.set(-0.3 * u, 0.4 * u, 0);
-    r.armL.rotation.set(-2.6 * u, 0, 0.5 * u); r.armR.rotation.set(-2.4 * u, 0, -0.7 * u);
-    r.elbows[0].rotation.x = -0.4 * u; r.elbows[1].rotation.x = -0.9 * u;
-    r.legL.rotation.x = -0.35 * u; r.knees[0].rotation.x = 0.6 * u; r.legR.rotation.x = 0.1 * u;
-    r.tool.rotation.x = 0.8 * u;
-    // (about the feet, back by a quarter turn, lifted by the body's depth so it lies on the ground, not in it)
-    r.g.rotation.set(-Math.PI / 2 * u * u, b.face, 0, 'YXZ');
-    r.g.position.set(b.x + b.dx * slide, b.y + 0.1 * u - 0.35 * sink, b.z + b.dz * slide);
+    r.body.position.set(0, 0, 0); r.body.rotation.set(0, 0, 0); r.chest.rotation.set(0, 0, 0);
+    if (!rd.popped) r.head.rotation.set(b.nod[0], b.nod[1], 0);
+    else { r.head.position.set(0, -0.1, 0); r.head.rotation.set(0, 0, 0); }
+    if (b.ig) { const m = b.held.mid; r.tool.position.set(-m[0], -m[1], -m[2]); r.tool.rotation.set(0, 0, 0); r.tool.visible = true; }
+    const L = rd.limbs, legs = [r.legL, r.legR], arms = [r.armL, r.armR];
+    for (const q of [0, 1]) {
+      legs[q].rotation.set(L[q].th, 0, L[q].rb, 'ZYX'); r.knees[q].rotation.set(L[q].k, 0, 0);
+      arms[q].rotation.set(L[q + 2].th, 0, L[q + 2].rb, 'ZYX'); r.elbows[q].rotation.set(L[q + 2].k, 0, 0);
+      r.ankles[q].rotation.set(0.3, 0, 0); r.wrists[q].rotation.set(0, 0, 0);
+    }
+    const fr = rd.frame();
+    r.g.position.set(fr.pos[0], fr.pos[1] + sink, fr.pos[2]);
+    r.g.quaternion.set(fr.q[0], fr.q[1], fr.q[2], fr.q[3]);
     r.g.updateMatrixWorld();
+    if (b.hg) placeGroup(b.hg, rd.head, sink);
+    if (b.ig) placeGroup(b.ig, rd.items[0].body, sink);
     humanBones(f, true);
   }
 }
@@ -25924,6 +26012,26 @@ const TUNING = [
     [HUMAN_SPAWN, 'highwayman', 'A highwayman in front of you', 'action', () => spawnHumansAhead('highwayman', 1, 7)],
     [HUMAN_SPAWN, 'clear', 'Clear away every foe about', 'action', () => foes.slice().forEach(removeFoe)],
   ]],
+  // (v604) the fallen people's ragdolls (src/ragdoll.js)
+  ['Ragdolls', [
+    [RAGDOLL, 'gravity', 'Gravity', 2, 30, 0.5],
+    [RAGDOLL, 'bounce', 'Bounce off the ground', 0, 1, 0.01],
+    [RAGDOLL, 'friction', 'Friction on the ground', 0, 1.5, 0.01],
+    ...['sword', 'axe', 'hammer', 'spear', 'bow', 'fist'].flatMap(w => [
+      [RAGDOLL, w + 'Kick', titleCase(w) + ' kill: knocked away', 0, 12, 0.1],
+      [RAGDOLL, w + 'Lift', titleCase(w) + ' kill: lifted', 0, 10, 0.1],
+      [RAGDOLL, w + 'Spin', titleCase(w) + ' kill: tipped over', 0, 15, 0.1],
+    ]),
+    [RAGDOLL, 'limbSpring', 'Arms and legs: pull back to hanging', 0, 6, 0.05],
+    [RAGDOLL, 'limbDamping', 'Arms and legs: damping', 0, 6, 0.05],
+    [RAGDOLL, 'bendSpring', 'Knees and elbows: pull back to a little bend', 0, 10, 0.1],
+    [RAGDOLL, 'bendDamping', 'Knees and elbows: damping', 0, 10, 0.1],
+    [RAGDOLL, 'headPop', 'Chance the head comes off', 0, 1, 0.01],
+    [RAGDOLL, 'popSpeed', 'Head: flies up at', 0, 10, 0.1],
+    [RAGDOLL, 'scatter', 'Dropped weapon: flung about at', 0, 6, 0.1],
+    [RAGDOLL, 'itemFriction', 'Dropped weapon: friction', 0, 1.5, 0.01],
+    [HUMAN, 'lie', 'Seconds they lie there before sinking', 0, 60, 0.5],
+  ]],
   ['Ground haze', [
     [GROUND_HAZE, 'on', 'Ground haze (0 off, 1 on)', 0, 1, 1],
     [GROUND_HAZE, 'swamp', 'Swamps: how much', 0, 2, 0.01],
@@ -27092,7 +27200,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 602, crashSeen = new Map();
+const GAME_VERSION = 604, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
