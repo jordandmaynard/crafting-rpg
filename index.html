@@ -5615,6 +5615,7 @@ function townGround(i) { return sandTown(i) ? DESERT : snowTown(i) ? SNOW : 0; }
 function streetTile(i) { return !!PATH[i] || (!!TN[i] && townCell(i % N, Math.floor(i / N)) !== 'yard'); }
 const ARCHES = new Map();      // tile of an archway's middle edge -> { c, r, w, o, y, key }
 let TOWN_POSTS = false;      // (any large town walled: buildPieces looks for wall posts)
+const ARCH_CLEAR = 3;       // (v671) tiles either side of an archway's middle kept clear of wall in front of it
 const ARCH_END = new Set();    // the corner points (T(x, z)) an archway's piers stand on: the wall puts no post there
 function fenceTowns() {
   const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
@@ -5636,8 +5637,21 @@ function fenceTowns() {
       const pc = -DR[d], pr = DC[d], cc = (j, w) => t.c + DC[d] * (e + j) + pc * w, rr = (j, w) => t.r + DR[d] * (e + j) + pr * w;
       const mid = T(cc(0, 0), rr(0, 0)), out = T(cc(1, 0), rr(1, 0));
       if (!(TSTREET[mid] || PATH[mid]) || !LV[out] || WT[out] || LAVA[out] || !terrainOpen(mid, out, d)) continue;
-      for (let j = 1; j < 5; j++) for (let w = -1; w <= 1; w++) if (TN[T(cc(j, w), rr(j, w))] === own) corridor.add(T(cc(j, w), rr(j, w)));
-      for (let j = -4; j <= 0; j++) for (let w = -1; w <= 1; w++) { const x = T(cc(j, w), rr(j, w)); if (TN[x] !== own && LV[x] && !WT[x] && !LAVA[x]) fill.add(x); }
+      // (v671, Jordan: nothing built in front of an archway's banners) the way out is cleared ARCH_CLEAR tiles wide
+      // either side of the street, not just the street, so the wall runs on flush with the arch before it turns out
+      // (any building's tile past the line stays town ground)
+      const A = ARCH_CLEAR, bldg = x => FL[x] || UP[1].FL.has(x) || stairAt.has(x) || OBJ[OB[x]].tile;
+      for (let w = -A; w <= A; w++) for (let j = 1; j < 5; j++) {
+        const x = T(cc(j, w), rr(j, w));
+        if (TN[x] !== own) continue;
+        if (Math.abs(w) > 1 && (bldg(x) || SH[x])) break;   // (nor a ramp: walls never cross one)
+        corridor.add(x);
+      }
+      for (let j = -4; j <= 0; j++) for (let w = -A; w <= A; w++) {
+        if (Math.abs(w) > 1 && j < 0) continue;
+        const x = T(cc(j, w), rr(j, w));
+        if (TN[x] !== own && LV[x] && !WT[x] && !LAVA[x] && (Math.abs(w) <= 1 || (!CY[x] && !SH[x] && LV[x] === LV[mid]))) fill.add(x);
+      }
       for (let w = -1; w <= 1; w++) { const [a, b, ww] = edgeOf(cc(0, w), rr(0, w), d); open.add(edgeKey(a, b, ww)); }
       arches.push([cc(0, 0), rr(0, 0), d]);
     }

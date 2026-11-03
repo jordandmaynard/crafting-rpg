@@ -337,6 +337,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v670:** (Jordan: dense lit haze without washing the scene out) The lit haze has a new HAZE.clear setting (T > Lit haze) for how much the haze dims what's behind it. 1, the default, is the old look. Lower values keep the scene's own contrast while the haze's light and shafts are still added on top. hazeApply mixes the transmission toward 1 by hazeA.y.
 
+**v671:** (Jordan: nothing built in front of an archway's banners) A large town's archway now keeps the ground clear for three tiles either side of its middle (ARCH_CLEAR), not just the street. Town ground just past the arch's line counts as outside, so the wall runs on flush with the arch and only turns out two tiles beyond the piers. A building's tile or a ramp past the line stays town ground. Gaps just behind the line on the same level are filled in, so the wall stays straight.
+
 **v672:** (Jordan: bigger gate houses in the town's stone) The guard huts beside town gates are always 2 x 2 now (tried 2, 3 then 4 tiles along the wall from the gate; a gate gets no hut if none fits). A sandstone town builds them from the desert tileset (sandstone walls, pointed-arch door, flat terracotta roof). Grey and ash towns build them in their wall's stone (HUT_WALLS, read by stoneOf).
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
