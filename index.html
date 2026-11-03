@@ -2407,6 +2407,13 @@ function markShoals() {
     SHOAL[i] = 256 | m | k << 9;
   }
   for (const k of [0, 1]) for (const i of rows[k]) { LV[i] = WL[i]; SHORE[i] = 1; }
+  // (the water within reach of a shoal, whose bank and bed take its sand: see shoalBed)
+  shoalNear.fill(0);
+  const RR = Math.ceil(SHOAL_BED.reach) + 1;
+  for (const k of [0, 1]) for (const i of rows[k]) {
+    const c = i % N, r = (i - c) / N;
+    for (let dr = -RR; dr <= RR; dr++) for (let dc = -RR; dc <= RR; dc++) { const cc = c + dc, rr = r + dr; if (cc >= 0 && rr >= 0 && cc < N && rr < N) shoalNear[T(cc, rr)] = 1; }
+  }
   // (a lake's tiles beside its dirt beach have their swells lowered too)
   for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
     const i = T(c, r);
@@ -8805,6 +8812,32 @@ function beachColor(c, r, a, b) {
 }
 const BEACH_DIRT = { a: C('#7a5a3a'), b: C('#6e5034') };
 // a shoal's sand: the beach's wet sand, all one (the water over it does the rest)
+// The bank and sea or lake bed past a shoal (Jordan): in the shoal's sand (or dirt), so its far edge doesn't stand out as a
+// line of pale sand against dark rock, fading back to the usual bank and bed over SHOAL_BED.reach tiles from the shoal
+// and SHOAL_BED.depth under its floor, so the open sea's bed stays dark. A pure function of the point's place and
+// height, so neighbouring cells agree. shoalNear marks the water tiles within reach of a shoal (filled by markShoals).
+const SHOAL_BED = { reach: 2.5, depth: 1.6 };
+const shoalNear = new Uint8Array(N * N);
+function shoalBed(p, k) {
+  const x = p[0], z = p[2], R = Math.ceil(SHOAL_BED.reach);
+  const c0 = Math.floor(x), r0 = Math.floor(z);
+  let best = 1e9, lake = false, L = 0;
+  for (let r = r0 - R - 1; r <= r0 + R; r++) for (let c = c0 - R - 1; c <= c0 + R; c++) {
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const t = T(c, r);
+    if (!SHOAL[t]) continue;
+    const dx = Math.max(c - x, 0, x - c - 1), dz = Math.max(r - z, 0, z - r - 1), d = Math.hypot(dx, dz);
+    if (d < best) { best = d; lake = WT[t] === 2; L = LV[t]; }
+  }
+  if (best >= SHOAL_BED.reach) return k;
+  const floor = L * STEP - BEACH_DROP * 3;
+  const w = (1 - best / SHOAL_BED.reach) * clamp(1 - (floor - p[1]) / SHOAL_BED.depth, 0, 1);
+  if (w <= 0) return k;
+  const q = lake ? BEACH_DIRT : PAL[DESERT];
+  const sand = q.a.clone().lerp(q.b, 0.5);
+  const f = 0.88 * (0.95 + 0.05 * w);
+  return k.clone().lerp(new GFX.Color(sand.r * f, sand.g * f, sand.b * f), w * w * (3 - 2 * w));
+}
 function shoalColor(c, r, a, b) {
   const p = WT[T(c, r)] === 2 ? BEACH_DIRT : PAL[DESERT];   // (a lake's shoal is dirt, v641)
   return shade((c + r) % 2 ? p.a : p.b, (0.9 + hs(c, r, a * 2 + b + 44) * 0.12) * 0.88);
@@ -8877,6 +8910,10 @@ function* groundSteps(cx, cz, ch) {
           } else if (LAVA[i]) cc = shade(C('#1e1210'), 0.9 + hs(c, r, a + b * 2) * 0.2);
           else cc = groundColor(c, r, a, b);
           k00 = k10 = k01 = k11 = cc;
+        }
+        // (Jordan: the bank and bed past a shoal drawn in its sand, fading back to the usual with depth and distance)
+        if (!L && !cy && !LAVA[i] && shoalNear[i]) {
+          k00 = shoalBed(P[n00], k00); k10 = shoalBed(P[n10], k10); k01 = shoalBed(P[n01], k01); k11 = shoalBed(P[n11], k11);
         }
         const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
         // (v633: + 64 on a beach, + 128 on a shoal: a shoal's sand runs only into the beach's and its own, never the grass)
@@ -29635,7 +29672,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 673, crashSeen = new Map();
+const GAME_VERSION = 674, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

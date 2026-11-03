@@ -342,6 +342,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v672:** (Jordan: bigger gate houses in the town's stone) The guard huts beside town gates are always 2 x 2 now (tried 2, 3 then 4 tiles along the wall from the gate; a gate gets no hut if none fits). A sandstone town builds them from the desert tileset (sandstone walls, pointed-arch door, flat terracotta roof). Grey and ash towns build them in their wall's stone (HUT_WALLS, read by stoneOf).
 
 **v673:** (Jordan's tuning) Lit haze: sun 1.75 (was 1.9), forward 0.26 (0.19), sky 0.35 (1), lamps 1.4 (1), lift 0.55 (0.34), clear 0.5 (1). Eye adaptation's darkest stays 1 (Jordan: tuned for bright, only brightens in the dark).
+**v674:** (Jordan) The bank and bed past a shoal are drawn in the shoal's sand (dirt in a lake), fading back to the usual rock and bed over 2.5 tiles out and 1.6 under the shoal's floor, so the shoal's far edge no longer shows as a pale line against dark rock and the open sea's bed stays dark.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
