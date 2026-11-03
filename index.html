@@ -3449,28 +3449,33 @@ function townBeds(t, n) {
     if (h.cathedral || h.role === 'bank') continue;   // (2026-11-03, Jordan: no beds in a bank)
     // (v454, Jordan) in a two-story house the beds go upstairs, the work below; any that don't fit come down
     if (h.up) townBedsUp(h, want, n);
-    const [ic, ir] = h.inside || h.tiles[0];
-    for (let b = h.beds.length; b < (h.role === 'guard' && h.beds.length ? 0 : want); b++) {
-      let best = null, bd = -1;
-      for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
-        // head at (c, r) against the wall behind it, foot a tile on toward d
-        const i = T(c, r), j = T(c + DC[d], r + DR[d]);
-        if (!houseFree(h, i) || !houseFree(h, j) || !h.tiles.some(([a, e]) => T(a, e) === j) || !bedClear(h, 0, i) || !bedClear(h, 0, j)) continue;
-        if (!wallOn(c, r, (d + 2) & 3) || wallOn(c, r, d)) continue;
-        if (isDoorVal(wallOn(c, r, (d + 2) & 3))) continue;
-        const score = Math.hypot(c - ic, r - ir) + hs(c, r, 460 + d) * 0.5;
-        if (score <= bd) continue;
-        OB[i] = O.BED; OB[j] = O.BEDX;
-        const ok = bedsReachable(h, [...h.beds.filter(e => !e.k), { i, j }]);
-        OB[i] = 0; OB[j] = 0;
-        if (ok) { bd = score; best = { c, r, d, i, j }; }
-      }
-      if (!best) break;
-      OB[best.i] = O.BED; OB[best.j] = O.BEDX;
-      const bed = { ...best, color: BLANKETS[Math.floor(hs(best.c, best.r, 470) * BLANKETS.length)], house: h, town: n };
-      BEDS.set(best.i, bed); BEDS.set(best.j, bed); h.beds.push(bed);
-    }
+    houseBedsDown(h, h.role === 'guard' && h.beds.length ? 0 : want, n);
     for (const b of h.beds) { b.wood = PROP_WOOD[t.tier] || 'pine'; b.bunk = h.role === 'guard'; }
+  }
+}
+// the ground floor's beds, up to `want` in all: the head against a wall, farthest first from the door, the house left
+// walkable (v683: a farmhouse's too, for its farmer)
+function houseBedsDown(h, want, n) {
+  const [ic, ir] = h.inside || h.tiles[0];
+  for (let b = h.beds.length; b < want; b++) {
+    let best = null, bd = -1;
+    for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
+      // head at (c, r) against the wall behind it, foot a tile on toward d
+      const i = T(c, r), j = T(c + DC[d], r + DR[d]);
+      if (!houseFree(h, i) || !houseFree(h, j) || !h.tiles.some(([a, e]) => T(a, e) === j) || !bedClear(h, 0, i) || !bedClear(h, 0, j)) continue;
+      if (!wallOn(c, r, (d + 2) & 3) || wallOn(c, r, d)) continue;
+      if (isDoorVal(wallOn(c, r, (d + 2) & 3))) continue;
+      const score = Math.hypot(c - ic, r - ir) + hs(c, r, 460 + d) * 0.5;
+      if (score <= bd) continue;
+      OB[i] = O.BED; OB[j] = O.BEDX;
+      const ok = bedsReachable(h, [...h.beds.filter(e => !e.k), { i, j }]);
+      OB[i] = 0; OB[j] = 0;
+      if (ok) { bd = score; best = { c, r, d, i, j }; }
+    }
+    if (!best) break;
+    OB[best.i] = O.BED; OB[best.j] = O.BEDX;
+    const bed = { ...best, color: BLANKETS[Math.floor(hs(best.c, best.r, 470) * BLANKETS.length)], house: h, town: n };
+    BEDS.set(best.i, bed); BEDS.set(best.j, bed); h.beds.push(bed);
   }
 }
 // the upstairs beds (story 1, kept in BEDS by 1 * SNN + tile, drawn with the story's pieces): the head against a
@@ -3584,8 +3589,12 @@ const PROP_KITS = {
     [{ id: 'feastTable', seats: 'chair' }, { id: 'bookcase', n: 2 }, { id: 'candleStand', n: 2 }, { id: 'hearth' }, { id: 'chest', at: 'bed' }, { id: 'rug', up: true }, { hang: 'tapestry' }],
   ],
   // (one of each sort, whatever the size: oak for the farms, pine for the cabins)
-  farm: [{ id: 'bed' }, { id: 'hearth' }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'chest' }, { id: 'barrel', n: 2 }, { id: 'shelf' }, { id: 'washtub' }],
+  // (v683: the farmhouse's bed is the farmer's now, a town bed of its own: furnishLone)
+  farm: [{ id: 'hearth' }, { id: 'roundTable', seats: 'stool', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'barrel', n: 2 }, { id: 'shelf' }, { id: 'washtub' }],
   cabin: [{ id: 'bed' }, { id: 'hearth' }, { id: 'roundTable', seats: 'chair', n: 1 }, { id: 'chest' }, { id: 'barrel' }, { id: 'rug' }, { hang: 'antlers' }],
+  // (v683, Jordan: the mill furnished upstairs, where the miller lives; the miller's bed goes in first: placeMills)
+  mill: [{ id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'roundTable', seats: 'stool', n: 1, up: true }, { id: 'shelf', up: true }, { id: 'washstand', up: true },
+    { id: 'barrel', up: true }, { id: 'crate', up: true }, { id: 'rug', up: true }, { hang: 'antlers', up: true }],
 };
 // (2026-11-03) a bank walled off by its counter: the secure part's things behind it, the hall's before it
 const BANK_BACK = [{ id: 'vaultDoor' }, { id: 'strongbox', n: 3 }, { id: 'coinTable' }, { id: 'desk' }, { id: 'chair', n: 1 }, { id: 'bookcase' }, { id: 'candleStand' }, { hang: 'wallMap' }];
@@ -4284,9 +4293,10 @@ function townYards(t, n) {
     fill('birdBath', baths.sort((a, b) => a.s - b.s), count(K.bath, 8), 6, { look: { live: true } });   // (its water and bird drawn live: buildFountains, birdLive)
   }
 }
-// a farmhouse or a cabin: one room, no beds of the town's
-function furnishLone(tiles, inside, kind, wood, n) {
-  const h = { tiles, inside, clear: new Set(), beds: [], up: null };
+// a farmhouse or a cabin: one room, no beds of the town's (v683: but for the farmer's, beds 1, with its door)
+function furnishLone(tiles, inside, kind, wood, n, o = {}) {
+  const h = { tiles, inside, door: o.door || null, clear: new Set(), beds: [], up: null };
+  if (o.beds) { houseBedsDown(h, o.beds, -1); for (const b of h.beds) b.wood = wood; }
   furnish(h, PROP_KITS[kind], { wood, n });
   return h;
 }
@@ -5868,7 +5878,7 @@ function placeFarms() {
           if (door) f.door = [ec, er, ew];
         }
       }
-      f.room = furnishLone(house, [dc, dr], 'farm', 'oak', 900 + k);   // (2026-11-02: its furniture)
+      f.room = furnishLone(house, [dc, dr], 'farm', 'oak', 900 + k, { door: f.door, beds: 1 });   // (2026-11-02: its furniture; v683: the farmer's bed)
       for (const i of yard) {
         const c = i % N, r = (i - c) / N;
         for (let d = 0; d < 4; d++) {
@@ -6366,6 +6376,14 @@ function placeMills() {
       pillars.get(i).push(q);
       return q;
     });
+    // (v683, Jordan: furnished upstairs, a miller living there) the miller's bed and things on the upper floor (the
+    // landing kept clear); below, the grinder is their work, stood at from before it, the sacks' corner kept clear
+    const h = { tiles: m.tiles, inside: millTile(m, 1, D - 1), door: m.door, up: { tiles: m.tiles, doors: [] }, beds: [], clear: new Set([T(...millTile(m, 0, D - 1))]),
+      work: T(...millTile(m, 1, 1)), workFrom: T(...millTile(m, 1, 2)), mill: m };
+    townBedsUp(h, 1, -1);
+    for (const b of h.beds) b.wood = 'oak';
+    furnish(h, PROP_KITS.mill, { wood: 'oak', n: 960 + mills.length });
+    m.house = h;
     const [hc, hr] = millTile(m, 1, 1);
     m.c = hc; m.r = hr; [m.x, m.z] = millP(m, 2, 2);
     m.home = T(hc, hr); m.water = at(1, -1);
@@ -25303,7 +25321,7 @@ function doorFront(h) {
 // can townsfolk stand on tile i of town t?
 function folkOpen(t, i) {
   const c = i % N, r = Math.floor(i / N);
-  if (TN[i] !== t.n + 1 || !LV[i] || WT[i] || LAVA[i] || stairAt.has(i)) return false;
+  if ((t.own ? !t.own.has(i) : TN[i] !== t.n + 1) || !LV[i] || WT[i] || LAVA[i] || stairAt.has(i)) return false;
   const o = OBJ[OB[i]];
   if (o.tile || o.solid >= 0.1) return false;
   // (v463, Jordan: one walked into the cathedral's side) nothing round standing on it: towers, buttresses, columns
@@ -25321,8 +25339,12 @@ function folkTight(i) {
 // The town's people (made the first time it wakes; the same every time, from the world's seed): each house's, its
 // job fitting the town's size (the tannery's a tanner, the smithy's a smith, the cathedral's clergy), with a seed
 // whose design gives that job.
+const folkPerson = (t, d, home, slot, must, worker, keep) => ({ must, worker, keep, d, t, home, slot, k: 0, up: false, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
+  moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
 function folkPeople(t) {
   if (t.folk && t.folkShare === FOLK.share) return t.folk;
+  // (v683) a mill's or a farm's one: its miller or farmer
+  if (t.lone) { t.folkShare = FOLK.share; return t.folk = [folkPerson(t, folkKit.design(folkSeed(t.n, 0, 0, 0), 'town', t.lone), 0, 0, 2, t.lone === 'miller', folkSeed(t.n, 0, 0, 4242))]; }
   if (t.n == null) t.n = towns.indexOf(t);
   const tiers = FOLK_TIERS[t.tier] || FOLK_TIERS[0], [lo, hi] = FOLK_PER_HOUSE[t.tier] || FOLK_PER_HOUSE[0], used = new Set(), out = [];
   // (v452) the night's watch, the lamplighter and the town's street trades: one each, in the plain houses' second places
@@ -25350,8 +25372,7 @@ function folkPeople(t) {
       // (v449, Jordan) anyone known as "of" a place is of this town
       if (d.name.last.startsWith('of ')) { const of = 'of ' + titleCase(t.name); d.name.full = d.name.full.slice(0, -d.name.last.length) + of; d.name.last = of; }
       used.add(d.job);
-      out.push({ must: want ? (extra ? 1 : 2) : 0, worker: !!want && !extra && !!(h.trade || h.cathedral), keep: folkSeed(t.n, hi0, k, 4242), d, t, home: hi0, slot: k, k: 0, up: false, x: 0, z: 0, y: 0, face: 0, state: 'stay', at: -1, goal: -1, route: null, ri: 0, stayT: 0, anim: 'idle', animT: Math.random() * 20, walkT: 0, carry: false,
-        moved: 0, stuckT: 0, waved: 0, rig: null, bones: null, local: null, batch: null, base: 0 });
+      out.push(folkPerson(t, d, hi0, k, want ? (extra ? 1 : 2) : 0, !!want && !extra && !!(h.trade || h.cathedral), folkSeed(t.n, hi0, k, 4242)));
     }
   });
   // (v448, Jordan: half as many) FOLK.share of them kept: the tanner, smith and clergy always, the rest by lot
@@ -25392,8 +25413,10 @@ function folkPlaces(t) {
   if (t.n == null) t.n = towns.indexOf(t);
   const own = t.n + 1, R = t.R, set = new Set(), P = [];
   t.fount = OB[T(t.c, t.r)] === O.FOUNTAIN;
-  const add = (i, kind) => { if (i >= 0 && !set.has(i) && folkOpen(t, i)) { set.add(i); P.push({ i, kind }); } };
+  const add = (i, kind, look) => { if (i >= 0 && !set.has(i) && folkOpen(t, i)) { set.add(i); P.push(look ? { i, kind, look } : { i, kind }); } };
   t.houses.forEach((h, k) => { const i = doorFront(h); if (i >= 0) { add(i, 'door'); h.front = i; } });
+  // (v683) a mill's or a farm's own places: by the wheel, about the yard, the field's tiles (each with where to face)
+  for (const q of t.spots || []) add(q.i, q.kind, q.look);
   // (v452) inside each house: the ground floor's open tiles (not its stair, the tile inside the door kept for last),
   // and where its worker stands at the bench, facing it
   for (const h of t.houses) {
@@ -25502,7 +25525,7 @@ function folkRoute(t, a, b) {
 // a balcony, not a bed)
 function folkOpenK(t, k, i) {
   if (!k) return folkOpen(t, i);
-  return TN[i] === t.n + 1 && UP[k].FL.has(i) && !BALCONY.has(i) && !BEDS.has(k * SNN + i) && !PROP_AT.has(k * SNN + i) && !stairAt.has(k * SNN + i);
+  return (t.own ? t.own.has(i) : TN[i] === t.n + 1) && UP[k].FL.has(i) && !BALCONY.has(i) && !BEDS.has(k * SNN + i) && !PROP_AT.has(k * SNN + i) && !stairAt.has(k * SNN + i);
 }
 // how high someone stands: on a stair, up its flight; on an upper story, its floor; else the ground
 function folkY(p) {
@@ -25602,6 +25625,44 @@ function freeTown(t) {
   folkTowns.delete(t);
 }
 
+// (v683, Jordan) a miller living in each river mill, a farmer in each farmhouse: each place a home of one house and one
+// person, woken and put to sleep as a town is, walking only its own ground (t.own: the mill and the ring round it,
+// FARM 4; the farm's yard, fields and the edge round them, FARM 1). The miller works the grinder by day and sleeps
+// upstairs; the farmer hoes the wheat field by day (never reaping it: only you cut wheat, reapWheat) and sleeps in
+// the farmhouse. Their places: the door, by the wheel watching it turn, about the yard, the field's tiles.
+let folkHomes = null;
+function makeFolkHomes() {
+  folkHomes = [];
+  const home = (lone, n, src, h, own, spots) => {
+    const cs = [...own].map(i => i % N), rs = [...own].map(i => Math.floor(i / N));
+    const c0 = Math.min(...cs), c1 = Math.max(...cs), r0 = Math.min(...rs), r1 = Math.max(...rs), c = (c0 + c1) >> 1, r = (r0 + r1) >> 1;
+    folkHomes.push({ lone, n, src, c, r, R: Math.max(c1 - c, c - c0, r1 - r, r - r0) + 1, houses: [h], tier: 0, name: src.name || '', own, spots, fount: false });
+  };
+  mills.forEach((m, j) => {
+    if (!m.house || !m.house.door) return;
+    const own = new Set(), at = (a, b) => T(...millTile(m, a, b));
+    for (let b = -1; b <= MILL.D; b++) for (let a = -1; a <= MILL.W; a++) { const i = at(a, b); if (FARM[i] === 4 && LV[i]) own.add(i); }
+    const w = m.wheelC ? [m.wheelC[0], m.wheelC[2]] : millP(m, 1.5, -0.5), spots = [];
+    for (const [a, b] of [[-1, 0], [MILL.W, 0], [-1, 1]]) spots.push({ i: at(a, b), kind: 'wheel', look: w });
+    for (const [a, b] of [[-1, 3], [MILL.W, 3], [MILL.W, 1], [2, MILL.D], [0, MILL.D]]) spots.push({ i: at(a, b), kind: 'yard' });
+    home('miller', 1000 + j, m, m.house, own, spots);
+  });
+  farms.forEach((f, j) => {
+    if (!f.room || !f.door) return;
+    const own = new Set(), house = new Set(f.house.map(([c, r]) => T(c, r)));
+    for (let r = f.r - 12; r <= f.r + 12; r++) for (let c = f.c - 12; c <= f.c + 12; c++) { const i = T(c, r); if (FARM[i] === 1 && LV[i]) own.add(i); }
+    const spots = [];
+    // (about the yard: the tiles round the farmhouse, a few of them)
+    for (const i of house) for (let d = 0; d < 4; d++) { const k = i + DI[d]; if (own.has(k) && !house.has(k) && !FIELD[k] && hs(k % N, Math.floor(k / N), 678) < 0.35) spots.push({ i: k, kind: 'yard' }); }
+    // (every tile of the fields, facing along its rows one way or the other)
+    for (const fl of f.fields) for (const [c, r] of fl.tiles) {
+      const s = hs(c, r, 679) < 0.5 ? -4 : 4;
+      spots.push({ i: T(c, r), kind: 'field', look: fl.dir === 1 ? [c + 0.5 + s, r + 0.5] : [c + 0.5, r + 0.5 + s] });
+    }
+    f.room.farm = f;
+    home('farmer', 2000 + j, f, f.room, own, spots);
+  });
+}
 // ----- waking and sleeping -----
 function wakeTown(t) {
   folkPlaces(t); folkPeople(t);
@@ -25626,13 +25687,16 @@ function wakeTown(t) {
 }
 // towns wake when you come near and sleep when you've gone; the waking ones' people are built a few ms a frame
 function folkTowns_tick() {
-  for (const t of towns) {
-    if (!t.houses || !t.houses.length) continue;
+  if (!folkHomes) makeFolkHomes();
+  const tick = t => {
+    if (!t.houses || !t.houses.length) return;
     const d = Math.max(Math.abs(H.x - t.c), Math.abs(H.z - t.r)) - t.R;
     const awake = folkTowns.has(t);
     if (!awake && FOLK.on > 0.5 && d < FOLK.wake) wakeTown(t);
     else if (awake && (d > FOLK.wake + 12 || FOLK.on <= 0.5)) freeTown(t);
-  }
+  };
+  for (const t of towns) tick(t);
+  for (const t of folkHomes) tick(t);
   const t0 = performance.now();
   for (const t of folkTowns) {
     if (t.batches) continue;
@@ -25645,7 +25709,7 @@ function folkTowns_tick() {
 // ----- what they do -----
 // what someone's doing at this hour (v452): sleep, home, work, errand, watch (the guards) or lamps (the lamplighter)
 const inHours = (h, a, b) => { a = (a + 24) % 24; b = (b + 24) % 24; return a <= b ? h >= a && h < b : h >= a || h < b; };
-const FOLK_OUT_WORK = { sweeper: 'street', crier: 'fountain', busker: 'fountain', flowerSeller: 'fountain', gossip: 'door', pickpocket: 'street', carter: 'door', elder: 'fountain' };
+const FOLK_OUT_WORK = { sweeper: 'street', crier: 'fountain', busker: 'fountain', flowerSeller: 'fountain', gossip: 'door', pickpocket: 'street', carter: 'door', elder: 'fountain', farmer: 'field' };
 function folkActivity(p) {
   const h = SKY.timeOfDay, j = p.d.job;
   if (j === 'guard' || j === 'captain') return inHours(h, 8 + p.sh, 15 + p.sh) ? 'sleep' : 'watch';
@@ -25674,9 +25738,12 @@ function folkNext(p, place = false) {
     stay = FOLK.workMin + Math.random() * (FOLK.workMax - FOLK.workMin);
   } else if (act === 'work') {
     const k = FOLK_OUT_WORK[p.d.job];
-    goal = pickOf(k === 'fountain' && t.fount ? placesOf('fountain') : k === 'street' ? placesOf('street', 'planter') : k === 'door' ? placesOf('door') : P.length ? P : [{ i: H0.front }]).i;
+    const q = pickOf(k === 'fountain' && t.fount ? placesOf('fountain') : k === 'street' ? placesOf('street', 'planter') : k === 'door' ? placesOf('door') : k === 'field' ? placesOf('field') : P.length ? P : [{ i: H0.front }]);
+    goal = q.i; if (q.look) p.look = q.look;
     // (v454, Jordan) the busker plays a good while at each spot round the fountain
     if (p.d.job === 'busker') stay = 40 + Math.random() * 50;
+    // (v683) the farmer hoes a while at each tile of the field
+    if (p.d.job === 'farmer') stay = 20 + Math.random() * 25;
   } else if (act === 'watch') { goal = pickOf(placesOf('street', 'lamp', 'fountain', 'door')).i; stay = 3 + Math.random() * 6; }
   else if (act === 'lamps') { goal = pickOf(placesOf('lamp')).i; stay = 2 + Math.random() * 3; }
   else {
@@ -25684,7 +25751,7 @@ function folkNext(p, place = false) {
     const u = Math.random(), shops = t.houses.filter(h => (h.trade || h.cathedral) && h !== H0 && h.inTiles && h.inTiles.length);
     if (u < 0.3 && shops.length) goal = inside(pickOf(shops));
     else if (u < 0.42) goal = atHome(H0);
-    else if (P.length) goal = pickOf(P).i;
+    else if (P.length) { const q = pickOf(P); goal = q.i; if (q.look) p.look = q.look; }   // (v683: by the wheel, watching it)
   }
   if (goal == null || goal < 0) goal = H0.front;
   p.act = act; p.asleep = false; p.actT = 2 + Math.random() * 2;
@@ -25739,6 +25806,9 @@ const FOLK_SAY = {
   carter: ["Out of the way, the cart's heavy!", "These roads will be the death of my wheels."],
   gossip: ["Did you hear about the smith's daughter?", "Oh, I couldn't possibly say. But I will."],
   pickpocket: ["Who, me? Just admiring your pack.", "Lovely day for a stroll, isn't it?"],
+  // (v683, Jordan) the mills' millers and the farms' farmers
+  miller: ["The wheel never stops while the river runs.", "Got wheat? The stones are there, grind it yourself.", "Mind your fingers near the stones.", "Flour in everything. My bed, my hair, my supper."],
+  farmer: ["Weeds grow faster than the wheat, I swear.", "Rain's due. The wheat'll be glad of it.", "Help yourself to the wheat, it grows back quick enough.", "Up before the sun, every day."],
 };
 function folkGreeting() { const h = SKY.timeOfDay; return h < 12 ? 'Good morning.' : h < 18 ? 'Good day.' : 'Good evening.'; }
 let folkTalk = null;   // { p, text, t }
@@ -25897,7 +25967,7 @@ function updateFolk(dt) {
           const dc = R[p.ri] % N - fc, dr = Math.floor(R[p.ri] / N) % N - fr;
           if (Math.abs(dc) + Math.abs(dr) === 1) {
             const q = doorAcross(fc, fr, dc ? (dc > 0 ? 1 : 3) : (dr > 0 ? 2 : 0));
-            if (q && !q.open && !q.gate) { setDoor(q, true, p.x, p.z); p.opened = q; sfx.door(); }
+            if (q && !q.open && (!q.gate || t.lone)) { setDoor(q, true, p.x, p.z); p.opened = q; sfx.door(); }   // (v683: a farm's gate too)
           }
         }
         const ex = tx - p.x, ez = tz - p.z, el = Math.hypot(ex, ez);
@@ -26032,6 +26102,7 @@ function updateFolk(dt) {
     else if (p.state === 'walk') p.anim = p.carry ? 'carry' : 'walk';
     else if (p.moving) p.anim = 'walk';
     else if (p.d.job === 'sweeper' && p.at >= 0 && folkStreet(p.at) && p.act === 'work') p.anim = 'sweep';
+    else if (p.d.job === 'farmer' && p.act === 'work' && p.at >= 0 && p.at < SNN && FIELD[p.at]) p.anim = 'hoe';   // (v683, Jordan: tending the wheat)
     else if (p.d.job === 'busker' && p.act === 'work') p.anim = 'play';   // (v454, Jordan: by the fountain by day)
     else if (hd < FOLK.waveR && p.waved === 0 && H.alive) { p.waved = Math.random() < FOLK.wave ? 1 : 2; if (p.waved === 1) p.waveT = p.animT; p.anim = p.waved === 1 ? 'wave' : 'idle'; }
     else if (p.waved === 1 && p.animT - p.waveT < FOLK.waveTime) p.anim = 'wave';
@@ -30239,7 +30310,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 677, crashSeen = new Map();
+const GAME_VERSION = 683, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -30277,6 +30348,20 @@ let genMs = 0;
 window.GAME = {
   // (tests) the town props: per house its role, props down and whether it's still walkable (door to the stair's
   // foot and every free tile; landing to every upstairs door), and the farms' and cabins' rooms
+  // (v683) the mills' millers and the farms' farmers: each home's person, bed, work and places, and whether every place
+  // (the bed's side, the work spot, the field) can be walked to from the door
+  folkHomes: () => {
+    if (!folkHomes) makeFolkHomes();
+    return folkHomes.map(t => {
+      folkPlaces(t); const p = folkPeople(t)[0], h = t.houses[0], from = h.front, kinds = {};
+      for (const q of t.places) kinds[q.kind] = (kinds[q.kind] || 0) + 1;
+      const go = g => g == null || g < 0 ? null : !!folkRoute(t, from, g);
+      const bed = h.beds[0], fields = t.places.filter(q => q.kind === 'field');
+      return { lone: t.lone, name: p.d.name.full, job: p.d.job, hat: p.d.head.item, prop: p.d.prop, own: t.own.size, R: t.R, kinds, front: from, beds: h.beds.length, bedUp: bed ? !!bed.k : null,
+        toBed: bed ? go(bed.side) : null, work: h.workSpot ?? null, toWork: go(h.workSpot), up: (h.upTiles || []).length, toUp: h.upTiles && h.upTiles.length ? go(h.upTiles[0]) : null,
+        toFields: fields.length ? fields.filter(q => go(q.i)).length + '/' + fields.length : null, props: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' ') };
+    });
+  },
   props: () => {
     const walk = h => { const R = propRooms(h); return { down: propReach(h, 0), up: R.up ? propReach(h, 1) : null }; };
     const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), grid: walk(h).down ? undefined : (() => { const cs = h.tiles.map(p => p[0]), rs = h.tiles.map(p => p[1]), ins = h.inside ? T(...h.inside) : -1, set = new Set(h.tiles.map(([c, r]) => T(c, r))); const L = []; for (let r = Math.min(...rs) - 1; r <= Math.max(...rs) + 1; r++) { let line = ''; for (let c = Math.min(...cs) - 1; c <= Math.max(...cs) + 1; c++) { const i = T(c, r); line += !set.has(i) ? (WN[i] || WW[i] ? '#' : ' ') : i === ins ? 'D' : stairAt.has(i) ? 'S' : BEDS.has(i) ? 'B' : PROP_AT.has(i) ? PROP_AT.get(i).id[0] : OB[i] ? 'o' : h.clear?.has(i) ? ',' : '.'; } L.push(line); } return L.join('/'); })(), beds: (h.beds || []).length, upBeds: (h.beds || []).filter(b => b.k).length, drill: h.drill ? [h.drill.L, h.drill.D] : undefined, work: h.work != null, ...walk(h) });
@@ -30286,7 +30371,7 @@ window.GAME = {
     const mapOf = t => { const L = []; for (let r = t.r - t.R - 1; r <= t.r + t.R + 1; r++) { let line = ''; for (let c = t.c - t.R - 1; c <= t.c + t.R + 1; c++) { const i = T(c, r), q = PROP_AT.get(i); line += TN[i] !== t.n0 + 1 ? ' ' : FL[i] ? '#' : q ? ({ marketStall: 'M', produce: 'p', streetBench: 'b', noticeBoard: 'N', signpost: 'S', horseTrough: 'T', hayBales: 'h', rainBarrel: 'r', woodpile: 'w', washLine: 'L', handcart: 'C', flagpole: 'F', birdBath: 'o', kegStack: 'k', weaponRack: 'R', brazier: 'Z', archeryButt: 'A', trainingDummy: 'X' }[q.id] || (q.house?.yard ? '?' : q.id[0].toUpperCase())) : OB[i] === O.WELL ? 'W' : OB[i] === O.FOUNTAIN ? 'Q' : OB[i] === O.LAMP ? 'l' : OB[i] === O.PLANTER ? 'f' : OB[i] && OBJ[OB[i]].solid ? 't' : TSTREET[i] || PATH[i] ? '-' : GUARD_YARD.has(i) ? ':' : '.'; } L.push(line); } return L; };
     towns.forEach((t, n) => t.n0 = n);
     return { towns: towns.map(t => ({ tier: t.tier, R: t.R, gap: gapOf(t), yard: yardOf(t), map: mapOf(t), houses: t.houses.filter(h => !h.cathedral).map(one) })),
-      farms: farms.map(f => f.room ? one(f.room) : null), cabins: cabins.map(m => m.room ? one(m.room) : null), total: [...PROP_DRAW.values()].reduce((s, l) => s + l.length, 0) };
+      farms: farms.map(f => f.room ? one(f.room) : null), cabins: cabins.map(m => m.room ? one(m.room) : null), mills: mills.map(m => m.house ? one(m.house) : null), total: [...PROP_DRAW.values()].reduce((s, l) => s + l.length, 0) };
   },
   // (tests) townsfolk: towns awake, people, places and routes; folkTown(n) wakes town n's people at once
   folk: () => ({ ...FOLK_READ, batches: folkBatches.map(b => ({ people: b.people.length, verts: b.mesh.geometry.attributes.position.count, bones: b.people.reduce((s, p) => s + p.bones.length, 0) })),

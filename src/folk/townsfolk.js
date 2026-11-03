@@ -148,6 +148,15 @@ Object.assign(JOBS, {
   cleric: j('Cleric', 'mosque', { prop: 'book' }),
   chanter: j('Chanter', 'mosque', { prop: 'book' }),
 });
+// (v683, Jordan: a miller living in each river mill, a farmer in each farmhouse) never rolled for a town (they come
+// after JOB_LIST, so every kept seed is as it was): the game asks for them by name, design(seed, 'town', 'miller');
+// tier 'country' keeps them out of the viewer's lists
+Object.assign(JOBS, {
+  miller: j('Miller', 'country', { head: [['cap', 3], ['coif', 2], ['none', 2], ['kerchief', 1]], torso: [['shirt', 3], ['tunic', 2], ['vest', 2], ['blouse', 1], ['bodice', 1]], legs: [['trousers', 3], ['breeches', 2], ['skirt', 1]],
+    dye: { torso: ['white', 'linen', 'oat', 'wool'], under: ['white', 'linen'], legs: ['oat', 'wool', 'brown', 'grey'], head: ['white', 'linen', 'oat'], apron: ['white', 'linen'] }, x: { apron: 0.9, apronBib: 0.5, belt: 0.4 }, prop: 'flourSack', surnames: ['Miller', 'Mills', 'Grist', 'Mulder'] }),
+  farmer: j('Farmer', 'country', { head: [['strawHat', 6], ['hood', 1], ['kerchief', 1], ['none', 1]], torso: [['tunic', 3], ['shirt', 3], ['vest', 2], ['bodice', 1], ['blouse', 1]], legs: [['trousers', 3], ['breeches', 2], ['skirt', 1]], feet: [['boots', 3], ['wraps', 1]],
+    dye: { torso: ['oat', 'russet', 'moss', 'brown', 'wool', 'ochre'], under: ['linen', 'oat'], legs: EARTH, head: ['russet', 'brown', 'moss'] }, x: { belt: 0.8, neckerchief: 0.4 }, prop: 'hoe', surnames: ['Farmer', 'Fields', 'Tiller', 'Sower'] }),
+});
 const ROUGH = ['brown', 'umber', 'charcoal', 'grey', 'moss', 'russet', 'wool', 'oat'];
 Object.assign(DYES, { hide: ['#6e4a2e', 0], darkHide: ['#3e2c20', 0], bone: ['#d8ceb0', 0], ash: ['#8e8a82', 0] });
 const wj = (title, tier, o) => j(title, tier, Object.assign({ hostile: true }, o));
@@ -243,10 +252,11 @@ export const HAIR_STYLES = {
   masc: [['short', 6], ['crop', 4], ['bald', 2], ['shaggy', 3], ['ponytail', 1], ['long', 1]],
   fem: [['long', 5], ['bob', 3], ['bun', 4], ['braid', 4], ['ponytail', 3], ['short', 1]],
 };
-export function design(seed, pool = 'town') {
+export function design(seed, pool = 'town', want = null) {
   const r = folkRand(seed);
   const body = r() < 0.5 ? 'masc' : 'fem';
-  const job = pick(r, pool === 'wilds' ? WILD_LIST : JOB_LIST), J = JOBS[job];
+  // (v683: a job asked for by name still takes its roll, so the rest of the design comes out as it would have)
+  const rolled = pick(r, pool === 'wilds' ? WILD_LIST : JOB_LIST), job = want && JOBS[want] ? want : rolled, J = JOBS[job];
   const age = pick(r, J.ages || [['young', 4], ['adult', 6], ['old', 2]]);
   const d = { seed, body, age, job, tier: J.tier };
   d.height = 0.95 + r() * 0.1;
@@ -325,7 +335,7 @@ export const DESERT_JOBS = {
   elder: 'robe', smith: 'work', tanner: 'work', woodcutter: 'work', goodfolk: 'either', lamplighter: 'work',
   ironmonger: 'work', armorer: 'work', glazier: 'work', mason: 'work', herbalist: 'robe', innkeeper: 'either', carter: 'work', sweeper: 'work',
   masterSmith: 'work', jeweller: 'robe', merchant: 'robe', banker: 'robe', cartographer: 'robe', busker: 'either', flowerSeller: 'either',
-  crier: 'either', gossip: 'either', pickpocket: 'work',
+  crier: 'either', gossip: 'either', pickpocket: 'work', miller: 'work', farmer: 'work',
   guard: 'watch', captain: 'watch', bishop: 'clergy', priest: 'clergy', choir: 'clergy',
 };
 // the cathedral's clergy and who they are at the mosque
@@ -1076,7 +1086,13 @@ export function makeFolkKit(GFX) {
     box(crate, 0.3, 0.22, 0.24, 0, 0, 0, '#9a6a3e');
     for (const y of [-0.08, 0.08]) box(crate, 0.31, 0.04, 0.25, 0, y, 0, '#6a4426');
     for (const s of [1, -1]) box(crate, 0.04, 0.23, 0.25, s * 0.13, 0, 0, '#5a3a22');
-    broom.visible = crate.visible = false;
+    // (v683) a hoe for the farmer's hoeing, hung from the body as the broom is: local -y down the handle, the blade at
+    // its foot (y -0.7) standing out along +z, which the pose turns back toward them and down
+    const hoe = pivot(body, 0, 0, 0); hoe.rotation.order = 'YXZ';
+    box(hoe, 0.028, 1.0, 0.028, 0, -0.2, 0, '#8a6440');
+    box(hoe, 0.036, 0.05, 0.05, 0, -0.685, 0.012, '#4e4a44');
+    box(hoe, 0.15, 0.014, 0.13, 0, -0.7, 0.075, '#6a6e78');
+    broom.visible = crate.visible = hoe.visible = false;
     // (v7) the job's tool, in the left hand (a frame hanging with the hand: -y down, +z ahead). Staffs are kept upright
     // by the pose; a lute rides on the back. (v14) The hostile folk hold their weapons in the right hand as the hero
     // does (a bow or crossbow stays in the left, as the hero's bow does), so the game can give them the hero's strokes.
@@ -1153,6 +1169,16 @@ export function makeFolkKit(GFX) {
       if (P === 'crozier') { box(tool, 0.03, 0.03, 0.12, 0, 0.87, 0.045, GOLD); box(tool, 0.03, 0.09, 0.03, 0, 0.83, 0.1, GOLD); box(tool, 0.04, 0.04, 0.04, 0, 0.84, 0, '#e0e0f0'); }
       if (P === 'spear') { taper(tool, 0.85, 1.0, [0.05, 0.016], [0.004, 0.004], STEEL); box(tool, 0.04, 0.03, 0.04, 0, 0.845, 0, STEEL); }
       if (P === 'broomHeld') { box(tool, 0.07, 0.035, 0.05, 0, -0.37, 0, DARK); box(tool, 0.16, 0.14, 0.05, 0, -0.45, 0, STRAW); }
+    } else if (P === 'hoe') {
+      // (v683) carried upright like a staff, the blade at the top standing out ahead
+      box(tool, 0.03, 1.0, 0.03, 0, 0.15, 0, WOOD);
+      box(tool, 0.036, 0.05, 0.05, 0, 0.64, 0.012, '#4e4a44');
+      box(tool, 0.15, 0.014, 0.12, 0, 0.65, 0.07, '#6a6e78');
+    } else if (P === 'flourSack') {
+      // (v683) a small sack of flour, tied at the neck
+      box(tool, 0.13, 0.16, 0.1, 0, -0.13, 0.02, '#e4dac0');
+      box(tool, 0.1, 0.03, 0.08, 0, -0.04, 0.02, '#d6caa8');
+      box(tool, 0.05, 0.03, 0.05, 0, -0.015, 0.02, '#a88a58');
     } else if (P === 'hammer' || P === 'mallet') {
       box(tool, 0.025, 0.26, 0.025, 0, -0.1, 0.02, WOOD);
       box(tool, P === 'mallet' ? 0.07 : 0.05, P === 'mallet' ? 0.07 : 0.05, P === 'mallet' ? 0.12 : 0.11, 0, -0.23, 0.03, P === 'mallet' ? '#a07a50' : '#6a6e78');
@@ -1204,11 +1230,11 @@ export function makeFolkKit(GFX) {
       box(lute, 0.035, 0.24, 0.025, 0, 0.22, 0, '#5a3a22');
       box(lute, 0.05, 0.06, 0.03, 0, 0.36, 0, '#3a2416', -0.4);
     }
-    const staff = ['staff', 'lampPole', 'crozier', 'spear', 'broomHeld', 'torch', 'shovel', 'cultStaff'].includes(P);
+    const staff = ['staff', 'lampPole', 'crozier', 'spear', 'broomHeld', 'torch', 'shovel', 'cultStaff', 'hoe'].includes(P);
     // a soft round shadow on the ground
     const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
     g.scale.set(1.12 * d.build * (fem ? 0.98 : 1), 1.12 * d.height * (fem ? 0.97 : 1), 1.12 * d.build);
-    return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, tool, hand, staff, shadow, lute, luteBack, luteFront };
+    return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff, shadow, lute, luteBack, luteFront };
   }
   return { design, build, pose, describe };
 }
@@ -1217,7 +1243,7 @@ export function makeFolkKit(GFX) {
 // The walk is the hero's (legSwing's planted half linear, knees bending on the swing, the foot kept level), a little
 // slower and shorter in the step; the rest are made for standing about in town.
 export const FOLK_WALK = { rate: 4.2, stride: 0.6, arms: 0.45, knee: 1.4, foot: 0.6, elbow: 0.3, bob: 0.025, twist: 0.08 };
-export const ANIMS = ['idle', 'walk', 'talk', 'wave', 'carry', 'sweep', 'play', 'brandish'];
+export const ANIMS = ['idle', 'walk', 'talk', 'wave', 'carry', 'sweep', 'play', 'brandish', 'hoe'];
 function legSwing(ph) {
   const u = ((ph % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI), sn = Math.sin(u);
   const w = u > 1.5 * Math.PI ? u - 2 * Math.PI : u;
@@ -1256,10 +1282,27 @@ function holdBroom(f, top, low, bodyY) {
   f.broom.position.set(L[0] + dir[0] * k, L[1] + dir[1] * k, L[2] + dir[2] * k);
   f.broom.rotation.set(Math.acos(Math.max(-1, Math.min(1, -dir[1]))), Math.atan2(-dir[0], -dir[2]), 0);
 }
+// (v683) the hoeing's three moments: [chest bend, the top (right) grip, the low (left) grip in the body's frame, the
+// blade's height off the ground]: raised, chopped in ahead, drawn back
+const HOE_KEYS = { R: [0.3, [0.02, 0.64, 0.18], [0.08, 0.54, 0.26], 0.2], S: [0.4, [0.04, 0.54, 0.13], [0.08, 0.46, 0.23], 0], D: [0.5, [0.02, 0.64, 0.22], [0.06, 0.5, 0.28], 0] };
+// (v683) lay the hoe along the line from the top grip through the low one, its blade's edge `lift` off the ground
+// (its tip 0.7 down the handle and 0.14 out from it, back toward them and down)
+function holdHoe(f, top, low, bodyY, lift) {
+  const c = f.chest, toBody = p => { const q = rotX(rotY(rotZ(p, c.rotation.z), c.rotation.y), c.rotation.x); return [q[0] + c.position.x, q[1] + c.position.y, q[2] + c.position.z]; };
+  const T = toBody(top), L = toBody(low);
+  let dir = [L[0] - T[0], L[1] - T[1], L[2] - T[2]];
+  const n = Math.hypot(...dir) || 1; dir = dir.map(v => v / n);
+  if (dir[1] > -0.35) dir[1] = -0.35;
+  const m = Math.hypot(...dir); dir = dir.map(v => v / m);
+  const h = Math.hypot(dir[0], dir[2]);
+  const k = Math.max(-0.4, Math.min(0.1, (L[1] + bodyY - lift - h * 0.14) / -dir[1] - 0.7));
+  f.hoe.position.set(L[0] + dir[0] * k, L[1] + dir[1] * k, L[2] + dir[2] * k);
+  f.hoe.rotation.set(Math.acos(Math.max(-1, Math.min(1, -dir[1]))), Math.atan2(-dir[0], -dir[2]), 0);
+}
 export function pose(f, anim, t) {
   const W = FOLK_WALK, z3 = o => o.rotation.set(0, 0, 0);
   [f.body, f.chest, f.head, f.legL, f.legR, f.armL, f.armR, ...f.knees, ...f.ankles, ...f.elbows, ...f.wrists, ...f.flaps, ...f.fronts, ...f.backs, f.tool].forEach(z3);
-  f.tool.visible = anim !== 'carry' && anim !== 'sweep' && anim !== 'play';
+  f.tool.visible = anim !== 'carry' && anim !== 'sweep' && anim !== 'play' && anim !== 'hoe';
   // (the busker's lute: on the back, or across the front to be played)
   if (f.lute) {
     f.lute.visible = true;
@@ -1269,6 +1312,7 @@ export function pose(f, anim, t) {
   }
   f.broom.rotation.set(0, 0, 0);
   f.broom.visible = anim === 'sweep'; f.crate.visible = anim === 'carry';
+  if (f.hoe) { f.hoe.rotation.set(0, 0, 0); f.hoe.visible = anim === 'hoe'; }
   const walking = anim === 'walk' || anim === 'carry';
   let bodyY = Math.sin(t * 1.8) * 0.006, crouch = 0;
   if (walking) {
@@ -1328,6 +1372,25 @@ export function pose(f, anim, t) {
     holdBroom(f, top, low, bodyY);
     f.head.rotation.x = 0.2; f.head.rotation.y = s * 0.1;
     f.legL.rotation.x = -0.12; f.legR.rotation.x = 0.1; f.knees[0].rotation.x = 0.12; f.knees[1].rotation.x = 0.16;
+  }
+  else if (anim === 'hoe' && f.hoe) {
+    // (v683, Jordan: the farmer tends the wheat, never cutting it) hoeing the weeds between the rows: the hoe raised,
+    // chopped down into the furrow ahead, drawn back through it toward them, raised again; bent over it, the head
+    // down. Each grip is set in the body's frame (worked out in Node so both builds reach it and the blade meets the
+    // ground), the hoe laid through where the hands got to; turned a little to their right, so the blade, which comes
+    // down off to their left, lands straight ahead of them.
+    const u = (t * 0.62) % 1, sm = x => x * x * (3 - 2 * x);
+    const [A, B, k] = u < 0.15 ? [HOE_KEYS.R, HOE_KEYS.S, sm(u / 0.15)] : u < 0.6 ? [HOE_KEYS.S, HOE_KEYS.D, sm((u - 0.15) / 0.45)] : [HOE_KEYS.D, HOE_KEYS.R, sm((u - 0.6) / 0.4)];
+    const mx = (a, b) => a + (b - a) * k, bend = mx(A[0], B[0]), lift = mx(A[3], B[3]);
+    const at = i => [mx(A[i][0], B[i][0]), mx(A[i][1], B[i][1]), mx(A[i][2], B[i][2])];
+    f.body.rotation.set(0, -0.42, 0); f.legL.rotation.z = f.legR.rotation.z = 0;
+    f.chest.rotation.x = bend;
+    const inChest = p => rotX([p[0], p[1] - f.chest.position.y, p[2]], -bend);
+    const top = reach(f.armR, f.elbows[1], inChest(at(1)));
+    const low = reach(f.armL, f.elbows[0], inChest(at(2)));
+    holdHoe(f, top, low, bodyY, lift);
+    f.head.rotation.x = 0.3 - bend * 0.3; f.head.rotation.y = 0.2;
+    f.legL.rotation.x = -0.22; f.legR.rotation.x = 0.14; f.knees[0].rotation.x = 0.2; f.knees[1].rotation.x = 0.24;
   }
   else if (anim === 'brandish') {
     // (v9) squared up to fight: crouched, the weapon hand up and jabbing now and then, the other fist up on guard; a
