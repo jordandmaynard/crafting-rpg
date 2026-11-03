@@ -2,7 +2,7 @@
 
 A fantasy survival game in the spirit of V Rising, with the same low-res, isometric pixel look as [Dungeon Golf](https://github.com/jordandmaynard/dungeon-golf) and [Bone Road](https://github.com/jordandmaynard/board-game-rpg).
 
-You are a human adventurer in a wild land that is generated fresh every time: 1024 × 1024 tiles of terraced ground on a strict grid, with half-tile slopes and ramps between the levels. Fell trees and break rocks for wood and stone, fight what comes out of the wilds, and build a shelter before night falls.
+You are a human adventurer in a wild land that is generated fresh every time: 1216 × 1216 tiles of terraced ground on a strict grid, with half-tile slopes and ramps between the levels. Fell trees and break rocks for wood and stone, fight what comes out of the wilds, and build a shelter before night falls.
 
 ## Play
 
@@ -88,7 +88,7 @@ Floors need flat ground that no slope reaches into. Walls (not doors) can also r
 
 The Dungeon Golf pipeline: a low-resolution buffer scaled up by a whole number, an orthographic camera at a fixed 30° tilt (starting at a 45° turn, where tile edges are a clean 2:1 pixel staircase), and a camera snapped to whole big pixels with the leftover slid in CSS. With the outline on, the frame renders to a target with a depth texture, and a pass on the low-res buffer strokes any pixel whose neighbours within the outline's thickness lie more than the outline distance further back, as Crafting and Conquest's toon strokes do, so strokes are whole mosaic pixels. Scenery is merged into vertex-coloured, flat-shaded meshes, and the hero draws in a second pass so a silhouette shows through anything in front.
 
-The 1024 × 1024 map is split into 32 × 32-tile chunks. Only chunks near the camera are built, nearest first and a few milliseconds' worth per frame, and far ones are let go. A chunk is built in small steps so no one frame pays for much of it: its ground four rows of tiles at a time (then its bog, water and lava), then what stands on it eight rows at a time, then its meshes one at a time, then its building pieces and grass. Felling a tree or building a wall rebuilds only its chunk.
+The 1216 × 1216 map is split into 32 × 32-tile chunks. Only chunks near the camera are built, nearest first and a few milliseconds' worth per frame, and far ones are let go. A chunk is built in small steps so no one frame pays for much of it: its ground four rows of tiles at a time (then its bog, water and lava), then what stands on it eight rows at a time, then its meshes one at a time, then its building pieces and grass. Felling a tree or building a wall rebuilds only its chunk.
 
 ## Global illumination
 
@@ -289,6 +289,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v637:** (Jordan: reference pictures for the art agent painting the missing icons) T > Icon reference > Take shots builds each buildable with no painted icon (stairs, windows, fences, gates, iron door, crate, iron chest) one at a time on open plot ground near you, for free, draws it alone at the game's 30° view under the character view's studio lights, takes it down again, then draws the hero in each armor set from the front and the back, and downloads emberwild-icon-reference.zip (PNGs + README). The world, gear and costs are put back as they were.
 
 **v638:** (Jordan: a fringe round the thatched roofs) Thatched roofs carry on past the walls as a fringe (thatchFringe): THATCH.fringe (0.25) of a tile further down the roof's own slope, so the straw map runs on unbroken, its lower edge cut into ragged points of straw (THATCH.teeth a tile, THATCH.ragged), mitred round outer and inner corners. It's part of the roof's mesh, so it hides with the roof and blocks nothing; it replaces the thatch's dark fascia. T > Thatch roofs: fringe, points, ragged.
+
+**v639:** (Jordan: make up some of the land lost to the continents) The world is 1216 x 1216 tiles (was 1024 x 1024): about 41% more land, room for a few more towns; generation takes about 40% longer and the world's data about 40% more memory.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
