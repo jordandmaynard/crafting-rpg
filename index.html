@@ -4757,7 +4757,8 @@ const DES_T = {
   door: { W: 0.35, R: 0.45, spring: 1.16, ring: 0.1 },        // (the arched door: half width, the arcs' radius, springing, wedge stones)
   recess: { W: 0.3, R: 0.42, spring: 1.12, foot: 0.22 },       // (the pointed recess in each upper wall)
   bay: { W: 0.2, y0: 0.5, y1: 1.36, depth: 0.26 },             // (the upper windows' lattice bays)
-  flush: { W: 0.17, R: 0.26, y0: 0.55, spring: 1.12 },          // (v651: the flush lattice window in every other upper wall's recess)
+  flush: { W: 0.17, R: 0.26, y0: 0.55, spring: 1.12 },
+  mosaics: 0.4, tile0: '#dcc08a',                             // (v652: the share of plain upper walls with a mosaic, its field)          // (v651: the flush lattice window in every other upper wall's recess)
   band: 1.7, grid: 0.11, bar: 0.022, awnings: 0.4, catchers: 0.6,
 };
 const desertEdge = (c, r, w, k = Math.round(PDY / WALL_H)) => !!DESERT_WALLS[k]?.has(edgeKey(c, r, w));
@@ -14271,7 +14272,10 @@ function desertUpper(c, r, w, y, at, ry, win, cut) {
   const skin = (a0, a1, h0, h1) => { if (a1 - a0 > 0.003 && h1 - h0 > 0.003) B((a0 + a1) / 2, y + (h0 + h1) / 2, a1 - a0, h1 - h0, 0.07, 0.06, D.plaster, SURF_PLASTER); };
   // (v651, Jordan: walls without a bay looked windowless) a plain wall gets a flush pointed window in its recess
   const F = D.flush, fApex = F.spring + archRise(F.W, F.R);
+  // (v652, Jordan: some of them a tile mosaic in the band's colours instead, DES_T.mosaics of them)
+  const mosaic = !win && hs(c * 3 + w, r, 653) < D.mosaics;
   if (win) { core(x0, 0.5 - BW.W, yb, yt); core(0.5 + BW.W, x1, yb, yt); core(0.5 - BW.W, 0.5 + BW.W, yb, BW.y0); core(0.5 - BW.W, 0.5 + BW.W, BW.y1, yt); }
+  else if (mosaic) core(x0, x1, yb, yt);
   else {
     core(x0, 0.5 - F.W, yb, F.spring); core(0.5 + F.W, x1, yb, F.spring); core(0.5 - F.W, 0.5 + F.W, yb, F.y0);
     const nf = Math.ceil((fApex - F.spring) / 0.03);
@@ -14300,6 +14304,7 @@ function desertUpper(c, r, w, y, at, ry, win, cut) {
     B(a, y + 1.6, 0.065, 0.065, 0.112, 0.01, D.cream, SURF_SMOOTH, Math.PI / 4);
     B(a, y + 1.6, 0.028, 0.028, 0.118, 0.008, D.tealDk, SURF_SMOOTH, Math.PI / 4);
   }
+  if (mosaic) { desertMosaic(B, y, Q); return; }
   if (!win) {
     // the flush window: glass in the wall, a star lattice in front of it, a wooden frame and sill, wedge stones over it
     const inside = (a, h) => h < F.spring || Math.abs(a - 0.5) <= archHalf(F.W, F.R, h - F.spring);
@@ -14330,6 +14335,35 @@ function desertUpper(c, r, w, y, at, ry, win, cut) {
   for (const h of [BW.y0 + 0.02, BW.y1 - 0.02]) B(0.5, y + h, 2 * BW.W + 0.12, 0.04, o1 - 0.025, 0.05, dk, SURF_WOOD);
   B(0.5, y + BW.y1 + 0.03, 2 * BW.W + 0.2, 0.06, (o0 + o1) / 2 + 0.03, BW.depth + 0.1, wd, SURF_WOOD);
   B(0.5, y + BW.y1 + 0.09, 2 * BW.W + 0.12, 0.06, (o0 + o1) / 2, BW.depth + 0.02, dk, SURF_WOOD);
+}
+// a tile mosaic filling an upper wall's pointed recess (Q), in the belt band's colours and big enough to read at the
+// game's pixel size: a teal border round a tan field, a large eight-pointed teal star in its middle with a cream one in
+// it and a dark heart, a diamond under the point and a row of small ones along the foot
+function desertMosaic(B, y, Q) {
+  const D = DES_T;
+  // (the recess's shape, in from its edge by `inset`, as thin slices out to o)
+  const fill = (inset, o, col) => {
+    const W = Q.W - inset, R = Q.R - inset, h0 = Q.foot + inset, top = Q.spring + archRise(W, R), n = Math.ceil((top - Q.spring) / 0.025);
+    B(0.5, y + (h0 + Q.spring) / 2, 2 * W, Q.spring - h0, o, 0.012, col, SURF_SMOOTH);
+    for (let q = 0; q < n; q++) {
+      const ha = Q.spring + (top - Q.spring) * q / n, hb = Q.spring + (top - Q.spring) * (q + 1) / n, f = archHalf(W, R, (ha + hb) / 2 - Q.spring);
+      if (f > 0.006) B(0.5, y + (ha + hb) / 2, 2 * f, hb - ha + 0.001, o, 0.012, col, SURF_SMOOTH);
+    }
+  };
+  fill(0.005, 0.044, D.tealDk);
+  fill(0.02, 0.046, D.teal);
+  fill(0.07, 0.05, D.cream);
+  fill(0.085, 0.054, D.tile0);
+  const star = (a, h, s, o, col) => { for (const rz of [0, Math.PI / 4]) B(a, y + h, s, s, o, 0.012, col, SURF_SMOOTH, rz); };
+  const hc = (Q.foot + Q.spring) / 2 + 0.12;
+  star(0.5, hc, 0.3, 0.058, D.teal);
+  star(0.5, hc, 0.18, 0.062, D.cream);
+  star(0.5, hc, 0.08, 0.066, D.tealDk);
+  B(0.5, y + hc, 0.03, 0.03, 0.07, 0.01, D.plum, SURF_SMOOTH, Math.PI / 4);
+  // (small stars round it, a diamond under the point, a row of them along the foot)
+  for (const [a, h] of [[0.37, hc - 0.29], [0.63, hc - 0.29], [0.37, hc + 0.29], [0.63, hc + 0.29]]) { star(a, h, 0.09, 0.058, D.teal); B(a, y + h, 0.035, 0.035, 0.062, 0.01, D.cream, SURF_SMOOTH, Math.PI / 4); }
+  B(0.5, y + Q.spring + archRise(Q.W, Q.R) * 0.6, 0.08, 0.08, 0.058, 0.012, D.tealDk, SURF_SMOOTH, Math.PI / 4);
+  for (const a of [0.42, 0.5, 0.58]) B(a, y + Q.foot + 0.12, 0.05, 0.05, 0.058, 0.012, a === 0.5 ? D.tealDk : D.teal, SURF_SMOOTH, Math.PI / 4);
 }
 // a terrace's railing: a low sandstone parapet, coped, a merlon in the middle and a post at each end
 function desertParapet(c, r, w, y, at, ry) {
@@ -28725,7 +28759,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 651, crashSeen = new Map();
+const GAME_VERSION = 652, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
