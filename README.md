@@ -337,6 +337,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v670:** (Jordan: dense lit haze without washing the scene out) The lit haze has a new HAZE.clear setting (T > Lit haze) for how much the haze dims what's behind it. 1, the default, is the old look. Lower values keep the scene's own contrast while the haze's light and shafts are still added on top. hazeApply mixes the transmission toward 1 by hazeA.y.
 
+**v671:** (Jordan: nothing built in front of an archway's banners) A large town's archway now keeps the ground clear for three tiles either side of its middle (ARCH_CLEAR), not just the street. Town ground just past the arch's line counts as outside, so the wall runs on flush with the arch and only turns out two tiles beyond the piers. A building's tile or a ramp past the line stays town ground. Gaps just behind the line on the same level are filled in, so the wall stays straight.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
