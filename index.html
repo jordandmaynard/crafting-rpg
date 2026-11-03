@@ -4600,7 +4600,15 @@ function raiseTownHouses(t, n) {
 // side of the door and an altar at the back. cathExtras / cathUpper draw what isn't a wall, floor or stair.
 // (v657) the mosque's: the drum over the nave (its height, the windows a face), the dome's rise (of its radius), the
 // minaret's shaft and lantern (half-widths, heights over the dome's top), the gold, where the minbar stands across
-const MOSQUE = { drumH: 1.1, rise: 1.08, gores: 24, shaft: 0.42, lantern: 0.34, over: 0.9, lanternH: 1.0, gold: '#d8a838', goldDk: '#a87a26', minbarA: 1 };
+const MOSQUE = { drumH: 1.1, rise: 1.08, gores: 24, shaft: 0.42, lantern: 0.34, over: 0.9, lanternH: 1.0, gold: '#d8a838', goldDk: '#a87a26', minbarA: 1, colOut: 0.2 };
+// (v666, Jordan) a medium desert town's prayer house in place of the chapel: an open courtyard walled in sandstone, a
+// minaret at each front corner, a covered prayer hall across the back (hall rows deep) behind an arcade of pointed
+// arches, a small gold dome over it, an ablution basin in the courtyard's middle, the floor all zellige (mosaicFloor)
+const PRAYER = { sizes: [[7, 8], [7, 7], [5, 8], [5, 7]], hall: 2, shaft: 1.8, T0: 0.5, S0: 0.27, L0: 0.24, lanternH: 0.72, dome: 0.7, drum: 0.42, spring: 1.2, pier: 0.22 };
+// (v666, Jordan) the mosque's and prayer house's floors: a geometric tile mosaic centred on the room (MOSAIC_AT: tile ->
+// its room's frame), MOSAIC.n pieces a side a tile, runs of one colour laid as one piece
+const MOSAIC = { n: 5, period: 2, navy: '#24365e', gold: '#d8a838', grout: '#4a3a30' };
+const MOSAIC_AT = new Map();
 const CATH = { roof: '#4a5060', stone: '#8a8694', band: '#76727e', dark: '#1e1a24', above: 1.7, pitch: 1.15 };
 // (its heights: the walls' top, the nave's eaves and ridge, the towers' lower stage and belfry tops, so the
 // towers always stand CATH.above over the ridge)
@@ -4880,14 +4888,14 @@ function raiseCathedral(t, c0, r0, d, W, dep, house, piece) {
   const isTower = (a, b) => (b <= 2 || (mosque && b >= dep - 1)) && (a <= o0 + 1 || a >= a1 - 1);
   const y = LV[T(...at(0, 1))] * STEP, U = UP[1];
   const ca = { c0, r0, d, p, W, dep, o0, a1, y, P, cols: [], towers: [], buttress: [], rose: null, mosque, isTower };
-  const tiles = [], set = new Set();
+  const tiles = [], set = new Set(), mosaicFrame = { c0, r0, p, d, Bc: (1 + dep) / 2, hw: W / 2, hd: dep / 2 };
   const pillar = q => { const i = T(Math.floor(q.x), Math.floor(q.z)); if (!pillars.has(i)) pillars.set(i, []); pillars.get(i).push(q); return q; };
   for (let a = o0; a <= a1; a++) for (let b = 1; b <= dep; b++) {
     const [c, r] = at(a, b), i = T(c, r);
     house.add(i); OB[i] = 0; piece(c, r);
     if (isTower(a, b)) { FL[i] = 2; pillar({ x: c + 0.5, z: r + 0.5, y, R: 0.72, col: false }); continue; }
     FL[i] = 3; tiles.push([c, r]); set.add(i); cathTile.set(i, ca);
-    if (mosque) DESERT_TILES.add(i);
+    if (mosque) { DESERT_TILES.add(i); MOSAIC_AT.set(i, mosaicFrame); }
   }
   // the stairs: stone, up the last aisle along its outer wall toward the front
   // (a mosque's two rows further in, clear of the back minaret: its foot reached from the row in front of that)
@@ -4945,7 +4953,9 @@ function raiseCathedral(t, c0, r0, d, W, dep, house, piece) {
   }
   // the arcades, in line with the towers' inner faces, a column every two tiles; the altar (v428: no porch columns)
   const A = (W - 1) / 2 - 1.5;
-  for (const sg of [-1, 1]) for (let B = 4.5; B <= dep - 1.5; B += 2) { const [x, z] = P(sg * A, B); ca.cols.push(pillar({ x, z, y, R: 0.16, col: true, key: 8 * SNN + T(Math.floor(x), Math.floor(z)) })); }
+  // (v666, Jordan: a mosque's in sandstone, set back under the gallery so their tops don't stand out past its edge)
+  const Ao = mosque ? A + MOSQUE.colOut : A;
+  for (const sg of [-1, 1]) for (let B = 4.5; B <= dep - 1.5; B += 2) { const [x, z] = P(sg * Ao, B); ca.cols.push(pillar({ x, z, y, R: 0.16, col: true, sand: mosque, key: 8 * SNN + T(Math.floor(x), Math.floor(z)) })); }
   if (mosque) {
     // (the minbar's steps beside the mihrab; folk stand before the mihrab where they'd stand at the altar)
     for (const B of [dep - 0.9, dep - 0.25]) { const [x, z] = P(MOSQUE.minbarA, B); pillar({ x, z, y, R: 0.3, col: false }); }
@@ -4963,9 +4973,9 @@ function raiseCathedral(t, c0, r0, d, W, dep, house, piece) {
 // if it can, so the low sun comes through the rose.
 const CHAPEL = { sizes: [[5, 8], [5, 7], [5, 6]], steepleB: 1.25, steepleW: 0.9, steepleH: 1.1, spireH: 2.4 };
 function placeChapel(t, n, house, cands, piece) {
-  const own = n + 1, inTown = (c, r) => TN[T(c, r)] === own;
+  const own = n + 1, inTown = (c, r) => TN[T(c, r)] === own, prayer = townLook(t).stone === 'sand';
   const order = cands.map(([c, r, d]) => [c, r, d, Math.hypot(c - t.c, r - t.r) + hs(c, r, 493 + d) * 0.5]).sort((a, b) => a[3] - b[3]);
-  for (const ew of [1, 0]) for (const [W, dep] of CHAPEL.sizes) for (const [c0, r0, d] of order) {
+  for (const ew of [1, 0]) for (const [W, dep] of prayer ? PRAYER.sizes : CHAPEL.sizes) for (const [c0, r0, d] of order) {
     if ((d & 1) !== ew) continue;
     const p = (d + 1) & 3, at = (a, b) => [c0 + DC[p] * a + DC[d] * b, r0 + DR[p] * a + DR[d] * b];
     const lv = LV[T(...at(0, 1))], o0 = -(W - 1) / 2, a1 = -o0;
@@ -4977,7 +4987,7 @@ function placeChapel(t, n, house, cands, piece) {
     // (nothing right across a narrow street from its door: the town's edge counts as something)
     const [xc, xr] = at(0, -1);
     if (ok && !TSTREET[T(xc, xr)] && !inTown(xc, xr)) ok = false;
-    if (ok) return raiseChapel(t, c0, r0, d, W, dep, house, piece);
+    if (ok) return prayer ? raisePrayerHouse(t, c0, r0, d, W, dep, house, piece) : raiseChapel(t, c0, r0, d, W, dep, house, piece);
   }
   return null;
 }
@@ -5015,6 +5025,111 @@ function raiseChapel(t, c0, r0, d, W, dep, house, piece) {
   { const [x, z] = P(0, dep - 0.5), i = T(Math.floor(x), Math.floor(z)); if (!pillars.has(i)) pillars.set(i, []); pillars.get(i).push({ x, z, y, R: 0.42, col: false }); ca.altar = [x, z]; }
   ca.anchor = doorT; cathAt.set(doorT, ca); chapels.push(ca); t.chapel = ca;
   return { tiles, door, inside: at(0, 1), clear: new Set([doorT]), color: CATH.roof, style: 'chapel', cathedral: ca, chapel: ca, up: null };
+}
+function raisePrayerHouse(t, c0, r0, d, W, dep, house, piece) {
+  const p = (d + 1) & 3, back = (d + 2) & 3, o0 = -(W - 1) / 2, a1 = -o0, PR = PRAYER;
+  const at = (a, b) => [c0 + DC[p] * a + DC[d] * b, r0 + DR[p] * a + DR[d] * b];
+  const P = (A, B) => [c0 + 0.5 + DC[p] * A + DC[d] * B, r0 + 0.5 + DR[p] * A + DR[d] * B];
+  const y = LV[T(...at(0, 1))] * STEP, Bc = (1 + dep) / 2, hall0 = dep - PR.hall + 1;
+  const isTower = (a, b) => b === 1 && (a === o0 || a === a1);
+  const ca = { c0, r0, d, p, W, dep, o0, a1, y, P, cols: [], towers: [], buttress: [], rose: null, chapel: true, mosque: true, prayer: true, isTower, Bc, hall0, piers: [] };
+  const tiles = [], set = new Set(), frame = { c0, r0, p, d, Bc, hw: W / 2, hd: dep / 2 };
+  const pillar = q => { const i = T(Math.floor(q.x), Math.floor(q.z)); if (!pillars.has(i)) pillars.set(i, []); pillars.get(i).push(q); return q; };
+  for (let a = o0; a <= a1; a++) for (let b = 1; b <= dep; b++) {
+    const [c, r] = at(a, b), i = T(c, r);
+    house.add(i); OB[i] = 0; piece(c, r); DESERT_TILES.add(i);
+    if (isTower(a, b)) { FL[i] = 2; pillar({ x: c + 0.5, z: r + 0.5, y, R: 0.62, col: false }); continue; }
+    FL[i] = 3; tiles.push([c, r]); set.add(i); MOSAIC_AT.set(i, frame);
+  }
+  const doorT = T(...at(0, 1));
+  let door = null;
+  for (let a = o0; a <= a1; a++) for (let b = 1; b <= dep; b++) {
+    if (isTower(a, b)) continue;
+    const [c, r] = at(a, b), i = T(c, r);
+    for (let e = 0; e < 4; e++) {
+      if (set.has(T(c + DC[e], r + DR[e]))) continue;
+      const [ec, er, ew] = edgeOf(c, r, e), side = e === p || e === ((p + 2) & 3);
+      const isDoor = i === doorT && e === back, win = side && b >= hall0;
+      (ew ? WW : WN)[T(ec, er)] = isDoor ? 2 : win ? 14 : 4;
+      piece(ec, er);
+      DESERT_WALLS[0].add(edgeKey(ec, er, ew));
+      if (isDoor) { door = [ec, er, ew]; DESERT_DOORS.add(dKey(ec, er, ew, 0)); }
+    }
+  }
+  // the arcade's piers, on the hall's front line between the walls; the basin; where folk stand to pray
+  for (let k = 0; k < W - 1; k++) { const [x, z] = P(o0 + 0.5 + k, hall0 - 0.5); ca.piers.push(pillar({ x, z, y, R: PR.pier * 0.6, col: false })); }
+  { const [x, z] = P(0, Bc); ca.basin = [x, z]; pillar({ x, z, y, R: 0.5, col: false }); }
+  for (const B of [dep - 0.9, dep - 0.25]) { const [x, z] = P(MOSQUE.minbarA, B); pillar({ x, z, y, R: 0.3, col: false }); }
+  ca.altar = P(0, dep - 0.6);
+  for (const A of [o0, a1]) { const [x, z] = P(A, 1); ca.towers.push({ x, z, key: 9 * SNN + T(Math.floor(x), Math.floor(z)) }); }
+  ca.anchor = doorT; cathAt.set(doorT, ca); chapels.push(ca); t.chapel = ca;
+  return { tiles, door, inside: at(0, 1), clear: new Set([doorT]), color: CATH.roof, style: 'chapel', cathedral: ca, chapel: ca, up: null };
+}
+// the prayer house's piers and its ablution basin (story 0, with mosqueExtras' minarets, mihrab and minbar)
+function prayerBits(ca) {
+  const D = DES_T, St = STONE_SAND, PR = PRAYER, y = ca.y, s = PR.pier;
+  for (const q of ca.piers) {
+    part(G.box, shade(CC(St.block), 0.9), q.x, y + 0.08, q.z, { sx: s + 0.06, sy: 0.16, sz: s + 0.06 });
+    part(G.box, St.block, q.x, y + PR.spring / 2, q.z, { sx: s, sy: PR.spring - 0.1, sz: s });
+    part(G.box, D.teal, q.x, y + PR.spring - 0.16, q.z, { sx: s + 0.01, sy: 0.06, sz: s + 0.01 });
+    part(G.box, D.light, q.x, y + PR.spring - 0.05, q.z, { sx: s + 0.06, sy: 0.1, sz: s + 0.06 });
+  }
+  const [x, z] = ca.basin, r8 = R => ({ sx: 2 * R / k8, sz: 2 * R / k8, ry: Math.PI / 8 });
+  part(G.cyl8, D.light, x, y + 0.05, z, { ...r8(0.5), sy: 0.1 });
+  part(G.cyl8, St.block, x, y + 0.24, z, { ...r8(0.42), sy: 0.28 });
+  part(G.cyl8, D.teal, x, y + 0.3, z, { ...r8(0.425), sy: 0.07 });
+  part(G.cyl8, D.tealDk, x, y + 0.385, z, { ...r8(0.38), sy: 0.01 });
+  // (its coping a ring of eight stones, so the water (buildFountains) lies inside it)
+  for (let k = 0; k < 8; k++) { const t = k / 8 * Math.PI * 2; part(G.box, D.cream, x + Math.sin(t) * 0.4, y + 0.415, z + Math.cos(t) * 0.4, { sx: 0.35, sy: 0.05, sz: 0.11, ry: t }); }
+  part(G.cyl8, D.cream, x, y + 0.55, z, { sx: 0.07, sy: 0.3, sz: 0.07 });
+  part(G.ico, '#c8a040', x, y + 0.72, z, { s: 0.06 });
+}
+// its roof, hidden with it when you're in: the cornice and stepped merlons round the walls' tops, the arches' heads
+// over the arcade, terracotta over the hall, and over the hall's middle a short drum and a small gold dome
+function prayerRoof(ca) {
+  return b => {
+    const save = OUT; OUT = bufTmp; bufTmp.n = 0;
+    try {
+      const D = DES_T, St = STONE_SAND, M = MOSQUE, PR = PRAYER, ax = DC[ca.p] !== 0, fy = ca.y + WALL_H + 0.04;
+      const at = (A, yy, B) => { const [x, z] = ca.P(A, B); return [x, yy, z]; };
+      const box = (A, yy, B, sA, sy, sB, col) => part(G.box, col, ...at(A, yy, B), ax ? { sx: sA, sy, sz: sB } : { sx: sB, sy, sz: sA });
+      const tower = ca.isTower, inside = (a, bb) => a >= ca.o0 && a <= ca.a1 && bb >= 1 && bb <= ca.dep && !tower(a, bb);
+      for (let a = ca.o0; a <= ca.a1; a++) for (let bb = 1; bb <= ca.dep; bb++) {
+        if (tower(a, bb)) continue;
+        if (bb >= ca.hall0) box(a, fy - 0.04, bb, 1.002, 0.08, 1.002, shade(CC(D.tile), 0.9 + hs(a + 40, bb, 656) * 0.16));
+        for (const [da, db] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const na = a + da, nb = bb + db;
+          if (inside(na, nb) || tower(na, nb)) continue;
+          box(a + da * 0.5, fy, bb + db * 0.5, da ? 0.44 : 1.44, 0.34, da ? 1.44 : 0.44, D.light);
+          box(a + da * 0.68, fy - 0.22, bb + db * 0.68, da ? 0.03 : 1.4, 0.1, da ? 1.4 : 0.03, D.teal);
+          // (stepped merlons, two a wall: a block and a smaller one on it)
+          for (const u of [-0.25, 0.25]) {
+            const ma = a + da * 0.55 + (da ? 0 : u), mb = bb + db * 0.55 + (db ? 0 : u);
+            box(ma, fy + 0.25, mb, da ? 0.2 : 0.26, 0.16, da ? 0.26 : 0.2, D.light);
+            box(ma, fy + 0.38, mb, da ? 0.16 : 0.14, 0.1, da ? 0.14 : 0.16, shade(CC(D.light), 1.04));
+          }
+        }
+      }
+      // the arcade's heads: over each span from the springing up to the roof, less its pointed opening
+      const Bl = ca.hall0 - 0.5, Wh = 0.5 - PR.pier / 2, R = Wh * 1.6, rise = archRise(Wh, R), y0 = ca.y + PR.spring, y1 = fy - 0.08;
+      for (let a = ca.o0; a <= ca.a1; a++) for (let h = 0; h < y1 - y0 - 1e-3; h += 0.05) {
+        const hb = Math.min(y1 - y0, h + 0.05), f = h + 0.025 < rise ? archHalf(Wh, R, (h + hb) / 2) : 0, col = shade(CC(St.block), 0.96);
+        if (f <= 0.006) { box(a, y0 + (h + hb) / 2, Bl, 1.0, hb - h, 0.24, col); continue; }
+        for (const sg of [-1, 1]) { const w0 = 0.5 - f; if (w0 > 0.005) box(a + sg * (f + w0 / 2), y0 + (h + hb) / 2, Bl, w0, hb - h, 0.24, col); }
+      }
+      for (const sg of [-1, 1]) box((ca.o0 + ca.a1) / 2, y1 - 0.12, Bl + sg * 0.125, ca.W, 0.08, 0.012, D.teal);
+      box((ca.o0 + ca.a1) / 2, fy, Bl, ca.W, 0.34, 0.3, D.light);   // (the hall roof's front edge over the arcade)
+      // the dome over the hall's middle, on a short coursed drum
+      const [dx, , dz] = at(0, 0, (ca.hall0 + ca.dep) / 2), Rd = PR.dome, hdr = Rd + 0.08;
+      coursed(dx, dz, hdr, fy - 0.08, fy + PR.drum, Math.floor(dx * 7), Math.floor(dz * 7), () => false, St.core, St.block);
+      part(G.box, D.light, dx, fy + PR.drum + 0.04, dz, { sx: 2 * hdr + 0.14, sy: 0.08, sz: 2 * hdr + 0.14 });
+      goldDome(dx, fy + PR.drum + 0.08, dz, Rd, M.rise, 16, 0.36);
+      const m = bufTmp.mesh(roofMat);
+      const caster = new GFX.Mesh(m.geometry, castOnlyBoth); caster.castShadow = true; caster.matrixAutoUpdate = false;
+      m.userData.caster = caster;
+      return m;
+    } finally { OUT = save; }
+  };
 }
 // what a cathedral has besides its walls, floors and stairs, drawn with its door's chunk: on the ground story's mesh
 // the towers (each whole and as a waist-high stump, the cutaway picking: see cutTag), the buttresses' lower halves,
@@ -5177,56 +5292,63 @@ function archSlices(put, W, y, h0, sp, col, sl = 0.06) {
   put(0, y + (h0 + sp) / 2, 2 * W, sp - h0, col);
   for (let h = 0; h < rise - 0.01; h += sl) { const hb = Math.min(rise, h + sl), f = archHalf(W, R, (h + hb) / 2); if (f > 0.006) put(0, y + sp + (h + hb) / 2, 2 * f, hb - h, col); }
 }
+// (v666: split out of mosqueExtras so the prayer house can stand smaller ones) a minaret at tw: a square block T0 from
+// its middle to each face up to base, a shaft S0 up to shaftTop, the balcony, a lantern L0 and lanternH tall, gold dome
+function minaretPiece(tw, y, T0, S0, L0, base, shaftTop, lanternH) {
+  const D = DES_T, St = STONE_SAND, M = MOSQUE;
+  const { x, z } = tw, n0 = OUT.n, k = 0.94 + hs(Math.floor(x), Math.floor(z), 655) * 0.1, tx0 = Math.floor(x * 7), tz0 = Math.floor(z * 7);
+  const sq = (yy, h, w, col) => part(G.box, col, x, yy, z, { sx: w, sy: h, sz: w });
+  const face = (e, off, along, yy, w, h, th, col) => { const tx = -DR[e], tz = DC[e]; part(G.box, col, x + DC[e] * off + tx * along, yy, z + DR[e] * off + tz * along, DC[e] ? { sx: th, sy: h, sz: w } : { sx: w, sy: h, sz: th }); };
+  sq(y + 0.15, 0.3, 2 * T0 + 0.16, shade(CC(St.core), 1.2));
+  coursed(x, z, T0, y + 0.3, base, tx0, tz0, () => false, St.core, St.block);
+  for (let e = 0; e < 4; e++) {
+    face(e, T0 + 0.05, 0, y + D.band + 0.08, 2 * T0 + 0.1, 0.16, 0.03, D.teal);
+    for (const u of [-0.75, -0.25, 0.25, 0.75]) face(e, T0 + 0.07, u * T0, y + D.band + 0.08, 0.085, 0.085, 0.012, D.cream);
+    // (an arched window lit from nowhere, dark, on the upper story)
+    if (base - y > WALL_H + 1) archSlices((a, yy, sa, sy, col) => face(e, T0 + 0.045, a, yy, sa, sy, 0.02, col), 0.16, y + WALL_H, 0.5, 1.1, '#2a2026');
+  }
+  sq(base + 0.06, 0.12, 2 * T0 + 0.2, D.light);
+  coursed(x, z, S0, base + 0.12, shaftTop, tx0 + 3, tz0, () => false, St.core, St.block);
+  for (let e = 0; e < 4; e++) for (const hh of [0.35, 0.62]) {
+    const yy = base + 0.12 + (shaftTop - base - 0.12) * hh;
+    archSlices((a, y2, sa, sy, col) => face(e, S0 + 0.045, a, y2, sa, sy, 0.02, col), 0.07, yy, 0, 0.3, '#2a2026', 0.04);
+  }
+  // the balcony on corbels, a low railing of sandstone round it
+  sq(shaftTop - 0.12, 0.12, 2 * S0 + 0.22, shade(CC(D.light), 0.92));
+  sq(shaftTop + 0.03, 0.08, 2 * S0 + 0.5, D.light);
+  for (let e = 0; e < 4; e++) face(e, S0 + 0.21, 0, shaftTop + 0.22, 2 * S0 + 0.5, 0.3, 0.06, shade(CC(St.block), k));
+  // the lantern: four piers and arches open between them, a cornice
+  const yl = shaftTop + 0.07, hl = lanternH;
+  for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) part(G.box, shade(CC(St.block), k * 1.04), x + u * (L0 - 0.07), yl + hl / 2, z + v * (L0 - 0.07), { sx: 0.14, sy: hl, sz: 0.14 });
+  for (let e = 0; e < 4; e++) {
+    // (the arch's head over the opening: the wall above the springing less the pointed hole, in slices)
+    const W = L0 - 0.14, sp = hl * 0.6, R = W * 1.6, rise = archRise(W, R);
+    for (let h = 0; h < hl - sp; h += 0.05) {
+      const hb = Math.min(hl - sp, h + 0.05), f = h + 0.025 < rise ? archHalf(W, R, (h + hb) / 2) : 0;
+      for (const sg of [-1, 1]) { const w0 = W - f; if (w0 > 0.005) face(e, L0 - 0.07, sg * (f + w0 / 2), yl + sp + (h + hb) / 2, w0, hb - h, 0.12, shade(CC(St.block), k)); }
+      if (f <= 0.006) face(e, L0 - 0.07, 0, yl + sp + (h + hb) / 2, 2 * W, hb - h, 0.12, shade(CC(St.block), k));
+    }
+  }
+  sq(yl + hl + 0.06, 0.12, 2 * L0 + 0.16, D.light);
+  for (let e = 0; e < 4; e++) face(e, L0 + 0.085, 0, yl + hl - 0.08, 2 * L0, 0.1, 0.012, D.teal);
+  goldDome(x, yl + hl + 0.12, z, L0 - 0.02, 1.15, 12, 0.32);
+  cutTag(OUT, n0, tw.key + 1, 1);
+  const n1 = OUT.n;
+  sq(y + 0.15, 0.3, 2 * T0 + 0.16, shade(CC(St.core), 1.2));
+  sq(y + CUT_H / 2, CUT_H, 2 * T0, shade(CC(St.block), k));
+  sq(y + CUT_H, 0.03, 2 * T0 - 0.1, D.light);
+  cutTag(OUT, n1, tw.key + 1, -1);
+}
 function mosqueExtras(ca) {
   const save = emitSurf; emitSurf = wallSurf;
   try {
     const D = DES_T, St = STONE_SAND, M = MOSQUE, y = ca.y, dm = mosqueDims(ca), ax = DC[ca.p] !== 0;
     // the minaret: a square sandstone block up to the hall's top (the belt band round it), a slender shaft, a railed
     // balcony, an open lantern of four arches and a small gold dome
+    const PR = PRAYER;
     for (const tw of ca.towers) {
-      const { x, z } = tw, n0 = OUT.n, k = 0.94 + hs(Math.floor(x), Math.floor(z), 655) * 0.1, tx0 = Math.floor(x * 7), tz0 = Math.floor(z * 7);
-      const sq = (yy, h, w, col) => part(G.box, col, x, yy, z, { sx: w, sy: h, sz: w });
-      const face = (e, off, along, yy, w, h, th, col) => { const tx = -DR[e], tz = DC[e]; part(G.box, col, x + DC[e] * off + tx * along, yy, z + DR[e] * off + tz * along, DC[e] ? { sx: th, sy: h, sz: w } : { sx: w, sy: h, sz: th }); };
-      const T0 = 1.0, S0 = M.shaft, L0 = M.lantern;
-      sq(y + 0.15, 0.3, 2 * T0 + 0.16, shade(CC(St.core), 1.2));
-      coursed(x, z, T0, y + 0.3, dm.base, tx0, tz0, () => false, St.core, St.block);
-      for (let e = 0; e < 4; e++) {
-        face(e, T0 + 0.05, 0, y + D.band + 0.08, 2 * T0 + 0.1, 0.16, 0.03, D.teal);
-        for (const u of [-0.75, -0.25, 0.25, 0.75]) face(e, T0 + 0.07, u, y + D.band + 0.08, 0.085, 0.085, 0.012, D.cream);
-        // (an arched window lit from nowhere, dark, on the upper story)
-        archSlices((a, yy, sa, sy, col) => face(e, T0 + 0.045, a, yy, sa, sy, 0.02, col), 0.16, y + WALL_H, 0.5, 1.1, '#2a2026');
-      }
-      sq(dm.base + 0.06, 0.12, 2 * T0 + 0.2, D.light);
-      coursed(x, z, S0, dm.base + 0.12, dm.shaftTop, tx0 + 3, tz0, () => false, St.core, St.block);
-      for (let e = 0; e < 4; e++) for (const hh of [0.35, 0.62]) {
-        const yy = dm.base + 0.12 + (dm.shaftTop - dm.base - 0.12) * hh;
-        archSlices((a, y2, sa, sy, col) => face(e, S0 + 0.045, a, y2, sa, sy, 0.02, col), 0.07, yy, 0, 0.3, '#2a2026', 0.04);
-      }
-      // the balcony on corbels, a low railing of sandstone round it
-      sq(dm.shaftTop - 0.12, 0.12, 2 * S0 + 0.22, shade(CC(D.light), 0.92));
-      sq(dm.shaftTop + 0.03, 0.08, 2 * S0 + 0.5, D.light);
-      for (let e = 0; e < 4; e++) face(e, S0 + 0.21, 0, dm.shaftTop + 0.22, 2 * S0 + 0.5, 0.3, 0.06, shade(CC(St.block), k));
-      // the lantern: four piers and arches open between them, a cornice
-      const yl = dm.shaftTop + 0.07, hl = M.lanternH;
-      for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) part(G.box, shade(CC(St.block), k * 1.04), x + u * (L0 - 0.07), yl + hl / 2, z + v * (L0 - 0.07), { sx: 0.14, sy: hl, sz: 0.14 });
-      for (let e = 0; e < 4; e++) {
-        // (the arch's head over the opening: the wall above the springing less the pointed hole, in slices)
-        const W = L0 - 0.14, sp = hl * 0.6, R = W * 1.6, rise = archRise(W, R);
-        for (let h = 0; h < hl - sp; h += 0.05) {
-          const hb = Math.min(hl - sp, h + 0.05), f = h + 0.025 < rise ? archHalf(W, R, (h + hb) / 2) : 0;
-          for (const sg of [-1, 1]) { const w0 = W - f; if (w0 > 0.005) face(e, L0 - 0.07, sg * (f + w0 / 2), yl + sp + (h + hb) / 2, w0, hb - h, 0.12, shade(CC(St.block), k)); }
-          if (f <= 0.006) face(e, L0 - 0.07, 0, yl + sp + (h + hb) / 2, 2 * W, hb - h, 0.12, shade(CC(St.block), k));
-        }
-      }
-      sq(yl + hl + 0.06, 0.12, 2 * L0 + 0.16, D.light);
-      for (let e = 0; e < 4; e++) face(e, L0 + 0.085, 0, yl + hl - 0.08, 2 * L0, 0.1, 0.012, D.teal);
-      goldDome(x, yl + hl + 0.12, z, L0 - 0.02, 1.15, 12, 0.32);
-      cutTag(OUT, n0, tw.key + 1, 1);
-      const n1 = OUT.n;
-      sq(y + 0.15, 0.3, 2 * T0 + 0.16, shade(CC(St.core), 1.2));
-      sq(y + CUT_H / 2, CUT_H, 2 * T0, shade(CC(St.block), k));
-      sq(y + CUT_H, 0.03, 2 * T0 - 0.1, D.light);
-      cutTag(OUT, n1, tw.key + 1, -1);
+      if (ca.prayer) minaretPiece(tw, y, PR.T0, PR.S0, PR.L0, y + WALL_H, y + WALL_H + PR.shaft, PR.lanternH);
+      else minaretPiece(tw, y, 1.0, M.shaft, M.lantern, dm.base, dm.shaftTop, M.lanternH);
     }
     // the mihrab: a pointed niche in the middle of the back wall, framed in cream stone with a teal tile border, its
     // hood dark, a star over it; and the minbar beside it, wooden steps up to a canopied seat
@@ -5239,14 +5361,16 @@ function mosqueExtras(ca) {
     layer(0.38, 0.12, 1.3, 0.018, D.cream);
     layer(0.3, 0.16, 1.3, 0.024, '#3a2a36');
     for (const sg of [-1, 1]) { const [cx, , cz] = at(sg * 0.42, 0, Bw - 0.06); part(G.cyl8, D.cream, cx, y + 0.65, cz, { sx: 0.08, sy: 1.3, sz: 0.08 }); }
-    for (const rz of [0, Math.PI / 4]) part(G.box, D.teal, ...at(0, y + 2.15, Bw - 0.012), ax ? { sx: 0.24, sy: 0.24, sz: 0.012, rz } : { sx: 0.012, sy: 0.24, sz: 0.24, rx: rz });
+    for (const rz of [0, Math.PI / 4]) part(G.box, D.teal, ...at(0, y + (ca.prayer ? 1.8 : 2.15), Bw - 0.012), ax ? { sx: 0.24, sy: 0.24, sz: 0.012, rz } : { sx: 0.012, sy: 0.24, sz: 0.24, rx: rz });
     const A = M.minbarA, wd = D.wood, dk = D.woodDk;
     for (let q = 0; q < 5; q++) { const h = 0.25 * (q + 1), B0 = ca.dep - 1.35 + q * 0.22; box(A, y + h / 2, B0, 0.5, h, 0.22, shade(CC(wd), 0.9 + (q % 2) * 0.12)); }
     box(A, y + 0.65, ca.dep - 0.08, 0.5, 1.3, 0.5, wd);
     for (const sg of [-1, 1]) box(A + sg * 0.27, y + 0.75, ca.dep - 0.6, 0.04, 1.5, 1.6, dk);   // (its sides)
-    for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) box(A + u * 0.22, y + 1.75, ca.dep - 0.08 + v * 0.2, 0.04, 0.9, 0.04, dk);
-    box(A, y + 2.22, ca.dep - 0.08, 0.56, 0.06, 0.56, dk);
-    part(G.cone4, CC(M.gold), ...at(A, y + 2.45, ca.dep - 0.08), { sx: 0.5, sy: 0.4, sz: 0.5, ry: Math.PI / 4 });
+    const mh = ca.prayer ? -0.62 : 0;   // (v666: under the prayer house's one-story roof)
+    for (const [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) box(A + u * 0.22, y + 1.75 + mh, ca.dep - 0.08 + v * 0.2, 0.04, 0.9, 0.04, dk);
+    box(A, y + 2.22 + mh, ca.dep - 0.08, 0.56, 0.06, 0.56, dk);
+    part(G.cone4, CC(M.gold), ...at(A, y + 2.45 + mh, ca.dep - 0.08), { sx: 0.5, sy: 0.4, sz: 0.5, ry: Math.PI / 4 });
+    if (ca.prayer) prayerBits(ca);
   } finally { emitSurf = save; SURF = 0; }
 }
 // the roof (with the gallery story, so it hides as any roof does): terracotta squares over the hall but the drum's
@@ -6192,7 +6316,7 @@ function finishTowns() {
         a.pair = b; b.pair = a; doors.set(key, a); doors.set('pair:' + key, b);
         bankLanterns(t, hse);
       } else { makeDoor(...hse.door); if (hse.role === 'guard') bankLanterns(t, hse); }
-      makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
+      makeRoom(hse.tiles, hse.color, hse.chapel ? (hse.chapel.prayer ? prayerRoof(hse.chapel) : cathRoof(hse.chapel)) : null);
       if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.up.tiles, hse.color, hse.cathedral ? (hse.cathedral.mosque ? mosqueRoof(hse.cathedral) : cathRoof(hse.cathedral)) : null, 1); }
     }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
@@ -9149,7 +9273,7 @@ const PLANT_U = {
 };
 const plantMat = new GFX.ShaderMaterial({ uniforms: PLANT_U, vertexColors: true, side: GFX.DoubleSide, attributes: { plant: 'vec4f' }, lit: true,
   code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) sn: vec4f }
 // the trample map's push at a point (none off the map)
 fn pushAt(p: vec2f) -> vec2f {
   if (U.trV.w < 0.5) { return vec2f(0.0); }
@@ -9181,7 +9305,7 @@ fn pushAt(p: vec2f) -> vec2f {
       let cy = cos(yaw); let sy = sin(yaw);
       w = root + vec3f(p1.x * cy - p1.z * sy, p1.y, p1.x * sy + p1.z * cy);
     }
-    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, vec4f(0.0));
   }
   // a banner's cloth (20 + which way it faces; 30 + an archway's): rippling out from its hanging line, waves
   // running down it and a slow billow; an archway's only outward, and gone while its archway is lowered
@@ -9191,7 +9315,7 @@ fn pushAt(p: vec2f) -> vec2f {
     if (arch) {
       for (var j = 0; j < 8; j++) {
         if (j >= i32(U.bcutN)) { break; }
-        if (distance(root.xz, U.bcut[j].xy) < 2.6) { return VOut(vec4f(0.0, 0.0, -2.0, 1.0), w0, v.color, w0 - F.camPos.xyz); }
+        if (distance(root.xz, U.bcut[j].xy) < 2.6) { return VOut(vec4f(0.0, 0.0, -2.0, 1.0), w0, v.color, w0 - F.camPos.xyz, vec4f(0.0)); }
       }
     }
     let xd = vec2f(cos(ry), -sin(ry));
@@ -9206,7 +9330,18 @@ fn pushAt(p: vec2f) -> vec2f {
     if (arch) { d = ((wave * 0.5 + 0.5) * U.flag.x + billow * U.flag.w) * h; }
     var w = w0 + vec3f(nd.x, 0.0, nd.y) * d;
     w.y += abs(d) * 0.15;
-    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+    // (v666, Jordan: smooth shaded, as the sails are) the cloth's own normal from how d changes across it (a) and
+    // down it (h), passed on for the fragment in place of the facet's
+    let c1 = cos(t * 2.0 - h * U.flag.z + a * 1.5 + ph);
+    let c2 = cos(t * 3.3 - h * U.flag.z * 1.6 + ph * 1.3);
+    let wh = -(c1 * 0.7 + c2 * 0.3 * 1.6) * U.flag.z;
+    let wa = c1 * 0.7 * 1.5;
+    let ws = select(1.0, 0.5, arch);
+    let d0 = select(wave * U.flag.x, (wave * 0.5 + 0.5) * U.flag.x, arch) + billow * U.flag.w;
+    let dh = d0 + h * U.flag.x * ws * wh;
+    let da = h * U.flag.x * ws * wa;
+    let sn = vec3f(nd.x, 0.0, nd.y) - vec3f(xd.x, 0.0, xd.y) * da + vec3f(0.0, 1.0, 0.0) * dh;
+    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, vec4f(sn, 1.0));
   }
   // a floating leaf (flex 10 and up, the rest how freely): a lily pad pushed aside along the water, staying
   // level, turning a little as it bobs
@@ -9217,7 +9352,7 @@ fn pushAt(p: vec2f) -> vec2f {
     let ya = 0.15 * sin(U.windV.w * 0.35 + root.x * 1.3 + root.z * 1.7) + (pb.x - pb.y) * 0.3;
     let rel = w0 - root;
     let w = root + vec3f(rel.x * cos(ya) - rel.z * sin(ya) + off.x, rel.y, rel.x * sin(ya) + rel.z * cos(ya) + off.y);
-    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, vec4f(0.0));
   }
   var push = vec2f(0.0);
   if (U.trV.w > 0.5) {
@@ -9238,10 +9373,11 @@ fn pushAt(p: vec2f) -> vec2f {
     let ca = cos(a); let sa = sin(a);
     w = root + rel * ca + cross(k, rel) * sa + k * dot(k, rel) * (1.0 - ca);
   }
-  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, vec4f(0.0));
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
-  let N = flatNormal(i.eye);
+  var N = flatNormal(i.eye);
+  if (i.sn.w > 0.5) { N = normalize(i.sn.xyz); N = select(N, -N, dot(N, i.eye) > 0.0); }
   let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
@@ -13133,6 +13269,15 @@ function buildFountains() {
         for (const pt of [[q.x, y, q.z], [q.x + Math.sin(a0) * R, y, q.z + Math.cos(a0) * R], [q.x + Math.sin(a1) * R, y, q.z + Math.cos(a1) * R]]) wp(pt, BATH_WATER.depth);
       }
     }
+    if (t.chapel?.prayer && t.chapel.basin) {
+      // (v666: the prayer house's ablution basin)
+      const [bx, bz] = t.chapel.basin, by = t.chapel.y + 0.405, R = 0.36, n = 8;
+      pool(bx, bz, R);
+      for (let k = 0; k < n; k++) {
+        const a0 = (k + 0.5) / n * Math.PI * 2, a1 = (k + 1.5) / n * Math.PI * 2;
+        for (const pt of [[bx, by, bz], [bx + Math.sin(a0) * R, by, bz + Math.cos(a0) * R], [bx + Math.sin(a1) * R, by, bz + Math.cos(a1) * R]]) wp(pt, 0.08);
+      }
+    }
     if (t.tier !== 2) continue;
     const x = t.c + 0.5, z = t.r + 0.5, y0 = LV[T(t.c, t.r)] * STEP;
     // a flat ring of water between radii r0 and r1 at height y, d deep
@@ -13754,6 +13899,65 @@ function marbleFloor(c, r) {
     const col = shade(CC((c * 2 + k + r * 2 + j) % 2 ? '#d2ccc0' : '#eeeae2'), 0.96 + hs(c, r, 70 + j * 2 + k) * 0.06);
     SURF = SURF_SMOOTH; part(G.box, col, c + 0.25 + k * 0.5, y + 0.035, r + 0.25 + j * 0.5, { sx: 0.47, sy: 0.05, sz: 0.47 }); SURF = 0;
   }
+}
+// (v666, Jordan) a mosque's column: sandstone, an octagonal shaft on a square plinth, a teal band under a stepped
+// capital no wider than the plinth, up to the gallery's floor (cut: a stump at waist height)
+function sandColumn(x, y, z, cut) {
+  const D = DES_T, St = STONE_SAND, sv = SURF; SURF = SURF_STONE;
+  part(G.box, shade(CC(St.block), 0.9), x, y + 0.08, z, { sx: 0.34, sy: 0.16, sz: 0.34 });
+  part(G.box, D.light, x, y + 0.18, z, { sx: 0.3, sy: 0.04, sz: 0.3 });
+  const top = cut ? CUT_H : WALL_H - 0.34, sh = top - 0.2;
+  part(G.cyl8, St.block, x, y + 0.2 + sh / 2, z, { sx: 0.24, sy: sh, sz: 0.24, ry: Math.PI / 8 });
+  if (cut) { part(G.cyl8, D.light, x, y + top, z, { sx: 0.22, sy: 0.02, sz: 0.22, ry: Math.PI / 8 }); SURF = sv; return; }
+  part(G.cyl8, D.teal, x, y + top - 0.06, z, { sx: 0.25, sy: 0.08, sz: 0.25, ry: Math.PI / 8 });
+  part(G.box, D.light, x, y + top + 0.05, z, { sx: 0.26, sy: 0.1, sz: 0.26 });
+  part(G.box, shade(CC(St.block), 1.04), x, y + top + 0.16, z, { sx: 0.3, sy: 0.12, sz: 0.3 });
+  part(G.box, D.light, x, y + top + 0.28, z, { sx: 0.34, sy: 0.12, sz: 0.34 });
+  SURF = sv;
+}
+// the colour of the mosaic at (u, v) tiles from the middle of a room hw by hd (half sizes): a border of bands, a
+// star medallion in the middle, and a field of eight-pointed stars in a diamond lattice MOSAIC.period apart
+function mosaicColor(u, v, hw, hd) {
+  const D = DES_T, M = MOSAIC, e = Math.min(hw - Math.abs(u), hd - Math.abs(v));
+  if (e < 0.3) return D.tealDk;
+  if (e < 0.42) return D.cream;
+  if (e < 0.62) return D.tile;
+  if (e < 0.74) return D.cream;
+  const star = (x, y) => Math.min(Math.max(Math.abs(x), Math.abs(y)), (Math.abs(x) + Math.abs(y)) * 0.7071);
+  const Rm = Math.min(hw, hd) - 1.3, sm = star(u, v);
+  if (Rm > 0.9 && sm < Rm) {
+    if (sm < 0.3) return M.gold;
+    if (sm < Rm * 0.45) return D.teal;
+    if (sm < Rm * 0.6) return D.cream;
+    if (sm < Rm * 0.86) return M.navy;
+    return D.cream;
+  }
+  const P = M.period, lu = u - P * Math.round(u / P), lv = v - P * Math.round(v / P), sf = star(lu, lv);
+  if (sf < 0.18) return D.cream;
+  if (sf < 0.5) return D.teal;
+  if (Math.abs(Math.abs(lu) + Math.abs(lv) - P / 2) < 0.12) return M.navy;
+  return D.tile0;
+}
+function mosaicFloor(c, r, f) {
+  const y = LV[T(c, r)] * STEP + PDY, n = MOSAIC.n, s = 1 / n;
+  part(G.box, MOSAIC.grout, c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+  const frame = (x, z) => { const dx = x - f.c0 - 0.5, dz = z - f.r0 - 0.5; return [dx * DC[f.p] + dz * DR[f.p], dx * DC[f.d] + dz * DR[f.d] - f.Bc]; };
+  SURF = SURF_SMOOTH;
+  for (let j = 0; j < n; j++) {
+    const z = r + (j + 0.5) * s;
+    let k0 = 0, col0 = null;
+    for (let k = 0; k <= n; k++) {
+      const col = k < n ? mosaicColor(...frame(c + (k + 0.5) * s, z), f.hw, f.hd) : null;
+      if (k && col !== col0) {
+        const kc = shade(CC(col0), 0.95 + hs(c * n + k0, r * n + j, 671) * 0.1);
+        part(G.box, kc, c + (k0 + k) / 2 * s, y + 0.035, z, { sx: (k - k0) * s - 0.016, sy: 0.05, sz: s - 0.016 });
+        k0 = k;
+      }
+      if (!k) k0 = 0;
+      col0 = col;
+    }
+  }
+  SURF = 0;
 }
 // a fluted marble column with a leafy capital, MARBLE_H to the top of its slab (cut: a stump at waist height)
 function marbleColumn(x, y, z, cut) {
@@ -15072,15 +15276,16 @@ function buildPieces(cx, cz, ch, only = null) {
   if (!only || only.has(0)) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
-    if (FL[i] === 3) marbleFloor(c, r);
+    if (FL[i] === 3) { const mf = MOSAIC_AT.get(i); if (mf) mosaicFloor(c, r, mf); else marbleFloor(c, r); }
     else if (FL[i] === 2) stoneFloor(c, r);
     else if (FL[i]) plankFloor(c, r);
     if (WN[i]) wallGI(c, r, 0, WN[i], giCuts);
     if (WW[i]) wallGI(c, r, 1, WW[i], giCuts);
     const pl = pillars.get(i);
     if (pl) for (const q of pl) if (q.col) {
-      const n0 = bufBuild.n; marbleColumn(q.x, q.y, q.z, false); cutTag(bufBuild, n0, q.key + 1, 1);
-      const n1 = bufBuild.n; marbleColumn(q.x, q.y, q.z, true); cutTag(bufBuild, n1, q.key + 1, -1);
+      const colFn = q.sand ? sandColumn : marbleColumn;
+      const n0 = bufBuild.n; colFn(q.x, q.y, q.z, false); cutTag(bufBuild, n0, q.key + 1, 1);
+      const n1 = bufBuild.n; colFn(q.x, q.y, q.z, true); cutTag(bufBuild, n1, q.key + 1, -1);
     } else if (q.kind === 'post') cabinPost(q);
     const m = mausAt.get(i);
     if (m && m.anchor === i) mausExtras(m);
@@ -29407,7 +29612,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 665, crashSeen = new Map();
+const GAME_VERSION = 666, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

@@ -335,6 +335,12 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v665:** (Jordan) Desert towns' planters are woven baskets instead of copper pots. Each has a bellied body with a rolled rim and is one world mesh (buildBaskets) drawn in basketMat. That material wraps the thatch's straw height map round the basket, so the straw runs round it in coils stacked up its side (BASKET). The ficus and the soil are unchanged.
 
+**v666:** (Jordan) Mosque and prayer house.
+- The mosque's arcade columns are sandstone (sandColumn) and set MOSQUE.colOut back under the gallery, so their capitals no longer stick out past its edge.
+- The mosque's floor is a zellige tile mosaic centred on the hall (mosaicFloor, mosaicColor, MOSAIC_AT): a banded border, a star medallion in the middle and a field of eight-pointed stars.
+- Medium desert towns get a prayer house in place of the chapel (raisePrayerHouse, PRAYER). It is an open sandstone courtyard with a small minaret at each front corner (minaretPiece, split out of mosqueExtras) and an ablution basin with water in the middle. Across the back is a covered prayer hall behind an arcade of pointed arches, with the mihrab and minbar and a small gold dome on a drum (prayerRoof). The whole floor is zellige, and stepped merlons run round the walls.
+- Town banners (flagpoles and archways) are smooth shaded: plantMat passes the rippling cloth's own normal to the fragment shader.
+
 **v657:** (Jordan) In sand towns the bank and the guard house are built in the desert sandstone too (stoneOf puts DESERT_WALLS first; they keep their doors, props, lantern and yard), and the cathedral becomes a mosque (ca.mosque): the same hall and gallery in sandstone with lattice windows and the teal band, one minaret at a front corner (a sandstone block, a slender shaft, a railed balcony, an open lantern and a small gold dome), a mihrab niche and a wooden minbar for the altar, and mosqueRoof: flat terracotta behind a sandstone cornice, a drum with arched lattice windows, a ribbed gold dome (goldDome). No buttresses, rose or awnings on it.
 
 **v658:** (Jordan) Stairs against a wall keep their place and width (running a little into the wall is fine), but the handrail (wood) or parapet (stone, desert sandstone too) on the side with a wall, fence, door or window along either of their two tiles on their story is left off, so it no longer sticks out through the wall.
