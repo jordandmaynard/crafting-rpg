@@ -4,6 +4,7 @@
 // out to the elbow and a forearm piece to the black tip, hinged there so the wing can flap and, gliding, arch; a
 // dolphin is its body and a tail hinged at its root, beating up and down. Forward is +z, up +y, its left +x.
 import * as GFX from '../gfx/index.js';
+import { makeDolphin, poseDolphinSkin, disposeDolphin } from './dolphin.js';
 
 export const GULL_COLORS = { white: '#eeeee8', grey: '#a3a9b2', tip: '#25272b', beak: '#e0ac38' };
 export const DOLPHIN_COLORS = { back: '#56636f', belly: '#b7c0c6', fins: '#47525d', eye: '#15181b' };
@@ -132,10 +133,25 @@ export function gullWings(ph, A, arch, droop) {
   const fk = Math.max(0, Math.min(1, A / 0.62));
   return [(1 - fk) * arch + fk * 0.1 + A * Math.sin(ph), A * 0.75 * Math.sin(ph - 0.7) - (1 - fk) * droop];
 }
-// a dolphin in mat: { g, tail } (tail's rotation.x beats it)
-export function dolphinModel(mat) {
+// a dolphin in mat: style 1 (v685, the default) the delivered skinned dolphin (src/sea/dolphin.js, 3.6 tiles long),
+// style 0 the first one (pieces with a hinged tail, 2.3 long). { g, style, tail | dolphin }
+export function dolphinModel(mat, style = 1) {
+  if (style >= 1) { const d = makeDolphin(GFX, { material: mat }); return { g: d.g, style: 1, dolphin: d }; }
   const S = seaLifeShapes(), g = new GFX.Group(), tail = new GFX.Group();
   g.add(new GFX.Mesh(S.dFront, mat));
   tail.position.set(0, 0, DOLPHIN_TAIL); tail.add(new GFX.Mesh(S.dTail, mat)); g.add(tail);
-  return { g, tail };
+  return { g, style: 0, tail };
+}
+// its swimming stroke at `cycles` through it (1 a beat), amp its strength (1 swimming, less in the air)
+export function poseDolphinModel(m, cycles, amp = 1) {
+  if (m.dolphin) {
+    const d = m.dolphin, pos = poseDolphinSkin(d.skin, cycles, amp, 1), ids = d.skin.shape.triangles, out = d.position.array;
+    for (let i = 0; i < ids.length; i++) { const j = ids[i] * 3; out[i * 3] = pos[j]; out[i * 3 + 1] = pos[j + 1]; out[i * 3 + 2] = pos[j + 2]; }
+    d.position.needsUpdate = true;
+  } else m.tail.rotation.x = Math.sin(cycles * Math.PI * 2) * 0.32 * amp;
+}
+// done with it: the skinned one's own buffer freed
+export function dropDolphinModel(m) {
+  if (m.g.parent) m.g.parent.remove(m.g);
+  if (m.dolphin) m.dolphin.mesh.geometry.dispose();
 }

@@ -1171,7 +1171,7 @@ import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_W
 import { Ragdoll, RAGDOLL } from './src/ragdoll.js';
 import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShapes } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
-import { gullModel, poseGull, gullWings, dolphinModel } from './src/sea/sealife.js';
+import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel } from './src/sea/sealife.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -18138,7 +18138,7 @@ const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 10.6
 // heading you can drift meanwhile (radians); stay: seconds they pace you (0 no end); fewest/most: pod size; jumps:
 // most leaps each; leap: their height (×); depth: how deep they swim between (tiles); beat: tail beats a second;
 // cooldown: seconds before another pod can come
-const DOLPHINS = { on: 1, deep: 8, wait: 4, straight: 0.3, stay: 30, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 20 };
+const DOLPHINS = { on: 1, deep: 8, wait: 4, straight: 0.3, stay: 30, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 20, model: 1 };   // (model: v685, 1 the delivered skinned dolphin, 0 the first)
 const SEA_SPAWN = { gulls: 0, dolphins: 0 };   // (T > Sea life buttons)
 const seaLife = { flights: [], gullT: 5, pod: null, runT: 0, runH: 0, runGoal: 10, coolT: 0 };
 // (v684) the gull's and the dolphin's pieces live in src/sea/sealife.js (shared with the Random Model Generator), in
@@ -18220,7 +18220,7 @@ function spawnPod(b) {
     const sd = k % 2 ? 1 : -1, bow = k === 0 && n > 2;
     const su = bow ? (Math.random() < 0.5 ? -0.6 : 0.6) : sd * (BOAT.beam + 1.1 + Math.random() * 1.8);
     const sv = bow ? BOAT.bow + 1.3 : -1.5 + Math.random() * 6;
-    const { g, tail } = dolphinModel(boatMat);
+    const m = dolphinModel(boatMat, DOLPHINS.model), g = m.g;
     shadowy(g);
     g.scale.setScalar(D.size * (0.85 + Math.random() * 0.3));
     const [x, z] = boatWorld(b, su * 1.5, sv - 7);
@@ -18229,8 +18229,8 @@ function spawnPod(b) {
     // (seaLifeMirror sets it on level water for that pass)
     g.traverse(o => o.layers.enable(9));
     scene.add(g);
-    list.push({ g, tail, su, sv, ph: Math.random() * 6.28, x, z, d: -3.5, hd: b.h, jump: null, jumps: Math.max(0, Math.round(D.jumps * (0.5 + Math.random() * 0.5))),
-      nextJump: 4.5 + Math.random() * 6, above: false, beat: Math.random() * 6.28 });
+    list.push({ g, m, su, sv, ph: Math.random() * 6.28, x, z, d: -3.5, hd: b.h, jump: null, jumps: Math.max(0, Math.round(D.jumps * (0.5 + Math.random() * 0.5))),
+      nextJump: 4.5 + Math.random() * 6, above: false, beat: Math.random() });
   }
   seaLife.pod = { boat: b, t: 0, state: 'rise', leaveT: 0, outT: 0, slowT: 0, list };
   return seaLife.pod;
@@ -18286,8 +18286,8 @@ function updateDolphins(dt) {
     f.g.position.set(f.x, f.y, f.z);
     f.g.rotation.set(-Math.atan2(vy, Math.max(hs, 2)), f.hd, f.jump ? 0.25 * Math.sin(f.jump.t / f.jump.J * Math.PI) * (f.su > 0 ? 1 : -1) : 0, 'YXZ');
     // the tail beating: hard as it swims, easing off in the air
-    f.beat += dt * Math.PI * 2 * D.beat * (f.jump ? 0.4 : 1);
-    f.tail.rotation.x = Math.sin(f.beat) * (f.jump ? 0.12 : 0.32);
+    f.beat += dt * D.beat * (f.jump ? 0.4 : 1);   // (in beats)
+    poseDolphinModel(f.m, f.beat, f.jump ? 0.4 : 1);
     // a splash as it breaks the surface, and as it goes back in
     const above = f.d > 0;
     if (above !== f.above && (f.jump || !above)) {
@@ -18299,7 +18299,7 @@ function updateDolphins(dt) {
     f.above = above;
   }
   if (P.state === 'dive' && P.leaveT > 4) {
-    for (const f of P.list) scene.remove(f.g);
+    for (const f of P.list) dropDolphinModel(f.m);
     S.pod = null; S.coolT = D.cooldown; S.runT = 0;
   }
 }
@@ -29380,6 +29380,7 @@ const TUNING = [
     [DOLPHINS, 'depth', 'Dolphins: how deep they swim between leaps (tiles)', 0.2, 2, 0.05],
     [DOLPHINS, 'beat', 'Dolphins: tail beats a second', 0.3, 5, 0.1],
     [DOLPHINS, 'size', 'Dolphins: size', 0.3, 3, 0.05],
+    [DOLPHINS, 'model', 'Dolphins: model, 0 first, 1 skinned (from the next pod)', 0, 1, 1],
     [DOLPHINS, 'cooldown', 'Dolphins: seconds before another pod can come', 0, 600, 5],
     [SEA_SPAWN, 'dolphins', 'Dolphins: a pod now beside your boat', 'action', () => { if (H.boat && !seaLife.pod) spawnPod(H.boat); }],
   ]],
@@ -30315,7 +30316,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 684, crashSeen = new Map();
+const GAME_VERSION = 685, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
