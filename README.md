@@ -337,6 +337,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v670:** (Jordan: dense lit haze without washing the scene out) The lit haze has a new HAZE.clear setting (T > Lit haze) for how much the haze dims what's behind it. 1, the default, is the old look. Lower values keep the scene's own contrast while the haze's light and shafts are still added on top. hazeApply mixes the transmission toward 1 by hazeA.y.
 
+**v672:** (Jordan: bigger gate houses in the town's stone) The guard huts beside town gates are always 2 x 2 now (tried 2, 3 then 4 tiles along the wall from the gate; a gate gets no hut if none fits). A sandstone town builds them from the desert tileset (sandstone walls, pointed-arch door, flat terracotta roof). Grey and ash towns build them in their wall's stone (HUT_WALLS, read by stoneOf).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

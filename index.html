@@ -4759,6 +4759,7 @@ const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new
 const BANK_WALLS = new Set(), BANK_DOORS = new Set();
 // (2026-11-03, Jordan: the guard house in dark stone, both floors) its walls' edgeKeys, by story
 const GUARD_WALLS = [new Set(), new Set()], GUARD_DOORS = new Set();
+const HUT_WALLS = new Map();   // (v672: the gate huts' walls, edgeKey -> their town's stone, as stoneOf gives it)
 // (v649, Jordan's mockup: the desert house) In a town walled in sandstone (townLook stone 'sand') every house but the
 // bank and the guard house is built from the desert tileset: a sandstone ground story (stone walls, pointed-arch doors
 // in a ring of wedge stones, pointed windows filled with a wooden star lattice and no glass), a teal tile band on the
@@ -5565,7 +5566,7 @@ const BEDS = new Map();        // (v452) both tiles of every town bed -> { c, r 
 // road. A town no road reaches still gets a gate at a street's end. (2026-11-03, Jordan: by size) A hamlet has a
 // wooden fence, a medium town a low dry-stone wall, and a large town a full stone wall (15, townWallPiece), along
 // its cliff tops too, with a 1 x 3 archway (ARCHES, townArch) where each of its main streets goes out, and a small
-// stone guard hut, 2 x 2 where it fits or else 1 x 1, against the wall either side of it (t.huts).
+// stone guard hut, 2 x 2 (v672: always; once 1 x 1 where that wouldn't fit), against the wall either side of it (t.huts).
 // (v643, Jordan: towns vary with what's round them) A town's stone (TOWN_STONE: its large wall, posts and archways, a
 // medium town's dry-stone wall) is sandstone where a big desert lies near, dark ash and obsidian where the Blasted
 // Wastes do, else grey; its wood (TOWN_WOOD, the prop woods: a hamlet's fence and gate, its log houses) by the trees
@@ -5682,27 +5683,31 @@ function townHut(t, own, c, r, d, s, corridor) {
     return BI[i] === TOWN && TN[i] === own && LV[i] === L && !SH[i] && !FL[i] && !TSTREET[i] && !PATH[i] && !WT[i] && !BR[i] && !LAVA[i] && !CY[i] &&
       !stairAt.has(i) && !pillars.has(i) && !DOCK_WAY[i] && !DOCK_NEAR[i] && !UP[1].FL.has(i) && !OBJ[OB[i]].tile && OB[i] !== O.FOUNTAIN && !GUARD_YARD.has(i) && !corridor.has(i);
   };
-  let tiles = null;
-  for (const size of [2, 1]) {
-    const tt = [];
-    for (let j = 0; j < size; j++) for (let a = 2; a < 2 + size; a++) tt.push(at(a, j));
+  // (v672, Jordan: always 2 x 2, no more 1 x 1: a little further along the wall if it won't fit beside the gate)
+  let tiles = null, a0 = 2;
+  for (const a00 of [2, 3, 4]) {
+    const tt = [], size = 2;
+    for (let j = 0; j < size; j++) for (let a = a00; a < a00 + size; a++) tt.push(at(a, j));
     if (!tt.every(p => ok(...p))) continue;
     // (a tile clear of every other building all round it)
     const set = new Set(tt.map(p => T(...p)));
     let crowd = false;
     for (const [hc, hr] of tt) for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const n = T(hc + a, hr + b); if (!set.has(n) && (FL[n] || UP[1].FL.has(n) || stairAt.has(n))) crowd = true; }
-    if (!crowd) { tiles = tt; break; }
+    if (!crowd) { tiles = tt; a0 = a00; break; }
   }
   if (!tiles) return;
   const set = new Set(tiles.map(p => T(...p))), two = tiles.length > 1;
   const dirOf = (dc, dr) => { for (let e = 0; e < 4; e++) if (DC[e] === dc && DR[e] === dr) return e; return -1; };
   const toStreet = dirOf(-pc, -pr), inward = (d + 2) & 3;
-  const [dc0, dr0] = two ? at(2, 1) : at(2, 0), doorD = two ? toStreet : inward;
-  const [wc, wr] = two ? at(3, 1) : [null, null];
+  const [dc0, dr0] = two ? at(a0, 1) : at(a0, 0), doorD = two ? toStreet : inward;
+  const [wc, wr] = two ? at(a0 + 1, 1) : [null, null];
+  // (v672, Jordan: in the town's own stone) a sandstone town's in the desert tileset, the others in its wall's stone
+  const look = townLook(t), desert = look.stone === 'sand', hutStone = { block: look.S.block, core: look.S.core, crenel: look.S.cap, cap: look.S.cap, bars: false };
   let door = null;
   for (const [hc, hr] of tiles) {
     const i = T(hc, hr);
     FL[i] = 2; OB[i] = 0; t.lampAt?.delete(i); t.planterAt?.delete(i);
+    if (look.stone === 'sand') DESERT_TILES.add(i);
     buildCount[Math.floor(hr / CH) * NC + Math.floor(hc / CH)]++;
     for (let e = 0; e < 4; e++) {
       if (set.has(T(hc + DC[e], hr + DR[e]))) continue;
@@ -5710,6 +5715,8 @@ function townHut(t, own, c, r, d, s, corridor) {
       if (!arr[T(ec, er)]) buildCount[Math.floor(er / CH) * NC + Math.floor(ec / CH)]++;
       arr[T(ec, er)] = isDoor ? KIND_VAL.door : hc === wc && hr === wr && e === inward ? KIND_VAL.stonewindow : KIND_VAL.stonewall;
       if (isDoor) door = [ec, er, ew];
+      if (desert) { DESERT_WALLS[0].add(edgeKey(ec, er, ew)); if (isDoor) DESERT_DOORS.add(dKey(ec, er, ew, 0)); }
+      else HUT_WALLS.set(edgeKey(ec, er, ew), hutStone);
     }
   }
   const hut = { tiles, door, inside: [dc0, dr0], color: '#7c7886', hut: true }, f = doorFront(hut);
@@ -14660,7 +14667,7 @@ const STONE_PLAIN = { block: '#8a8694', core: '#4a4652', crenel: '#7e7a88', cap:
 const STONE_BANK = { block: '#c4baa6', core: '#7a7264', crenel: '#b6ac98', cap: '#b2a894', bars: true };
 // (2026-11-03, Jordan: the guard house the bank's opposite, in dark stone on both its floors)
 const STONE_GUARD = { block: '#5a5664', core: '#2a2630', crenel: '#524e5c', cap: '#4c4854', bars: false };
-const stoneOf = (c, r, w, k = Math.round(PDY / WALL_H)) => { const e = edgeKey(c, r, w); return DESERT_WALLS[k]?.has(e) ? STONE_SAND : !k && BANK_WALLS.has(e) ? STONE_BANK : GUARD_WALLS[k]?.has(e) ? STONE_GUARD : STONE_PLAIN; };
+const stoneOf = (c, r, w, k = Math.round(PDY / WALL_H)) => { const e = edgeKey(c, r, w); return DESERT_WALLS[k]?.has(e) ? STONE_SAND : !k && BANK_WALLS.has(e) ? STONE_BANK : GUARD_WALLS[k]?.has(e) ? STONE_GUARD : (!k && HUT_WALLS.get(e)) || STONE_PLAIN; };
 // iron bars over a stone window, on its outside: uprights cut to the arch and two cross bars
 function windowBars(c, r, w, y, at, ry) {
   const s = windowOutside(c, r, w) || 1, W = STONE_WIN.W, R2 = 4 * W * W, o = 0.2;
@@ -29614,7 +29621,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 670, crashSeen = new Map();
+const GAME_VERSION = 672, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
