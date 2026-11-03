@@ -533,14 +533,15 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 /* (v647, Jordan) empty doll squares (ghostIcon, EMPTY_SLOT): the starting gear's silhouette pressed in */
 #inv .cell .ghost { --d: calc(var(--esD, 1) * 1px / var(--ui, 1)); position: relative; display: block; width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); pointer-events: none; }
 #inv .cell .ghost.px { --s: calc(max(var(--n, 32px), round(down, calc(var(--cell) * var(--dpr, 1)), var(--n, 32px))) / var(--dpr, 1)); width: min(var(--s), var(--cell)); height: min(var(--s), var(--cell)); }
-#inv .cell .ghost i { position: absolute; inset: 0; -webkit-mask: var(--g) center / contain no-repeat; mask: var(--g) center / contain no-repeat; }
+#inv .cell .ghost { --gx: 50%; --gy: 50%; --gs: contain; }
+#inv .cell .ghost i { position: absolute; inset: 0; -webkit-mask: var(--g) var(--gx) var(--gy) / var(--gs) no-repeat; mask: var(--g) var(--gx) var(--gy) / var(--gs) no-repeat; }
 #inv .cell .ghost .g-fill { background: rgba(0, 0, 0, var(--esFill, 0.39)); }
 /* an inner bevel: the silhouette less itself moved down-right leaves its top-left inside edge (in shade), less itself
    moved up-left its bottom-right inside edge (catching the light) */
-#inv .cell .ghost .g-dark, #inv .cell .ghost .g-lit { -webkit-mask: var(--g) center / contain no-repeat, var(--g) center / contain no-repeat; mask: var(--g) center / contain no-repeat, var(--g) center / contain no-repeat;
+#inv .cell .ghost .g-dark, #inv .cell .ghost .g-lit { -webkit-mask: var(--g) var(--gx) var(--gy) / var(--gs) no-repeat, var(--g) var(--gx) var(--gy) / var(--gs) no-repeat; mask: var(--g) var(--gx) var(--gy) / var(--gs) no-repeat, var(--g) var(--gx) var(--gy) / var(--gs) no-repeat;
   -webkit-mask-composite: source-out; mask-composite: subtract; }
-#inv .cell .ghost .g-dark { background: rgba(0, 0, 0, var(--esDark, 0.91)); -webkit-mask-position: center, calc(50% + var(--d)) calc(50% + var(--d)); mask-position: center, calc(50% + var(--d)) calc(50% + var(--d)); }
-#inv .cell .ghost .g-lit { background: rgba(255, 228, 190, var(--esLit, 0.3)); -webkit-mask-position: center, calc(50% - var(--d)) calc(50% - var(--d)); mask-position: center, calc(50% - var(--d)) calc(50% - var(--d)); }
+#inv .cell .ghost .g-dark { background: rgba(0, 0, 0, var(--esDark, 0.91)); -webkit-mask-position: var(--gx) var(--gy), calc(var(--gx) + var(--d)) calc(var(--gy) + var(--d)); mask-position: var(--gx) var(--gy), calc(var(--gx) + var(--d)) calc(var(--gy) + var(--d)); }
+#inv .cell .ghost .g-lit { background: rgba(255, 228, 190, var(--esLit, 0.3)); -webkit-mask-position: var(--gx) var(--gy), calc(var(--gx) - var(--d)) calc(var(--gy) - var(--d)); mask-position: var(--gx) var(--gy), calc(var(--gx) - var(--d)) calc(var(--gy) - var(--d)); }
 #doll .cell { width: 84px; height: 84px; --cell: 72px; }
 #pack.pack-grid { position: absolute; left: 84px; top: 200px; display: grid; grid-template-columns: repeat(4, 90px); grid-template-rows: repeat(5, 90px); gap: 8px; }
 #pack .cell { width: 90px; height: 90px; --cell: 78px; }
@@ -7640,6 +7641,8 @@ function setLook(body, seed) {
   if (body) OPTIONS.body = body;
   if (seed !== undefined) OPTIONS.lookSeed = seed;
   applyOptions(); rebuildHero();
+  // (v655) torso icons follow the body type
+  if (body) { bodyIcons(); try { if (invOpen) renderInv(); } catch (e) { } }
 }
 $('optMasc').addEventListener('click', e => { setLook('masc'); e.currentTarget.blur(); });
 $('optFem').addEventListener('click', e => { setLook('fem'); e.currentTarget.blur(); });
@@ -17742,6 +17745,55 @@ for (const [k, f] of [['sword', 'slash'], ['whirl', 'whirl'], ['lunge', 'lunge']
   ['warhammer', 'smash'], ['stunsmash', 'groundsmash'], ['charge', 'charge']]) BAR_ICON[k] = paintImg(f, 'max(26px, calc(4.9vh - 14px))');
 for (const k of ['clothShirt', 'clothPants', 'clothBoots', ...['sword', 'bow', 'spear', 'axe', 'hammer'].flatMap(w => ['wood', 'bone', 'copper', 'iron', 'verdane', 'caerite', 'orivane', 'auralith'].map(t => w + '_' + t)), 'stone', 'wood', 'planks', 'stoneBlock',
   'bone', 'hide', 'leather', 'wheat', 'flour', 'bread', 'roughSandstone', 'sand', 'glassPane', 'emptyBottle', 'boneDust', ...['copper', 'iron', ...FANTASY.map(m => m.k)].flatMap(k => [k + 'Ore', k + 'Ingot'])]) ICON[k] = paintImg(k, 'max(34px, 5.12vh)');
+// (v655, Jordan's missing-icons pack and torso body-type delta, art/deliveries) the twelve buildables still drawn in
+// pixels and all 32 armor pieces, painted, plus a male torso for each armor set and a female starting shirt. Packed
+// into atlases (icons/atlas/<name>-128/-256.webp, one a set) rather than a file an icon: the artifact holds at most 511
+// files. An atlas icon is still an <img class="paint"> (a clear pixel) with its cell as a background, so every place
+// that sizes, outlines or flies an icon treats it as before. image-set picks the 128 or 256 sheet by the screen's pixel
+// ratio. The buildables have their black contour painted in; the armor gets the usual runtime outline.
+const PAINT_ATLAS = {
+  'armor-leather': [5, 1, ['leatherArmor', 'leatherArmor_male', 'leatherPants', 'leatherBoots', 'leatherHelmet']],
+  'armor-bone': [5, 1, ['boneArmor', 'boneArmor_male', 'bonePants', 'boneBoots', 'boneHelmet']],
+  'armor-chain': [5, 1, ['chainArmor', 'chainArmor_male', 'chainPants', 'chainBoots', 'chainHelmet']],
+  'armor-plate': [5, 1, ['plateArmor', 'plateArmor_male', 'platePants', 'plateBoots', 'plateHelmet']],
+  'armor-verdane': [5, 1, ['verdaneArmor', 'verdaneArmor_male', 'verdanePants', 'verdaneBoots', 'verdaneHelmet']],
+  'armor-caerite': [5, 1, ['caeriteArmor', 'caeriteArmor_male', 'caeritePants', 'caeriteBoots', 'caeriteHelmet']],
+  'armor-orivane': [5, 1, ['orivaneArmor', 'orivaneArmor_male', 'orivanePants', 'orivaneBoots', 'orivaneHelmet']],
+  'armor-auralith': [5, 1, ['auralithArmor', 'auralithArmor_male', 'auralithPants', 'auralithBoots', 'auralithHelmet']],
+  'build': [4, 3, ['woodstairs', 'stonestairs', 'woodwindow', 'stonewindow', 'fence', 'stonefence', 'ironfence', 'gate', 'irondoor', 'irongate', 'crate', 'chest']],
+  'starter-fem': [1, 1, ['clothShirt_female']],
+};
+const ATLAS_AT = {};   // icon -> [atlas, cols, rows, cell]
+for (const [n, [cols, rows, keys]] of Object.entries(PAINT_ATLAS)) keys.forEach((k, i) => { ATLAS_AT[k] = [n, cols, rows, i]; });
+const atlasUrl = (n, px) => `icons/atlas/${n}-${px}.webp?v=${PAINT_REV}`;
+const CLEAR_PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+// a cell's place in its sheet, as CSS background (or mask) size and position percentages
+function atlasCell(k) {
+  const [n, cols, rows, i] = ATLAS_AT[k], c = i % cols, r = Math.floor(i / cols);
+  return { n, size: `${cols * 100}% ${rows * 100}%`, x: cols > 1 ? c / (cols - 1) * 100 : 0, y: rows > 1 ? r / (rows - 1) * 100 : 0 };
+}
+function atlasImg(k) {
+  const a = atlasCell(k), u1 = atlasUrl(a.n, 128), u2 = atlasUrl(a.n, 256);
+  // (fetched and decoded as the game loads, the sheet the screen will use, like the single paintings)
+  const want = (devicePixelRatio || 1) > 1 ? u2 : u1;
+  if (!paintKept.has(want)) { const im = new Image(); im.src = want; if (im.decode) im.decode().catch(() => {}); paintKept.set(want, im); }
+  const set = `url('${u1}') 1x, url('${u2}') 2x`;
+  return `<img class="paint" data-paint="${k}" src="${CLEAR_PX}" style="background-image: -webkit-image-set(${set}); background-image: image-set(${set}); background-size: ${a.size}; background-position: ${a.x}% ${a.y}%; background-repeat: no-repeat" alt="" draggable="false">`;
+}
+for (const k of Object.keys(ATLAS_AT)) if (!/_male$|_female$/.test(k)) { ICON[k] = atlasImg(k); if (BAR_ICON[k]) BAR_ICON[k] = ICON[k]; }
+// a torso's icon follows your body type everywhere it's shown (pack, doll, crafting, tips): the armor sets' own
+// paintings are the feminine cut, *_male the masculine; the starting shirt's painting the masculine, clothShirt_female
+// the feminine. Called again when the body type changes in Options (setLook).
+const TORSO_ICONS = ['clothShirt', ...['leather', 'bone', 'chain', 'plate', 'verdane', 'caerite', 'orivane', 'auralith'].map(m => m + 'Armor')];
+const TORSO_MASC = { clothShirt: ICON.clothShirt };
+function bodyIcons() {
+  const fem = OPTIONS.body === 'fem';
+  for (const k of TORSO_ICONS) {
+    if (k === 'clothShirt') ICON[k] = fem ? atlasImg('clothShirt_female') : TORSO_MASC.clothShirt;
+    else ICON[k] = atlasImg(fem ? k : k + '_male');
+  }
+}
+bodyIcons();
 function setDpr() { document.documentElement.style.setProperty('--dpr', devicePixelRatio || 1); }
 setDpr();
 addEventListener('resize', setDpr);
@@ -17856,7 +17908,13 @@ applyEmptySlot.live = true;
 applyEmptySlot();
 // the icon for an empty doll square: the ghost item's silhouette, as layers masked by its image
 function ghostIcon(slot) {
-  const html = ICON[GEAR_GHOST[slot]] || '', m = html.match(/src="([^"]+)"/);
+  const html = ICON[GEAR_GHOST[slot]] || '', at = (html.match(/data-paint="([^"]+)"/) || [])[1];
+  if (at && ATLAS_AT[at]) {
+    // (v655) an atlas cell: its sheet as the mask, sized and placed on the cell
+    const a = atlasCell(at);
+    return `<span class="ghost" style="--g: url('${atlasUrl(a.n, 256)}'); --gs: ${a.size}; --gx: ${a.x}%; --gy: ${a.y}%"><i class="g-fill"></i><i class="g-dark"></i><i class="g-lit"></i></span>`;
+  }
+  const m = html.match(/src="([^"]+)"/);
   if (!m) return html;
   const px = /class="px"/.test(html), n = (html.match(/--n: (\d+)px/) || [])[1] || 32;
   const src = px ? m[1] : m[1].replace('-128.webp', '-256.webp');
@@ -28921,7 +28979,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 654, crashSeen = new Map();
+const GAME_VERSION = 655, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
