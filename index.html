@@ -6542,7 +6542,8 @@ const renderer = await GFX.createRenderer().catch(err => {
   throw err;
 });
 renderer.autoClear = false;
-// the sun's shadow: percentage-closer filtering, 17 taps spread by the shadow's radius (T > Shadows > Edge softness)
+// the sun's shadow: percentage-closer filtering spread by the shadow's radius (T > Shadows > Edge softness): 1 tap under a third of a
+// texel, 4 up to a texel (v581), 17 past that
 renderer.shadowMap.enabled = true;
 // phones (v360, Jordan's Adreno profile: the GPU side took 40 ms a frame against 20 ms of timed passes): renders
 // into the same target carry on in one render pass (renderer.mergePasses, T > Shadows), so a tiled GPU doesn't
@@ -7235,7 +7236,6 @@ function renderWorld() {
   renderer.shadowMap.autoUpdate = true;
   updateTrunkCut();
   updateWillows();
-  updateCaustics();
   scene.updateMatrixWorld();
   // the ground on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow map is
   // drawn in the first render, from the ground's and the world's casters both (shadowLayers)
@@ -7249,17 +7249,25 @@ function renderWorld() {
   } else { renderer.passName = 'world'; renderer.drawFilter = worldOpaque; renderer.render(scene, camera); }
   renderer.shadowMap.autoUpdate = false;
   renderer.drawFilter = null;
-  renderer.passName = 'ground';   // (the profiler's names for each render's pass)
-  camera.layers.set(5); renderer.render(scene, camera);
-  renderer.passName = 'snow and sand';
+  // (v581: the deep snow and sand before the ground they lie on, so the ground they cover fails the depth test before
+  // it's lit, as the ground under a roof does; both write depth, so what shows is the same)
+  renderer.passName = 'snow and sand';   // (the profiler's names for each render's pass)
   camera.layers.set(6); renderer.render(scene, camera);
+  renderer.passName = 'ground';
+  camera.layers.set(5); renderer.render(scene, camera);
   renderer.passName = 'world see-through';
   camera.layers.set(0); renderer.drawFilter = worldClear; renderer.render(scene, camera); renderer.drawFilter = null;
   // the grass tufts on their own (layer 4: they cast no shadow), so the profiler shows what they cost
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
+  // (v581) is any water on screen (lakes, rivers, the sea, fountains: layer 2)? With none, the caustics, the docks'
+  // mirrored picture and the copy of the world for the water are all skipped: inland they were made every frame
+  // for nothing. (The scene walk is the frame's own, kept from the renders above, so this costs a filter.)
+  camera.layers.set(2);
+  const waterSeen = renderer._collect(scene, camera).length > 0;
+  if (waterSeen) updateCaustics();
   // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
-  const bend = on && (WATER.refraction > 0 || SSR.on > 0.5 || SSR.proxy > 0.5);   // (v509: the reflections read the copy too)
+  const bend = waterSeen && on && (WATER.refraction > 0 || SSR.on > 0.5 || SSR.proxy > 0.5);   // (v509: the reflections read the copy too)
   // (v525) the docks' and boats' mirrored picture, for the water
   WATER_U.ssrC.value.z = bend && SSR.proxy > 0.5 && renderProxies() ? 1 : 0;
   if (bend) { const s = renderer.snapshot(outlineRT); WATER_U.tRefr.value = s.color; WATER_U.tRefrD.value = s.depth; }
@@ -9071,7 +9079,7 @@ const driftGeo = new GFX.BufferGeometry();
 }
 const driftMesh = new GFX.Mesh(driftGeo, driftMat);
 driftMesh.frustumCulled = false; driftMesh.receiveShadow = true; driftMesh.matrixAutoUpdate = false;
-driftMesh.layers.set(6);   // drawn in a pass of its own, after the ground (see renderWorld)
+driftMesh.layers.set(6);   // drawn in a pass of its own, before the ground (see renderWorld)
 driftMesh.visible = false;
 scene.add(driftMesh);
 let driftLook = 0;
@@ -9598,6 +9606,12 @@ const ROT_A = mat2x2f(0.8, -0.6, 0.6, 0.8);
 const ROT_B = mat2x2f(0.6, -0.8, 0.8, 0.6);
 const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  // (v581) with the bed bent through (refr), the darkening pass only lays down 1 - f, the waterline's and the haze's
+  // fade: worked out here, before any of the waves, foam and caustics, which only the adding pass needs
+  if (U.refr > 0.5 && U.passAdd < 0.5) {
+    let f0 = smoothstep(0.0, 0.03, i.depth) * (1.0 - sat((i.fogZ - U.fogNear) / (U.fogFar - U.fogNear)));
+    return vec4f(vec3f(1.0 - f0), 1.0);
+  }
   let t = U.time;
   let xz = i.wpos.xz;
   let d = max(i.depth, 0.0); let spd = length(i.flow);
@@ -21469,6 +21483,10 @@ function updateSky() {
     placeSun(md[0], md[1], md[2]);
   }
   CLOUD_U.shadowAmt.value *= lightFade;
+  // (v581) no shadow map at all while the sun (or moon) gives no light: the handover, when it's faded right out. (With
+  // only shadowAmt at 0, a low sun, the map stays: the haze's shafts, the rose windows, spray and smoke still read
+  // it; the lit surfaces skip their lookups then, shadeLitN)
+  if (sun.castShadow && (lightFade < 0.001 || sun.intensity <= 0)) sun.castShadow = false;
   // the sky's light: night, through dusk round the horizon, to day
   const a = smoothstep(-0.2, -0.02, y), b = smoothstep(0.02, 0.3, y);
   tmpC.set(SKY.bgNight).lerp(tmpC2.set(SKY.bgDusk), a).lerp(tmpC2.set(SKY.bgDay), b);
@@ -26302,7 +26320,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 580, crashSeen = new Map();
+const GAME_VERSION = 581, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

@@ -248,6 +248,14 @@ fn sunShadow(w: vec3f, n: vec3f) -> f32 {
   let s = sc.xyz / sc.w;
   if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0 || s.z > 1.0) { return 1.0; }
   let z = s.z + F.shadow.x; let r = F.shadow.z * F.shadow.w;
+  // (v581) the taps by how far they spread (F.shadow.z, in texels of the map): each is already a 2 x 2 filtered
+  // comparison, so within about a texel 17 of them come out nearly the same as 4, and under a third of one, as 1
+  if (F.shadow.z < 0.35) { return textureSampleCompareLevel(shadowMap, shadowSamp, s.xy, z); }
+  if (F.shadow.z <= 1.0) {
+    var s4 = 0.0;
+    for (var i = 0; i < 4; i++) { s4 += textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + vec2f(f32(i & 1) - 0.5, f32(i >> 1) - 0.5) * r, z); }
+    return s4 * 0.25;
+  }
   var sum = 0.0;
   for (var i = 0; i < 17; i++) { sum += textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + PCF[i] * r, z); }
   return sum / 17.0;
@@ -316,7 +324,8 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
     var lc = F.sunColor.rgb * cloudShade(w.xz);
-    if (receive) { lc *= mix(1.0, sunShadow(w, Ng), F.cloud2.z); }
+    // (v581: not looked up at all once shadows have faded out, cloud2.z 0)
+    if (receive && F.cloud2.z > 0.001) { lc *= mix(1.0, sunShadow(w, Ng), F.cloud2.z); }
     let irr = sat(dot(N, L)) * lc;
     col += irr * diff + irr * PI * ggx(f0, rough, N, V, L);
   }
