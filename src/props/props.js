@@ -394,12 +394,17 @@ export const PROPS = {
       // stone courses: each block its own shade
       const block = (x, y, zz, sx, sy, sz, i) => part(G.box, shade(STONE, 0.86 + 0.18 * ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1), x, y, zz, { sx, sy, sz });
       block(0, 0.1, z + 0.02, 1.7, 0.2, D + 0.04, 1);                 // the hearthstone
+      // (2026-11-03, Jordan: gaps at its side and back) every stone runs IN back into the wall (the plaster between a
+      // timber wall's beams stands back of where the prop's back is), the cheeks' courses sit on one another with
+      // their outer faces flush, and a course across behind the lintel closes the cheeks' tops to the hood
+      const IN = 0.06, zz = (d, f = 0) => z0 - IN + (d + IN + f) / 2;
       let i = 2;
-      for (const s of [-1, 1]) for (let k = 0; k < 4; k++) block(s * 0.68, 0.32 + k * 0.2, z, 0.26 + (k % 2) * 0.04, 0.19, D - 0.04, i++);
-      part(G.box, '#2a2420', 0, 0.62, z0 + 0.06, { sx: 1.1, sy: 0.85, sz: 0.1 });      // sooty fireback
+      for (const s of [-1, 1]) for (let k = 0; k < 4; k++) { const w = 0.26 + (k % 2) * 0.04; block(s * (0.85 - w / 2), 0.3 + k * 0.2, zz(D - 0.02), w, 0.2, D - 0.02 + IN, i++); }
+      part(G.box, '#2a2420', 0, 0.6, z0 + 0.05 - IN / 2, { sx: 1.1, sy: 0.8, sz: 0.1 + IN });      // sooty fireback
+      block(0, 1.0975, zz(D - 0.18), 1.7, 0.195, D - 0.18 + IN, i++);                            // (behind the lintel)
       part(G.box, C.dark, 0, 1.1, z + D / 2 - 0.08, { sx: 1.7, sy: 0.16, sz: 0.18 });   // the oak lintel
       // the hood narrowing up to the ceiling
-      for (let k = 0; k < 4; k++) { const t = k / 3; block(0, 1.3 + k * 0.2, z0 + (D - 0.12) * (1 - t * 0.45) / 2, 1.6 - t * 0.7, 0.21, (D - 0.12) * (1 - t * 0.45), i++); }
+      for (let k = 0; k < 4; k++) { const t = k / 3, d = (D - 0.12) * (1 - t * 0.45); block(0, 1.3 + k * 0.2, zz(d), 1.6 - t * 0.7, 0.21, d + IN, i++); }
       // the fire: crossed logs, embers, flames
       for (const s of [-1, 1]) seg(G.cyl6, '#3a2618', [-0.32 * s, 0.24, z - 0.12], [0.3 * s, 0.3, z + 0.1], 0.05);
       part(G.box, '#ff6a2a', 0, 0.22, z, { sx: 0.6, sy: 0.03, sz: 0.36, into: 'glow' });
