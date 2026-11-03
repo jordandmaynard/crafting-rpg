@@ -3709,7 +3709,7 @@ function townYards(t, n) {
   fill('streetBench', byStreet(2, 750, (c, r) => dist(c, r) * 0.08), count(K.bench, 2) - placed.filter(q => q.id === 'streetBench').length, 5);
   fill('handcart', byStreet(2, 760, (c, r) => Math.abs(dist(c, r) - R * 0.6) * 0.1), count(K.cart, 5), 6);
   // 4. horse troughs out toward the edge
-  fill('horseTrough', byStreet(2, 770).filter(s => dist(...s.tiles[0]) >= R - 8), count(K.trough, 6), 8);
+  fill('horseTrough', byStreet(2, 770).filter(s => dist(...s.tiles[0]) >= R - 8), count(K.trough, 6), 8, { look: { live: true } });   // (its water in the fountain's shader)
   // 5. round each house: a rain barrel at a corner, a woodpile and hay against its walls (not the door's)
   const outWall = v => v === 1 || v === 3 || v === 4 || v === 12 || v === 13 || v === 14;
   t.houses.forEach((h, j) => {
@@ -3751,7 +3751,7 @@ function townYards(t, n) {
       for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if ((a || b) && free(c + a, r + b, false)) open++;
       if (open >= 7) baths.push({ tiles: [[c, r]], f: Math.floor(hs(c, r, 811) * 4), s: hs(c, r, 810) });
     }
-    fill('birdBath', baths.sort((a, b) => a.s - b.s), count(K.bath, 8), 6);
+    fill('birdBath', baths.sort((a, b) => a.s - b.s), count(K.bath, 8), 6, { look: { live: true } });   // (its water and bird drawn live: buildFountains, birdLive)
   }
 }
 // a farmhouse or a cabin: one room, no beds of the town's
@@ -3771,6 +3771,32 @@ function drawProp(q, glowOk) {
   if (g.glow) propEmit(g.glow, q, glowOk ? GLOW : OUT);
   if (q.id === 'hearth' && q.tiles) propStack(q);
   if (q.cut != null) cutTag(OUT, n0, q.cut, 1);
+  if (q.look?.live && q.look.bird && SPIDER) birdLive(q);
+}
+// (2026-11-03, Jordan: the bird should move its head and fluff its tail) a bird bath's bird, alive: drawn into the
+// chunk's spider buffer (no outline, as the spiders; it isn't moved by the cutaway) with each piece tagged with its
+// pivot and what it is, so spiderMat moves it: the head turns this way and that in quick jerks and now and then dips
+// to drink, and every few seconds the bird shivers, its feathers puffing up and its tail fanning (T > Bird baths)
+function birdLive(q) {
+  const L = q.look, a = L.at, cs = Math.cos(q.ry), sn = Math.sin(q.ry);
+  const lx = Math.sin(a) * 0.27, lz = Math.cos(a) * 0.27, bx = q.x + cs * lx + sn * lz, bz = q.z - sn * lx + cs * lz, by = q.y + 0.675;
+  const ry = a + Math.PI / 2 + q.ry, fx = Math.sin(ry), fz = Math.cos(ry), B = CC(L.birdC[0]), dark = shade(B, 0.75);
+  const tagged = (kind, px, py, pz, draw) => { const from = SPIDER.n; draw(); SPIDER.tag(from, px, py, pz, kind); };
+  // (kinds: 2 the head, 3 the tail, 4 the body, 5 the legs, which keep still)
+  tagged(5, bx, by, bz, () => { for (const s of [-1, 1]) part(G.box, '#3a2a20', bx + fz * s * 0.015, by - 0.035, bz - fx * s * 0.015, { sx: 0.008, sy: 0.04, sz: 0.008, into: 'spider' }); });
+  tagged(4, bx, by - 0.02, bz, () => {
+    part(G.oct, B, bx, by, bz, { sx: 0.07, sy: 0.07, sz: 0.12, ry, into: 'spider' });
+    for (const s of [-1, 1]) part(G.oct, dark, bx + fz * s * 0.03 - fx * 0.01, by + 0.008, bz - fx * s * 0.03 - fz * 0.01, { sx: 0.022, sy: 0.04, sz: 0.09, ry, into: 'spider' });
+    if (L.birdC[1] === 'A robin') part(G.oct, '#d0602a', bx + fx * 0.04, by - 0.02, bz + fz * 0.04, { sx: 0.05, sy: 0.04, sz: 0.04, ry, into: 'spider' });
+  });
+  const nx = bx + fx * 0.04, nz = bz + fz * 0.04, ny = by + 0.02;
+  tagged(2, nx, ny, nz, () => {
+    const hx = bx + fx * 0.06, hz = bz + fz * 0.06, hy = by + 0.04;
+    part(G.oct, shade(B, 1.1), hx, hy, hz, { sx: 0.05, sy: 0.05, sz: 0.05, ry, into: 'spider' });
+    for (const s of [-1, 1]) part(G.box, '#101014', hx + fz * s * 0.021 + fx * 0.008, hy + 0.006, hz - fx * s * 0.021 + fz * 0.008, { sx: 0.008, sy: 0.008, sz: 0.008, ry, into: 'spider' });
+    seg(G.cone4, '#c8a040', [hx + fx * 0.02, hy, hz + fz * 0.02], [hx + fx * 0.055, hy - 0.005, hz + fz * 0.055], 0.01, 'spider');
+  });
+  tagged(3, bx - fx * 0.05, by + 0.005, bz - fz * 0.05, () => part(G.box, dark, bx - fx * 0.09, by + 0.012, bz - fz * 0.09, { sx: 0.03, sy: 0.01, sz: 0.08, ry, rx: -0.2, into: 'spider' }));
 }
 // (v543, Jordan: the cooking hearth's hood poked up through the roof) its chimney carried on up from the hood's top
 // and out through the roof, as a built hearth's stack is (hearthTop): up through any floors over it to the roof of
@@ -9031,12 +9057,50 @@ const webMat = flatMat({ vertexColors: true, side: GFX.DoubleSide, opacity: 0 })
 // Every so often a spider drops down from its web on a thread, hangs there bobbing a moment, then climbs back up
 // (T > Graveyard spiders). Lit like the world, but writing alpha 0 so the outline draws no stroke round it.
 const SPIDERS = { drops: 1.95, depth: 1.5, dropTime: 0.8, hang: 4, climb: 6, size: 1 };
-const SPIDER_U = { drops: { value: 1 }, depth: { value: 1 }, dropTime: { value: 0.8 }, hang: { value: 4 }, climb: { value: 6 } };
+const BIRDS = { looks: 1.4, turn: 1.8, drinks: 0.22, fluffEvery: 5, fluffTime: 0.6, puff: 0.18, tailFan: 0.7 };   // (T > Bird baths: birdAt)
+const SPIDER_U = { drops: { value: 1 }, depth: { value: 1 }, dropTime: { value: 0.8 }, hang: { value: 4 }, climb: { value: 6 },
+  // (2026-11-03) the bird baths' birds (birdAt): head turns a second, how far, the share of them that drink, how often
+  // it shivers (s) and for how long, and how much its feathers puff and its tail fans
+  looks: { value: 1.4 }, turn: { value: 1.8 }, drinks: { value: 0.22 }, fluffEvery: { value: 5 }, fluffTime: { value: 0.6 }, puff: { value: 0.18 }, tailFan: { value: 0.7 } };
 const spiderMat = new GFX.ShaderMaterial({ uniforms: SPIDER_U, vertexColors: true, side: GFX.DoubleSide, attributes: { spider: 'vec4f' }, lit: true,
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+fn bhash(p: f32) -> f32 { return fract(sin(p * 127.1) * 43758.5453); }
+// (2026-11-03) a bird bath's bird (birdLive: spider.w 2 head, 3 tail, 4 body, 5 still; spider.xyz its pivot)
+fn birdAt(w0: vec3f, b: vec4f) -> vec3f {
+  let pv = b.xyz;
+  let s = fract(sin(dot(pv.xz, vec2f(12.9898, 78.233))) * 43758.5453);
+  let t = F.camDir.w;
+  var p = w0 - pv;
+  // every few seconds a shiver: the feathers puff up and the tail fans
+  let P = U.fluffEvery * (0.7 + s * 0.6);
+  let g = fract(t / P + s) * P;
+  let k = select(0.0, sin(clamp(g / U.fluffTime, 0.0, 1.0) * 3.14159), g < U.fluffTime);
+  if (b.w < 2.5) {
+    // the head: turned this way and that in quick jerks, now and then dipped to drink
+    let q = t * U.looks + s * 17.0;
+    let n = floor(q);
+    let u = fract(q);
+    let a0 = (bhash(n - 1.0 + s * 31.0) - 0.5) * U.turn;
+    let a1 = (bhash(n + s * 31.0) - 0.5) * U.turn;
+    let a = mix(a0, a1, smoothstep(0.0, 0.12, u));
+    let c = cos(a);
+    let sn = sin(a);
+    p = vec3f(c * p.x + sn * p.z, p.y, -sn * p.x + c * p.z);
+    let dip = select(0.0, sin(clamp((u - 0.25) / 0.5, 0.0, 1.0) * 3.14159), bhash(n * 1.7 + s * 5.0) > 1.0 - U.drinks);
+    p.y = p.y - dip * 0.035;
+  } else if (b.w < 3.5) {
+    p = p * (1.0 + U.tailFan * k);
+    p.y = p.y + k * 0.012 * (1.0 + sin(g * 70.0));
+  } else if (b.w < 4.5) {
+    p = p * (1.0 + U.puff * k);
+    p.y = p.y + 0.004 * sin(g * 70.0) * k;
+  }
+  return pv + p;
+}
 @vertex fn vs(v: VIn) -> VOut {
   let w0 = (O.model * vec4f(v.position, 1.0)).xyz;
+  if (v.spider.w > 1.5) { let wb = birdAt(w0, v.spider); return VOut(F.viewProj * vec4f(wb, 1.0), wb, v.color, wb - F.camPos.xyz); }
   // its cycle: sitting at the hub, then a quick drop, a bounce and a hang, then the climb back up in little tugs
   let busy = U.dropTime + U.hang + U.climb;
   let P = (busy + 14.0 + v.spider.z * 30.0) / max(U.drops, 0.02);
@@ -10102,6 +10166,7 @@ function updateAmbient() {
   for (const k of AMB_KEYS) U[k].value = A[k];
   U.flyCol.value.set(A.flyColor); U.emberA.value.set(A.emberColor); U.emberB.value.set(A.emberColor2); U.snowCol.value.set(A.snowColor);
   for (const k of ['drops', 'depth', 'dropTime', 'hang', 'climb']) SPIDER_U[k].value = SPIDERS[k];
+  for (const k in BIRDS) SPIDER_U[k].value = BIRDS[k];
   // (the sun's own height: the light's direction, sunDir in the shaders, is the moon's by night)
   U.dayK.value = smoothstep(-0.05, 0.2, sunDir[1]);
   if (ambMesh) ambMesh.visible = A.butterflies + A.dragonflies + A.fireflies + A.embers + A.snow + A.fairies > 0;
@@ -11649,11 +11714,28 @@ function fountainFalls(c, r) {
   }
   return out;
 }
+// (2026-11-03, Jordan) the bird baths' water too, in the same shader: a disc in each basin
+const BATH_WATER = { y: 0.595, r: 0.255, depth: 0.04 };
 function buildFountains() {
   for (const m of fountMeshes) { scene.remove(m); m.geometry.dispose(); }
   fountMeshes.length = 0;
   const pos = [], dep = [], flow = [], fall = [], fpos = [], fuv = [];
   for (const t of towns) {
+    for (const q of t.yard?.props || []) {
+      if (q.id === 'horseTrough') {
+        // (a trough's water: a flat sheet inside its sides, turned as it stands)
+        const st = q.look.stone, hw = st ? 0.76 : 0.8, hd = st ? 0.14 : 0.19, y = q.y + (st ? 0.355 : 0.375), cs = Math.cos(q.ry), sn = Math.sin(q.ry);
+        const P = (a, b) => [q.x + cs * a + sn * b, y, q.z - sn * a + cs * b];
+        for (const pt of [P(-hw, -hd), P(-hw, hd), P(hw, hd), P(-hw, -hd), P(hw, hd), P(hw, -hd)]) { pos.push(...pt); dep.push(0.12); flow.push(0, 0); fall.push(0); }
+        continue;
+      }
+      if (q.id !== 'birdBath') continue;
+      const n = 16;
+      for (let k = 0; k < n; k++) {
+        const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2, y = q.y + BATH_WATER.y, R = BATH_WATER.r;
+        for (const pt of [[q.x, y, q.z], [q.x + Math.sin(a0) * R, y, q.z + Math.cos(a0) * R], [q.x + Math.sin(a1) * R, y, q.z + Math.cos(a1) * R]]) { pos.push(...pt); dep.push(BATH_WATER.depth); flow.push(0, 0); fall.push(0); }
+      }
+    }
     if (t.tier !== 2) continue;
     const x = t.c + 0.5, z = t.r + 0.5, y0 = LV[T(t.c, t.r)] * STEP;
     // a flat ring of water between radii r0 and r1 at height y, d deep
@@ -24869,6 +24951,15 @@ const TUNING = [
     [SPIDERS, 'climb', 'Climb back (seconds)', 0.5, 20, 0.1],
     [SPIDERS, 'size', 'Spider size', 0.2, 6, 0.05],
   ]],
+  ['Bird baths', [
+    [BIRDS, 'looks', 'Head turns a second', 0, 5, 0.05],
+    [BIRDS, 'turn', 'How far it turns its head', 0, 3, 0.05],
+    [BIRDS, 'drinks', 'Share of turns it dips to drink', 0, 1, 0.01],
+    [BIRDS, 'fluffEvery', 'Shiver every (seconds)', 0.5, 20, 0.1],
+    [BIRDS, 'fluffTime', 'Shiver lasts (seconds)', 0.1, 3, 0.05],
+    [BIRDS, 'puff', 'Feathers puff', 0, 1, 0.01],
+    [BIRDS, 'tailFan', 'Tail fans', 0, 2, 0.05],
+  ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
     [ORE_LOOK, 'iron', 'Iron colour', 'color'],
@@ -25723,7 +25814,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 570, crashSeen = new Map();
+const GAME_VERSION = 571, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

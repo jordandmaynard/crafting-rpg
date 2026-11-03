@@ -1172,7 +1172,7 @@ function horseTrough(L, C) {
       part(G.box, shade(st, 0.95 + s * 0.04), 0, 0.27, s * (D / 2 - 0.045), { sx: W, sy: 0.34, sz: 0.09 });
       part(G.box, shade(st, 1.0 - s * 0.03), s * (W / 2 - 0.045), 0.27, 0, { sx: 0.09, sy: 0.34, sz: D - 0.18 });
     }
-    part(G.box, WATER, 0, 0.35, 0, { sx: W - 0.18, sy: 0.01, sz: D - 0.18 });
+    if (!L.live) part(G.box, WATER, 0, 0.35, 0, { sx: W - 0.18, sy: 0.01, sz: D - 0.18 });   // (L.live: the game's fountain water shader, buildFountains)
   } else {
     for (const x of [-0.6, 0.6]) {
       for (const s of [-1, 1]) seg(G.box, C.dark, [x, 0, s * 0.22], [x, 0.18, s * 0.13], 0.03);
@@ -1184,7 +1184,7 @@ function horseTrough(L, C) {
       part(G.box, C.dark, s * (W / 2 - 0.015), 0.33, 0, { sx: 0.05, sy: 0.22, sz: D - 0.07 });
       part(G.box, IRON, s * 0.42, 0.33, 0, { sx: 0.03, sy: 0.24, sz: D + 0.02 });
     }
-    part(G.box, WATER, 0, 0.37, 0, { sx: W - 0.1, sy: 0.01, sz: D - 0.08 });
+    if (!L.live) part(G.box, WATER, 0, 0.37, 0, { sx: W - 0.1, sy: 0.01, sz: D - 0.08 });
   }
   if (L.pump) {
     const x = W / 2 + 0.08, z = -0.12;
@@ -1328,8 +1328,9 @@ function birdBath(L) {
   part(G.cyl8, shade(st, 1.05), 0, 0.47, 0, { sx: 0.24, sy: 0.06, sz: 0.24 });
   part(G.cyl12, shade(st, 0.95), 0, 0.54, 0, { sx: 0.6, sy: 0.08, sz: 0.6 });
   ring(0.27, 0.605, 14, 0.05, 0.05, shade(st, 1.08), 6);
-  part(G.cyl12, WATER, 0, 0.595, 0, { sx: 0.5, sy: 0.01, sz: 0.5 });
-  if (L.bird) {
+  // (L.live: the game draws the water in its fountain's water shader and the bird alive, birdLive in index.html)
+  if (!L.live) part(G.cyl12, WATER, 0, 0.595, 0, { sx: 0.5, sy: 0.01, sz: 0.5 });
+  if (L.bird && !L.live) {
     const a = L.at, bx = Math.sin(a) * 0.27, bz = Math.cos(a) * 0.27, ry = a + Math.PI / 2, fx = Math.sin(ry), fz = Math.cos(ry), B = CC(L.birdC[0]);
     part(G.oct, B, bx, 0.67, bz, { sx: 0.07, sy: 0.07, sz: 0.12, ry });
     part(G.oct, shade(B, 1.1), bx + fx * 0.06, 0.71, bz + fz * 0.06, { sx: 0.05, sy: 0.05, sz: 0.05 });
