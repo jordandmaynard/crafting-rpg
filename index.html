@@ -1226,7 +1226,7 @@ const BEACH = new Uint8Array(N * N);
 // ground) and the water is still drawn over it. SHOAL is 256 | which of its neighbours are the deeper water past it
 // (bits as BEACH's). See markShoals.
 const SHOAL = new Uint16Array(N * N);
-// (v635) BDIRT: a lake's beach, of the ground's own brown dirt, not sand (no shoal off it). SHORE: water whose swells are
+// (v635) BDIRT: a lake's beach, of the ground's own brown dirt, not sand (its shoals dirt too since v641). SHORE: water whose swells are
 // lowered so their crests stop at the still water's line (shoals, and a lake's tiles beside its dirt beach).
 const BDIRT = new Uint8Array(N * N), SHORE = new Uint8Array(N * N);
 const FX = new Int8Array(N * N), FZ = new Int8Array(N * N);   // river flow direction, x127
@@ -1251,9 +1251,8 @@ const rampDir = s => (s - 1) & 3;
 // (v627: just under the water's surface, which stands 0.16 under the level); the shoals carry on down at the same
 // angle (v629, Jordan; two rows off the sea since v635, see markShoals).
 const BEACH_DROP = 0.18;
-// (v640, Jordan: a lake's dirt beach half as steep again, so it reaches into the water)
-const DIRT_DROP = BEACH_DROP * 1.5;
-const beachDrop = i => BDIRT[i] ? DIRT_DROP : BEACH_DROP;
+// (v640 made a lake's dirt beach steeper; v641, Jordan: back to the same slope, with two dirt shoal rows instead)
+const beachDrop = i => BEACH_DROP;
 function beachH(m, u, v) {
   let h = 1;
   if (m & 1) h = Math.min(h, v);
@@ -2370,14 +2369,15 @@ function markShoals() {
   SHOAL.fill(0); SHORE.fill(0);
   const row = new Uint8Array(N * N), rows = [[], []];
   const nearDock = (c, r) => docks.some(k => Math.max(Math.abs(k.c - c), Math.abs(k.r - r)) <= DOCK_CLEAR);
-  const sea = i => !LV[i] && !BR[i] && WL[i] && !LAVA[i] && !CY[i] && !WT[i];
+  // (v641: lakes too, off their dirt beaches, in dirt)
+  const sea = i => !LV[i] && !BR[i] && WL[i] && !LAVA[i] && !CY[i] && (!WT[i] || WT[i] === 2);
   for (let k = 0; k < 2; k++) for (let r = 1; r < N - 1; r++) for (let c = 1; c < N - 1; c++) {
     const i = T(c, r), L = WL[i];
     if (!sea(i) || row[i]) continue;
     let by = false;
     for (let dr = -1; dr <= 1 && !by; dr++) for (let dc = -1; dc <= 1; dc++) {
       const n = T(c + dc, r + dr);
-      if (k ? row[n] === 1 && WL[n] === L : BEACH[n] && !BDIRT[n] && LV[n] === L) { by = true; break; }
+      if (k ? row[n] === 1 && WL[n] === L : BEACH[n] && LV[n] === L) { by = true; break; }
     }
     if (!by || nearDock(c, r)) continue;
     rows[k].push(i); row[i] = k + 1;
@@ -8305,7 +8305,7 @@ function beachColor(c, r, a, b) {
 const BEACH_DIRT = { a: C('#7a5a3a'), b: C('#6e5034') };
 // a shoal's sand: the beach's wet sand, all one (the water over it does the rest)
 function shoalColor(c, r, a, b) {
-  const p = PAL[DESERT];
+  const p = WT[T(c, r)] === 2 ? BEACH_DIRT : PAL[DESERT];   // (a lake's shoal is dirt, v641)
   return shade((c + r) % 2 ? p.a : p.b, (0.9 + hs(c, r, a * 2 + b + 44) * 0.12) * 0.88);
 }
 // whether a half-cell with corner heights 00, 10, 01, 11 splits along 10-01 (true) or 00-11: through the corner
@@ -8380,7 +8380,7 @@ function* groundSteps(cx, cz, ch) {
         const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
         // (v633: + 64 on a beach, + 128 on a shoal: a shoal's sand runs only into the beach's and its own, never the grass)
         if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
-        else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1) + (SHOAL[i] ? 128 : BEACH[i] && !BDIRT[i] ? 64 : 0); }
+        else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1) + (SHOAL[i] ? 128 : BEACH[i] ? 64 : 0); }
         // split through the odd corner out, so slope corners come out as clean hips and valleys
         const odd = lifted === 1 || lifted === 3;
         let flip = odd && (up[n10] !== up[n00] && up[n10] !== up[n11] || up[n01] !== up[n00] && up[n01] !== up[n11]);
@@ -25634,7 +25634,7 @@ function tileRGB(i) {
   if (PATH[i] && BI[i] !== TOWN) { [R, Gc, B] = [196, 170, 120]; tileCls = 1; }
   if (BEACH[i]) { if (BDIRT[i]) { R = 140; Gc = 104; B = 66; } else { R = 222; Gc = 196; B = 136; } }
   // (cyan, halfway in brightness between the beach and the water; the second row halfway between that and the sea)
-  if (SHOAL[i]) { tileCls = 2; return SHOAL[i] & 512 ? [61, 130, 152] : [80, 170, 182]; }
+  if (SHOAL[i]) { tileCls = 2; return WT[i] === 2 ? (SHOAL[i] & 512 ? [63, 137, 160] : [80, 170, 182]) : SHOAL[i] & 512 ? [61, 130, 152] : [80, 170, 182]; }
   let f = 0.72 + L * 0.05;
   const o = OB[i];
   if (OBJ[o].tree) f *= 0.78;
@@ -28153,7 +28153,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 640, crashSeen = new Map();
+const GAME_VERSION = 641, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
