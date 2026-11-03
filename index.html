@@ -8330,6 +8330,25 @@ const G = {
   frust7: new GFX.CylinderGeometry(0.26, 0.5, 1, 7),
   frust4: new GFX.CylinderGeometry(0.2, 0.5, 1, 4),
 };
+// (v660) the top of a log cut on a slant: an eight-sided cylinder (G.cyl8's unit size) whose top falls from 0.5 at
+// z -0.5 to -0.5 at z +0.5, so it slopes down toward +z; logCutTop is that sloped face alone, a little inset and
+// lifted, for the paler sawn wood. Both laid both ways round, as snowSkirt is.
+G.logCut = (() => {
+  const pos = [], g = new GFX.BufferGeometry(), v = j => { const t = j / 8 * Math.PI * 2; return [0.5 * Math.sin(t), 0.5 * Math.cos(t)]; };
+  for (let j = 0; j < 8; j++) {
+    const [x0, z0] = v(j), [x1, z1] = v(j + 1), b0 = [x0, -0.5, z0], b1 = [x1, -0.5, z1], t0 = [x0, -z0, z0], t1 = [x1, -z1, z1];
+    pos.push(...b0, ...b1, ...t1, ...b0, ...t1, ...t0, ...b0, ...t1, ...b1, ...b0, ...t0, ...t1);
+  }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+})();
+G.logCutTop = (() => {
+  const pos = [], g = new GFX.BufferGeometry(), v = j => { const t = j / 8 * Math.PI * 2, x = 0.44 * Math.sin(t), z = 0.44 * Math.cos(t); return [x, -z + 0.04, z]; };
+  const m = [0, 0.04, 0];
+  for (let j = 0; j < 8; j++) { const a = v(j), b = v(j + 1); pos.push(...m, ...a, ...b, ...m, ...b, ...a); }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+})();
 // each primitive's triangles, unrolled once, so dropping thousands of them into a chunk stays cheap
 // the snow lying on a frost pine's boughs: a band round the wide foot of a six-sided cone (G.cone6's own unit
 // shape, its corners and the middles of its sides), thicker on some sides than others, with a lip hanging just
@@ -13827,6 +13846,7 @@ function wallSurf(k) {
   if (k.r > k.b * 1.2) return Math.max(k.r, k.g) >= 0.5 ? SURF_PLASTER : SURF_WOOD;
   return SURF_STONE;
 }
+const LOG_CUT_SLOPE = 0.9;   // (v660: how steeply a log wall's tops are sawn, rise over run; the roof is ROOF_SLOPE 0.62)
 function wallPieceRaw(c, r, w, type, cut) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1);
   const y = Math.max(LV[i], LV[j]) * STEP + PDY;
@@ -13939,10 +13959,19 @@ function wallPieceRaw(c, r, w, type, cut) {
   if (type === 3) {
     // (v621, Jordan: no more uneven sharpened tops: every log is sawn off level, just under the roof's eaves)
     const W = lookAt(i, j)?.W;   // (v643: a town's log houses in the wood of its country)
+    // (v660, Jordan: the level tops poked up through the thatch's fringe) where the wall has an inside and an outside,
+    // each log is sawn off on a slant falling to the outside, steeper than the roof, its high side under the eaves
+    const out = cut ? 0 : windowOutside(c, r, w), CAP = 0.2 * LOG_CUT_SLOPE;
     for (let n = 0; n < 5; n++) {
-      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.04, col = shade(CC(W ? (n % 2 ? W.wood : W.light) : n % 2 ? '#6a4a2c' : '#7a5634'), (0.88 + kk * 0.2) * (W && n % 2 === 0 ? 0.88 : 1));
+      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - (out ? 0.05 + CAP : 0.04), col = shade(CC(W ? (n % 2 ? W.wood : W.light) : n % 2 ? '#6a4a2c' : '#7a5634'), (0.88 + kk * 0.2) * (W && n % 2 === 0 ? 0.88 : 1));
       let p = at(0.1 + n * 0.2, y + h / 2); part(G.cyl8, col, p[0], p[1], p[2], { sx: 0.2, sy: h, sz: 0.2 });
       // the sawn end of a log shows paler
+      if (out) {
+        const ryc = ry + (out < 0 ? Math.PI : 0), sawn = shade(CC(W ? W.light : '#b08656'), (0.9 + kk * 0.15) * (W ? 1.25 : 1));
+        p = at(0.1 + n * 0.2, y + h + CAP / 2); part(G.logCut, col, p[0], p[1], p[2], { sx: 0.2, sy: CAP, sz: 0.2, ry: ryc });
+        part(G.logCutTop, sawn, p[0], p[1], p[2], { sx: 0.2, sy: CAP, sz: 0.2, ry: ryc });
+        continue;
+      }
       p = at(0.1 + n * 0.2, y + h); part(G.cyl8, cut ? '#c89a62' : shade(CC(W ? W.light : '#b08656'), (0.9 + kk * 0.15) * (W ? 1.25 : 1)), p[0], p[1], p[2], { sx: 0.17, sy: 0.02, sz: 0.17 });
     }
     for (const yy of cut ? [0.3] : [0.3, WALL_H - 0.45]) { const p = at(0.5, y + yy); part(G.box, W ? W.dark : '#4a3020', p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.26, ry }); }
@@ -29180,7 +29209,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 659, crashSeen = new Map();
+const GAME_VERSION = 660, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

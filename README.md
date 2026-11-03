@@ -329,6 +329,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v658:** (Jordan) Stairs against a wall keep their place and width (running a little into the wall is fine), but the handrail (wood) or parapet (stone, desert sandstone too) on the side with a wall, fence, door or window along either of their two tiles on their story is left off, so it no longer sticks out through the wall.
 
+**v660:** (Jordan: the log walls' tops poked through the thatch fringe) Where a log wall has an inside and an outside (windowOutside), each log is sawn off on a slant falling to the outside (G.logCut, a slanted cylinder top, with its paler sawn face G.logCutTop), steeper than the roof (LOG_CUT_SLOPE 0.9), its high side just under the eaves, so the fringe covers it. Freestanding log walls keep their level tops.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
