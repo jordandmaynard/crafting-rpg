@@ -303,6 +303,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v646:** (Jordan) The backpack's refine and stash buttons, when there's nothing for them to do, are darkened and greyed like a locked ability (frame dimmed, icon grey) instead of faded see-through.
 
+**v647:** (Jordan) Empty squares on the character doll show what goes there as the starting gear's icon: the leather helmet, cloth shirt, wooden sword, cloth pants and cloth boots (the amulet keeps its outline). T > Empty gear squares picks the style: 0 the icons greyed, flattened and dimmed (greyed, contrast, brightness and opacity sliders), or 1 their silhouettes pressed into the square with a one-screen-pixel inner bevel, shaded along the top-left inside edge and lit along the bottom-right (inside darkness, edge strengths and bevel width sliders).
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).

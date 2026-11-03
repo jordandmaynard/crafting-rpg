@@ -530,6 +530,18 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 #inv .cell.press { --skinTint: brightness(0.754); }
 #inv .cell .n { right: 7px; bottom: 3px; font: 600 20px/1 var(--wk); color: #ffefd2; text-shadow: var(--nStroke), 0 2px 2px #180c06, 1px 0 2px #180c06; font-variant-numeric: tabular-nums; }
 #inv .cell.empty > img, #inv .cell.empty > svg { filter: grayscale(1) sepia(0.55); opacity: 0.75; }
+/* (v647, Jordan) empty doll squares (ghostIcon, EMPTY_SLOT): the starting gear faded, or its silhouette pressed in */
+#inv #doll .cell.empty > img[data-ghost] { filter: grayscale(var(--esGrey, 0.85)) contrast(var(--esCon, 0.5)) brightness(var(--esBri, 0.8)); opacity: var(--esOp, 0.8); }
+#inv .cell .ghost { --d: calc(var(--esD, 1) * 1px / var(--ui, 1)); position: relative; display: block; width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); pointer-events: none; }
+#inv .cell .ghost.px { --s: calc(max(var(--n, 32px), round(down, calc(var(--cell) * var(--dpr, 1)), var(--n, 32px))) / var(--dpr, 1)); width: min(var(--s), var(--cell)); height: min(var(--s), var(--cell)); }
+#inv .cell .ghost i { position: absolute; inset: 0; -webkit-mask: var(--g) center / contain no-repeat; mask: var(--g) center / contain no-repeat; }
+#inv .cell .ghost .g-fill { background: rgba(0, 0, 0, var(--esFill, 0.35)); }
+/* an inner bevel: the silhouette less itself moved down-right leaves its top-left inside edge (in shade), less itself
+   moved up-left its bottom-right inside edge (catching the light) */
+#inv .cell .ghost .g-dark, #inv .cell .ghost .g-lit { -webkit-mask: var(--g) center / contain no-repeat, var(--g) center / contain no-repeat; mask: var(--g) center / contain no-repeat, var(--g) center / contain no-repeat;
+  -webkit-mask-composite: source-out; mask-composite: subtract; }
+#inv .cell .ghost .g-dark { background: rgba(0, 0, 0, var(--esDark, 0.75)); -webkit-mask-position: center, calc(50% + var(--d)) calc(50% + var(--d)); mask-position: center, calc(50% + var(--d)) calc(50% + var(--d)); }
+#inv .cell .ghost .g-lit { background: rgba(255, 228, 190, var(--esLit, 0.22)); -webkit-mask-position: center, calc(50% - var(--d)) calc(50% - var(--d)); mask-position: center, calc(50% - var(--d)) calc(50% - var(--d)); }
 #doll .cell { width: 84px; height: 84px; --cell: 72px; }
 #pack.pack-grid { position: absolute; left: 84px; top: 200px; display: grid; grid-template-columns: repeat(4, 90px); grid-template-rows: repeat(5, 90px); gap: 8px; }
 #pack .cell { width: 90px; height: 90px; --cell: 78px; }
@@ -17246,6 +17258,30 @@ const GEAR_SLOTS = [
   { slot: 'amulet', name: 'AMULET', label: 'Amulet', pos: [305, 218], icon: 'empty_amulet' }, { slot: 'weapon', name: 'WEAPON', label: 'Weapon', pos: [47, 371], icon: 'empty_weapon' },
   { slot: 'legs', name: 'PANTS', label: 'Pants', pos: [305, 371], icon: 'empty_legs' }, { slot: 'boots', name: 'BOOTS', label: 'Boots', pos: [176, 516], icon: 'empty_boots' },
 ];
+// (v647, Jordan) an empty doll square shows what goes there as the starting gear's icon (the leather helmet for the
+// head; the amulet keeps its old outline, there being no starting amulet), drawn one of two ways (T > Empty gear
+// squares): style 0 faded (greyed, flattened, dimmed), style 1 its silhouette pressed in, with a one-pixel inner bevel
+// (dark along its top-left edges, lit along its bottom-right) as if stamped into the square
+const GEAR_GHOST = { head: 'leatherHelmet', chest: 'clothShirt', amulet: 'empty_amulet', weapon: 'sword_wood', legs: 'clothPants', boots: 'clothBoots' };
+const EMPTY_SLOT = { style: 0, grey: 0.85, contrast: 0.5, bright: 0.8, opacity: 0.8, fill: 0.35, dark: 0.75, lit: 0.22, depth: 1 };
+function applyEmptySlot() {
+  const E = EMPTY_SLOT, st = document.documentElement.style;
+  st.setProperty('--esGrey', E.grey); st.setProperty('--esCon', E.contrast); st.setProperty('--esBri', E.bright); st.setProperty('--esOp', E.opacity);
+  st.setProperty('--esFill', E.fill); st.setProperty('--esDark', E.dark); st.setProperty('--esLit', E.lit); st.setProperty('--esD', E.depth);
+  if ((E.style > 0.5 ? 1 : 0) !== applyEmptySlot.was) { applyEmptySlot.was = E.style > 0.5 ? 1 : 0; try { if (invOpen) renderInv(); } catch (e) { } }
+}
+applyEmptySlot.live = true;
+applyEmptySlot();
+// the icon for an empty doll square: the ghost item's own <img> (faded by CSS), or its silhouette as a pressed-in shape
+function ghostIcon(slot) {
+  const k = GEAR_GHOST[slot], html = ICON[k] || '';
+  if (!(EMPTY_SLOT.style > 0.5)) return html.replace('<img ', '<img data-ghost="1" ');
+  const m = html.match(/src="([^"]+)"/);
+  if (!m) return html;
+  const px = /class="px"/.test(html), n = (html.match(/--n: (\d+)px/) || [])[1] || 32;
+  const src = px ? m[1] : m[1].replace('-128.webp', '-256.webp');
+  return `<span class="ghost${px ? ' px' : ''}" style="--g: url('${src}'); --n: ${n}px"><i class="g-fill"></i><i class="g-dark"></i><i class="g-lit"></i></span>`;
+}
 const GEAR = { head: null, amulet: null, chest: 'clothShirt', legs: 'clothPants', boots: 'clothBoots', weapon: 'sword_wood' };
 const PACK = new Array(20).fill(null), PACK_N = new Array(20).fill(0);
 // the hotbar's seven squares (see The hotbar): weapons kept there rather than in the pack, starting with the five
@@ -17656,7 +17692,7 @@ function renderInv() {
     const box = document.createElement('div');
     box.className = 'gear-item'; box.style.left = g.pos[0] + 'px'; box.style.top = g.pos[1] + 'px';
     doll.appendChild(box);
-    const el = cell(box, ['gear', g.slot], id ? ICON[ITEMS[id].icon] : ICON[g.icon]);
+    const el = cell(box, ['gear', g.slot], id ? ICON[ITEMS[id].icon] : ghostIcon(g.slot));
     if (!id) el.classList.remove('full');
     box.insertAdjacentHTML('beforeend', `<label>${g.label}</label>`);
   }
@@ -27233,6 +27269,17 @@ const TUNING = [
     [QUEST_MARK, 'bob', 'Bob up and down (m)', 0, 0.5, 0.01],
     [QUEST_MARK, 'range', 'Shown within (m)', 10, 120, 1],
   ]],
+  ['Empty gear squares', [
+    [EMPTY_SLOT, 'style', 'Style: 0 faded starting gear, 1 pressed-in silhouette', 0, 1, 1, applyEmptySlot],
+    [EMPTY_SLOT, 'grey', 'Faded: greyed', 0, 1, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'contrast', 'Faded: contrast', 0, 1.5, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'bright', 'Faded: brightness', 0, 1.5, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'opacity', 'Faded: opacity', 0, 1, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'fill', 'Pressed in: inside darkness', 0, 1, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'dark', 'Pressed in: shaded edge (top-left)', 0, 1, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'lit', 'Pressed in: lit edge (bottom-right)', 0, 1, 0.01, applyEmptySlot],
+    [EMPTY_SLOT, 'depth', 'Pressed in: bevel width (screen px)', 1, 4, 1, applyEmptySlot],
+  ]],
   ['Levels', [
     [XP, 'perKill', 'Experience a kill drops (a level 1 foe)', 0, 100, 1],
     [XP, 'levelBonus', 'More for each level the foe is over 1 (share of that)', 0, 2, 0.05],
@@ -28297,7 +28344,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 646, crashSeen = new Map();
+const GAME_VERSION = 647, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
