@@ -1753,18 +1753,32 @@ function flagpole(L, C) {
   seg(G.cyl6, C.dark, [0, 3.32, 0], [0.6, 3.32, 0], 0.018);
   part(G.oct, '#c8a048', 0.61, 3.32, 0, { sx: 0.05, sy: 0.05, sz: 0.05 });
   for (const x of [0.1, 0.31, 0.52]) part(G.box, IRON, x, 3.31, 0, { sx: 0.02, sy: 0.07, sz: 0.045 });
-  const F = CC(L.field[0]), M = CC(L.mark[0]), ox = 0.31, oy = 3.29, hw = 0.25, len = 1.2;
-  plate(L.tail ? [[-hw, 0], [-hw, -len], [0, -len + 0.22], [hw, -len], [hw, 0]] : [[-hw, 0], [-hw, -len], [hw, -len], [hw, 0]], 0, -len / 2, -0.006, 0.006, F, ox, oy);
-  const sign = L.sign, shapes = [[[-hw, -0.08], [-hw, -0.15], [hw, -0.15], [hw, -0.08]]];   // (each counter-clockwise: its faces outward)
-  if (sign === 'diamond') shapes.push([[0, -0.4], [-0.13, -0.56], [0, -0.72], [0.13, -0.56]]);
-  else if (sign === 'cross') shapes.push([[-0.035, -0.38], [-0.035, -0.76], [0.035, -0.76], [0.035, -0.38]], [[-0.15, -0.53], [-0.15, -0.6], [0.15, -0.6], [0.15, -0.53]]);
-  else if (sign === 'sun') { const s = []; for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2, rr = k % 2 ? 0.08 : 0.14; s.push([-Math.sin(a) * rr, -0.56 + Math.cos(a) * rr]); } shapes.push(s); }
-  else shapes.push([[-0.2, -0.66], [0, -0.48], [0, -0.38], [-0.2, -0.56]], [[0, -0.48], [0.2, -0.66], [0.2, -0.56], [0, -0.38]]);
-  for (const s of shapes) {
+  // (L.live: the game draws the cloth itself, fluttering in the wind: bannerCloth in index.html)
+  if (L.live) return;
+  const F = CC(L.field[0]), M = CC(L.mark[0]), ox = 0.31, oy = 3.29, len = BANNER.len;
+  plate(bannerOutline(L.tail), 0, -len / 2, -0.006, 0.006, F, ox, oy);
+  for (const s of bannerShapes(L.sign)) {
     const cx = s.reduce((a, p) => a + p[0], 0) / s.length, cy = s.reduce((a, p) => a + p[1], 0) / s.length;
     plate(s, cx, cy, 0.006, 0.01, M, ox, oy);
     plate(s, cx, cy, -0.01, -0.006, M, ox, oy);
   }
+}
+// (2026-11-03, Jordan: half as long again, 1.2 till then) a town banner's size: half width, length, swallowtail notch
+export const BANNER = { hw: 0.25, len: 1.8, tail: 0.33 };
+// its outline, hung from (0, 0), counter-clockwise
+export function bannerOutline(tail) {
+  const { hw, len } = BANNER;
+  return tail ? [[-hw, 0], [-hw, -len], [0, -len + BANNER.tail], [hw, -len], [hw, 0]] : [[-hw, 0], [-hw, -len], [hw, -len], [hw, 0]];
+}
+// the band across its head and its device, each counter-clockwise (so its faces point outward)
+export function bannerShapes(sign) {
+  const hw = BANNER.hw, k = BANNER.len / 1.2, y = v => v * k;   // (the device spread down the longer cloth)
+  const shapes = [[[-hw, -0.08], [-hw, -0.15], [hw, -0.15], [hw, -0.08]]];
+  if (sign === 'diamond') shapes.push([[0, y(-0.4)], [-0.13, y(-0.56)], [0, y(-0.72)], [0.13, y(-0.56)]]);
+  else if (sign === 'cross') shapes.push([[-0.035, y(-0.38)], [-0.035, y(-0.76)], [0.035, y(-0.76)], [0.035, y(-0.38)]], [[-0.15, y(-0.53)], [-0.15, y(-0.6)], [0.15, y(-0.6)], [0.15, y(-0.53)]]);
+  else if (sign === 'sun') { const s = []; for (let n = 0; n < 16; n++) { const a = n / 16 * Math.PI * 2, rr = n % 2 ? 0.08 : 0.14; s.push([-Math.sin(a) * rr, y(-0.56) + Math.cos(a) * rr]); } shapes.push(s); }
+  else shapes.push([[-0.2, y(-0.66)], [0, y(-0.48)], [0, y(-0.38)], [-0.2, y(-0.56)]], [[0, y(-0.48)], [0.2, y(-0.66)], [0.2, y(-0.56)], [0, y(-0.38)]]);
+  return shapes;
 }
 // a bird bath: a stone basin on a pedestal, water in it, maybe a bird on its rim
 function birdBath(L) {

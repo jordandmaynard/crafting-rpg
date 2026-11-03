@@ -1155,7 +1155,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_WHERE } from './src/folk/townsfolk.js';
 import { Ragdoll, RAGDOLL } from './src/ragdoll.js';
-import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT } from './src/props/props.js';
+import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShapes } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 await (async () => {
 const $ = id => document.getElementById(id);
@@ -4208,7 +4208,7 @@ function townYards(t, n) {
   if (K.flag[1]) {
     const town = rollProp('flagpole', 1 + Math.floor(hs(t.c, t.r, 740) * 99998));
     const eaves = ([c, r]) => { for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (FL[T(c + a, r + b)]) return true; return false; };
-    fill('flagpole', byStreet(1, 741, plazaNear).filter(s => dist(...s.tiles[0]) <= P + 5 && !eaves(s.tiles[0])), count(K.flag, 4), 3, { look: town });
+    fill('flagpole', byStreet(1, 741, plazaNear).filter(s => dist(...s.tiles[0]) <= P + 5 && !eaves(s.tiles[0])), count(K.flag, 4), 3, { look: { ...town, live: true } });   // (its cloth drawn by the game, fluttering: bannerCloth)
   }
   fill('streetBench', byStreet(2, 750, (c, r) => dist(c, r) * 0.08), count(K.bench, 2) - placed.filter(q => q.id === 'streetBench').length, 5);
   fill('handcart', byStreet(2, 760, (c, r) => Math.abs(dist(c, r) - R * 0.6) * 0.1), count(K.cart, 5), 6);
@@ -4284,7 +4284,51 @@ function drawProp(q, glowOk) {
   if (q.id === 'hearth' && q.tiles) { const sv = OUT; if (PROP_OUTER) OUT = PROP_OUTER; try { propStack(q); } finally { OUT = sv; } }
   if (q.cut != null) cutTag(OUT, n0, q.cut, 1);
   if (q.look?.live && q.look.bird && SPIDER) birdLive(q);
+  if (q.id === 'flagpole' && q.look?.live) { const cs = Math.cos(q.ry), sn = Math.sin(q.ry); bannerCloth(q.x + cs * 0.31, q.y + 3.29, q.z - sn * 0.31, q.ry, q.look, false); }
 }
+// (2026-11-03, Jordan: town banners half as long again, fluttering in the wind, and one either side of every
+// archway) A banner's cloth, hung from (x, y, z) facing along ry: a grid of BANNER's outline (swallowtailed when its
+// look says) in the chunk's plant buffer, with its band and device just off each face, every vertex tagged with
+// where it hangs from and which way it faces (20 + ry; 30 + ry an archway's, hidden while its archway is lowered),
+// so plantMat ripples it: waves running down the cloth from its head, and a slow billow (BANNER_FX, T > Banners)
+const BANNER_FX = { amp: 0.09, speed: 1.3, wave: 3.0, billow: 0.06 };
+function bannerCloth(x, y, z, ry, L, arch) {
+  if (!PLANT || !PLANT.tag) return;
+  const xd = [Math.cos(ry), -Math.sin(ry)], nd = [Math.sin(ry), Math.cos(ry)], { hw, len } = BANNER;
+  const at = (lx, ly, off) => [x + xd[0] * lx + nd[0] * off, y + ly, z + xd[1] * lx + nd[1] * off];
+  const bottom = lx => -len + (L.tail ? BANNER.tail * (1 - Math.abs(lx) / hw) : 0);
+  const F = CC(L.field[0]), M = CC(L.mark[0]), cols = 4, rows = 12, from = PLANT.n;
+  for (let a = 0; a < cols; a++) for (let b = 0; b < rows; b++) {
+    const x0 = -hw + 2 * hw * a / cols, x1 = -hw + 2 * hw * (a + 1) / cols, yy = (lx, k) => bottom(lx) * k / rows;
+    const col = shade(F, 0.96 + hs(a, b, 171) * 0.08);
+    const p00 = at(x0, yy(x0, b), 0), p10 = at(x1, yy(x1, b), 0), p01 = at(x0, yy(x0, b + 1), 0), p11 = at(x1, yy(x1, b + 1), 0);
+    triOne(p00, p01, p11, col, col, col, PLANT); triOne(p00, p11, p10, col, col, col, PLANT);
+  }
+  for (const s of bannerShapes(L.sign)) {
+    const cx = s.reduce((q, p) => q + p[0], 0) / s.length, cy = s.reduce((q, p) => q + p[1], 0) / s.length;
+    for (const off of [0.012, -0.012]) for (let k = 0; k < s.length; k++) {
+      const p = s[k], q = s[(k + 1) % s.length];
+      triOne(at(cx, cy, off), at(p[0], p[1], off), at(q[0], q[1], off), M, M, M, PLANT);
+    }
+  }
+  const tw = Math.PI * 2;
+  PLANT.tag(from, x, y, z, (arch ? 30 : 20) + ((ry % tw) + tw) % tw);
+}
+// the two banners either side of an archway, hung from rods on its piers' outer faces (townArchRaw), in its town's colours
+function archBanners(ar) {
+  const t = towns[TN[T(ar.tc, ar.tr)] - 1];
+  if (!t) return;
+  t.banner ||= { ...rollProp('flagpole', 1 + Math.floor(hs(t.c, t.r, 740) * 99998)), live: true };
+  const A = TOWN_ARCH, pa = A.half + A.pier / 2, b = (A.depth - A.back + ARCH_BANNER.out) * ar.o, y = ar.y + A.top - ARCH_BANNER.down;
+  // (faced so the cloth's front, which way it ripples, is the archway's outside)
+  const ry = ar.w ? (ar.o > 0 ? Math.PI / 2 : -Math.PI / 2) : ar.o > 0 ? 0 : Math.PI;
+  for (const s of [-1, 1]) {
+    const x0 = ar.w ? ar.c + b : ar.c + 0.5 + s * pa, z0 = ar.w ? ar.r + 0.5 + s * pa : ar.r + b;
+    // (its face toward the outside: turned round where out is the other way)
+    bannerCloth(x0, y, z0, ry, t.banner, true);
+  }
+}
+const ARCH_BANNER = { out: 0.09, down: 0.22 };
 // (2026-11-03, Jordan: the bird should move its head and fluff its tail) a bird bath's bird, alive: drawn into the
 // chunk's spider buffer (no outline, as the spiders; it isn't moved by the cutaway) with each piece tagged with its
 // pivot and what it is, so spiderMat moves it: the head turns this way and that in quick jerks and now and then dips
@@ -8827,6 +8871,8 @@ const PLANT_U = {
   trV: { value: { x: 0, y: 0, z: 40, w: 0 } },       // the trample map's corner (tiles), width (tiles), on
   windV: { value: { x: 1, y: 0, z: 0, w: 0 } },      // the wind's way (x z), how far it leans them, its phase
   bend: { value: 1 },                                // how far a full push leans a plant (radians)
+  flag: { value: { x: BANNER_FX.amp, y: BANNER_FX.speed, z: BANNER_FX.wave, w: BANNER_FX.billow } },   // banners: ripple, speed, waves down the cloth, billow
+  bcut: { value: new Float32Array(32) }, bcutN: { value: 0 },   // the archways lowered now (x z), whose banners hide
 };
 const plantMat = new GFX.ShaderMaterial({ uniforms: PLANT_U, vertexColors: true, side: GFX.DoubleSide, attributes: { plant: 'vec4f' }, lit: true,
   code: /* wgsl */ `
@@ -8862,6 +8908,31 @@ fn pushAt(p: vec2f) -> vec2f {
       let cy = cos(yaw); let sy = sin(yaw);
       w = root + vec3f(p1.x * cy - p1.z * sy, p1.y, p1.x * sy + p1.z * cy);
     }
+    return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
+  }
+  // a banner's cloth (20 + which way it faces; 30 + an archway's): rippling out from its hanging line, waves
+  // running down it and a slow billow; an archway's only outward, and gone while its archway is lowered
+  if (v.plant.w >= 20.0) {
+    let arch = v.plant.w >= 30.0;
+    let ry = v.plant.w - select(20.0, 30.0, arch);
+    if (arch) {
+      for (var j = 0; j < 8; j++) {
+        if (j >= i32(U.bcutN)) { break; }
+        if (distance(root.xz, U.bcut[j].xy) < 2.6) { return VOut(vec4f(0.0, 0.0, -2.0, 1.0), w0, v.color, w0 - F.camPos.xyz); }
+      }
+    }
+    let xd = vec2f(cos(ry), -sin(ry));
+    let nd = vec2f(sin(ry), cos(ry));
+    let h = max(root.y - w0.y, 0.0);
+    let a = dot(w0.xz - root.xz, xd);
+    let t = U.windV.w * U.flag.y;
+    let ph = dot(root.xz, vec2f(1.3, 1.7));
+    let wave = sin(t * 2.0 - h * U.flag.z + a * 1.5 + ph) * 0.7 + sin(t * 3.3 - h * U.flag.z * 1.6 + ph * 1.3) * 0.3;
+    let billow = sin(t * 0.7 + ph) * 0.5 + 0.5;
+    var d = (wave * U.flag.x + billow * U.flag.w) * h;
+    if (arch) { d = ((wave * 0.5 + 0.5) * U.flag.x + billow * U.flag.w) * h; }
+    var w = w0 + vec3f(nd.x, 0.0, nd.y) * d;
+    w.y += abs(d) * 0.15;
     return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
   }
   // a floating leaf (flex 10 and up, the rest how freely): a lily pad pushed aside along the water, staying
@@ -8909,6 +8980,7 @@ function updateTrample(dt) {
   const wa = CLOUDS.direction * Math.PI / 180, wv = PLANT_U.windV.value;
   wv.x = Math.cos(wa); wv.y = Math.sin(wa); wv.z = F.wind; wv.w = (wv.w + dt * F.windSpeed * 2) % 1e4;
   PLANT_U.bend.value = F.bend;
+  const fl = PLANT_U.flag.value; fl.x = BANNER_FX.amp; fl.y = BANNER_FX.speed; fl.z = BANNER_FX.wave; fl.w = BANNER_FX.billow;
   if (!on) return;
   const bodies = [], way = (o, x, z) => {
     const was = o.trWas || [x, z], dx = x - was[0], dz = z - was[1], l = Math.hypot(dx, dz);
@@ -12954,6 +13026,8 @@ function objRows(cx, cz, ra, rb) {
       const pd = PROP_DRAW.get(i);   // (a town prop's floor pieces and rugs; wall hangings go with the building pieces)
       if (pd) { if (shut) { OUT = INOBJ; GLOW = INGLOW; } for (const q of pd) if (!q.hang) drawProp(q, true); }
     } finally { OUT = sv; GLOW = sg; PROP_OUTER = null; }
+    const arb = ARCHES.get(i);
+    if (arb) archBanners(arb);
     if (BR[i]) (DOCK[i] ? dockDeck : bridgeDeck)(c, r, i);
     else if (RIM[i] & 255) cliffRocks(c, r, i);
     if (FIELD[i]) furrows(c, r, i);
@@ -13347,6 +13421,12 @@ function townArchRaw(ar, cut) {
     const y1 = Math.min(top - A.spring, y0 + 0.3), u = y0 < outer ? Math.sqrt(outer * outer - y0 * y0) : 0, col = shade(CC(A.stone), 0.85 + hs(c, r + y0 * 10, 164 + w) * 0.22);
     if (u <= 0) bx(0, bc, y + A.spring + (y0 + y1) / 2, 2 * hf, y1 - y0, A.depth - 0.04, col);
     else if (u < hf - 0.02) for (const s of [-1, 1]) bx(s * (u + hf) / 2, bc, y + A.spring + (y0 + y1) / 2, hf - u, y1 - y0, A.depth - 0.04, col);
+  }
+  // (the banners' rods, on brackets out from the piers' outer faces: archBanners)
+  for (const s of [-1, 1]) {
+    const by = y + A.top - ARCH_BANNER.down + 0.02, of = A.depth - A.back;
+    bx(s * pa, of + ARCH_BANNER.out, by, BANNER.hw * 2 + 0.1, 0.035, 0.035, '#2e2e34');
+    for (const h of [-1, 1]) bx(s * pa + h * (BANNER.hw + 0.03), of + ARCH_BANNER.out / 2, by, 0.03, 0.03, ARCH_BANNER.out + 0.02, '#2e2e34');
   }
   // a coping right across, and merlons along its outer edge
   const span = 2 * (hf + A.pier);
@@ -14797,6 +14877,8 @@ function updateCutaway(inside) {
 // so you're never lost behind them (TOWN_WALL_CUT: how near, in tiles, for the wall and for an archway)
 const TOWN_WALL_CUT = { arch: 6.5 };   // (v632: the wall itself is never lowered)
 function townWallCuts(sy, cy) {
+  const bc = PLANT_U.bcut.value;
+  PLANT_U.bcutN.value = 0;
   if (!towns.some(t => t.tier === 2 && Math.hypot(t.c - H.x, t.r - H.z) < t.R + 10)) return;
   const hc = Math.floor(H.x), hr = Math.floor(H.z), R = Math.ceil(TOWN_WALL_CUT.arch) + 2;
   // (an archway also while you're under it: it stands out past the wall)
@@ -14807,7 +14889,11 @@ function townWallCuts(sy, cy) {
     // (v632, Jordan: the wall flickered on and off as you walked by it: it and its posts now always stand; only the
     // archways come down)
     const ar = ARCHES.get(i);
-    if (ar && want(ar.w ? c : c + 0.5, ar.w ? r + 0.5 : r, ar.w ? (c - H.x) * sy : (r - H.z) * cy, TOWN_WALL_CUT.arch, 1)) wantCut.add(ar.key);
+    if (ar && want(ar.w ? c : c + 0.5, ar.w ? r + 0.5 : r, ar.w ? (c - H.x) * sy : (r - H.z) * cy, TOWN_WALL_CUT.arch, 1)) {
+      wantCut.add(ar.key);
+      const n = PLANT_U.bcutN.value;   // (its banners hide with it)
+      if (n < 8) { bc[n * 4] = ar.w ? c : c + 0.5; bc[n * 4 + 1] = ar.w ? r + 0.5 : r; PLANT_U.bcutN.value = n + 1; }
+    }
   }
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
@@ -27478,6 +27564,12 @@ const TUNING = [
     [LANTERN_GLASS, 'day', 'Their glass: brightness by day (×)', 0, 10, 0.05],
     [LANTERN_GLASS, 'night', 'Their glass: brightness by night (×, eased between at dusk and dawn)', 0, 10, 0.05],
   ]],
+  ['Banners', [
+    [BANNER_FX, 'amp', 'Town banners: ripple', 0, 0.4, 0.005],
+    [BANNER_FX, 'speed', 'Town banners: ripple speed (×)', 0, 4, 0.05],
+    [BANNER_FX, 'wave', 'Town banners: waves down the cloth', 0, 10, 0.1],
+    [BANNER_FX, 'billow', 'Town banners: slow billow', 0, 0.4, 0.005],
+  ]],
   ['Hearth fires', [
     [PROP_FIRE, 'on', 'Town hearths and braziers burn in the GPU effects (0 off)', 0, 1, 1],
     [PROP_FIRE, 'reach', 'Played within this many tiles of you', 6, 60, 1],
@@ -28204,7 +28296,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 644, crashSeen = new Map();
+const GAME_VERSION = 645, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
