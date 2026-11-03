@@ -6794,7 +6794,7 @@ const connectStats = { reached: 0 };
 // ---------- Scenery catalogue ----------
 // solid: radius of a round obstacle; tile: blocks the whole tile; hp/give: what an axe or sword gets out of it
 const O = {
-  PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8,
+  PINE: 1, OAK: 2, DEAD: 3, SNOWPINE: 4, CACTUS: 5, BIRCH: 6, BURNT: 8, PALM: 9,
   ROCK: 10, ICEROCK: 11, SANDROCK: 12, VENT: 13, VENTX: 14, COPPER: 15, IRON: 16, VERDANE: 17, CAERITE: 18, ORIVANE: 19, AURALITH: 28,
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
@@ -6810,6 +6810,7 @@ def(O.BIRCH, { name: 'birch', solid: 0.2, hp: 3, give: 'wood', tree: true });
 def(O.DEAD, { name: 'dead tree', solid: 0.16, hp: 3, give: 'wood', tree: true });
 def(O.SNOWPINE, { name: 'frost pine', solid: 0.22, hp: 4, give: 'wood', tree: true });
 def(O.CACTUS, { name: 'cactus', solid: 0.18, hp: 2, give: 'wood', tree: true });
+def(O.PALM, { name: 'date palm', solid: 0.16, hp: 3, give: 'wood', tree: true });   // (v654: a sand town's trees)
 def(O.BURNT, { name: 'burned tree', solid: 0.15, hp: 2, give: 'wood', tree: true });
 // a smoking vent: a hole two tiles across, crusted with sulphur round its lip, that nothing walks into; it's
 // drawn from its north-west tile (VENT), and the other three (VENTX) are just its ground
@@ -7032,8 +7033,9 @@ function placeScenery(c, r) {
       const d = Math.hypot(dx, dz);
       // keep the step outside each door clear
       for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2 || wallOn(c, r, e) === 11) return;
-      if (d >= t.R - 2 && k2 > 0.7) OB[i] = O.OAK;
-      else if (k2 < 0.05) OB[i] = O.BUSH;
+      // (v654, Jordan: a town walled in sandstone grows palms, and dry scrub)
+      if (d >= t.R - 2 && k2 > 0.7) OB[i] = sandTown(i) ? O.PALM : O.OAK;
+      else if (k2 < 0.05) OB[i] = sandTown(i) ? O.DRYBUSH : O.BUSH;
       return;
     }
     case FOREST: {
@@ -11455,7 +11457,7 @@ function updateWake(dt) {
 // Bone Road's props, a size up so they stand right against a human adventurer
 const TS = 1.3;
 // oaks', birches', pines' (frost pines too) and ferns' sizes on top of that (T > Trees)
-const TREE_SIZE = { oak: 1.8, birch: 1.8, pine: 1.8, fern: 2.35, swamp: 1.2, grave: 1.1 };
+const TREE_SIZE = { palm: 1.8, oak: 1.8, birch: 1.8, pine: 1.8, fern: 2.35, swamp: 1.2, grave: 1.1 };
 function pine(x, z, k, snow = false) {
   const P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P, g = shade(CC(snow ? '#2f5048' : '#2f5a34'), 0.85 + k * 0.3);
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
@@ -11977,6 +11979,54 @@ function pumice(x, z, k) {
   for (let n = 0; n < 2 + Math.floor(k * 3); n++) {
     const a = k * 11 + n * 2.4, d = 0.1 + hash(x, z, n) * 0.28, s = 0.07 + hash(x, z, n + 3) * 0.09;
     part(G.dodec, shade(CC(n % 3 ? '#8a847a' : '#3a3230'), 0.85 + hash(x, z, n + 6) * 0.3), x + Math.sin(a) * d, y + s * 0.3, z + Math.cos(a) * d, { sx: s * 1.3, sy: s, sz: s * 1.1, ry: a });
+  }
+}
+// (v654, Jordan) a date palm for the sand towns: a ringed trunk curving up from a flared foot, leaning its own way,
+// a crown of fronds arching out and drooping (each a run of flat blades folded into a V along its rib, broad at the
+// crown and narrowing to a yellowed tip), a few young ones standing up in the middle, and dates hanging under them
+function frondBlade(col, x, y, z, ry, rx, rz, sx, sy, sz) {
+  dummy.position.set(x, y, z); dummy.rotation.set(rx, ry, rz, 'YXZ'); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
+  emitPart(G.box, col, 'world');
+  dummy.rotation.set(0, 0, 0, 'XYZ');
+}
+function palm(x, z, k) {
+  const y = groundAt(x, z), S = TS * TREE_SIZE.palm * (0.9 + k * 0.25), H = 1.22 * S;
+  let seed = k * 1000 + 29;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const bark = shade(CC('#8a6a48'), 0.9 + k * 0.15), ringC = shade(bark, 0.74), leaf = CC('#4a8a36');
+  const la = k * 6.28 + 1.3, lean = (0.12 + rnd() * 0.12) * S, lx = Math.sin(la), lz = Math.cos(la);
+  const at = t => [x + lx * lean * t * t, y + H * t, z + lz * lean * t * t];
+  seg(G.frust7, ringC, [x, y - 0.04, z], [x, y + 0.14 * S, z], 0.1 * S);   // (its flared foot)
+  const n = 7;
+  for (let q = 0; q < n; q++) {
+    const a = at(q / n), b = at((q + 1) / n), r = (0.068 - 0.022 * q / n) * S;
+    seg(G.cyl8, q % 2 ? bark : shade(bark, 1.06), a, b, r);
+    seg(G.cyl8, ringC, b, [b[0] + (b[0] - a[0]) * 0.12, b[1] + (b[1] - a[1]) * 0.12, b[2] + (b[2] - a[2]) * 0.12], r * 1.2);   // (the ring a frond left)
+  }
+  const C = at(1);
+  part(G.ico, shade(CC('#6a5a32'), 0.9), C[0], C[1] + 0.02 * S, C[2], { sx: 0.2 * S, sy: 0.16 * S, sz: 0.2 * S });   // (the crown's heart)
+  // the fronds: out and up from the crown, arching over and drooping to their tips
+  const frond = (a, up, L, wide) => {
+    let px = C[0], py = C[1] + 0.04 * S, pz = C[2], pitch = up;
+    const pieces = 5, l = L / pieces, sa = Math.sin(a), ca = Math.cos(a);
+    for (let q = 0; q < pieces; q++) {
+      const cp = Math.cos(pitch), dx = sa * cp, dy = -Math.sin(pitch), dz = ca * cp, w = wide * (1 - q / pieces * 0.72);
+      const mx = px + dx * l / 2, my = py + dy * l / 2, mz = pz + dz * l / 2;
+      const col = shade(q === pieces - 1 ? leaf.clone().lerp(CC('#a8a040'), 0.45) : leaf, 0.82 + q * 0.06 + rnd() * 0.1);
+      // (two halves of it folded up into a V along the rib)
+      for (const sd of [-1, 1]) frondBlade(shade(col, sd > 0 ? 1.06 : 0.92), mx + ca * sd * w / 4, my + 0.01 * S, mz - sa * sd * w / 4, a, pitch, sd * 0.38, w / 2, 0.022 * S, l * 1.08);
+      frondBlade(shade(CC('#6a7a3a'), 0.9), mx, my, mz, a, pitch, 0, 0.025 * S, 0.03 * S, l * 1.04);   // (the rib)
+      px += dx * l; py += dy * l; pz += dz * l;
+      pitch += 0.34 + rnd() * 0.08;
+    }
+  };
+  const fronds = 8 + (k > 0.5 ? 1 : 0);
+  for (let q = 0; q < fronds; q++) frond(k * 4 + q / fronds * 6.28 + (rnd() - 0.5) * 0.3, -0.55 - rnd() * 0.25, (0.78 + rnd() * 0.18) * S, (0.2 + rnd() * 0.04) * S);
+  for (let q = 0; q < 3; q++) frond(k * 7 + q * 2.09, -1.15, 0.42 * S, 0.12 * S);   // (young ones standing up)
+  // dates hanging in bunches under the crown
+  for (let q = 0; q < 3; q++) {
+    const a = k * 3 + q * 2.09, bx = C[0] + Math.sin(a) * 0.1 * S, bz = C[2] + Math.cos(a) * 0.1 * S;
+    part(G.ico, shade(CC('#9a5a22'), 0.85 + rnd() * 0.25), bx, C[1] - 0.1 * S, bz, { sx: 0.08 * S, sy: 0.12 * S, sz: 0.08 * S, ry: a });
   }
 }
 function cactus(x, z, k) {
@@ -12690,6 +12740,7 @@ function well(x, z) {
 // the middle holding a bowl that spills over, a finial on top
 const FOUNTAIN = { R: 1.42, wall: 0.46, stone: '#a49c8e', dark: '#7e776c', water: '#3f6f9e' };
 function fountain(c, r) {
+  if (lookAt(T(c, r), T(c, r))?.stone === 'sand') return desertFountain(c, r);   // (v654)
   const x = c + 0.5, z = r + 0.5, y = LV[T(c, r)] * STEP, F = FOUNTAIN, R = F.R, segs = 24;
   part(G.cyl16, F.dark, x, y + 0.04, z, { sx: R * 2 + 0.3, sy: 0.08, sz: R * 2 + 0.3 });   // (the step)
   part(G.cyl16, '#5a5e5a', x, y + 0.12, z, { sx: R * 2 - 0.1, sy: 0.08, sz: R * 2 - 0.1 });   // (the basin's floor)
@@ -12708,6 +12759,53 @@ function fountain(c, r) {
   }
   part(G.cyl16, F.stone, x, y + 1.56, z, { sx: 0.16, sy: 0.5, sz: 0.16 });
   part(G.ico, shade(CC(F.stone), 1.06), x, y + 1.86, z, { s: 0.22 });
+}
+// (v654, Jordan) a desert town's fountain, in the houses' style and stone: an octagonal sandstone basin clad in a band
+// of teal tiles set with cream diamonds under a cream marble coping, on a step bordered in teal, its floor dark teal
+// tile; in the middle an octagonal pedestal ringed in teal holding a scalloped marble bowl, an onion finial on top.
+// Its water is an octagon to fit (buildFountains), on the round fountain's heights (FOUNT)
+const k8 = Math.cos(Math.PI / 8);
+function desertFountain(c, r) {
+  const x = c + 0.5, z = r + 0.5, y = LV[T(c, r)] * STEP, F = FOUNTAIN, R = F.R, D = DES_T, St = STONE_SAND;
+  const side = a => 2 * a * Math.tan(Math.PI / 8);   // (an octagon's side, by its apothem)
+  const ang = k => (k + 0.5) / 8 * Math.PI * 2;
+  // a flat octagon of apothem a (its corners where the walls' meet), sy tall, centred at height yy
+  const disc = (a, yy, sy, col) => part(G.cyl8, col, x, yy, z, { sx: 2 * a / k8, sy, sz: 2 * a / k8 });
+  // on each of the eight sides, a box centred apothem a out, at height yy (in the side's plane: sx along it, rz turned)
+  const onSide = (k, a, yy, sx, sy, sz, col, rz = 0, u = 0) => { const t = ang(k); part(G.box, col, x + Math.sin(t) * a + Math.cos(t) * u, yy, z + Math.cos(t) * a - Math.sin(t) * u, { sx, sy, sz, ry: t, rz }); };
+  disc(R + 0.14, y + 0.04, 0.08, shade(CC(St.core), 1.15));                       // (the step)
+  for (let k = 0; k < 8; k++) {
+    onSide(k, R + 0.08, y + 0.085, side(R + 0.11) + 0.005, 0.012, 0.06, D.teal);   // (its border of teal tiles)
+    for (const u of [-0.3, 0.3]) onSide(k, R + 0.08, y + 0.088, 0.035, 0.012, 0.035, D.cream, 0, u);
+  }
+  disc(R - 0.12, y + 0.12, 0.08, '#24525a');                                        // (the basin's tiled floor)
+  for (let k = 0; k < 8; k++) {
+    const st = shade(CC(St.block), 0.9 + hs(c + k, r, 401) * 0.14), wd = side(R + 0.01) + 0.005;
+    onSide(k, R - 0.08, y + F.wall / 2, side(R + 0.01) + 0.003, F.wall, 0.18, st);   // (the wall)
+    // (its tile band outside: a dark line under teal tiles, cream diamonds with dark hearts along it)
+    onSide(k, R + 0.016, y + 0.1, wd, 0.03, 0.012, D.tealDk);
+    onSide(k, R + 0.016, y + 0.25, wd, 0.22, 0.012, D.teal);
+    for (const u of [-0.32, 0, 0.32]) {
+      onSide(k, R + 0.024, y + 0.25, 0.12, 0.12, 0.012, D.cream, Math.PI / 4, u);
+      onSide(k, R + 0.031, y + 0.25, 0.05, 0.05, 0.01, D.tealDk, Math.PI / 4, u);
+    }
+    onSide(k, R - 0.07, y + F.wall + 0.035, side(R + 0.07) + 0.01, 0.07, 0.28, shade(CC(D.cream), 0.97 + hs(c, r + k, 402) * 0.06));   // (the coping)
+  }
+  disc(0.31, y + 0.34, 0.6, St.block);                                              // (the pedestal)
+  disc(0.33, y + 0.62, 0.06, D.cream);
+  disc(0.14, y + 0.92, 0.64, shade(CC(St.block), 1.06));
+  disc(0.16, y + 0.82, 0.09, D.teal);
+  part(G.cyl16, D.cream, x, y + 1.28, z, { sx: 1.2, sy: 0.1, sz: 1.2 });            // (the bowl, tapering underneath)
+  part(G.cyl16, shade(CC(D.cream), 0.88), x, y + 1.2, z, { sx: 0.86, sy: 0.08, sz: 0.86 });
+  part(G.cyl16, shade(CC(D.cream), 0.8), x, y + 1.14, z, { sx: 0.5, sy: 0.06, sz: 0.5 });
+  for (let k = 0; k < 12; k++) {   // (its scalloped rim)
+    const t = (k + 0.5) / 12 * Math.PI * 2;
+    part(G.ico, shade(CC(D.cream), 1.02 + hs(c + k, r, 403) * 0.04), x + Math.sin(t) * 0.56, y + 1.34, z + Math.cos(t) * 0.56, { sx: 0.2, sy: 0.12, sz: 0.13, ry: t });
+  }
+  disc(0.07, y + 1.58, 0.42, St.block);                                             // (the finial: a shaft, an onion, a brass ball)
+  part(G.ico, D.cream, x, y + 1.84, z, { sx: 0.22, sy: 0.2, sz: 0.22 });
+  part(G.cone6, D.cream, x, y + 1.98, z, { sx: 0.1, sy: 0.12, sz: 0.1 });
+  part(G.ico, '#c8a040', x, y + 2.06, z, { s: 0.07 });
 }
 // The fountain's water (v410): its basin and bowl in the lakes' water shader (still: FOUNT_U swell 0), the streams
 // spilling over the bowl's rim in the falling-water shader the grotto falls use (streaks running down them), and
@@ -12761,15 +12859,16 @@ function buildFountains() {
     if (t.tier !== 2) continue;
     const x = t.c + 0.5, z = t.r + 0.5, y0 = LV[T(t.c, t.r)] * STEP;
     // a flat ring of water between radii r0 and r1 at height y, d deep
-    const ring = (r0, r1, y, d) => {
-      const n = 32;
+    const ring = (r0, r1, y, d, n = 32) => {
       for (let k = 0; k < n; k++) {
         const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2;
         const P = (rr, a) => [x + Math.sin(a) * rr, y, z + Math.cos(a) * rr];
         for (const q of [P(r0, a0), P(r1, a0), P(r1, a1), P(r0, a0), P(r1, a1), P(r0, a1)]) { pos.push(...q); dep.push(d); flow.push(0, 0); fall.push(0); }
       }
     };
-    ring(0.32, FOUNTAIN.R - 0.17, y0 + FOUNT.basinY, FOUNT.basinD);
+    // (v654: a desert town's basin is an octagon, its corners where its walls' are)
+    if (townLook(t).stone === 'sand') ring(0.33, (FOUNTAIN.R - 0.17) / k8, y0 + FOUNT.basinY, FOUNT.basinD, 8);
+    else ring(0.32, FOUNTAIN.R - 0.17, y0 + FOUNT.basinY, FOUNT.basinD);
     ring(0.085, 0.5, y0 + FOUNT.bowlY, FOUNT.bowlD);
     // the streams: each over the rim and out in an arc down to the basin, a ribbon across it and one along it
     for (let k = 0; k < FOUNT.streams; k++) {
@@ -12808,6 +12907,7 @@ function buildFountains() {
 const PLANTER_FLOWERS = ['#e0587a', '#f0c040', '#f4f0ea', '#b070d8', '#f08a3c', '#e83c3c'];
 function planter(c, r) {
   const i = T(c, r), y = LV[i] * STEP, t = towns[TN[i] - 1], x = c + 0.5, z = r + 0.5;
+  if (t && townLook(t).stone === 'sand') return copperPlanter(c, r, x, y, z);   // (v654)
   // (lengthwise along the avenue it lines; round the plaza, along the plaza's edge it stands on)
   const dx = c - t.c, dz = r - t.r, P = TOWN_TIER[t.tier].plaza;
   const ns = t.planterAt?.has(i) ? t.planterAt.get(i) : TSTREET[i] === 3 ? Math.abs(dx) <= 1 : Math.abs(dx) === P && Math.abs(dz) !== P ? true : Math.abs(dz) === P && Math.abs(dx) !== P ? false : hs(c, r, 402) > 0.5;
@@ -12823,6 +12923,34 @@ function planter(c, r) {
       part(G.ico, col, px + (ns ? (f - 0.5) * 0.14 : o), y + 0.6 + f * 0.03, pz + (ns ? o : (f - 0.5) * 0.14), { s: 0.085 });
     }
   }
+}
+// (v654, Jordan) a desert town's street planter: a beaten copper pot, its hammered facets catching the light one by
+// one, a rolled rim, dark soil, and a ficus in it: a braided trunk and a round head of glossy leaves
+const COPPER_POT = { copper: '#b8693a', rim: '#d88a50', dark: '#7e4428', trunk: '#7a6650', leaf: '#2f5e2c' };
+function copperPlanter(c, r, x, y, z) {
+  const P = COPPER_POT;
+  part(G.cyl8, P.dark, x, y + 0.04, z, { sx: 0.3, sy: 0.08, sz: 0.3 });   // (its foot)
+  part(G.cyl16, P.copper, x, y + 0.14, z, { sx: 0.44, sy: 0.12, sz: 0.44 });
+  // (the belly: hammered facets round it, in two courses, each its own shade)
+  for (let row = 0; row < 2; row++) for (let k = 0; k < 10; k++) {
+    const t = (k + row * 0.5) / 10 * Math.PI * 2, rr = row ? 0.26 : 0.27, yy = y + 0.27 + row * 0.15;
+    part(G.box, shade(CC(P.copper), 0.8 + hs(c * 7 + k, r * 3 + row, 660) * 0.42), x + Math.sin(t) * rr, yy, z + Math.cos(t) * rr, { sx: 0.17, sy: 0.15, sz: 0.06, ry: t, rx: row ? 0.22 : -0.12 });
+  }
+  part(G.cyl16, shade(CC(P.copper), 0.7), x, y + 0.34, z, { sx: 0.5, sy: 0.3, sz: 0.5 });   // (behind the facets)
+  part(G.cyl16, P.rim, x, y + 0.5, z, { sx: 0.5, sy: 0.05, sz: 0.5 });                     // (the rolled rim)
+  part(G.cyl16, '#3a2618', x, y + 0.51, z, { sx: 0.42, sy: 0.02, sz: 0.42 });              // (the soil)
+  // the ficus: three stems braided up (leaning in turn), then its head of leaves in clumps
+  for (let k = 0; k < 3; k++) {
+    const t = k / 3 * Math.PI * 2;
+    part(G.box, shade(CC(P.trunk), 0.9 + k * 0.08), x + Math.sin(t) * 0.025, y + 0.82, z + Math.cos(t) * 0.025, { sx: 0.035, sy: 0.62, sz: 0.035, ry: t, rz: 0.12 });
+  }
+  const hy = y + 1.25;
+  part(G.ico, shade(CC(P.leaf), 0.8), x, hy, z, { sx: 0.5, sy: 0.38, sz: 0.5 });
+  for (let k = 0; k < 9; k++) {
+    const t = k / 9 * Math.PI * 2 + hs(c, r, 661), up = (k % 3 - 1) * 0.1, rr = 0.2 + hs(c + k, r, 662) * 0.06;
+    part(G.ico, shade(CC(P.leaf), 0.85 + hs(c + k, r, 663) * 0.35), x + Math.sin(t) * rr, hy + up, z + Math.cos(t) * rr, { sx: 0.2, sy: 0.16, sz: 0.2, ry: t });
+  }
+  part(G.ico, shade(CC(P.leaf), 1.15), x, hy + 0.18, z, { sx: 0.26, sy: 0.16, sz: 0.26 });
 }
 function lamp(x, z) {
   const li = T(Math.floor(x), Math.floor(z));
@@ -12846,6 +12974,7 @@ function drawObject(o, c, r) {
     case O.FERN: return fern(x, z, k2);
     case O.DEAD: return BI[T(c, r)] === SWAMP ? swampTree(x, z, k2) : BI[T(c, r)] === GRAVE ? graveTree(x, z, k2) : deadTree(x, z, k2);
     case O.CACTUS: return cactus(x, z, k2);
+    case O.PALM: return palm(x, z, k2);
     case O.BURNT: return burntTree(x, z, k2);
     case O.VENT: return vent(c, r, k2);
     case O.GROTTO: { const g = grottos.find(q => q.anchor === T(c, r)); return g && grotto(g); }
@@ -14373,10 +14502,11 @@ function desertMosaic(B, y, Q) {
   const D = DES_T;
   // (the recess's shape, in from its edge by `inset`, as thin slices out to o)
   const fill = (inset, o, col) => {
-    const W = Q.W - inset, R = Q.R - inset, h0 = Q.foot + inset, top = Q.spring + archRise(W, R), n = Math.ceil((top - Q.spring) / 0.025);
+    // (v654, Jordan: the slices were too many, too noisy: a third as many, on the same heights for every layer)
+    const W = Q.W - inset, R = Q.R - inset, h0 = Q.foot + inset, top = Q.spring + archRise(W, R), SL = 0.075;
     B(0.5, y + (h0 + Q.spring) / 2, 2 * W, Q.spring - h0, o, 0.012, col, SURF_SMOOTH);
-    for (let q = 0; q < n; q++) {
-      const ha = Q.spring + (top - Q.spring) * q / n, hb = Q.spring + (top - Q.spring) * (q + 1) / n, f = archHalf(W, R, (ha + hb) / 2 - Q.spring);
+    for (let ha = Q.spring; ha < top - 0.01; ha += SL) {
+      const hb = Math.min(top, ha + SL), f = archHalf(W, R, (ha + hb) / 2 - Q.spring);
       if (f > 0.006) B(0.5, y + (ha + hb) / 2, 2 * f, hb - ha + 0.001, o, 0.012, col, SURF_SMOOTH);
     }
   };
@@ -28791,7 +28921,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 653, crashSeen = new Map();
+const GAME_VERSION = 654, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
