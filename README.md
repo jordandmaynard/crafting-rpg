@@ -710,7 +710,7 @@ Mode icons from Jordan's Wanderer's Kit mode icons v1 (art/deliveries/wanderers-
 
 **v356:** stack counts everywhere have a 1px black stroke (--nStroke) so they read over icons (Jordan). Fixed a crash: walking away from a station while the mouse was over one of its squares (showInfo read the closed station; Jordan saw it on v346).
 
-## Spell effects (v564)
+## Spell effects (v565)
 
 Particles stepped on the GPU (`src/gfx/particles.js`), for spells and for the world's own effects. The CPU writes a particle into a ring of slots once, when it's spawned (where, how fast, how long it lives, how it moves and looks); a compute pass steps every live one each frame (gravity or lift, drag, a pull toward its anchor, a swirl round it, turbulence, the wind, a bounce off its own floor), and two draws read the same buffer: everything soft or glowing in one premultiplied pass (a particle can add light, cover what's behind it, or both), and solid bits in another (lit, outlined, dithering away at the end of their life).
 
@@ -722,7 +722,7 @@ Effects (FX_LIB in index.html) are written as phases, each with emitters (a burs
 
 The dust puffs and chips that hits, falls and building throw up, lava spitting and bleeding wounds use it too. T > Spell effects tunes it (density, glow, size, hard steps, smoke banding, effect lights, shake, hit-stop) and casts each effect in front of you. The ideas were learnt from pixelfx and Sprite Fusion's pixel effects (choreography in phases, light over flat fills, ramps that cool); the code is our own.
 
-**v564:** GPU particle effects (see Spell effects): src/gfx/particles.js, FX_LIB with eight effects, T > Spell effects; dust, chips, lava spit and bleeding moved onto it; screen shake and hit-stop; ShaderMaterials can read storage buffers (`mat.storage`).
+**v565:** GPU particle effects (see Spell effects): src/gfx/particles.js, FX_LIB with eight effects, T > Spell effects; dust, chips, lava spit and bleeding moved onto it; screen shake and hit-stop; ShaderMaterials can read storage buffers (`mat.storage`).
 
 ## Life in the air
 
