@@ -17739,6 +17739,10 @@ const FX_RAMPS = {
 };
 const fxParts = new GFX.FxParticles(renderer, { cap: MOBILE ? 4096 : 8192, solidCap: MOBILE ? 512 : 1024, shared: { tRefrD: WATER_U.tRefrD, refr: WATER_U.refr } });
 for (const k in FX_RAMPS) fxParts.ramp(k, FX_RAMPS[k]);
+// (v616, Jordan: smoke as Crafting and Conquest draws it) the SMOKE style's four soft sprites (textures/dust_1-4.png,
+// from C&C), and its flat warm grey, lit by the sky and the day in the shader
+fxParts.loadSmoke([1, 2, 3, 4].map(k => new URL(`textures/dust_${k}.png`, document.baseURI).href)).catch(e => console.error('Smoke sprites failed to load.', e));
+fxParts.ramp('soot', ['#5a544e', '#6a645e', '#7a736c', '#8a827a', '#9a9188', '#aaa197', '#bab0a6', '#cac0b6']);
 // (layers of their own, drawn in renderWorld: the solid ones after the hero, the see-through ones after the smoke
 // and haze)
 fxParts.clearMesh.layers.set(FX_CLEAR_LAYER); fxParts.solidMesh.layers.set(FX_SOLID_LAYER); fxParts.domeMesh.layers.set(FX_SOLID_LAYER);
@@ -18017,8 +18021,9 @@ function lavaBubble(x, y, z) {
   }
   fxParts.spawn({ style: F.RING, x, y, z, delay: popAt, life: 0.4, size0: R * 0.8, size1: R * 3.2, ride: true, floor: y, ramp: lava, tone0: 1, tone1: 0.6, glow: 2, alpha: 0.8 });
   fxParts.spawn({ style: F.DISC, x, y, z, delay: popAt, life: 0.22, size0: R * 1.2, size1: R * 1.8, ride: true, floor: y, ramp: lava, tone0: 1, tone1: 0.8, glow: 3, cover: 0 });
-  for (let k = 0; k < 2; k++) fxParts.spawn({ style: F.PUFF, x: x + (Math.random() - 0.5) * R, y: y + R * 0.5, z: z + (Math.random() - 0.5) * R, vy: 0.5 + Math.random() * 0.4,
-    grav: -0.03, drag: 0.8, turb: 0.4, delay: popAt, life: 1.4 + Math.random() * 0.8, size0: R * 0.8, size1: R * 3, ramp: smoke, tone0: 0.5, tone1: 0.75, alpha: 0.35 });
+  for (let k = 0; k < 2; k++) fxParts.spawn({ style: F.SMOKE, x: x + (Math.random() - 0.5) * R, y: y + R * 0.5, z: z + (Math.random() - 0.5) * R, vy: 0.5 + Math.random() * 0.4,
+    grav: -0.03, drag: 1.2, turb: 0.2, delay: popAt, life: 1.6 + Math.random() * 0.8, size0: R * 0.8, size1: R * 2.6, rot: Math.random() * 6.283, spin: (Math.random() - 0.5) * 1.8,
+    ramp: fxParts.ramp('soot'), tone0: 0.35, tone1: 0.45, alpha: 0.4 });
   if (FX_TUNE.lights > 0.5) lavaPops.push({ x, y, z, s: Math.min(1.5, s), t: 0, at: popAt });
 }
 const CHIP_HEX = { wood: '#8a5a32', stone: '#8c8a96', copperOre: '#d4773e', ironOre: '#b9bfc9', ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', m.ore])) };
@@ -18236,7 +18241,7 @@ function updatePropFires(dt) {
   const F = PROP_FIRE;
   if ((propFireT -= dt) <= 0) { propFireT = 2; listPropFires(); }
   if (F.on < 0.5 || FX_TUNE.on < 0.5 || dt <= 0) return;
-  const fire = fxParts.ramp('fire'), smoke = fxParts.ramp('smoke'), dens = FX_TUNE.density, S = GFX.FX, rnd = (a, b) => a + Math.random() * (b - a);
+  const fire = fxParts.ramp('fire'), smoke = fxParts.ramp('smoke'), soot = fxParts.ramp('soot'), dens = FX_TUNE.density, S = GFX.FX, rnd = (a, b) => a + Math.random() * (b - a);
   for (const f of propFires) {
     const d = Math.hypot(f.x - H.x, f.z - H.z);
     if (d > F.reach) continue;
@@ -18259,18 +18264,20 @@ function updatePropFires(dt) {
       }
       // a brazier's open fire: a thin smoke off its top too
       if (!f.hearth) for (let i = due('wisp', 2.5 * F.smoke); i--;) {
-        fxParts.spawn({ style: S.PUFF, x: f.x + rnd(-0.08, 0.08), y: f.y + 0.6, z: f.z + rnd(-0.08, 0.08), vy: rnd(0.4, 0.7), grav: -0.05, drag: 0.6, turb: 0.4,
-          life: rnd(1.8, 2.6), size0: 0.1 * F.smokeSize, size1: rnd(0.45, 0.65) * F.smokeSize, ramp: smoke, tone0: 0.45, tone1: 0.7, alpha: 0.3 });
+        const sz = rnd(0.12, 0.2) * F.smokeSize;
+        fxParts.spawn({ style: S.SMOKE, x: f.x + rnd(-0.08, 0.08), y: f.y + 0.6, z: f.z + rnd(-0.08, 0.08), vy: rnd(0.4, 0.7), grav: -0.05, drag: 1.2, turb: 0.2,
+          life: rnd(2, 3), size0: sz, size1: sz * rnd(2.2, 3), rot: rnd(0, 6.283), spin: rnd(-0.9, 0.9), ramp: soot, tone0: 0.4, tone1: 0.5, alpha: 0.35 });
       }
     }
     // smoke out of the top of a hearth's chimney stack
     const st = f.q.stackTop;
-    // (v610, Jordan: the trail read as flat sheets) fewer, rounder puffs, each its own size, shade and drift, so they
-    // billow apart instead of running together into a smooth band down the wind; more drag holds the wind's carry
-    if (st) for (let i = due('smoke', 2.6 * F.smoke); i--;) {
-      const m = F.smokeSize * rnd(0.7, 1.35), a = Math.random() * 6.283, kick = rnd(0.05, 0.18), tone = rnd(0.32, 0.6);
-      fxParts.spawn({ style: S.PUFF, x: st[0] + rnd(-0.05, 0.05), y: st[1], z: st[2] + rnd(-0.05, 0.05), vx: Math.cos(a) * kick, vy: rnd(0.45, 0.75), vz: Math.sin(a) * kick,
-        grav: -0.06, drag: 0.9, turb: 0.9, life: rnd(2.4, 3.8), size0: 0.2 * m, size1: rnd(0.75, 1.1) * m, ramp: smoke, tone0: tone, tone1: tone + rnd(0.15, 0.3), alpha: rnd(0.3, 0.5) });
+    // (v616, Jordan: smoke as C&C draws it) soft sprites, each one of four, spinning slowly, swelling to two or three
+    // times its size as it slows and rises, fading in quickly and out over its life
+    if (st) for (let i = due('smoke', 4 * F.smoke); i--;) {
+      const m = F.smokeSize, sz = rnd(0.22, 0.34) * m;
+      fxParts.spawn({ style: S.SMOKE, x: st[0] + rnd(-0.05, 0.05), y: st[1], z: st[2] + rnd(-0.05, 0.05), vx: rnd(-0.15, 0.15), vy: rnd(0.35, 0.6), vz: rnd(-0.15, 0.15),
+        grav: -0.05, drag: 1.8, turb: 0.15, life: 3 * rnd(1, 1.5), size0: sz, size1: sz * rnd(2.2, 3.2), rot: rnd(0, 6.283), spin: rnd(-0.9, 0.9),
+        ramp: soot, tone0: 0.55, tone1: 0.6, alpha: 0.6 });
     }
   }
 }
@@ -27391,7 +27398,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 615, crashSeen = new Map();
+const GAME_VERSION = 616, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

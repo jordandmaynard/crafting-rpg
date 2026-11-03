@@ -17,7 +17,7 @@
 // each lasting a while, with emitters that fire a burst as it begins or spawn at a rate through it, lights that
 // flare or swell, and events (for the game: strike now, shake, hit-stop). A phase can loop until the effect is
 // told to stop (a campfire, a poison cloud, a channelled beam). See FxRunner for the emitter fields.
-import { ShaderMaterial, CustomBlending, OneFactor, OneMinusSrcAlphaFactor, AddEquation, DoubleSide } from './materials.js';
+import { ShaderMaterial, DataTexture, CustomBlending, OneFactor, OneMinusSrcAlphaFactor, AddEquation, DoubleSide } from './materials.js';
 import { BufferGeometry, Float32BufferAttribute } from './geometry.js';
 import { Mesh } from './scene.js';
 import { Color } from './math.js';
@@ -25,8 +25,8 @@ import { Color } from './math.js';
 export const RAMP_N = 8, MAX_RAMPS = 64;
 const FLOATS = 32;   // a particle's record: 8 vec4f
 // how each particle is drawn
-export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12 };
-const SOLID_FROM = 8;
+export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13 };
+const SOLID_FROM = 8, SOLID_TO = 13;   // (the solid styles: SOLID_FROM up to, not with, SOLID_TO)
 
 // the particle record, shared by the compute pass and both draws
 const STRUCT = /* wgsl */ `
@@ -82,7 +82,7 @@ fn waveAt(xz: vec2f) -> f32 {
   let onFloor = p.y <= floorY + 0.002;
   // gravity (negative: it rises), and the wind on what's light (smoke, embers, sparks a little)
   v.y -= q.d.z * S.t.w * dt;
-  let windK = select(0.25, 1.0, st == ${FX.PUFF} || st == ${FX.FLAME} || st == ${FX.GLOW});
+  let windK = select(0.25, 1.0, st == ${FX.PUFF} || st == ${FX.FLAME} || st == ${FX.GLOW} || st == ${FX.SMOKE});
   v += S.wind.xyz * windK * dt * select(1.0, 0.0, onFloor);
   // pulled toward its anchor
   if (q.e.x != 0.0) {
@@ -161,7 +161,7 @@ struct VOut {
   let q = parts[ii];
   let st = i32(q.g.x + 0.5);
   let k = fxLife(q);
-  if (k < 0.0 || st >= ${SOLID_FROM}) { return o; }
+  if (k < 0.0 || (st >= ${SOLID_FROM} && st < ${SOLID_TO})) { return o; }
   let corner = v.position.xy;
   let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
   let up = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
@@ -192,6 +192,19 @@ struct VOut {
     extra = tw; cover = 0.0;
   } else if (st == ${FX.GLOW}) {
     cover = 0.0;
+  } else if (st == ${FX.SMOKE}) {
+    // (v616, Jordan: smoke as Crafting and Conquest draws it) a soft smoke sprite (one of four, by its seed) on a card
+    // turned to us round the upright, spinning by its turn; fading in over its first tenth and out over the rest
+    let view = toEye(at);
+    var rt = cross(vec3f(0.0, 1.0, 0.0), view);
+    if (length(rt) < 1e-3) { rt = right; }
+    rt = normalize(rt);
+    let upc = cross(view, rt);
+    let cs = cos(q.h.x); let sn = sin(q.h.x);
+    let c2 = vec2f(corner.x * cs - corner.y * sn, corner.x * sn + corner.y * cs);
+    w = at + (rt * c2.x + upc * c2.y) * size;
+    fade = min(1.0, k * 10.0) * pow(1.0 - k, 1.5);
+    extra = floor(fract(q.g.y * 7.31) * 4.0);
   } else if (st == ${FX.FLAME}) {
     // hot and self-lit at first; past its morph it's smoke, lit like any puff, on its smoke ramp
     let m = q.h.w;
@@ -228,7 +241,7 @@ struct VOut {
   // was only near and was cut along the line they crossed. So its depth is the ball's front (nothing just behind
   // the ball hides any of it) and the fragment shader works out how much of the ball's depth there lies in front of
   // what's behind it (see fs)
-  if (st == ${FX.PUFF} || st == ${FX.FLAME}) {
+  if (st == ${FX.PUFF} || st == ${FX.FLAME} || st == ${FX.SMOKE}) {
     let f = F.viewProj * vec4f(at + toEye(at) * size, 1.0);
     o.pos.z = clamp(f.z / f.w, 0.0, 1.0) * o.pos.w;
     o.pix = at; o.rad = size;
@@ -291,6 +304,16 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
       let n = normalize(right * uv.x + up * uv.y + back * sqrt(1.0 - r2));
       lit = i.col * fxLight(i.wpos, n) + i.col * i.glow;
     }
+  } else if (st == ${FX.SMOKE}) {
+    // its sprite's grey (the four in a 2 x 2 atlas, a texel in from each cell's edge), rounded off toward its edge;
+    // lit flat by the sky and the day, as C&C's smoke is (no shading as a ball)
+    let cell = vec2f(i.extra % 2.0, floor(i.extra / 2.0));
+    let tuv = clamp(vec2f(uv.x, -uv.y) * 0.5 + 0.5, vec2f(1.0 / 128.0), vec2f(1.0 - 1.0 / 128.0));
+    let spr = textureSampleLevel(tSmoke, tSmokeS, (cell + tuv) * 0.5, 0.0).r;
+    m = spr * smoothstep(1.0, 0.6, sqrt(r2));
+    var l = mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.75);
+    if (F.sunDir.w > 0.5) { l += F.sunColor.rgb * cloudShade(i.wpos.xz) * sat(F.sunDir.y) * 0.55; }
+    lit = i.col * l + i.col * i.glow;
   } else if (st == ${FX.RING}) {
     let d = sqrt(r2);
     if (d > 1.0) { discard; }
@@ -346,7 +369,7 @@ fn fxTurn(v: vec3f, n: vec3f, a: f32) -> vec3f { return v * cos(a) + cross(n, v)
   let q = parts[ii + u32(U.base.x)];
   let st = i32(q.g.x + 0.5);
   let k = fxLife(q);
-  if (k < 0.0 || st < ${SOLID_FROM} || (st == ${FX.DOME}) != (U.base.y > 0.5)) { return o; }
+  if (k < 0.0 || st < ${SOLID_FROM} || st >= ${SOLID_TO} || (st == ${FX.DOME}) != (U.base.y > 0.5)) { return o; }
   let s = fxSize(q, k);
   var tone = mix(q.f.y, q.f.z, k);
   var glowK = 1.0; var rough = 0.45;
@@ -480,7 +503,9 @@ export class FxParticles {
       tRefrD: shared.tRefrD || { value: null }, refr: shared.refr || { value: 0 }, base: { value: { x: 0, y: 0 } },
     };
     this.uniforms = U;
-    this.clearMat = new ShaderMaterial({ uniforms: U, code: CLEAR_WGSL, transparent: true, depthWrite: false, side: DoubleSide,
+    // (the smoke sprites, 4 in a 2 x 2 atlas: white until loadSmoke has them)
+    this.smokeTex = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    this.clearMat = new ShaderMaterial({ uniforms: Object.assign({}, U, { tSmoke: { value: this.smokeTex } }), code: CLEAR_WGSL, transparent: true, depthWrite: false, side: DoubleSide,
       blending: CustomBlending, blendEquation: AddEquation, blendSrc: OneFactor, blendDst: OneMinusSrcAlphaFactor });
     this.clearMat.keepAlpha = true;
     this.clearMat.storage = { parts: { buffer: this.buf, type: 'array<FxP>' } };
@@ -527,11 +552,24 @@ export class FxParticles {
     }
     return this.ramp(name, cols);
   }
+  // the SMOKE style's four sprites (grey images, all one size), laid into the 2 x 2 atlas the shader reads
+  async loadSmoke(urls) {
+    const imgs = await Promise.all(urls.map(async u => {
+      const res = await fetch(u);
+      if (!res.ok) throw new Error(`Couldn't load ${u} (${res.status})`);
+      return createImageBitmap(await res.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+    }));
+    const S = imgs[0].width, cv = new OffscreenCanvas(S * 2, S * 2), ctx = cv.getContext('2d', { willReadFrequently: true });
+    imgs.forEach((im, k) => ctx.drawImage(im, (k % 2) * S, Math.floor(k / 2) * S, S, S));
+    const px = ctx.getImageData(0, 0, S * 2, S * 2).data;
+    this.smokeTex.image = { data: new Uint8Array(px.buffer.slice(0)), width: S * 2, height: S * 2 };
+    this.smokeTex.needsUpdate = true;
+  }
   // spawn one particle. p: { style, x, y, z, vx, vy, vz, life, delay, ax, ay, az (anchor), floor, size0, size1,
   // grav, drag, pull, swirl, turb, bounce, ramp (id), tone0, tone1, alpha, glow, ramp2 (a flame's smoke), ride (it sits
   // on the rippling surface `wave` over its floor), rot, spin, stretch, cover (or morph, for a flame) }
   spawn(p) {
-    const solid = p.style >= SOLID_FROM, dome = p.style === FX.DOME;
+    const solid = p.style >= SOLID_FROM && p.style < SOLID_TO, dome = p.style === FX.DOME;
     let slot;
     if (dome) { slot = this.cap + this.solidCap + this.nextDome; this.nextDome = (this.nextDome + 1) % this.domeCap; }
     else if (solid) { slot = this.cap + this.nextSolid; this.nextSolid = (this.nextSolid + 1) % this.solidCap; }
@@ -611,7 +649,7 @@ export class FxParticles {
 // Special emitters: { bolt: { from, to, jag, segments, forks, width, life, every } } draws jagged beams, re-rolled
 // `every` seconds through the phase.
 const STYLE = { glow: FX.GLOW, spark: FX.SPARK, glint: FX.GLINT, puff: FX.PUFF, flame: FX.FLAME, ring: FX.RING, disc: FX.DISC,
-  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK };
+  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE };
 const pick = v => Array.isArray(v) ? v[0] + Math.random() * (v[1] - v[0]) : v;
 
 // A phase can also move: { move: { from, to, arc } } carries its 'head' point from one to the other across the phase
