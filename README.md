@@ -335,6 +335,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v665:** (Jordan) Desert towns' planters are woven baskets instead of copper pots. Each has a bellied body with a rolled rim and is one world mesh (buildBaskets) drawn in basketMat. That material wraps the thatch's straw height map round the basket, so the straw runs round it in coils stacked up its side (BASKET). The ficus and the soil are unchanged.
 
+**v670:** (Jordan: dense lit haze without washing the scene out) The lit haze has a new HAZE.clear setting (T > Lit haze) for how much the haze dims what's behind it. 1, the default, is the old look. Lower values keep the scene's own contrast while the haze's light and shafts are still added on top. hazeApply mixes the transmission toward 1 by hazeA.y.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

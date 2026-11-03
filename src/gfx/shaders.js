@@ -148,7 +148,7 @@ struct Frame {
   giA: vec4f,         // probe lighting: mode (0 off, 1 sky visibility, 2 bounce light), strength, minimum, bias
   giB: vec4f,         // the probe grid: its first column x, z (tiles), columns across, layers
   giC: vec4f,         // the height field: its first texel x, z, texels across
-  hazeA: vec4f,       // lit haze (haze.js): on
+  hazeA: vec4f,       // lit haze (haze.js): on, clear (how much of its dimming the scene behind takes)
   hazeB: vec4f,       // its texels (mosaic pixels) across, down
   post: vec4f,        // eye adaptation on (exposure.js), HDR highlights' peak (× white; 0 without HDR), clip height (see builtinCode)
   bloom: vec4f,       // bloom (bloom.js): strength (0 off), _, its texture coordinates a mosaic pixel (x, y)
@@ -213,7 +213,9 @@ fn flatNormal(e: vec3f) -> vec3f {
 fn hazeApply(c: vec3f, px: vec2f) -> vec3f {
   if (F.hazeA.x < 0.5) { return c; }
   let h = textureLoad(hazeTex, clamp(vec2i(px), vec2i(0), vec2i(F.hazeB.xy) - 1), 0);
-  return c * h.a + h.rgb;
+  // (clear, hazeA.y: 1 the haze dims what's behind it as it should; less, the scene keeps more of its own contrast
+  // under the haze's light: the glow added as before, the dimming eased off)
+  return c * mix(1.0, h.a, F.hazeA.y) + h.rgb;
 }
 // the eye's exposure on a colour about to be shown
 // the glow bloom spills over a mosaic pixel (px: its whole coordinates), to add after postExpose

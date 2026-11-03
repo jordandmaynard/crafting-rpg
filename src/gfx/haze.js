@@ -545,7 +545,7 @@ export class LitHaze {
   }
   // what drawing reads: the haze a mosaic pixel (or null with it off) and the frame's hazeA, hazeB
   view() { return this.on ? this.outView : null; }
-  uniforms() { return [this.on ? 1 : 0, 0, 0, 0, this.dims[0], this.dims[1], 0, 0]; }
+  uniforms() { return [this.on ? 1 : 0, this.clear ?? 1, 0, 0, this.dims[0], this.dims[1], 0, 0]; }
 
   // Each frame, after the scene is drawn and before what reads it. f: { on, camera, res: [x, y] (mosaic pixels),
   // ss (scene samples a mosaic pixel, each way), block (mosaic pixels a ray, each way: 1 or 2), depth ({ view, id }: the scene's depth), steps, top, bottom (world
@@ -556,6 +556,7 @@ export class LitHaze {
   // adds; under 1, shadows stay darker while far things still fade), groundColour (the GI's ground colour view, or null), hfSize (its texels across) }
   update(f) {
     this.on = !!f.on;
+    this.clear = Math.min(1, Math.max(0, f.clear ?? 1));
     if (!this.on) return;
     const X = Math.max(1, f.res[0] | 0), Y = Math.max(1, f.res[1] | 0);
     const B = Math.max(1, Math.round(f.block ?? 1));
