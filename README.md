@@ -240,6 +240,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v609:** (Jordan: the guard house all stone with a flat roof, in darker stone, the bank's opposite) The guard house's upper story is now walled in stone (and stone windows) too, so its roof is the flat stone roof. Its site must give a full upper story (no terrace), and it never gets a balcony. Both floors' walls, caps and crenels are in a dark stone (STONE_GUARD, GUARD_WALLS by story; stoneOf takes the story now). The crossed-sword shields stay by its door.
 
+**v611:** (Jordan: chimneys vanished from roofs since v592) A cooking hearth's chimney stack (propStack) is drawn into the buffer the room's furniture would have gone to before v592 (PROP_OUTER), not the inside mesh, so it shows through the roof while the roof does.
+
 **v610:** (Jordan: the chimney smoke looked edge-on) The town chimneys' smoke puffs are camera-facing balls, but blown down the wind they ran together into flat-looking sheets: now fewer, rounder puffs, each its own size, shade and drift, with more turbulence and drag, so they billow apart.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.

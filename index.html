@@ -4148,7 +4148,9 @@ function drawProp(q, glowOk) {
     const cs = Math.cos(q.ry), sn = Math.sin(q.ry), lz = q.id === 'hearth' ? -0.02 : 0;
     GLOW.tag(gn, q.x + sn * lz, q.y + (q.id === 'hearth' ? 0.27 : 0.78), q.z + cs * lz, 1);
   }
-  if (q.id === 'hearth' && q.tiles) propStack(q);
+  // (its chimney stack comes out through the roof: drawn where the room's outside is, not with the furniture inside it,
+  // so it shows while the roof does: PROP_OUTER, v611)
+  if (q.id === 'hearth' && q.tiles) { const sv = OUT; if (PROP_OUTER) OUT = PROP_OUTER; try { propStack(q); } finally { OUT = sv; } }
   if (q.cut != null) cutTag(OUT, n0, q.cut, 1);
   if (q.look?.live && q.look.bird && SPIDER) birdLive(q);
 }
@@ -12569,6 +12571,8 @@ let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUF
 // (v592) INOBJ, INGLOW: where the furniture inside a roofed room goes (town props, beds, workshop props), a mesh of
 // its own a chunk (ch.inObj, ch.inGlow) that's only drawn while that room can be seen into (interiorShown)
 let INOBJ = null, INGLOW = null;
+// (v611) while furniture is drawn into an inside mesh, the buffer it would have gone to: for what pokes out (chimneys)
+let PROP_OUTER = null;
 function objBufs(B, clear) {
   OUT = B.obj; GLOW = B.glow; METAL = B.metal; PRISMB = B.prism; TRUNK = B.trunk; CANOPY = B.canopy; PLANT = B.plant; WEB = B.web; SPIDER = B.spider;
   INOBJ = B.inObj; INGLOW = B.inGlow;
@@ -12582,11 +12586,12 @@ function objRows(cx, cz, ra, rb) {
     const shut = roomOf.has(i), inner = shut && (o === O.BED || o === O.WORKPROP || o === O.PROP);
     const sv = OUT, sg = GLOW;
     if (inner) { OUT = INOBJ; GLOW = INGLOW; }
+    PROP_OUTER = sv;
     try {
       if (o && !detached.has(i)) drawObject(o, c, r);
       const pd = PROP_DRAW.get(i);   // (a town prop's floor pieces and rugs; wall hangings go with the building pieces)
       if (pd) { if (shut) { OUT = INOBJ; GLOW = INGLOW; } for (const q of pd) if (!q.hang) drawProp(q, true); }
-    } finally { OUT = sv; GLOW = sg; }
+    } finally { OUT = sv; GLOW = sg; PROP_OUTER = null; }
     if (BR[i]) (DOCK[i] ? dockDeck : bridgeDeck)(c, r, i);
     else if (RIM[i] & 255) cliffRocks(c, r, i);
     if (FIELD[i]) furrows(c, r, i);
@@ -13535,12 +13540,13 @@ function buildPieces(cx, cz, ch, only = null) {
         // (v592) its beds and props, in a room: into the story's inside mesh (inUp k), drawn only while it can be seen into
         const shut = roomOf.has(k * SNN + i), sv = OUT;
         if (shut) OUT = bufInside;
+        PROP_OUTER = sv;
         try {
           const bd = BEDS.get(k * SNN + i);   // (v454: a town bed upstairs, drawn at its head)
           if (bd && bd.i === i) townBed(bd);
           const pd = PROP_DRAW.get(k * SNN + i);   // (its props, hidden with it)
           if (pd) for (const q of pd) drawProp(q, false);
-        } finally { OUT = sv; }
+        } finally { OUT = sv; PROP_OUTER = null; }
       }
     } finally { PDY = 0; PCUT = 0; }
     ch['inUp' + k] = bufInside.mesh(buildMat);
@@ -27357,7 +27363,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 610, crashSeen = new Map();
+const GAME_VERSION = 611, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
