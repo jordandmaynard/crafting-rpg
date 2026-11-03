@@ -4012,7 +4012,7 @@ function townYards(t, n) {
     const far = [Y.L - 1, Y.L - 2];
     for (const v of Y.D > 3 ? [3, 1] : [2, 1]) tryAt('archeryButt', far, v, (ud + 2) & 3);
     const fire = tryAt('brazier', far, 0, vd);
-    if (fire) t.lamps.push([fire.x, fire.z, 1, null, 0.95]);
+    if (fire) t.lamps.push([fire.x, fire.z, 4, null, 0.95]);
     // the rack: two tiles on the outer edge facing the house (tiles[0] its back left), free-standing
     const g = (toHouse + 3) & 3;
     for (let u = 0; u + 3 < Y.L; u++) {
@@ -4193,6 +4193,7 @@ function propStack(q) {
   part(G.box, shade(CC(st), 0.86), sx, y0 + h / 2, sz, { sx: PROP_STACK.w, sy: h, sz: PROP_STACK.d, ry: q.ry });
   for (let k = 1; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), sx, y0 + k * 0.3, sz, { sx: PROP_STACK.w + 0.02, sy: 0.03, sz: PROP_STACK.d + 0.02, ry: q.ry });
   part(G.box, dk, sx, top + 0.04, sz, { sx: PROP_STACK.w + 0.1, sy: 0.1, sz: PROP_STACK.d + 0.08, ry: q.ry });
+  q.stackTop = [sx, top + 0.1, sz];   // (where its smoke comes out: updatePropFires)
 }
 function propEmit(geo, q, B) {
   const a = geo.attributes.position.array, col = geo.attributes.color.array, m = a.length, cs = Math.cos(q.ry), sn = Math.sin(q.ry);
@@ -17674,6 +17675,7 @@ function updateFx(dt) {
   if (dt > 0) lavaBubbles(dt);
   updateFountainFx(dt);
   updateGrottoFx(dt);
+  updatePropFires(dt);
   fxParts.update(dt);
   const want = T.lights > 0.5 ? fxRun.lights.slice().sort((a, b) => b.k - a.k) : [];
   fxLights.forEach((l, i) => {
@@ -18111,6 +18113,64 @@ function updateGrottoFx(dt) {
         P({ style: S.GLINT, x: s.x + ox * rnd(0, 0.3), y: Math.max(s.y, s.yS + 0.1) + rnd(0, 0.3), z: s.z + oz * rnd(0, 0.3), vy: rnd(0.05, 0.2), life: rnd(0.3, 0.5),
           size0: 0.08, size1: 0.03, ramp, tone0: 1, tone1: 1, glow: 1.8 * gl });
       }
+    }
+  }
+}
+// ---------- Hearth and brazier fires (T > Hearth fires) ----------
+// (2026-11-03, Jordan) the town cooking hearths and the guard yards' braziers burn in the GPU particles: flames
+// licking up off the logs (turning to smoke as they die), embers drifting up, and smoke rising out of the top of a
+// hearth's chimney stack, all looping while you're within PROP_FIRE.reach tiles; each also lights the room round
+// it with a flickering lamp light (kind 4 in updateLamps). The fires drawn into the props stay under them.
+const PROP_FIRE = { on: 1, reach: 30, flames: 1, size: 1, embers: 1, smoke: 1, smokeSize: 1, light: 1, flicker: 1 };
+let propFires = [], propFireT = 0;
+const propFireAcc = new Map();
+// every hearth and brazier placed, with its fire's spot in the world (refreshed every couple of seconds)
+function listPropFires() {
+  propFires = [];
+  for (const list of PROP_DRAW.values()) for (const q of list) {
+    if (q.chimney || (q.id !== 'hearth' && q.id !== 'brazier')) continue;
+    const cs = Math.cos(q.ry), sn = Math.sin(q.ry), at = (lx, lz) => [q.x + cs * lx + sn * lz, q.z - sn * lx + cs * lz];
+    const hearth = q.id === 'hearth', [fx, fz] = at(0, hearth ? -0.02 : 0), [lx, lz] = at(0, hearth ? 0.35 : 0);
+    propFires.push({ q, hearth, x: fx, z: fz, y: q.y + (hearth ? 0.24 : 0.76), lx, lz, ly: q.y + (hearth ? 0.55 : 0.95), ax: cs, az: -sn });
+  }
+}
+function updatePropFires(dt) {
+  const F = PROP_FIRE;
+  if ((propFireT -= dt) <= 0) { propFireT = 2; listPropFires(); }
+  if (F.on < 0.5 || FX_TUNE.on < 0.5 || dt <= 0) return;
+  const fire = fxParts.ramp('fire'), smoke = fxParts.ramp('smoke'), dens = FX_TUNE.density, S = GFX.FX, rnd = (a, b) => a + Math.random() * (b - a);
+  for (const f of propFires) {
+    const d = Math.hypot(f.x - H.x, f.z - H.z);
+    if (d > F.reach) continue;
+    const near = Math.min(1, (F.reach - d) / 5);
+    let acc = propFireAcc.get(f.q);
+    if (!acc) { acc = {}; propFireAcc.set(f.q, acc); }
+    const due = (key, rate) => { acc[key] = (acc[key] || 0) + rate * dt * dens * near; const n = Math.floor(acc[key]); acc[key] -= n; return n; };
+    // (a fire on a story hidden over you doesn't show; its chimney still smokes)
+    if ((f.q.k || 0) <= shownStory) {
+      const w = f.hearth ? 0.26 : 0.17, sz = F.size * (f.hearth ? 0.8 : 1);
+      for (let i = due('flame', (f.hearth ? 26 : 30) * F.flames); i--;) {
+        const u = rnd(-1, 1) * w, v = rnd(-1, 1) * (f.hearth ? 0.1 : w);
+        fxParts.spawn({ style: S.FLAME, x: f.x + f.ax * u - f.az * v, y: f.y + rnd(0, 0.04), z: f.z + f.az * u + f.ax * v, vx: rnd(-0.06, 0.06), vy: rnd(0.5, 0.9), vz: rnd(-0.06, 0.06),
+          grav: -0.6, turb: 0.45, drag: 1.2, life: f.hearth ? rnd(0.35, 0.6) : rnd(0.45, 0.75), size0: rnd(0.13, 0.21) * sz, size1: rnd(0.04, 0.07) * sz,
+          ramp: fire, ramp2: smoke, tone0: 1, tone1: 0.35, glow: 2, cover: 0.55 });
+      }
+      for (let i = due('ember', (f.hearth ? 3 : 5) * F.embers); i--;) {
+        fxParts.spawn({ style: S.GLOW, x: f.x + rnd(-w, w) * 0.6, y: f.y + 0.08, z: f.z + rnd(-w, w) * 0.6, vx: rnd(-0.15, 0.15), vy: rnd(0.6, 1.2), vz: rnd(-0.15, 0.15),
+          turb: 1.1, drag: 0.6, life: f.hearth ? rnd(0.6, 1) : rnd(1.2, 2), size0: 0.025, size1: 0.012, ramp: fire, tone0: 1, tone1: 0.5, glow: 3 });
+      }
+      // a brazier's open fire: a thin smoke off its top too
+      if (!f.hearth) for (let i = due('wisp', 2.5 * F.smoke); i--;) {
+        fxParts.spawn({ style: S.PUFF, x: f.x + rnd(-0.08, 0.08), y: f.y + 0.6, z: f.z + rnd(-0.08, 0.08), vy: rnd(0.4, 0.7), grav: -0.05, drag: 0.6, turb: 0.4,
+          life: rnd(1.8, 2.6), size0: 0.1 * F.smokeSize, size1: rnd(0.45, 0.65) * F.smokeSize, ramp: smoke, tone0: 0.45, tone1: 0.7, alpha: 0.3 });
+      }
+    }
+    // smoke out of the top of a hearth's chimney stack
+    const st = f.q.stackTop;
+    if (st) for (let i = due('smoke', 5 * F.smoke); i--;) {
+      const m = F.smokeSize;
+      fxParts.spawn({ style: S.PUFF, x: st[0] + rnd(-0.06, 0.06), y: st[1], z: st[2] + rnd(-0.06, 0.06), vx: rnd(-0.05, 0.05), vy: rnd(0.55, 0.85), vz: rnd(-0.05, 0.05),
+        grav: -0.04, drag: 0.5, turb: 0.35, life: rnd(2.6, 3.6), size0: 0.14 * m, size1: rnd(0.7, 1) * m, ramp: smoke, tone0: rnd(0.4, 0.55), tone1: 0.75, alpha: 0.4 });
     }
   }
 }
@@ -22306,6 +22366,8 @@ function updateLamps() {
   for (const t of towns) if (Math.hypot(t.c - H.x, t.r - H.z) < 40) near.push(...t.lamps);
   for (const h of hearths.values()) if (Math.hypot(h.c - H.x, h.r - H.z) < 40) near.push([h.c + 0.5, h.r + 0.5, 1]);
   for (const g of grottos) if (GROTTO.light > 0 && Math.hypot(g.x - H.x, g.z - H.z) < 40) near.push([g.x, g.z, 2, g]);
+  // the town hearths, lighting their rooms (the braziers are in t.lamps already)
+  if (PROP_FIRE.light > 0) for (const f of propFires) if (f.hearth && Math.abs(f.lx - H.x) < 30 && Math.abs(f.lz - H.z) < 30) near.push(f.lamp || (f.lamp = [f.lx, f.lz, 4, null, f.ly - heightAt(f.lx, f.lz)]));
   // the fantasy ore rocks (Verdane and up) each light the ground round them in their colour
   if (!oreLightAt) { oreLightAt = []; for (let i = 0; i < N * N; i++) if (OBJ[OB[i]].metal) { const c = i % N, r = (i - c) / N; oreLightAt.push([c + 0.5, r + 0.5, 3, i]); } }
   for (const p of oreLightAt) if (OBJ[OB[p[3]]].metal && ORE_GLOW[OBJ[OB[p[3]]].metal] > 0 && Math.abs(p[0] - H.x) < 30 && Math.abs(p[1] - H.z) < 30) near.push(p);
@@ -22340,6 +22402,15 @@ function lampLight(l, p, k, night) {
     l.color.set(GROTTO.lightColor); l.distance = GROTTO.lightRange;
     l.position.set(p[0], p[3].L * STEP + 0.5, p[1]);
     l.intensity = GROTTO.light * (0.6 + night * 0.6) * (0.9 + Math.sin(time * 0.9 + k) * 0.1);
+    return;
+  }
+  if (p[2] === 4) {
+    // a town hearth or brazier: a fire's light, flickering hard and dancing a little about its spot
+    const F = PROP_FIRE, fl = F.flicker, a = time * 1.7 + k * 2.3;
+    const n = Math.sin(time * 11 + k) * 0.09 + Math.sin(time * 23.7 + k * 1.9) * 0.07 + Math.sin(time * 41.3 + k * 0.7) * 0.05 + (Math.sin(time * 5.3 + k) > 0.93 ? -0.12 : 0);
+    l.color.set('#ff9a48'); l.distance = 5.5;
+    l.position.set(p[0] + Math.sin(a * 3.1) * 0.03 * fl, heightAt(p[0], p[1]) + (p[4] ?? 0.7) + Math.sin(a * 4.3) * 0.04 * fl, p[1] + Math.cos(a * 2.7) * 0.03 * fl);
+    l.intensity = Math.max(0, F.light * (0.9 + night * 1.4) * (0.85 + n * fl));
     return;
   }
   l.color.set('#ffb060'); l.distance = 4.5;
@@ -26500,6 +26571,17 @@ const TUNING = [
     [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
     [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
+  ['Hearth fires', [
+    [PROP_FIRE, 'on', 'Town hearths and braziers burn in the GPU effects (0 off)', 0, 1, 1],
+    [PROP_FIRE, 'reach', 'Played within this many tiles of you', 6, 60, 1],
+    [PROP_FIRE, 'flames', 'Flames (×)', 0, 3, 0.05],
+    [PROP_FIRE, 'size', 'Flame size (×)', 0.3, 3, 0.05],
+    [PROP_FIRE, 'embers', 'Embers drifting up (×)', 0, 3, 0.05],
+    [PROP_FIRE, 'smoke', 'Chimney smoke (×)', 0, 3, 0.05],
+    [PROP_FIRE, 'smokeSize', 'Smoke puff size (×)', 0.3, 3, 0.05],
+    [PROP_FIRE, 'light', 'Firelight brightness (0 off)', 0, 3, 0.05],
+    [PROP_FIRE, 'flicker', 'Firelight flicker (×)', 0, 3, 0.05],
+  ]],
   ['Grotto water', [
     [GROT_FX, 'on', 'Grotto falls splash and mist in the GPU effects (0: the old spray)', 0, 1, 1, () => buildSpray()],
     [GROT_FX, 'reach', 'Played within this many tiles of you', 8, 80, 1],
@@ -27200,7 +27282,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 604, crashSeen = new Map();
+const GAME_VERSION = 605, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
