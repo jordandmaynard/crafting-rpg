@@ -703,6 +703,18 @@ export const PROPS = {
     roll: r => ({ stone: pick(r, VAULT_STONE), bays: r() < 0.5 ? 2 : 3, cover: pick(r, BOOKS), stacks: 2 + Math.floor(r() * 4), bell: r() < 0.6, seed: Math.floor(r() * 1e6) }),
     describe: L => [['Front', L.stone[1], L.stone[0]], ['Windows', `${L.bays} in an iron grille`], ['On the top', `A ledger, ${L.stacks} stacks of coin${L.bell ? ', a bell' : ''}`]],
     build(L, C) { tellerCounter(L, C); } },
+  tellerCounter2: { name: 'Teller counter (2)', group: 'Bank', tiles: [2, 1], use: 'Part of the counter across the bank', goes: 'Bank',
+    roll: r => ({ stone: pick(r, VAULT_STONE), bays: r() < 0.5 ? 1 : 2, cover: pick(r, BOOKS), stacks: 1 + Math.floor(r() * 2), bell: r() < 0.5, seed: Math.floor(r() * 1e6), w: 2 }),
+    describe: L => [['Front', L.stone[1], L.stone[0]], ['Windows', `${L.bays} in an iron grille`]],
+    build(L, C) { tellerCounter(L, C); } },
+  tellerCounter1: { name: 'Teller counter (1)', group: 'Bank', tiles: [1, 1], use: 'Part of the counter across the bank', goes: 'Bank',
+    roll: r => ({ stone: pick(r, VAULT_STONE), bays: 1, cover: pick(r, BOOKS), stacks: 0, bell: false, seed: Math.floor(r() * 1e6), w: 1 }),
+    describe: L => [['Front', L.stone[1], L.stone[0]], ['Windows', 'One in an iron grille']],
+    build(L, C) { tellerCounter(L, C); } },
+  counterGate: { name: 'Counter gate', group: 'Bank', tiles: [1, 1], rug: true, use: 'Walk through: the way behind the counter', goes: 'Bank, in the counter',
+    roll: r => ({ swing: r() < 0.5 ? -1 : 1 }),
+    describe: L => [['Hinged', L.swing < 0 ? 'Left' : 'Right'], ['Stands', 'Open, swung back behind the counter']],
+    build(L, C) { counterGate(L, C); } },
   coinTable: { name: 'Coin table', group: 'Bank', tiles: [1, 1], use: 'Show', goes: 'Bank',
     roll: r => ({ baize: pick(r, BAIZE), tip: (r() - 0.5) * 0.3, stacks: 2 + Math.floor(r() * 4), seed: Math.floor(r() * 1e6) }),
     describe: L => [['Cloth', L.baize[1], L.baize[0]], ['On it', `Brass scales, ${L.stacks} stacks of coin`]],
@@ -955,20 +967,21 @@ function vaultDoor(L, C) {
 // the teller counter: a stone front in panels between a plinth and a moulding, a dark wood top, and on it an iron
 // grille of bars between posts, a window in each bay (open below an arch, a brass tray through it); behind, open,
 // a shelf; on the top the ledger, coin stacks and maybe a bell
+// (L.w tiles long, 3 by default; L.line: one piece of a counter across the room, its ends square to its neighbours')
 function tellerCounter(L, C) {
-  const W = 2.9, zc = 0.08, D = 0.5, H = BAR_TOP - 0.05, f = zc + D / 2, Sn = CC(L.stone[0]), r = mulberry32(L.seed || 1);
+  const T = L.w || 3, ln = !!L.line, W = ln ? T : T - 0.1, ov = ln ? 0 : 1, zc = 0.08, D = 0.5, H = BAR_TOP - 0.05, f = zc + D / 2, Sn = CC(L.stone[0]), r = mulberry32(L.seed || 1);
   for (const s of [-1, 1]) part(G.box, shade(Sn, 0.85), s * (W / 2 - 0.04), H / 2, zc, { sx: 0.08, sy: H, sz: D });
   part(G.box, Sn, 0, H / 2, f - 0.04, { sx: W - 0.16, sy: H, sz: 0.06 });
   part(G.box, C.dark, 0, 0.3, zc - 0.03, { sx: W - 0.16, sy: 0.03, sz: D - 0.12 });
-  part(G.box, shade(Sn, 0.8), 0, 0.05, f + 0.005, { sx: W + 0.02, sy: 0.1, sz: 0.03 });
-  part(G.box, shade(Sn, 1.08), 0, H - 0.03, f + 0.008, { sx: W + 0.03, sy: 0.06, sz: 0.036 });
-  const np = 4;
+  part(G.box, shade(Sn, 0.8), 0, 0.05, f + 0.005, { sx: W + 0.02 * ov, sy: 0.1, sz: 0.03 });
+  part(G.box, shade(Sn, 1.08), 0, H - 0.03, f + 0.008, { sx: W + 0.03 * ov, sy: 0.06, sz: 0.036 });
+  const np = Math.max(1, Math.round(W * 1.4));
   for (let k = 0; k < np; k++) {
     const w = (W - 0.2) / np, x = -W / 2 + 0.1 + (k + 0.5) * w;
     part(G.box, shade(Sn, 1.06), x, H / 2 + 0.02, f + 0.005, { sx: w - 0.08, sy: H - 0.26, sz: 0.012 });
     part(G.box, shade(Sn, 0.94), x, H / 2 + 0.02, f + 0.013, { sx: w - 0.18, sy: H - 0.36, sz: 0.008 });
   }
-  part(G.box, C.dark, 0, BAR_TOP - 0.025, zc + 0.02, { sx: W + 0.06, sy: 0.05, sz: D + 0.1 });
+  part(G.box, C.dark, 0, BAR_TOP - 0.025, zc + 0.02, { sx: W + 0.06 * ov, sy: 0.05, sz: D + 0.1 });
   // the grille: posts at the ends and between bays, rails top and above the windows, bars between
   const gz = zc + 0.1, gy0 = BAR_TOP, gy1 = 1.55, nb = L.bays, bw = W / nb, wy = gy0 + 0.36;
   for (let k = 0; k <= nb; k++) part(G.box, IRON, -W / 2 + 0.03 + k * (W - 0.06) / nb, (gy0 + gy1) / 2, gz, { sx: 0.05, sy: gy1 - gy0, sz: 0.05 });
@@ -990,15 +1003,30 @@ function tellerCounter(L, C) {
     part(G.box, shade(CC(BRASS), 1.15), xm, gy0 + 0.024, gz, { sx: 0.26, sy: 0.006, sz: 0.2 });
   }
   // behind the grille: the ledger, coin stacks, the bell
+  if (T < 2) return;
   part(G.box, L.cover, -W / 2 + bw / 2 + 0.05, gy0 + 0.012, zc - 0.12, { sx: 0.4, sy: 0.02, sz: 0.28, ry: 0.15 });
   part(G.box, '#ece4cc', -W / 2 + bw / 2 + 0.05, gy0 + 0.026, zc - 0.12, { sx: 0.36, sy: 0.008, sz: 0.24, ry: 0.15 });
-  for (let k = 0; k < L.stacks; k++) coinStack(-W / 2 + bw + 0.1 + k * 0.16 + r() * 0.04, gy0, zc - 0.1 - r() * 0.08, 3 + Math.floor(r() * 6));
+  for (let k = 0; k < Math.min(L.stacks, Math.floor((W / 2 - 0.45 - (-W / 2 + bw + 0.1)) / 0.16) + 1); k++) coinStack(-W / 2 + bw + 0.1 + k * 0.16 + r() * 0.04, gy0, zc - 0.1 - r() * 0.08, 3 + Math.floor(r() * 6));
   if (L.bell) { part(G.cyl12, BRASS, W / 2 - 0.3, gy0 + 0.006, zc - 0.1, { sx: 0.1, sy: 0.012, sz: 0.1 }); part(G.oct, shade(CC(BRASS), 1.1), W / 2 - 0.3, gy0 + 0.05, zc - 0.1, { sx: 0.08, sy: 0.07, sz: 0.08 }); }
   // the shelf behind: two ledgers lying and a strongbox
   part(G.box, BOOKS[1], -0.6, 0.33, zc - 0.05, { sx: 0.32, sy: 0.05, sz: 0.24 });
   part(G.box, BOOKS[5], -0.6, 0.375, zc - 0.05, { sx: 0.3, sy: 0.04, sz: 0.22 });
   part(G.box, '#4a3422', 0.5, 0.42, zc - 0.05, { sx: 0.36, sy: 0.2, sz: 0.24 });
   for (const x of [0.36, 0.64]) part(G.box, IRON, x, 0.42, zc - 0.05, { sx: 0.03, sy: 0.21, sz: 0.25 });
+}
+// the gate in the counter: the grille's posts each side (the counter's line, z 0.18) up to its top rail height, a
+// short rail across the top, a low wooden leaf with iron bands hung on one post and swung open back behind the counter
+function counterGate(L, C) {
+  const gz = 0.18, gy1 = 1.55, sw = L.swing, Hl = BAR_TOP - 0.06;
+  for (const s of [-1, 1]) part(G.box, IRON, s * 0.47, gy1 / 2, gz, { sx: 0.05, sy: gy1, sz: 0.05 });
+  part(G.box, IRON, 0, gy1, gz, { sx: 1, sy: 0.05, sz: 0.06 });
+  // the leaf: hung at x = sw * 0.44, swung round to run back along that side
+  const x = sw * 0.42, z0 = gz - 0.05, len = 0.84;
+  part(G.box, C.wood, x, 0.05 + Hl / 2, z0 - len / 2, { sx: 0.04, sy: Hl, sz: len });
+  for (const y of [0.16, Hl - 0.06]) part(G.box, IRON, x, 0.05 + y, z0 - len / 2, { sx: 0.05, sy: 0.04, sz: len + 0.01 });
+  part(G.box, C.dark, x, 0.05 + Hl + 0.02, z0 - len / 2, { sx: 0.06, sy: 0.04, sz: len + 0.02 });
+  for (const y of [0.2, Hl - 0.1]) part(G.box, IRON_LT, sw * 0.455, 0.05 + y, z0 + 0.01, { sx: 0.03, sy: 0.08, sz: 0.04 });
+  part(G.box, BRASS, x - sw * 0.03, 0.05 + Hl * 0.6, z0 - len + 0.06, { sx: 0.02, sy: 0.05, sz: 0.03 });
 }
 // the coin table: a small square table with a baize top, brass scales on it (a post, a beam tipped a little, two
 // pans hung on cords), stacks of coin and a coin bag
