@@ -2303,7 +2303,7 @@ async function generate(progress) {
   nameRegions();
   findFalls();
   for (const g of grottos) { g.fall.grotto = true; falls.push(g.fall); }
-  for (const t of towns) if (t.tier === 2) falls.push(...fountainFalls(t.c, t.r));
+  for (const t of towns) if (t.tier === 2 && !townLook(t).snow) falls.push(...fountainFalls(t.c, t.r));   // (v663: frozen, none)
   progress(0.97, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
 }
@@ -4626,7 +4626,13 @@ function cathRoof(ca) {
       OUT = aisle;
       if (!ca.chapel) for (const sg of [-1, 1]) quad(at(sg * hw, eave, 2.5), at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.06, B1), at(sg * hw, eave, B1), lead);
       OUT = bufTmp;
-      part(G.box, dark, ...at(0, ridge + 0.04, (B0 + B1) / 2), DC[ca.p] ? { sx: 0.16, sy: 0.1, sz: B1 - B0 } : { sx: B1 - B0, sy: 0.1, sz: 0.16 });
+      // (v663: in an alpine town, snow over the slates, a little proud of them, and along the ridge)
+      const alp = alpineBuilding(b), sc = CC(ROOF_SNOW.col), lift = 0.05;
+      if (alp) {
+        for (const sg of [-1, 1]) quad(at(sg * (hw + 0.1), eave - 0.06 + lift, B0), at(0, ridge + lift, B0), at(0, ridge + lift, B1), at(sg * (hw + 0.1), eave - 0.06 + lift, B1), sc);
+        if (!ca.chapel) for (const sg of [-1, 1]) quad(at(sg * hw, eave + lift, 2.5), at(sg * (outer + 0.12), base - 0.06 + lift, 2.5), at(sg * (outer + 0.12), base - 0.06 + lift, B1), at(sg * hw, eave + lift, B1), sc);
+      }
+      part(G.box, alp ? ROOF_SNOW.top : dark, ...at(0, ridge + 0.04 + (alp ? lift : 0), (B0 + B1) / 2), DC[ca.p] ? { sx: 0.16, sy: 0.1, sz: B1 - B0 } : { sx: B1 - B0, sy: 0.1, sz: 0.16 });
       if (!ca.chapel) for (const sg of [-1, 1]) quad(at(sg * (outer + 0.12), base - 0.06, 2.5), at(sg * (outer + 0.12), base - 0.2, 2.5), at(sg * (outer + 0.12), base - 0.2, B1), at(sg * (outer + 0.12), base - 0.06, B1), dark);
       // the stone gables: over the door between the towers, and across the whole back. A mortar backing, then (v428,
       // Jordan: they were plain) coursed blocks as the walls are laid, cut to the gable's outline row by row, a moulded
@@ -6122,9 +6128,12 @@ function makeCobbleTex() {
   }
   return new GFX.DataTexture(out, S, S);
 }
-const COBBLE_U = { bump: { value: COBBLE.bump } };
-const cobbleMat = new GFX.ShaderMaterial({ uniforms: COBBLE_U, vertexColors: true, lit: true,
-  code: /* wgsl */ `
+// (v663, Jordan: in an alpine town the grout between the cobbles is frosted, packed with snow: frost blends the low
+// ground between the stones to frostC and flattens their bump there)
+const COBBLE_FROST = { amount: 0.9, col: '#dde8f4', lo: 0.12, hi: 0.62 };
+const COBBLE_U = { bump: { value: COBBLE.bump }, frost: { value: 0 }, frostC: { value: new GFX.Color(COBBLE_FROST.col) }, frostLo: { value: COBBLE_FROST.lo }, frostHi: { value: COBBLE_FROST.hi } };
+const COBBLE_FU = Object.assign({}, COBBLE_U, { frost: { value: COBBLE_FROST.amount } });
+const cobbleCode = /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
@@ -6133,18 +6142,21 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let N0 = vec3f(0.0, 1.0, 0.0);
   let t = textureSample(tCobble, tCobbleS, fract(i.world.xz * 0.5));
-  let m = vec3f((t.xy * 2.0 - 1.0) * U.bump, t.z * 2.0 - 1.0);
+  let fr = (1.0 - smoothstep(U.frostLo, U.frostHi, t.a)) * U.frost;
+  let m = vec3f((t.xy * 2.0 - 1.0) * U.bump * (1.0 - fr), t.z * 2.0 - 1.0);
   let N = normalize(vec3f(1.0, 0.0, 0.0) * m.x + vec3f(0.0, 0.0, 1.0) * m.y + N0 * m.z);
-  let c = shadeLitN(i.color * mix(0.42, 1.0, t.a), vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5);
+  let alb = mix(i.color * mix(0.42, 1.0, t.a), U.frostC, fr);
+  let c = shadeLitN(alb, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
-}`,
-});
+}`;
+const cobbleMat = new GFX.ShaderMaterial({ uniforms: COBBLE_U, vertexColors: true, lit: true, code: cobbleCode });
+const cobbleFrostMat = new GFX.ShaderMaterial({ uniforms: COBBLE_FU, vertexColors: true, lit: true, code: cobbleCode });
 const cobbleMeshes = [];
 function buildCobbles() {
   for (const m of cobbleMeshes) { scene.remove(m); m.geometry.dispose(); }
   cobbleMeshes.length = 0;
   if (!towns.some(t => t.tier === 2)) return;
-  if (!COBBLE_U.tCobble) COBBLE_U.tCobble = { value: makeCobbleTex() };
+  if (!COBBLE_U.tCobble) COBBLE_U.tCobble = COBBLE_FU.tCobble = { value: makeCobbleTex() };
   towns.forEach((t, n) => {
     if (t.tier !== 2) return;
     const pos = [], col = [], sand = townLook(t).stone === 'sand';
@@ -6158,7 +6170,7 @@ function buildCobbles() {
     geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
     geo.setAttribute('color', new GFX.Float32BufferAttribute(col, 3));
     geo.computeVertexNormals();
-    const mesh = new GFX.Mesh(geo, cobbleMat);
+    const mesh = new GFX.Mesh(geo, townLook(t).snow ? cobbleFrostMat : cobbleMat);
     mesh.receiveShadow = true; mesh.matrixAutoUpdate = false;
     scene.add(mesh); cobbleMeshes.push(mesh);
     // and the fountain in the middle: round, so a pillar on each of its tiles
@@ -9728,6 +9740,7 @@ function updateCuts(dt) {
 // quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
 // layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
 // point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
+const SNOW_CLEAR = new Set(['well', 'marketStall', 'produce']);   // (v663: the props an alpine town keeps dug out)
 const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.9, rim: 0.94, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.19, whirl: 1.6, arrowHole: 0.4, bank: 0.9, folk: 1 };
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
@@ -9754,8 +9767,11 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
     }
     // (v506) under open water (a lake, river or the sea; not a swamp pool): its bed takes no sun shadow, see groundShapeMat
     const wet = WL[i] && !LV[i] && !LAVA[i];
-    const open = kind && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk)
-      && !(sandy && (streetTile(i) || PROP_AT.has(i) || stairAt.has(i)));
+    // (v663, Jordan: in an alpine town the snow lies round the props as it does round the lamp posts, buried to
+    // their knees, but for the few folk work at: SNOW_CLEAR)
+    const alpProp = tg === SNOW && (OB[i] === O.PROP || OB[i] === O.PLANTER) && !SNOW_CLEAR.has(PROP_AT.get(i)?.id);
+    const open = kind && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk || alpProp)
+      && !(sandy && (streetTile(i) || (PROP_AT.has(i) && !alpProp) || stairAt.has(i)));
     const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
     for (let q = 0; q < 4; q++) {
       const lx = (c - c0) * 2 + (q & 1), lz = (r - r0) * 2 + (q >> 1), h0 = ph[(lz + 1) * W + lx + 1];
@@ -13030,6 +13046,28 @@ const FOUNT_FALL_U = Object.assign({}, FALL_U, { amount: { value: FOUNT.fall }, 
 const fountFallMat = makeFallMat(FOUNT_FALL_U);
 fountFallMat.keepAlpha = true;
 const fountMeshes = [];
+// (v663, Jordan) in an alpine town the fountain, bird baths, troughs and rain barrels are frozen over: their water
+// is a sheet of ice instead (darker in the middle, the cobbles' Voronoi map laid over it for cracks, glossy), the
+// fountain's streams are icicles hanging from its bowl, a few frozen right down to the basin, and short ones
+// fringe its coping. No falls, spray or mist from it (fountainFalls is skipped for it).
+const ICE = { col: '#cde3f1', deep: '#7fa6c2', crack: '#f4f9fc', tip: '#eef6fb', rough: 0.2, cracks: 0.75, scale: 1.1 };
+const ICE_U = { crackC: { value: new GFX.Color(ICE.crack) }, rough: { value: ICE.rough }, cracks: { value: ICE.cracks }, scale: { value: ICE.scale } };
+const iceMat = new GFX.ShaderMaterial({ uniforms: ICE_U, vertexColors: true, lit: true, side: GFX.DoubleSide, attributes: { iceN: 'vec3f' },
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) n: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, v.iceN);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N = normalize(i.n);
+  let t = textureSample(tCobble, tCobbleS, fract(i.world.xz * U.scale + vec2f(0.37, 0.61)));
+  let crack = (1.0 - smoothstep(0.04, 0.3, t.a)) * U.cracks * smoothstep(0.8, 0.95, N.y);
+  let alb = mix(i.color, U.crackC, crack);
+  let c = shadeLitN(alb, alb * 0.06, 0.0, U.rough, i.world, N, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
 function fountainFalls(c, r) {
   const x = c + 0.5, z = r + 0.5, y = LV[T(c, r)] * STEP + FOUNT.basinY, out = [], R1 = FOUNT.lip + FOUNT.out;
   for (let k = 0; k < FOUNT.streams; k++) {
@@ -13043,30 +13081,55 @@ const BATH_WATER = { y: 0.595, r: 0.255, depth: 0.04 };
 function buildFountains() {
   for (const m of fountMeshes) { scene.remove(m); m.geometry.dispose(); }
   fountMeshes.length = 0;
-  const pos = [], dep = [], flow = [], fall = [], fpos = [], fuv = [];
+  const pos = [], dep = [], flow = [], fall = [], fpos = [], fuv = [], ipos = [], icol = [], inrm = [];
+  const iceA = CC(ICE.col), iceD = CC(ICE.deep), iceT = CC(ICE.tip);
   for (const t of towns) {
+    // (v663: frozen in an alpine town) each water point goes in as ice, its shade by how far it lies from the
+    // middle (cx, cz) of a pool R across
+    const frozen = !!townLook(t).snow;
+    let cx = 0, cz = 0, cR = 1;
+    const pool = (x, z, R) => { cx = x; cz = z; cR = R; };
+    const wp = (pt, d) => {
+      if (!frozen) { pos.push(...pt); dep.push(d); flow.push(0, 0); fall.push(0); return; }
+      const k = iceD.clone().lerp(iceA, Math.min(1, 0.25 + Math.hypot(pt[0] - cx, pt[2] - cz) / cR * 0.9));
+      ipos.push(pt[0], pt[1] + 0.004, pt[2]); icol.push(k.r, k.g, k.b); inrm.push(0, 1, 0);
+    };
+    // an icicle hanging from (x, y, z), len long, rr round at its root: five sides to a point
+    const icicle = (x, y, z, len, rr, seed) => {
+      const n = 5, a0 = hs(seed, 7, 663) * Math.PI;
+      for (let k = 0; k < n; k++) {
+        const a = a0 + k / n * Math.PI * 2, b = a0 + (k + 1) / n * Math.PI * 2, m = (a + b) / 2, l = Math.hypot(len, rr);
+        const nr = [Math.sin(m) * len / l, -rr / l, Math.cos(m) * len / l];
+        for (const [pt, col] of [[[x + Math.sin(a) * rr, y, z + Math.cos(a) * rr], iceA], [[x + Math.sin(b) * rr, y, z + Math.cos(b) * rr], iceA], [[x, y - len, z], iceT]]) {
+          ipos.push(...pt); icol.push(col.r, col.g, col.b); inrm.push(...nr);
+        }
+      }
+    };
     for (const q of t.yard?.props || []) {
       if (q.id === 'horseTrough') {
         // (a trough's water: a flat sheet inside its sides, turned as it stands)
         const st = q.look.stone, hw = st ? 0.76 : 0.8, hd = st ? 0.14 : 0.19, y = q.y + (st ? 0.355 : 0.375), cs = Math.cos(q.ry), sn = Math.sin(q.ry);
         const P = (a, b) => [q.x + cs * a + sn * b, y, q.z - sn * a + cs * b];
-        for (const pt of [P(-hw, -hd), P(-hw, hd), P(hw, hd), P(-hw, -hd), P(hw, hd), P(hw, -hd)]) { pos.push(...pt); dep.push(0.12); flow.push(0, 0); fall.push(0); }
+        pool(q.x, q.z, hw);
+        for (const pt of [P(-hw, -hd), P(-hw, hd), P(hw, hd), P(-hw, -hd), P(hw, hd), P(hw, -hd)]) wp(pt, 0.12);
         continue;
       }
       if (q.id === 'rainBarrel' && q.look?.live) {
         // (2026-11-03, Jordan: the rain barrel too) a disc inside its top hoop; the barrel stands 0.27 off its back
         const cs = Math.cos(q.ry), sn = Math.sin(q.ry), zc = -0.5 + 0.13 + 0.27, cx = q.x + sn * zc, cz = q.z + cs * zc, y = q.y + 0.726, R = 0.178, n = 12;
+        pool(cx, cz, R);
         for (let k = 0; k < n; k++) {
           const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2;
-          for (const pt of [[cx, y, cz], [cx + Math.sin(a0) * R, y, cz + Math.cos(a0) * R], [cx + Math.sin(a1) * R, y, cz + Math.cos(a1) * R]]) { pos.push(...pt); dep.push(0.3); flow.push(0, 0); fall.push(0); }
+          for (const pt of [[cx, y, cz], [cx + Math.sin(a0) * R, y, cz + Math.cos(a0) * R], [cx + Math.sin(a1) * R, y, cz + Math.cos(a1) * R]]) wp(pt, 0.3);
         }
         continue;
       }
       if (q.id !== 'birdBath') continue;
       const n = 16;
+      pool(q.x, q.z, BATH_WATER.r);
       for (let k = 0; k < n; k++) {
         const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2, y = q.y + BATH_WATER.y, R = BATH_WATER.r;
-        for (const pt of [[q.x, y, q.z], [q.x + Math.sin(a0) * R, y, q.z + Math.cos(a0) * R], [q.x + Math.sin(a1) * R, y, q.z + Math.cos(a1) * R]]) { pos.push(...pt); dep.push(BATH_WATER.depth); flow.push(0, 0); fall.push(0); }
+        for (const pt of [[q.x, y, q.z], [q.x + Math.sin(a0) * R, y, q.z + Math.cos(a0) * R], [q.x + Math.sin(a1) * R, y, q.z + Math.cos(a1) * R]]) wp(pt, BATH_WATER.depth);
       }
     }
     if (t.tier !== 2) continue;
@@ -13076,13 +13139,30 @@ function buildFountains() {
       for (let k = 0; k < n; k++) {
         const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2;
         const P = (rr, a) => [x + Math.sin(a) * rr, y, z + Math.cos(a) * rr];
-        for (const q of [P(r0, a0), P(r1, a0), P(r1, a1), P(r0, a0), P(r1, a1), P(r0, a1)]) { pos.push(...q); dep.push(d); flow.push(0, 0); fall.push(0); }
+        for (const q of [P(r0, a0), P(r1, a0), P(r1, a1), P(r0, a0), P(r1, a1), P(r0, a1)]) wp(q, d);
       }
     };
     // (v654: a desert town's basin is an octagon, its corners where its walls' are)
+    pool(x, z, FOUNTAIN.R - 0.17);
     if (townLook(t).stone === 'sand') ring(0.33, (FOUNTAIN.R - 0.17) / k8, y0 + FOUNT.basinY, FOUNT.basinD, 8);
     else ring(0.32, FOUNTAIN.R - 0.17, y0 + FOUNT.basinY, FOUNT.basinD);
+    pool(x, z, 0.5);
     ring(0.085, 0.5, y0 + FOUNT.bowlY, FOUNT.bowlD);
+    if (frozen) {
+      // icicles in threes from under the bowl where the streams were, every other stream's middle one frozen
+      // right down to the basin's ice; and short ones round the basin's coping
+      const drop = FOUNT.bowlY - 0.15 - FOUNT.basinY;
+      for (let k = 0; k < FOUNT.streams; k++) for (let j = -1; j <= 1; j++) {
+        const a = (k + j * 0.22) / FOUNT.streams * Math.PI * 2, h = hs(t.c + k, t.r + j, 664), col = !j && k % 2 === 0;
+        const len = col ? drop : 0.12 + h * (j ? 0.22 : 0.38), rr = col ? 0.055 : 0.03 + h * 0.025;
+        icicle(x + Math.sin(a) * 0.57, y0 + 1.235, z + Math.cos(a) * 0.57, len, rr, t.c * 31 + k * 3 + j);
+      }
+      for (let k = 0; k < 20; k++) {
+        const a = (k + hs(t.c, k, 665) * 0.8) / 20 * Math.PI * 2, h = hs(t.r, k, 666);
+        icicle(x + Math.sin(a) * (FOUNTAIN.R + 0.04), y0 + FOUNTAIN.wall + 0.005, z + Math.cos(a) * (FOUNTAIN.R + 0.04), 0.05 + h * 0.12, 0.02 + h * 0.012, k * 7 + t.r);
+      }
+      continue;
+    }
     // the streams: each over the rim and out in an arc down to the basin, a ribbon across it and one along it
     for (let k = 0; k < FOUNT.streams; k++) {
       const a = k / FOUNT.streams * Math.PI * 2, sx = Math.sin(a), sz = Math.cos(a), H = FOUNT.bowlY + 0.03 - FOUNT.basinY;
@@ -13099,6 +13179,17 @@ function buildFountains() {
         }
       }
     }
+  }
+  if (ipos.length) {
+    if (!COBBLE_U.tCobble) COBBLE_U.tCobble = COBBLE_FU.tCobble = { value: makeCobbleTex() };
+    ICE_U.tCobble = COBBLE_U.tCobble;
+    const ig = new GFX.BufferGeometry();
+    ig.setAttribute('position', new GFX.Float32BufferAttribute(ipos, 3));
+    ig.setAttribute('color', new GFX.Float32BufferAttribute(icol, 3));
+    ig.setAttribute('iceN', new GFX.Float32BufferAttribute(inrm, 3));
+    const im = new GFX.Mesh(ig, iceMat);
+    im.receiveShadow = true; im.castShadow = false; im.matrixAutoUpdate = false;
+    scene.add(im); fountMeshes.push(im);
   }
   if (!pos.length) return;
   const g = new GFX.BufferGeometry();
@@ -15411,7 +15502,10 @@ function roofMesh(rm, o = {}) {   // rm: a building
   }
   const base = top * STEP + k * WALL_H + WALL_H - 0.02;
   if (!o.snow && desertBuilding(rm)) return flatDesertRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);   // (v649)
-  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);
+  // (v663, Jordan: in an alpine town the roofs lie under snow, the flat ones too; not pushable, no one goes up there)
+  const alp = alpineBuilding(rm);
+  if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k, alp);
+  if (alp) o = { ...o, snow: true };
   // Chebyshev distance from a point to the nearest outside tile: 45° hips everywhere
   const f = (x, z) => {
     let m = 1e9;
@@ -15506,10 +15600,14 @@ function stoneBuilding(rm) {
   }
   return stone > 0;
 }
-// (fy: the flagstones' top. Tiles under a floor or a stair are left out, as the hipped roof does)
-function flatStoneRoof(rm, open, fy, k) {
+// (v663) a building in an alpine town (see snowTown)
+function alpineBuilding(rm) { const t0 = rm.tiles[0]; return !!t0 && snowTown(T(t0[0], t0[1])); }
+const ROOF_SNOW = { flat: 0.1, soft: 0.035, inset: 0.155, col: '#eef3f8', top: '#f6f9fc', cap: 0.04 };
+// (fy: the flagstones' top. Tiles under a floor or a stair are left out, as the hipped roof does. snowy (v663): a
+// blanket of snow over the flags inside the parapet, and snow on its caps and crenels)
+function flatStoneRoof(rm, open, fy, k, snowy = false) {
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const y0 = fy - 0.04;
+  const y0 = fy - 0.04, S = ROOF_SNOW, openSet = snowy ? new Set(open.map(([c, r]) => T(c, r))) : null;
   for (const [c, r] of open) {
     part(G.box, '#3e3a44', c + 0.5, y0 + 0.01, r + 0.5, { sx: 1, sy: 0.02, sz: 1 });
     // every wall round it capped from its top (1.88) up just over the roof, one shade so the caps meeting at the
@@ -15526,6 +15624,23 @@ function flatStoneRoof(rm, open, fy, k) {
       if (capTop > y1) P(0.5, (y1 + capTop) / 2, { col: St.cap, sx: 1.31, sy: capTop - y1, sz: 0.31 });
       const kk = 0.92 + hs(ec, er, 50 + w) * 0.14, m0 = stone ? y1 + 0.2 : capTop, m1 = capTop + FLAT_CRENEL;
       if (m1 > m0) for (const a of [0.2, 0.8]) P(a, (m0 + m1) / 2, { col: shade(CC(St.crenel), kk), sx: 0.3, sy: m1 - m0, sz: 0.34 });
+      if (snowy) {
+        P(0.5, capTop + S.cap / 2, { col: S.top, sx: 1.3, sy: S.cap, sz: 0.33 });
+        if (m1 > m0) for (const a of [0.2, 0.8]) P(a, m1 + S.cap / 2, { col: S.top, sx: 0.33, sy: S.cap, sz: 0.37 });
+      }
+    }
+    if (snowy) {
+      // (in from the parapet on every side with a wall, out to the edge where the roof runs on)
+      const ins = d => openSet.has(T(c + DC[d], r + DR[d])) ? 0 : S.inset;
+      let x0 = c, x1 = c + 1, z0 = r, z1 = r + 1;
+      for (let d = 0; d < 4; d++) {
+        if (DC[d] > 0) x1 -= ins(d); else if (DC[d] < 0) x0 += ins(d);
+        else if (DR[d] > 0) z1 -= ins(d); else z0 += ins(d);
+      }
+      part(G.box, S.col, (x0 + x1) / 2, fy + S.flat / 2, (z0 + z1) / 2, { sx: x1 - x0, sy: S.flat, sz: z1 - z0 });
+      // (a softer crown a little in from any wall)
+      const cx0 = x0 + (x0 > c ? 0.07 : 0), cx1 = x1 - (x1 < c + 1 ? 0.07 : 0), cz0 = z0 + (z0 > r ? 0.07 : 0), cz1 = z1 - (z1 < r + 1 ? 0.07 : 0);
+      part(G.box, S.top, (cx0 + cx1) / 2, fy + S.flat + S.soft / 2, (cz0 + cz1) / 2, { sx: cx1 - cx0, sy: S.soft, sz: cz1 - cz0 });
     }
     for (let j = 0; j < 2; j++) {
       const off = (r * 2 + j) % 2 ? 0.25 : 0;
@@ -29217,7 +29332,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 662, crashSeen = new Map();
+const GAME_VERSION = 663, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
