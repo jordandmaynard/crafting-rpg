@@ -14287,7 +14287,7 @@ const slateSteep = new GFX.ShaderMaterial({ uniforms: { s: SLATE_U.s, slope: { v
 // a row of straw bundles of uneven widths running straight down it, thickest at the course's ragged lower edge (the
 // butt ends) and tucked under the course below. Laid by slateMat's shader with its own texture and settings.
 // T > Thatch roofs.
-const THATCH = { bump: 1.8, row: 0.19, span: 1.52, shade: 1.09 };   // (v623: Jordan's tuning)
+const THATCH = { bump: 1.8, row: 0.19, span: 1.52, shade: 1.09, fringe: 0.25, teeth: 8, ragged: 0.6 };   // (v623: Jordan's tuning; v638 the fringe)
 const THATCH_TEX = { across: 256, rows: 4, cell: 64, bundle: [6, 13], ragged: 10 };
 const THATCH_COLOR = '#a8854e';
 function makeThatchTex() {
@@ -14486,7 +14486,8 @@ function roofMesh(rm, o = {}) {   // rm: a building
     for (let d = 0; d < 4; d++) {
       if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
       const [ka, kb] = EDGE_K[d], ax = c + CX[ka], az = r + CZ[ka], bx = c + CX[kb], bz = r + CZ[kb];
-      quad([ax, base, az], [ax, base - eave, az], [bx, base - eave, bz], [bx, base, bz], ridge);
+      if (thatch && THATCH.fringe > 0) thatchFringe(rm, c, r, d, ax, az, bx, bz, base, tileA);
+      else quad([ax, base, az], [ax, base - eave, az], [bx, base - eave, bz], [bx, base, bz], ridge);
       if (o.snow) {
         // the snow's edge rolled over the eave, and icicles under it
         const ox = DC[d] * 0.07, oz = DR[d] * 0.07;
@@ -14503,6 +14504,30 @@ function roofMesh(rm, o = {}) {   // rm: a building
   OUT = save;
   return m;
 }
+// (v638, Jordan) a thatched roof's fringe: the thatch carried on past the wall along the roof's own slope (so the
+// straw map runs on into it unbroken) for THATCH.fringe of a tile, its lower edge cut into ragged points. Strips mitre
+// into each other round the corners: out past the end at an outer corner, short of it at an inner one. Part of the
+// roof's mesh, so it hides with the roof and never blocks anything.
+function thatchFringe(rm, c, r, d, ax, az, bx, bz, base, col) {
+  const L = THATCH.fringe, ex = bx - ax, ez = bz - az, ox = DC[d], oz = DR[d], sn = L * (1 - THATCH.ragged * 0.6);
+  const P = (t, sd) => [ax + ex * t + ox * sd, base - sd * ROOF_SLOPE, az + ez * t + oz * sd];
+  // (an end turns out round an outer corner, in round an inner one, straight on beside more wall)
+  const end = (sx, sz) => {
+    if (!rm.set.has(T(c + sx, r + sz))) return -1;
+    return rm.set.has(T(c + sx + ox, r + sz + oz)) ? 1 : 0;
+  };
+  const t0 = end(-ex, -ez) * sn, t1 = 1 - end(ex, ez) * sn, n = Math.max(2, Math.round(THATCH.teeth));
+  for (let i = 0; i < n; i++) {
+    const h = hs(c * 8 + d, r * 8 + i, 90), h2 = hs(c * 8 + i, r * 8 + d, 92);
+    const k = shade(col, 0.9 + h * 0.1);
+    const i0 = P(i / n, 0), i1 = P((i + 1) / n, 0);
+    const ta = t0 + (t1 - t0) * i / n, tb = t0 + (t1 - t0) * (i + 1) / n;
+    const o0 = P(ta, sn), o1 = P(tb, sn), tip = P(ta + (tb - ta) * (0.3 + h2 * 0.4), L * (1 + (h - 0.5) * THATCH.ragged * 0.5));
+    quad(i0, o0, o1, i1, k);
+    tri(o0, tip, o1, shade(k, 0.94));
+  }
+}
+function reroofAll() { for (const b of [...buildings.values()]) dropBuilding(b); settleBuildings(); }
 // (v539, Jordan) a building walled only in stone (stone walls and windows; doors don't count either way) gets a flat
 // roof of flagstones in place of the hipped one, with its walls' crenels stood round it as a parapet. (v541, Jordan:
 // laid at first under the walls' tops, 1.88, it cut through wardrobes (1.91) and met the bookcases' tops: now thin and
@@ -27726,6 +27751,9 @@ const TUNING = [
     [THATCH, 'row', 'Course height (tiles)', 0.08, 0.6, 0.01],
     [THATCH, 'span', 'Straw bundles: tiles the pattern spans across (wider = fatter bundles)', 0.5, 6, 0.01],
     [THATCH, 'shade', 'Gaps between bundles and courses darker', 0, 2, 0.01],
+    [THATCH, 'fringe', 'Fringe past the walls (tiles, 0 off)', 0, 0.6, 0.01, reroofAll],
+    [THATCH, 'teeth', 'Fringe points along each tile', 2, 20, 1, reroofAll],
+    [THATCH, 'ragged', 'How ragged the fringe\'s edge is', 0, 1, 0.01, reroofAll],
   ]],
   ['Bevels', [
     [DETAIL, 'strength', 'Chipped bevels on walls, floors and stairs: how far they bend (0 off)', 0, 5, 0.01],
@@ -28113,7 +28141,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 637, crashSeen = new Map();
+const GAME_VERSION = 638, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
