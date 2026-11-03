@@ -834,6 +834,9 @@ body.mapOpen #miniWrap.minimap { display: none; }
 #qTrack .qt-icon { left: 28px; top: 14px; width: 52px; height: 52px; }
 #qTrack .qt-icon img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
 #qTrack .qt-icon img.mirror { transform: scaleX(-1); }
+/* (v594, Jordan) one screen pixel of black round the seals and the item (or crossed swords), whatever the scale */
+#qTrack { --qt1: calc(1px / (var(--ui, 1) * var(--qtK, 1))); }
+#qTrack .qt-seal, #qTrack .qt-icon { filter: drop-shadow(var(--qt1) 0 0 #000) drop-shadow(calc(-1 * var(--qt1)) 0 0 #000) drop-shadow(0 var(--qt1) 0 #000) drop-shadow(0 calc(-1 * var(--qt1)) 0 #000); }
 #qTrack .qt-text { left: 96px; top: 10px; width: 244px; height: 28px; display: flex; gap: 10px; align-items: center; font: 700 18px/28px var(--wk); white-space: nowrap; }
 #qTrack .qt-text span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #qTrack .qt-text b { flex: none; min-width: 78px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -20408,9 +20411,21 @@ function buildSealAtlas(cell) {
   const c = document.createElement('canvas'); c.width = cell * 3; c.height = cell;
   const g = c.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-  sealImgs.forEach((im, k) => g.drawImage(im, k * cell, 0, cell, cell));
-  const d = g.getImageData(0, 0, cell * 3, cell).data;
-  for (let k = 0; k < d.length; k += 4) { const a = d[k + 3] / 255; d[k] = Math.round(d[k] * a); d[k + 1] = Math.round(d[k + 1] * a); d[k + 2] = Math.round(d[k + 2] * a); }
+  // (v594, Jordan) each a pixel in from its cell's edge, for a one-pixel black stroke round it
+  sealImgs.forEach((im, k) => g.drawImage(im, k * cell + 1, 1, cell - 2, cell - 2));
+  const W = cell * 3, d = g.getImageData(0, 0, W, cell).data, A = new Uint8Array(W * cell);
+  for (let k = 0; k < A.length; k++) A[k] = d[k * 4 + 3];
+  for (let y = 0; y < cell; y++) for (let x = 0; x < W; x++) {
+    const k = y * W + x, o = k * 4, a = A[k] / 255, c0 = x - x % cell;
+    // the stroke: as solid as the most solid of the eight around it (within the same seal's cell), under the seal
+    let m = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if ((dx || dy) && xx >= c0 && xx < c0 + cell && yy >= 0 && yy < cell) m = Math.max(m, A[yy * W + xx]);
+    }
+    d[o] = Math.round(d[o] * a); d[o + 1] = Math.round(d[o + 1] * a); d[o + 2] = Math.round(d[o + 2] * a);
+    d[o + 3] = Math.round(A[k] + m * (1 - a));
+  }
   const t = SEAL_U.tSeal.value;
   t.image = { data: new Uint8Array(d.buffer), width: cell * 3, height: cell }; t.needsUpdate = true;
   sealCell = cell;
@@ -26621,7 +26636,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 593, crashSeen = new Map();
+const GAME_VERSION = 594, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
