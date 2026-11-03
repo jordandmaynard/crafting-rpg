@@ -266,6 +266,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v622:** (Jordan) Ragdoll tuning as default: bounce 0.33, friction 0.36, item friction 0.44, head pops off 8% of the time, and each weapon's kick, lift and spin (sword 3/2.7/5.7, axe 5.9/4.4/7.7, hammer 7.3/4.6/8, spear 2.8/3.6/5.1, bow 3.3/1.2/9.7).
 
 **v623:** (Jordan) Thatch roofs tuning as defaults: bump 1.80, row 0.19, span 1.52, shade 1.09.
+**v624:** (Jordan) Quest board notices: the item art has a 1-screen-pixel black edge (it had none), and the quest description is in italics.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
