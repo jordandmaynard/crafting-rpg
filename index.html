@@ -2245,7 +2245,7 @@ async function generate(progress) {
   progress(0.95, 'NAMING THE LANDS'); await nextFrame();
   nameRegions();
   findFalls();
-  for (const g of grottos) falls.push(g.fall);
+  for (const g of grottos) { g.fall.grotto = true; falls.push(g.fall); }
   for (const t of towns) if (t.tier === 2) falls.push(...fountainFalls(t.c, t.r));
   progress(0.97, 'DRAWING THE MAP'); await nextFrame();
   paintMap();
@@ -10223,6 +10223,7 @@ function buildSpray() {
   for (const f of falls) {
     if (Math.abs(f.x - H.x) > SPRAY_R || Math.abs(f.z - H.z) > SPRAY_R) continue;
     if (f.small && FOUNT_FX.on > 0.5 && FX_TUNE.on > 0.5) continue;   // (v599: fountains splash in the GPU particles)
+    if (f.grotto && GROT_FX.on > 0.5 && FX_TUNE.on > 0.5) continue;   // (v602: and so do the grottos' falls)
     for (const [mist, slots] of [[0, SPRAY_SLOTS], [1, SPRAY_SLOTS / 2]]) for (let k = 0; k < slots; k++) {
       const sd = (++seed * 0.6180339887) % 1;
       for (const [cx, cz] of C) { pos.push(f.x, f.y, f.z); dir.push(f.dx, f.dz, f.drop); part.push(k, sd, mist + (f.small ? 2 : 0)); corner.push(cx, cz); }
@@ -17670,6 +17671,7 @@ function updateFx(dt) {
   if (dt > 0) fxRun.update(dt);
   if (dt > 0) lavaBubbles(dt);
   updateFountainFx(dt);
+  updateGrottoFx(dt);
   fxParts.update(dt);
   const want = T.lights > 0.5 ? fxRun.lights.slice().sort((a, b) => b.k - a.k) : [];
   fxLights.forEach((l, i) => {
@@ -18007,6 +18009,106 @@ function updateFountainFx(dt) {
       const s = fountStream(x, y0, z, stream(), rnd(0, 0.2)), m = F.mistSize;
       P({ style: GFX.FX.PUFF, x: s.x, y: s.y, z: s.z, vx: s.sx * rnd(0.05, 0.15), vy: rnd(0.05, 0.15), vz: s.sz * rnd(0.05, 0.15),
         life: rnd(1, 1.5), size0: 0.06 * m, size1: rnd(0.22, 0.32) * m, drag: 1.2, turb: 0.2, ramp: water, tone0: 0.97, tone1: 0.92, alpha: 0.16 });
+    }
+  }
+}
+// ---------- Grotto waterfall effects (T > Grotto water) ----------
+// (2026-11-03, Jordan) the fairy grottos' falls in the GPU particles, as the fountains are: white water and beads
+// where each fall spills over its lip, a little mist off the top, droplets shed off the curtain's edges on the way
+// down, and where it lands in the pool a splash thrown back up, glowing white water, ripples running out, a veil
+// of spray up the foot of the fall and a low glowing mist drifting out over the pool, with a fairy-light glint in
+// it now and then. In the grotto's teal (ramp 'grotto'); with it on, the old spray mesh leaves grottos alone.
+const GROT_FX = { on: 1, reach: 40, lip: 1, shed: 1, splash: 1, ripples: 1, mist: 1, mistSize: 1, glow: 1, glints: 1 };
+fxParts.ramp('grotto', ['#04302c', '#0a4a44', '#127064', '#1f9484', '#3cb8a6', '#72dccb', '#b0f4e8', '#effffb']);
+const grotAcc = new Map();   // fractional spawns carried over, by grotto and kind
+// a grotto's falls: [which (0 main, 1 the small one off its ledge), along the cliff a, how strong]; the fall's
+// centre line as drawn by buildGrottoFalls: b out from the cliff and y at tau (0 the lip, 1 the pool)
+function grotFallAt(g, which, tau, side = 0) {
+  const yS = g.L * STEP - BOG_SURF, yT = g.top * STEP;
+  let a, b, y, db, dy, w;
+  if (which === 0) {
+    const Hh = g.fallTop - yS, dur = Math.sqrt(2 * Math.max(0.2, Hh) / 9);
+    a = g.fa; b = 0.05 + 0.8 * tau; y = g.fallTop - Hh * tau * tau; db = 0.8 / dur; dy = -2 * Hh * tau / dur; w = 0.6 + 0.3 * tau;
+  } else {
+    const y2 = g.L * STEP + (yT - g.L * STEP) * 0.55, b2 = 0.5 * (yT - y2) / (yT - g.L * STEP), H2 = y2 - yS, dur = Math.sqrt(2 * Math.max(0.2, H2) / 9);
+    a = g.fa2; b = b2 + 0.12 + 0.4 * tau; y = y2 - H2 * tau * tau; db = 0.4 / dur; dy = -2 * H2 * tau / dur; w = 0.26 + 0.12 * tau;
+  }
+  const aa = a + side * w / 2;
+  return { x: g.x0 + g.lx * aa + g.ox * b, y, z: g.z0 + g.lz * aa + g.oz * b, vx: g.ox * db, vy: dy, vz: g.oz * db, w, yS };
+}
+function updateGrottoFx(dt) {
+  const F = GROT_FX;
+  if (F.on < 0.5 || FX_TUNE.on < 0.5 || dt <= 0) return;
+  const ramp = fxParts.ramp('grotto'), dens = FX_TUNE.density, gl = F.glow;
+  const P = (o) => fxParts.spawn(o), rnd = (a, b) => a + Math.random() * (b - a), S = GFX.FX;
+  for (const g of grottos) {
+    const d = Math.hypot(g.x - H.x, g.z - H.z);
+    if (d > F.reach) continue;
+    const near = Math.min(1, (F.reach - d) / 6);
+    let acc = grotAcc.get(g);
+    if (!acc) { acc = {}; grotAcc.set(g, acc); }
+    for (const [which, k] of [[0, 1], [1, 0.4]]) {
+      const due = (key, rate) => { key += which; acc[key] = (acc[key] || 0) + rate * k * dt * dens * near; const n = Math.floor(acc[key]); acc[key] -= n; return n; };
+      const ox = g.ox, oz = g.oz, lx = g.lx, lz = g.lz;
+      // at the lip: white water breaking over the edge, beads running off ahead, a little mist
+      for (let i = due('lip', 50 * F.lip); i--;) {
+        const s = grotFallAt(g, which, rnd(0, 0.06), rnd(-0.9, 0.9));
+        P({ style: S.PUFF, x: s.x, y: s.y + 0.02, z: s.z, vx: s.vx * 0.2 + rnd(-0.05, 0.05), vy: rnd(0.02, 0.12), vz: s.vz * 0.2 + rnd(-0.05, 0.05),
+          life: rnd(0.25, 0.45), size0: 0.04, size1: rnd(0.09, 0.14), drag: 3, ramp, tone0: 1, tone1: 0.85, alpha: 0.5, glow: 0.25 * gl });
+      }
+      for (let i = due('bead', 12 * F.lip); i--;) {
+        const s = grotFallAt(g, which, 0.02, rnd(-0.9, 0.9));
+        P({ style: S.DROP, x: s.x, y: s.y + 0.01, z: s.z, vx: s.vx * rnd(1, 1.3) + rnd(-0.1, 0.1), vy: rnd(0, 0.2), vz: s.vz * rnd(1, 1.3) + rnd(-0.1, 0.1),
+          life: 1.2, size0: 0.026, size1: 0.022, grav: 1, floor: s.yS, stretch: 0.07, ramp, tone0: 0.95, tone1: 0.8, glow: 0.3 * gl });
+      }
+      for (let i = due('lipMist', 4 * F.mist); i--;) {
+        const s = grotFallAt(g, which, rnd(0, 0.15), rnd(-1, 1)), m = F.mistSize;
+        P({ style: S.PUFF, x: s.x, y: s.y, z: s.z, vx: ox * rnd(0.05, 0.2), vy: rnd(0.04, 0.12), vz: oz * rnd(0.05, 0.2),
+          life: rnd(1.2, 1.8), size0: 0.08 * m, size1: rnd(0.3, 0.45) * m, drag: 1.2, turb: 0.2, ramp, tone0: 0.95, tone1: 0.9, alpha: 0.12, glow: 0.2 * gl });
+      }
+      // droplets shed off the curtain on the way down, mostly off its two edges, flung out and to the side
+      for (let i = due('shed', 40 * F.shed); i--;) {
+        const e = Math.random() < 0.7 ? (Math.random() < 0.5 ? -1 : 1) : rnd(-1, 1), s = grotFallAt(g, which, rnd(0.15, 0.85), e), j = e * rnd(0.1, 0.45);
+        P({ style: S.DROP, x: s.x, y: s.y, z: s.z, vx: s.vx * 0.7 + ox * rnd(0, 0.3) + lx * j, vy: s.vy * 0.6, vz: s.vz * 0.7 + oz * rnd(0, 0.3) + lz * j,
+          life: 0.9, size0: 0.02, size1: 0.018, grav: 1, floor: s.yS, stretch: 0.06, ramp, tone0: 0.9, tone1: 0.75, glow: 0.25 * gl });
+      }
+      // where it lands: a splash thrown back up and out
+      for (let i = due('splash', 70 * F.splash); i--;) {
+        const s = grotFallAt(g, which, 1, rnd(-1, 1)), a = Math.random() * 6.283, sp = rnd(0.2, 0.9);
+        P({ style: S.DROP, x: s.x, y: s.yS + 0.01, z: s.z, vx: Math.cos(a) * sp + ox * 0.35, vy: rnd(0.9, 2.1), vz: Math.sin(a) * sp + oz * 0.35,
+          life: rnd(0.4, 0.7), size0: 0.024, size1: 0.018, grav: 1, floor: s.yS, stretch: 0.06, ramp, tone0: 0.95, tone1: 0.8, glow: 0.3 * gl });
+      }
+      // glowing white water churning at the foot
+      for (let i = due('foam', 36 * F.splash); i--;) {
+        const s = grotFallAt(g, which, 1, rnd(-1.1, 1.1));
+        P({ style: S.PUFF, x: s.x + rnd(-0.08, 0.08), y: s.yS + 0.03, z: s.z + rnd(-0.08, 0.08), vx: rnd(-0.2, 0.2) + ox * 0.15, vy: rnd(0.05, 0.25), vz: rnd(-0.2, 0.2) + oz * 0.15,
+          life: rnd(0.35, 0.6), size0: 0.06, size1: rnd(0.14, 0.22), drag: 3, ramp, tone0: 1, tone1: 0.85, alpha: 0.55, glow: 0.45 * gl });
+      }
+      // ripples running out over the pool
+      for (let i = due('ripple', 6 * F.ripples), j = 0; j < i; j++) {
+        const s = grotFallAt(g, which, 1, rnd(-0.8, 0.8));
+        P({ style: S.RING, x: s.x + ox * rnd(0, 0.2), y: s.yS - 0.02, z: s.z + oz * rnd(0, 0.2), life: rnd(1, 1.4), size0: 0.08, size1: rnd(0.55, 0.8), ramp, tone0: 1, tone1: 0.8,
+          alpha: 0.45, glow: 0.4 * gl, cover: 0.35, stretch: 0.2 });
+      }
+      // a veil of spray up the foot of the fall
+      for (let i = due('veil', 14 * F.mist); i--;) {
+        const s = grotFallAt(g, which, rnd(0.75, 1), rnd(-1.2, 1.2)), m = F.mistSize;
+        P({ style: S.PUFF, x: s.x, y: Math.max(s.y, s.yS + 0.05), z: s.z, vx: ox * rnd(0.1, 0.35), vy: rnd(0.15, 0.4), vz: oz * rnd(0.1, 0.35),
+          life: rnd(0.8, 1.3), size0: 0.1 * m, size1: rnd(0.35, 0.55) * m, drag: 1.5, grav: -0.02, turb: 0.3, ramp, tone0: 0.97, tone1: 0.9, alpha: 0.16, glow: 0.3 * gl });
+      }
+      // and a low mist drifting out over the pool
+      for (let i = due('mist', 9 * F.mist); i--;) {
+        const s = grotFallAt(g, which, 1, rnd(-1, 1)), m = F.mistSize;
+        P({ style: S.PUFF, x: s.x + rnd(-0.15, 0.15), y: s.yS + rnd(0.05, 0.2), z: s.z + rnd(-0.15, 0.15), vx: ox * rnd(0.12, 0.4) + lx * rnd(-0.1, 0.1), vy: rnd(0.03, 0.12),
+          vz: oz * rnd(0.12, 0.4) + lz * rnd(-0.1, 0.1), life: rnd(2.4, 3.6), size0: 0.2 * m, size1: rnd(0.7, 1.05) * m, drag: 0.6, grav: -0.005, turb: 0.25,
+          ramp, tone0: 0.9, tone1: 0.8, alpha: 0.13, glow: 0.35 * gl });
+      }
+      // fairy-light glints caught in the spray
+      for (let i = due('glint', 3 * F.glints); i--;) {
+        const s = grotFallAt(g, which, rnd(0.3, 1), rnd(-1.3, 1.3));
+        P({ style: S.GLINT, x: s.x + ox * rnd(0, 0.3), y: Math.max(s.y, s.yS + 0.1) + rnd(0, 0.3), z: s.z + oz * rnd(0, 0.3), vy: rnd(0.05, 0.2), life: rnd(0.3, 0.5),
+          size0: 0.08, size1: 0.03, ramp, tone0: 1, tone1: 1, glow: 1.8 * gl });
+      }
     }
   }
 }
@@ -26290,6 +26392,18 @@ const TUNING = [
     [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
     [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
+  ['Grotto water', [
+    [GROT_FX, 'on', 'Grotto falls splash and mist in the GPU effects (0: the old spray)', 0, 1, 1, () => buildSpray()],
+    [GROT_FX, 'reach', 'Played within this many tiles of you', 8, 80, 1],
+    [GROT_FX, 'lip', 'White water and beads at the lip (×)', 0, 3, 0.05],
+    [GROT_FX, 'shed', 'Droplets shed off the falls on the way down (×)', 0, 3, 0.05],
+    [GROT_FX, 'splash', 'Splash and white water where they land (×)', 0, 3, 0.05],
+    [GROT_FX, 'ripples', 'Ripples over the pool (×)', 0, 3, 0.05],
+    [GROT_FX, 'mist', 'Mist and spray (×)', 0, 3, 0.05],
+    [GROT_FX, 'mistSize', 'Mist puff size (×)', 0.3, 3, 0.05],
+    [GROT_FX, 'glow', 'Glow in the water (×)', 0, 3, 0.05],
+    [GROT_FX, 'glints', 'Fairy-light glints in the spray (×)', 0, 3, 0.05],
+  ]],
   ['Great willows', [
     [WILLOW, 'sway', 'Hanging leaves: how far they sway', 0, 1, 0.01],
     [WILLOW, 'fade', 'Hanging leaves in front of you fade as you walk under: over how far (tiles)', 0.2, 4, 0.1],
@@ -26978,7 +27092,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 600, crashSeen = new Map();
+const GAME_VERSION = 602, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
