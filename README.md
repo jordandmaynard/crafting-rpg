@@ -259,6 +259,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v618:** (Jordan) Hearth fires tuning as defaults (flames 2.4, size 1.1, smoke 1.7, smoke size 0.95). Lantern glass (street lamps, the bank's and guard house's wall lanterns) is one colour at one brightness on every face, unlit and brighter (glow tag -1 in glowMat; wall lanterns go in a new per-chunk piece glow mesh, ch.pglow). T > Lantern glass.
 
 **v619:** (Jordan) Lantern glass has a day and a night brightness (T > Lantern glass), eased between by daylight() as the sun sets and rises.
+**v620:** (Jordan) Tuning as defaults: lamp halos amount 1.1, day 0; lantern glass day 0.65, night 2.4.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
