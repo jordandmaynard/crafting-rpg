@@ -1171,6 +1171,7 @@ import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_W
 import { Ragdoll, RAGDOLL } from './src/ragdoll.js';
 import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShapes } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
+import { gullModel, poseGull, gullWings, dolphinModel } from './src/sea/sealife.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -18140,58 +18141,8 @@ const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 10.6
 const DOLPHINS = { on: 1, deep: 8, wait: 4, straight: 0.3, stay: 30, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 20 };
 const SEA_SPAWN = { gulls: 0, dolphins: 0 };   // (T > Sea life buttons)
 const seaLife = { flights: [], gullT: 5, pod: null, runT: 0, runH: 0, runGoal: 10, coolT: 0 };
-let SEA_GEOS = null;
-// the gull's and the dolphin's pieces, made once (in boatMat, flat lit with its own colours)
-function seaLifeGeos() {
-  if (SEA_GEOS) return SEA_GEOS;
-  const make = fn => {
-    const B = new Buf(), was = partAll;
-    partAll = B;
-    try { fn(B); } finally { partAll = was; }
-    return B.mesh(boatMat).geometry;
-  };
-  // a flat piece of points [x, z] at height y, as a fan
-  const flat = (B, pts, col, y = 0) => { const c = CC(col), P = pts.map(p => p.length === 3 ? p : [p[0], y, p[1]]); for (let k = 1; k + 1 < P.length; k++) tri(P[0], P[k], P[k + 1], c, c, c, B); };
-  const W = '#eeeee8', GR = '#a3a9b2', DK = '#25272b', Y = '#e0ac38';
-  const gBody = make(() => {
-    part(G.ico, W, 0, 0, 0, { sx: 0.17, sy: 0.15, sz: 0.52 });
-    // (v680, Jordan) the head carried level, in line with the body
-    part(G.ico, W, 0, 0.01, 0.27, { s: 0.15 });
-    part(G.cone4, Y, 0, 0, 0.39, { rx: Math.PI / 2, sx: 0.045, sy: 0.12, sz: 0.04 });
-    part(G.box, W, 0, 0.01, -0.3, { sx: 0.13, sy: 0.02, sz: 0.16 });
-    part(G.box, DK, 0.055, 0.035, 0.31, { s: 0.022 }); part(G.box, DK, -0.055, 0.035, 0.31, { s: 0.022 });
-  });
-  // a wing from its shoulder (x 0) out to its elbow, and from the elbow to its black tip; grey above, white under
-  const inner = [[0, 0.1], [0.34, 0.07], [0.34, -0.1], [0, -0.15]], outer = [[0, 0.07], [0.24, 0.05], [0.24, -0.09], [0, -0.1]], tip = [[0.24, 0.05], [0.42, -0.06], [0.24, -0.09]];
-  const wing = (pts, s, top, under) => make(B => { const p = pts.map(([x, z]) => [x * s, z]); flat(B, p, top, 0.006); flat(B, p, under, -0.006); });
-  const gInner = [1, -1].map(s => wing(inner, s, GR, W));
-  const gOuter = [1, -1].map(s => make(B => {
-    const p = outer.map(([x, z]) => [x * s, z]), t = tip.map(([x, z]) => [x * s, z]);
-    flat(B, p, GR, 0.006); flat(B, p, W, -0.006); flat(B, t, DK, 0.006); flat(B, t, DK, -0.006);
-  }));
-  // the dolphin: grey-blue above, pale under, its body from the tail's root (z -0.3) to its beak (z 1.2), and its
-  // tail from there back to the flukes, beating up and down
-  const D = '#56636f', P = '#b7c0c6', Dd = '#47525d';
-  const dFront = make(B => {
-    part(G.ico, D, 0, 0, 0.3, { sx: 0.44, sy: 0.42, sz: 1.3 });
-    part(G.ico, P, 0, -0.07, 0.34, { sx: 0.37, sy: 0.32, sz: 1.12 });
-    part(G.ico, D, 0, 0.02, 0.86, { sx: 0.3, sy: 0.28, sz: 0.42 });
-    part(G.cone6, Dd, 0, -0.04, 1.1, { rx: Math.PI / 2, sx: 0.12, sy: 0.24, sz: 0.1 });
-    part(G.box, '#15181b', 0.13, 0.03, 0.92, { s: 0.035 }); part(G.box, '#15181b', -0.13, 0.03, 0.92, { s: 0.035 });
-    // the dorsal fin, swept back, and the flippers
-    flat(B, [[0.012, 0.17, 0.38], [0.012, 0.5, -0.12], [0.012, 0.17, -0.02]], Dd);
-    flat(B, [[-0.012, 0.17, 0.38], [-0.012, 0.5, -0.12], [-0.012, 0.17, -0.02]], Dd);
-    for (const s of [1, -1]) flat(B, [[0.17 * s, -0.12, 0.6], [0.44 * s, -0.27, 0.32], [0.17 * s, -0.12, 0.38]], Dd);
-  });
-  const dTail = make(B => {
-    seg(G.frust7, D, [0, 0, 0.12], [0, 0.02, -0.78], 0.2);
-    for (const s of [1, -1]) flat(B, [[0, 0.02, -0.66], [0.38 * s, 0, -1.0], [0.3 * s, 0.01, -1.06], [0.05 * s, 0.02, -0.88]], Dd);
-    flat(B, [[0.05, 0.02, -0.88], [-0.05, 0.02, -0.88], [0, 0.02, -0.66]], Dd);
-  });
-  SEA_GEOS = { gBody, gInner, gOuter, dFront, dTail };
-  return SEA_GEOS;
-}
-const seaMesh = geo => shadowy(new GFX.Mesh(geo, boatMat));
+// (v684) the gull's and the dolphin's pieces live in src/sea/sealife.js (shared with the Random Model Generator), in
+// boatMat, flat lit with their own colours
 // the water's surface at (x, z) over water at level wl, on its swell
 const seaSurfY = (wl, x, z) => wl * STEP - 0.16 + waterSwell(x, z);
 const angGap = (a, b) => { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
@@ -18209,7 +18160,7 @@ function deepSeaAt(x, z) {
 }
 // a flight of gulls across where you are, from out of sight on one side to out of sight on the other
 function spawnGulls() {
-  const S = seaLifeGeos(), Gl = GULLS, flock = Math.random() < Gl.flock && Gl.most >= 2;
+  const Gl = GULLS, flock = Math.random() < Gl.flock && Gl.most >= 2;
   const n = flock ? 2 + Math.floor(Math.random() * Math.max(1, Math.round(Gl.most) - 1)) : 1;
   const a = Math.random() * Math.PI * 2, dx = Math.sin(a), dz = Math.cos(a), L = 30, off = (Math.random() * 2 - 1) * 9;
   const wl = H.boat ? H.boat.wl : WL[T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1))];
@@ -18220,17 +18171,8 @@ function spawnGulls() {
     side: Math.random() < 0.5 ? 1 : -1, cried: Gl.cry < 0.5 || Math.random() < 0.35, birds: [],
   };
   for (let k = 0; k < n; k++) {
-    const g = new GFX.Group(), wings = [];
-    g.add(seaMesh(S.gBody));
-    for (const s of [0, 1]) {
-      const sh = new GFX.Group(), el = new GFX.Group();
-      sh.position.set(s ? -0.06 : 0.06, 0.03, 0.03);
-      sh.add(seaMesh(S.gInner[s]));
-      el.position.set(s ? -0.34 : 0.34, 0, 0);
-      el.add(seaMesh(S.gOuter[s]));
-      sh.add(el); g.add(sh);
-      wings.push([sh, el, s ? -1 : 1]);
-    }
+    const { g, wings } = gullModel(boatMat);
+    shadowy(g);
     g.scale.setScalar(Gl.size * (0.9 + Math.random() * 0.2));
     scene.add(g);
     fl.birds.push({ k, g, wings, ph: Math.random() * 6.28, A: 0.6, flapping: Math.random() < 0.7, swapT: 0.5 + Math.random() * 2,
@@ -18262,8 +18204,8 @@ function updateGulls(dt) {
       if (bd.swapT <= 0) { bd.flapping = !bd.flapping; bd.swapT = bd.flapping ? 1 + Math.random() * 1.8 : 1.5 + Math.random() * 3; }
       bd.A += ((bd.flapping ? 0.62 : 0) - bd.A) * Math.min(1, dt * 4);
       bd.ph += dt * Math.PI * 2 * Gl.flap * bd.rate * (0.4 + 0.6 * bd.A / 0.62);
-      const fk = clamp(bd.A / 0.62, 0, 1), sh = (1 - fk) * Gl.arch + fk * 0.1 + bd.A * Math.sin(bd.ph), el = bd.A * 0.75 * Math.sin(bd.ph - 0.7) - (1 - fk) * Gl.droop;
-      for (const [S0, E0, sd] of bd.wings) { S0.rotation.z = sh * sd; E0.rotation.z = el * sd; }
+      const [sh, el] = gullWings(bd.ph, bd.A, Gl.arch, Gl.droop);
+      poseGull(bd, sh, el);
       if (!fl.cried && Math.hypot(x - H.x, z - H.z) < 10) { fl.cried = true; sfx.gull(); }
     }
   }
@@ -18272,15 +18214,14 @@ function updateGulls(dt) {
 }
 // a pod up from below beside boat b: one riding the bow, the rest alongside, either side
 function spawnPod(b) {
-  const S = seaLifeGeos(), D = DOLPHINS, lo = Math.max(1, Math.round(D.fewest)), hi = Math.max(lo, Math.round(D.most));
+  const D = DOLPHINS, lo = Math.max(1, Math.round(D.fewest)), hi = Math.max(lo, Math.round(D.most));
   const n = lo + Math.floor(Math.random() * (hi - lo + 1)), list = [];
   for (let k = 0; k < n; k++) {
     const sd = k % 2 ? 1 : -1, bow = k === 0 && n > 2;
     const su = bow ? (Math.random() < 0.5 ? -0.6 : 0.6) : sd * (BOAT.beam + 1.1 + Math.random() * 1.8);
     const sv = bow ? BOAT.bow + 1.3 : -1.5 + Math.random() * 6;
-    const g = new GFX.Group(), tail = new GFX.Group();
-    g.add(seaMesh(S.dFront));
-    tail.position.set(0, 0, -0.3); tail.add(seaMesh(S.dTail)); g.add(tail);
+    const { g, tail } = dolphinModel(boatMat);
+    shadowy(g);
     g.scale.setScalar(D.size * (0.85 + Math.random() * 0.3));
     const [x, z] = boatWorld(b, su * 1.5, sv - 7);
     g.position.set(x, -50, z);
@@ -30374,7 +30315,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 683, crashSeen = new Map();
+const GAME_VERSION = 684, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

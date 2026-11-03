@@ -57,7 +57,7 @@ td:first-child { color: var(--dim); width: 58px; }
 .chip button { border: none; background: none; padding: 2px 6px; }
 .chip .x { color: var(--dim); }
 .muted { color: var(--dim); font-size: 12px; }
-body.boats .folkOnly, body:not(.boats) .boatOnly, body.props .folkOnly, body:not(.props) .propOnly, body.props .notProp { display: none; }
+body.sea .folkOnly, body:not(.sea) .seaOnly, body.boats .folkOnly, body:not(.boats) .boatOnly, body.props .folkOnly, body:not(.props) .propOnly, body.props .notProp { display: none; }
 kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 #err { position: fixed; left: 8px; right: 8px; bottom: 8px; background: var(--errBg); color: var(--errInk); padding: 8px 10px; border-radius: 6px; font: 12px ui-monospace, monospace; white-space: pre-wrap; z-index: 9; }
 @media (max-width: 760px) {
@@ -89,7 +89,7 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     </div>
     <div class="row" style="margin-top:6px">
       <span class="muted">Models</span>
-      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button><button data-pool="boats">Boats</button><button data-pool="props">Props</button>
+      <button data-pool="town" class="on">Townsfolk</button><button data-pool="wilds">Hostiles</button><button data-pool="boats">Boats</button><button data-pool="props">Props</button><button data-pool="sea">Sea life</button>
     </div>
     <div class="row" style="margin-top:6px">
       <button id="randWild" title="A random bandit, cultist, poacher… (H)">Generate hostile</button>
@@ -127,6 +127,10 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
 
     <h2 class="folkOnly">Move</h2>
     <div class="row folkOnly" id="anims"></div>
+    <h2 class="seaOnly">Creature</h2>
+    <div class="row seaOnly"><button data-sea="dolphin">Dolphin</button><button data-sea="gull">Gull</button></div>
+    <h2 class="seaOnly">Move</h2>
+    <div class="row seaOnly"><button data-smove="0" id="smove0"></button><button data-smove="1" id="smove1"></button></div>
     <h2 class="boatOnly">Sails</h2>
     <div class="row boatOnly"><button data-sails="1" class="on">Set</button><button data-sails="0.5">Reefed</button><button data-sails="0">Furled</button></div>
     <h2 class="boatOnly">Anchor</h2>
@@ -171,6 +175,7 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, design as folkDesign, desertDress, DESERT_JOBS, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
 import { PROPS, PROP_IDS, PROP_GROUPS, WOODS, seeded, rollProp, describeProp, buildProp, propStage } from './src/props/props.js';
+import { gullModel, poseGull, gullWings, dolphinModel, GULL_COLORS, DOLPHIN_COLORS } from './src/sea/sealife.js';
 import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat, hangChain } from './src/boats/brig.js';
 
 const $ = id => document.getElementById(id);
@@ -209,9 +214,10 @@ const S = {
 // as 'w' + number, and in the link as #wild=number)
 // (v14) and boats: a livery a seed (kept as 'b' + number, #boat=number)
 // (v20) and props: a prop and a look a seed (kept as 'p:' + prop + ':' + number, #prop=prop:number)
-const hashM = location.hash.match(/(seed|wild|boat|prop)=(?:(\w+):)?(\d+)/);
-const POOL_OF = { seed: 'town', wild: 'wilds', boat: 'boats', prop: 'props' }, LINK = { town: '#seed=', wilds: '#wild=', boats: '#boat=', props: '#prop=' };
-const SEED_KEY = { town: 'seed', wilds: 'wildSeed', boats: 'boatSeed', props: 'propSeed' }, TAG = { town: '', wilds: 'w', boats: 'b', props: 'p:' };
+// (v24) and sea life: the game's dolphin and gull (no seeded looks: kept as 's' + number, #sea=number)
+const hashM = location.hash.match(/(seed|wild|boat|prop|sea)=(?:(\w+):)?(\d+)/);
+const POOL_OF = { seed: 'town', wild: 'wilds', boat: 'boats', prop: 'props', sea: 'sea' }, LINK = { town: '#seed=', wilds: '#wild=', boats: '#boat=', props: '#prop=', sea: '#sea=' };
+const SEED_KEY = { town: 'seed', wilds: 'wildSeed', boats: 'boatSeed', props: 'propSeed', sea: 'seaSeed' }, TAG = { town: '', wilds: 'w', boats: 'b', props: 'p:', sea: 's' };
 S.pool = hashM ? POOL_OF[hashM[1]] : store.get('pool', 'town');
 S.prop = hashM && hashM[1] === 'prop' && PROPS[hashM[2]] ? hashM[2] : store.get('prop', 'bed');
 if (!PROPS[S.prop]) S.prop = 'bed';
@@ -221,7 +227,8 @@ S.sails = 1;
 // (v19) the anchor: 0 stowed under the cathead .. 1 dropped, easing to anchorGoal over the game's 1.6 s
 S.anchor = 0; S.anchorGoal = 0;
 S.seed = hashM ? +hashM[3] : store.get(SEED_KEY[S.pool], 1);
-const isBoats = () => S.pool === 'boats', isProps = () => S.pool === 'props';
+const isBoats = () => S.pool === 'boats', isProps = () => S.pool === 'props', isSea = () => S.pool === 'sea';
+S.sea = store.get('sea', 'dolphin') === 'gull' ? 'gull' : 'dolphin'; S.smove = 0;
 // (v21) the desert toggle: a town design as worn in a sandstone town (v22: the watch too, the clergy as the mosque's)
 S.desert = store.get('desert', false);
 const design = s => isBoats() ? rollLivery(s) : S.pool === 'town' && S.desert ? desertDress(folkDesign(s, 'town')) : folkDesign(s, S.pool);
@@ -235,11 +242,11 @@ const tag = s => isProps() ? `p:${S.prop}:${s}` : TAG[S.pool] + s;
 const untag = k => {
   const q = String(k).match(/^p:(\w+):(\d+)$/);
   if (q) return PROPS[q[1]] ? { pool: 'props', prop: q[1], seed: +q[2] } : null;
-  const m = String(k).match(/^([wb]?)(\d+)$/); return m ? { pool: m[1] === 'w' ? 'wilds' : m[1] === 'b' ? 'boats' : 'town', seed: +m[2] } : null;
+  const m = String(k).match(/^([wbs]?)(\d+)$/); return m ? { pool: m[1] === 'w' ? 'wilds' : m[1] === 'b' ? 'boats' : m[1] === 's' ? 'sea' : 'town', seed: +m[2] } : null;
 };
 let folks = [], yawDrag = 0, t = 0;
 
-const fits = s => { if (isBoats() || isProps()) return true; const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || (d.baseJob || d.job) === S.job); };
+const fits = s => { if (isBoats() || isProps() || isSea()) return true; const d = design(s); return (S.body === 'any' || d.body === S.body) && (S.job === 'any' || (d.baseJob || d.job) === S.job); };
 function step(dir) { let s = S.seed; for (let n = 0; n < 3000; n++) { s = Math.max(1, s + dir); if (fits(s)) break; if (s === 1 && dir < 0) break; } setSeed(s); }
 function randomSeed() { let s; for (let n = 0; n < 3000; n++) { s = 1 + Math.floor(Math.random() * 999999); if (fits(s)) break; } setSeed(s); }
 function lineSeeds() { const out = [S.seed]; let s = S.seed; while (out.length < (isBoats() ? 3 : 7) && s < S.seed + 4000) { s++; if (fits(s)) out.push(s); } return out; }
@@ -256,8 +263,10 @@ function rebuild() {
   for (const f of folks) scene.remove(f.g);
   document.body.classList.toggle('boats', isBoats());
   document.body.classList.toggle('props', isProps());
-  $('outfitH').textContent = isBoats() ? 'Livery' : isProps() ? 'Prop' : 'Outfit';
-  $('lineBtn').textContent = isProps() ? `All ${PROPS[S.prop].group.toLowerCase()}` : isBoats() ? 'Lineup of 3' : 'Lineup of 7';
+  document.body.classList.toggle('sea', isSea());
+  $('outfitH').textContent = isBoats() ? 'Livery' : isProps() ? 'Prop' : isSea() ? 'Colours' : 'Outfit';
+  $('lineBtn').textContent = isProps() ? `All ${PROPS[S.prop].group.toLowerCase()}` : isBoats() ? 'Lineup of 3' : isSea() ? 'Both' : 'Lineup of 7';
+  if (isSea()) return rebuildSea();
   if (isProps()) return rebuildProps();
   if (isBoats()) return rebuildBoats();
   const seeds = S.mode === 'one' ? [S.seed] : lineSeeds(), gap = 0.78;
@@ -289,6 +298,51 @@ function rebuildBoats() {
   $('whoJob').textContent = `Merchant brig · ${liveryName(L)} · livery ${S.seed}`;
   $('outfit').innerHTML = describeLivery(L).map(([k, v, c]) => `<tr><td>${k}</td><td>${c ? `<span class="sw" style="background:${c}"></span>` : ''}${v}</td></tr>`).join('');
 }
+// (v24) sea life: the game's dolphin or gull (both, side by side, in the lineup), moving as picked: a dolphin
+// swimming or leaping, a gull flapping or gliding with its wings arched (the game's GULLS.arch and droop)
+const SEA_MAT = new GFX.MeshStandardMaterial({ flatShading: true, roughness: 1, metalness: 0, vertexColors: true, side: GFX.DoubleSide });
+const SEA_INFO = {
+  dolphin: { name: 'Dolphin', job: 'Deep sea · pods pace a ship at full ahead · 2.3 tiles long', moves: ['Swim', 'Leap'], colors: DOLPHIN_COLORS },
+  gull: { name: 'Gull', job: 'Bays, inlets, straits and shallows · 0.84 tiles across the wings', moves: ['Flap', 'Glide'], colors: GULL_COLORS },
+};
+function rebuildSea() {
+  const kinds = S.mode === 'one' ? [S.sea] : ['dolphin', 'gull'];
+  folks = kinds.map((k, i) => {
+    const m = k === 'gull' ? gullModel(SEA_MAT) : dolphinModel(SEA_MAT);
+    m.sea = k; m.g.rotation.order = 'YXZ';
+    m.g.position.x = kinds.length > 1 ? (i ? 1.3 : -1.1) : 0;
+    scene.add(m.g);
+    return m;
+  });
+  const I = SEA_INFO[S.sea];
+  document.querySelectorAll('[data-sea]').forEach(x => x.classList.toggle('on', x.dataset.sea === S.sea));
+  I.moves.forEach((n, i) => { $('smove' + i).textContent = n; $('smove' + i).classList.toggle('on', S.smove === i); });
+  $('names').innerHTML = S.mode === 'one' ? '' : kinds.map(k => `<button data-sk="${k}">${SEA_INFO[k].name}</button>`).join('');
+  $('whoName').textContent = I.name;
+  $('whoJob').textContent = I.job;
+  $('outfit').innerHTML = Object.entries(I.colors).map(([k, c]) => `<tr><td>${k[0].toUpperCase() + k.slice(1)}</td><td><span class="sw" style="background:${c}"></span>${c}</td></tr>`).join('');
+}
+// a sea creature's pose at time t
+function poseSea(m, t) {
+  if (m.sea === 'gull') {
+    const flap = S.smove === 0, [sh, el] = gullWings(t * Math.PI * 2 * 3, flap ? 0.62 : 0, 0.3, 0.55);
+    poseGull(m, sh, el);
+    m.g.position.y = 0.55 + 0.04 * Math.sin(t * 1.7);
+    m.g.rotation.x = -0.04 * Math.cos(t * 1.7);
+    return;
+  }
+  // swimming: the tail beating; leaping: out and over in an arc every 2.2 s, as the game's do (its tail easing off
+  // in the air)
+  let y = 0.55, pitch = 0, air = false;
+  if (S.smove === 1) {
+    const J = 1.1, g = 9.8, u = t % 2.2;
+    if (u < J) { const v0 = 0.5 * g * J; y += v0 * u - 0.5 * g * u * u; pitch = -Math.atan2(v0 - g * u, 7); air = true; }
+  }
+  m.g.position.y = y; m.g.rotation.x = pitch;
+  m.tail.rotation.x = Math.sin(t * Math.PI * 2 * 1.6) * (air ? 0.12 : 0.32);
+}
+document.querySelectorAll('[data-sea]').forEach(b => b.onclick = () => { S.sea = b.dataset.sea; S.smove = 0; store.set('sea', S.sea); rebuild(); });
+document.querySelectorAll('[data-smove]').forEach(b => b.onclick = () => { S.smove = +b.dataset.smove; rebuild(); });
 // (v20) a prop on its tiles (and the wall behind it), or every prop of its group side by side, all in this seed's
 // looks and the picked wood; a townsperson beside it for scale if asked
 const propGeos = new Map();
@@ -354,7 +408,7 @@ function outfit(d) {
     + `<tr><td>Skin</td><td><span class="sw" style="background:${d.skin}"></span>${d.skin}</td></tr>`;
 }
 function keptList() {
-  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : u.pool === 'boats' ? '⛵ ' : u.pool === 'props' ? PROPS[u.prop].name + ' ' : '') + u.seed;
+  $('kept').innerHTML = S.kept.map(k => { const u = untag(k); if (!u) return ''; const label = (u.pool === 'wilds' ? '⚔ ' : u.pool === 'boats' ? '⛵ ' : u.pool === 'sea' ? '🐬 ' : u.pool === 'props' ? PROPS[u.prop].name + ' ' : '') + u.seed;
     return `<span class="chip"><button data-load="${k}" title="${u.pool === 'wilds' ? 'Hostile' : u.pool === 'boats' ? 'Boat livery' : u.pool === 'props' ? PROPS[u.prop].name : 'Townsfolk'} ${u.seed}">${label}</button><button class="x" data-drop="${k}" aria-label="Remove ${label}">×</button></span>`; }).join('');
   $('keptNote').style.display = S.kept.length ? 'none' : '';
   $('keep').textContent = S.kept.includes(tag(S.seed)) ? 'Kept' : 'Keep this seed';
@@ -374,11 +428,12 @@ document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
 });
 $('names').onclick = e => {
   const p = e.target.closest('[data-p]'); if (p) { S.mode = 'one'; document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x.dataset.mode === 'one')); setProp(p.dataset.p); return; }
+  const q = e.target.closest('[data-sk]'); if (q) { S.mode = 'one'; document.querySelectorAll('[data-mode]').forEach(x => x.classList.toggle('on', x.dataset.mode === 'one')); S.sea = q.dataset.sk; S.smove = 0; store.set('sea', S.sea); rebuild(); return; }
   const b = e.target.closest('[data-s]'); if (b) { document.querySelector('[data-mode="one"]').click(); setSeed(+b.dataset.s); }
 };
 // jobs grouped by where they're found
 function jobList() {
-  if (isBoats() || isProps()) return;
+  if (isBoats() || isProps() || isSea()) return;
   $('job').innerHTML = `<option value="any">${S.pool === 'wilds' ? 'Any kind' : 'Any job'}</option>` + POOLS[S.pool].map(t =>
     `<optgroup label="${TIERS[t]}">${Object.entries(JOBS).filter(([, J]) => J.tier === t).map(([k, J]) => `<option value="${k}">${J.title}</option>`).join('')}</optgroup>`).join('');
   $('job').value = S.job;
@@ -462,15 +517,15 @@ function frame(now) {
   const w = Math.max(16, Math.round(r.width * k)), h = Math.max(16, Math.round(r.height * k));
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   const yaw = S.spin ? spinYaw : -S.facing * Math.PI / 4 + yawDrag;
-  for (const f of folks) { if (f.isFolk) kit.pose(f, S.anim, t + f.offset); if (f.person) kit.pose(f.person, 'idle', t); f.g.rotation.y = yaw; }
+  for (const f of folks) { if (f.sea) poseSea(f, t); if (f.isFolk) kit.pose(f, S.anim, t + f.offset); if (f.person) kit.pose(f.person, 'idle', t); f.g.rotation.y = yaw; }
   wind.value.w = (wind.value.w + (S.paused ? 0 : dt * 2 * S.speed)) % 1e4;
   if (S.anchor !== S.anchorGoal) { S.anchor += Math.max(-dt / 1.6, Math.min(dt / 1.6, S.anchorGoal - S.anchor)); boatAnchor(); }
   // frame the figure (or the lineup) whatever the canvas's shape, from DOLL_VIEW's height and aim (a boat: its
   // length and its masts)
-  const boatsOn = isBoats(), propsOn = isProps();
-  const aspect = w / h, span = propsOn ? S.propSpan : boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = propsOn ? 2.6 : boatsOn ? 10 : 1.45;
+  const boatsOn = isBoats(), propsOn = isProps(), seaOn = isSea();
+  const aspect = w / h, span = seaOn ? (S.mode === 'one' ? (S.sea === 'gull' ? 1.1 : 2.6) : 4.2) : propsOn ? S.propSpan : boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = seaOn ? (S.smove === 1 && (S.mode !== 'one' || S.sea === 'dolphin') ? 2.6 : 1.2) : propsOn ? 2.6 : boatsOn ? 10 : 1.45;
   const vf = 20 * Math.PI / 180, need = Math.max(tall / 2 / Math.tan(vf / 2), span / 2 / (Math.tan(vf / 2) * aspect));
-  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = propsOn ? 0.9 : boatsOn ? 3 : 0.6;
+  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = seaOn ? (S.smove === 1 && (S.mode !== 'one' || S.sea === 'dolphin') ? 1.1 : 0.55) : propsOn ? 0.9 : boatsOn ? 3 : 0.6;
   cam.fov = 20; cam.aspect = aspect; cam.updateProjectionMatrix();
   cam.position.set(0, aimY + Math.sin(a) * dist, Math.cos(a) * dist);
   cam.lookAt(0, aimY, 0); cam.updateMatrixWorld();
