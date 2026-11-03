@@ -6901,7 +6901,7 @@ function chunkGI(cx, cz) {
       // what stands on it, and the roofs over it (each building's is one mesh of its own), cut into runs
       const roofs = [];
       for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
-      const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.metal), leaks: true }, { geo: geo(ch.prism), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
+      const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.metal), leaks: true }, { geo: geo(ch.prism), leaks: true }, { geo: geo(ch.leaf), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
         { geo: ch.buildGI || geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, ...roofs];
       job.st = GFX.rasterStart(cx, cz, job.ground);
       job.runs = parts.filter(part => GFX.rasterTris(part) > 0); job.t = 0;
@@ -7207,7 +7207,7 @@ fn cutHide(ct: vec2f) -> bool {
 // what the pieces drawn now are made of (buildMat): 0 plain, 1 stone, 2 wood, 3 plaster, 4 smooth (marble: bevels only)
 const SURF_STONE = 1, SURF_WOOD = 2, SURF_PLASTER = 3, SURF_SMOOTH = 4, SURF_SLATE = 5;   // (5: a bare triangle laid with the slate roofs' map)
 let SURF = 0, emitSurf = null;   // (emitSurf: while set, it picks SURF for each part from its colour)
-let OUT = new Buf(), GLOW = new Buf(), METAL = new Buf(), PRISMB = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
+let OUT = new Buf(), GLOW = new Buf(), METAL = new Buf(), PRISMB = new Buf(), LEAFB = null, TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
 // (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
 const bufWeb = new Buf();
 // (window glass: a mesh of its own per story with windowMat, casting no shadow; GLASSB is where glass goes while the
@@ -7227,6 +7227,24 @@ class TreeBuf extends Buf {
   }
 }
 const bufTrunk = new TreeBuf(), bufCanopy = new Buf();
+// (v565) oaks', birches' and pines' leaves carry, for every vertex, the smooth normal of the clump it's on (as if the
+// clump were round: an icosahedron's a sphere, a pine tier's a cone; 0 0 0 for a shape with none) and which tree's
+// leaves they are (LEAF_KIND: 0 oak, 1 birch, 2 pine, 3 snow on a frost pine), for leafMat
+class LeafBuf extends Buf {
+  constructor() { super(); this.lf = new Float32Array(Math.ceil(this.p.length / 3) * 4); }
+  need(k) {
+    super.need(k);
+    const want = Math.ceil(this.p.length / 3) * 4;
+    if (this.lf.length < want) { const f = new Float32Array(want); f.set(this.lf); this.lf = f; }
+  }
+  mesh(mat) {
+    const m = super.mesh(mat);
+    if (m) m.geometry.setAttribute('lf', new GFX.BufferAttribute(this.lf.slice(0, this.n / 3 * 4), 4));
+    return m;
+  }
+}
+let LEAF_KIND = 0;
+const bufLeaf = new LeafBuf(), bufTmpLeaf = new LeafBuf();
 // plants that bend (grass, flowers, reeds, ferns, bushes) carry, for every vertex, the foot of the stem it's on and
 // how freely that bends (see plantMat)
 class PlantBuf extends Buf {
@@ -7337,13 +7355,32 @@ const SAME_CORNERS = [0, 0, 0], SWAP_CORNERS = [0, 1, -1];   // (offsets in corn
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : OUT;
+  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'leaf' ? LEAFB || OUT : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   // (v440: a mirrored pose (negative scale) turns every triangle inside out: lay each one's corners the other way
   // round, so its front still faces out where back faces are culled. sw: the corner read for corner j of a triangle)
   const det = e[0] * (e[5] * e[10] - e[6] * e[9]) - e[4] * (e[1] * e[10] - e[2] * e[9]) + e[8] * (e[1] * e[6] - e[2] * e[5]);
   const sw = det < 0 ? SWAP_CORNERS : SAME_CORNERS;
+  if (B.lf) {
+    // (v565) the clump's smooth normal: the shape's own (a sphere's, a cone's) through the inverse transpose of the
+    // pose (its cofactors: columns b×c, c×a, a×b of the pose's columns a b c), flipped for a mirrored pose
+    const ax = e[0], ay = e[1], az = e[2], bx = e[4], by = e[5], bz = e[6], cx = e[8], cy = e[9], cz = e[10];
+    const m0 = by * cz - bz * cy, m1 = bz * cx - bx * cz, m2 = bx * cy - by * cx, m3 = cy * az - cz * ay, m4 = cz * ax - cx * az, m5 = cx * ay - cy * ax, m6 = ay * bz - az * by, m7 = az * bx - ax * bz, m8 = ax * by - ay * bx;
+    const lf = B.lf, ico = geo === G.ico, cone = geo === G.cone6, flip = det < 0 ? -1 : 1;
+    for (let i0 = 0, v = n / 3; i0 < src.length; i0 += 3, v++) {
+      const i = i0 + sw[(i0 / 3) % 3] * 3, px = src[i], py = src[i + 1], pz = src[i + 2];
+      let nx = 0, ny = 0, nz = 0;
+      if (ico) { nx = px; ny = py; nz = pz; }
+      else if (cone) {
+        // (the base's disc keeps its flat face: a triangle all at the foot)
+        const t = i0 - i0 % 9, low = src[t + 1] < -0.49 && src[t + 4] < -0.49 && src[t + 7] < -0.49, r = Math.hypot(px, pz);
+        if (low) ny = -1; else if (r < 1e-4) ny = 1; else { nx = px / r; ny = 0.5; nz = pz / r; }
+      }
+      const wx = (m0 * nx + m3 * ny + m6 * nz) * flip, wy = (m1 * nx + m4 * ny + m7 * nz) * flip, wz = (m2 * nx + m5 * ny + m8 * nz) * flip, l = Math.hypot(wx, wy, wz) || 1;
+      const o = v * 4; lf[o] = wx / l * (nx || ny || nz ? 1 : 0); lf[o + 1] = wy / l * (nx || ny || nz ? 1 : 0); lf[o + 2] = wz / l * (nx || ny || nz ? 1 : 0); lf[o + 3] = LEAF_KIND;
+    }
+  }
   if (B.dl) {
     if (emitSurf) SURF = emitSurf(k);
     const sx = dummy.scale.x, sy = dummy.scale.y, sz = dummy.scale.z, q = dummy.quaternion, code = SURF + (geo === G.box ? 8 : 0);
@@ -8099,8 +8136,146 @@ fn pushAt(p: vec2f) -> vec2f {
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
+// ---------- Leaves (v565, Jordan: treatments to try on oaks, birches and pines; T > Trees) ----------
+// Their crowns are drawn with leafMat, which can (1) shade each clump smooth, as if round, instead of faceted (smooth,
+// 0 faceted .. 1 smooth); (2) flutter them in the wind like the grass and sails (flutter, how far in tiles; flutterSpeed);
+// (3) cut leaf-shaped negative space out of them so you see through parts (holes, 0 none .. 1 the most), more of it
+// toward each clump's edge as you see it (holeEdge), in leaves of each tree's own shape and size (oakLeaf, birchLeaf,
+// pineLeaf: a leaf's size in tiles; oaks' lobed, birches' small and pointed, pines' fans of needles), and in their
+// shadows too (holeShadow 1). Through a hole you see the inside of the clump, a shade darker (inside).
+const LEAF = { smooth: 1, flutter: 0.025, flutterSpeed: 1, holes: 0.45, holeEdge: 0.6, oakLeaf: 0.16, birchLeaf: 0.1, pineLeaf: 0.14, holeShadow: 1, inside: 0.62 };
+const LEAF_U = {
+  windV: PLANT_U.windV,
+  lfA: { value: { x: 1, y: 0.025, z: 1, w: 0.45 } },    // smooth, flutter, flutterSpeed, holes
+  lfB: { value: { x: 0.6, y: 0.16, z: 0.1, w: 0.14 } },  // holeEdge, oak/birch/pine leaf size
+  lfC: { value: { x: 1, y: 0.62, z: 0, w: 0 } },         // holeShadow, inside
+};
+function updateLeafU() {
+  const L = LEAF, a = LEAF_U.lfA.value, b = LEAF_U.lfB.value, c = LEAF_U.lfC.value;
+  a.x = L.smooth; a.y = L.flutter; a.z = L.flutterSpeed; a.w = L.holes;
+  b.x = L.holeEdge; b.y = Math.max(0.01, L.oakLeaf); b.z = Math.max(0.01, L.birchLeaf); b.w = Math.max(0.01, L.pineLeaf);
+  c.x = L.holeShadow; c.y = L.inside;
+}
+const LEAF_WGSL = /* wgsl */ `
+fn lfHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn lfHash2(p: vec2f) -> vec2f { return fract(sin(vec2f(dot(p, vec2f(127.1, 311.7)), dot(p, vec2f(269.5, 183.3)))) * 43758.5453); }
+fn lfHash3(p: vec3f) -> f32 { return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453); }
+fn lfNoise(p: vec3f) -> f32 {
+  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  let a = mix(mix(lfHash3(i), lfHash3(i + vec3f(1.0, 0.0, 0.0)), u.x), mix(lfHash3(i + vec3f(0.0, 1.0, 0.0)), lfHash3(i + vec3f(1.0, 1.0, 0.0)), u.x), u.y);
+  let b = mix(mix(lfHash3(i + vec3f(0.0, 0.0, 1.0)), lfHash3(i + vec3f(1.0, 0.0, 1.0)), u.x), mix(lfHash3(i + vec3f(0.0, 1.0, 1.0)), lfHash3(i + vec3f(1.0, 1.0, 1.0)), u.x), u.y);
+  return mix(a, b, u.z);
+}
+// one leaf, in its own frame (its length 1 along x, its middle at 0): below 0 inside it
+fn leafShape(q: vec2f, kind: i32) -> f32 {
+  if (kind == 0) {
+    // an oak's: an oval with rounded lobes round its edge
+    let a = atan2(q.y, q.x);
+    return length(q * vec2f(1.0, 1.55)) - 0.5 * (0.84 + 0.16 * cos(a * 7.0));
+  }
+  if (kind == 1) {
+    // a birch's: small and pointed, widest nearer its stalk
+    let x = q.x + 0.5;
+    if (x <= 0.0 || x >= 1.0) { return 1.0; }
+    return abs(q.y) - 0.34 * pow(x, 0.7) * (1.0 - x) * 1.6;
+  }
+  // a pine's: a fan of five needles from a twig at the middle
+  let r = length(q);
+  if (r > 0.55) { return 1.0; }
+  let a = atan2(q.y, q.x);
+  var d = 1.0;
+  for (var k = 0; k < 5; k++) {
+    let ak = f32(k) * 0.42 - 0.84 + 1.5708;
+    let off = a - ak;
+    if (cos(off) > 0.0) { d = min(d, r * abs(sin(off)) - 0.04); }
+  }
+  return d;
+}
+// is p (in leaves) on a leaf? one to a cell, jittered, turned and sized at random; any of the nine round it may reach
+fn leafCover(p: vec2f, kind: i32) -> bool {
+  let id = floor(p);
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      let c = id + vec2f(f32(i), f32(j));
+      let h = lfHash2(c);
+      let ctr = c + 0.5 + (h - 0.5) * 0.6;
+      let ang = h.x * 6.2832 + h.y * 3.0;
+      let sz = 0.8 + 0.4 * lfHash(c + vec2f(17.0, 5.0));
+      let d = p - ctr; let cs = cos(ang); let sn = sin(ang);
+      if (leafShape(vec2f(d.x * cs + d.y * sn, d.y * cs - d.x * sn) / sz, kind) < 0.0) { return true; }
+    }
+  }
+  return false;
+}
+// is this point of a crown (world w, the clump's smooth normal n) cut away? amount: how much of it may be (0..1+):
+// patches where a soft noise lets it, and there between the leaves, laid on the plane the clump faces most
+fn leafCut(w: vec3f, n: vec3f, kind: i32, amount: f32) -> bool {
+  if (amount <= 0.0 || kind > 2) { return false; }
+  if (lfNoise(w * 1.7 + vec3f(f32(kind) * 13.0)) > amount) { return false; }
+  let s = select(select(U.lfB.w, U.lfB.z, kind == 1), U.lfB.y, kind == 0);
+  let an = abs(n);
+  var uv = w.xy;
+  if (an.x >= an.y && an.x >= an.z) { uv = w.zy; } else if (an.y >= an.z) { uv = w.xz; }
+  return !leafCover(uv / s, kind);
+}
+// the wind: the crown leaning with the gusts that run across the land (as the grass does), and a quicker flutter;
+// a smooth field of where things are, so a tier and the snow on it move together
+fn leafSway(w: vec3f) -> vec3f {
+  let amp = U.lfA.y;
+  if (amp <= 0.0) { return w; }
+  let t = U.windV.w * U.lfA.z;
+  let ph = t - dot(w.xz, U.windV.xy) * 0.6;
+  let gust = 0.5 + 0.5 * (sin(ph) * 0.6 + sin(ph * 2.3 + 1.7) * 0.4);
+  let fl = vec3f(sin(t * 5.1 + w.x * 3.1 + w.y * 2.3), 0.6 * sin(t * 4.3 + w.z * 2.9 + w.x * 1.7), sin(t * 5.7 + w.y * 3.3 + w.z * 2.1));
+  return w + (vec3f(U.windV.x, 0.0, U.windV.y) * gust + fl * 0.6) * amp;
+}
+`;
+const leafMat = new GFX.ShaderMaterial({ uniforms: LEAF_U, vertexColors: true, side: GFX.DoubleSide, attributes: { lf: 'vec4f' }, lit: true,
+  // (its shadow sways with it and has the holes too, when holeShadow is on: a fragment stage in the shadow map)
+  shadowFrag: true,
+  shadowCode: LEAF_WGSL + /* wgsl */ `
+struct SOut { @builtin(position) pos: vec4f, @location(0) rest: vec3f, @location(1) sn: vec3f, @location(2) @interpolate(flat) kind: f32 }
+@vertex fn vs(v: VIn) -> SOut {
+  let r = (O.model * vec4f(v.position, 1.0)).xyz;
+  return SOut(F.viewProj * vec4f(leafSway(r), 1.0), r, (O.model * vec4f(v.lf.xyz, 0.0)).xyz, v.lf.w);
+}
+@fragment fn fs(i: SOut) {
+  let kind = i32(i.kind + 0.5);
+  if (U.lfC.x > 0.5 && U.lfA.w > 0.0 && kind <= 2 && length(i.sn) > 0.5) {
+    if (leafCut(i.rest, normalize(i.sn), kind, U.lfA.w)) { discard; }
+  }
+}`,
+  code: LEAF_WGSL + /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f,
+  @location(3) rest: vec3f, @location(4) sn: vec3f, @location(5) @interpolate(flat) kind: f32 }
+@vertex fn vs(v: VIn) -> VOut {
+  let r = (O.model * vec4f(v.position, 1.0)).xyz;
+  let w = leafSway(r);
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, r, (O.model * vec4f(v.lf.xyz, 0.0)).xyz, v.lf.w);
+}
+@fragment fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
+  let Nf = flatNormal(i.eye);
+  let kind = i32(i.kind + 0.5);
+  let sl = length(i.sn);
+  var N = Nf;
+  if (sl > 0.5) {
+    let n = i.sn / sl;
+    // (on the inside of a clump, seen through a hole, its normal turned to face you)
+    let Ns = select(-n, n, front);
+    N = normalize(mix(Nf, Ns, U.lfA.x));
+    if (U.lfA.w > 0.0 && kind <= 2) {
+      let e = 1.0 - abs(dot(n, normalize(-i.eye)));
+      if (leafCut(i.rest, n, kind, U.lfA.w * mix(1.0, 2.0 * e, U.lfB.x))) { discard; }
+    }
+  }
+  let albedo = i.color * select(U.lfC.y, 1.0, front);
+  let c = shadeLitN(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, Nf, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
 // what presses into the trample map this frame: you (a wide sweep while whirling), and the foes walking near you
 function updateTrample(dt) {
+  updateLeafU();
   const F = FOLIAGE, on = F.on > 0.5;
   PLANT_U.trV.value.w = on ? 1 : 0;
   const wa = CLOUDS.direction * Math.PI / 180, wv = PLANT_U.windV.value;
@@ -10376,11 +10551,14 @@ function pine(x, z, k, snow = false) {
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
   for (let i = 0; i < 3; i++) {
     const w = (0.75 - i * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + i * hgt * 0.24 + hgt * 0.2;
-    part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 });
+    LEAF_KIND = 2;
+    part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3, into: 'leaf' });
     if (snow) {
-      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3 });
+      // (v565: the snow in the leaves' buffer too, so it sways with its tier; never cut through)
+      LEAF_KIND = 3;
+      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3, into: 'leaf' });
       // and dusting the wide foot of each tier, turned a sixth round from the one below so it isn't the same
-      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3 });
+      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3, into: 'leaf' });
     }
   }
 }
@@ -10413,13 +10591,14 @@ function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
   }
   // the crown: a clump over the fork, one at each limb's end, darker ones tucked in under them, and a few small
   // light ones on top where the sun catches it
-  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5 });
+  LEAF_KIND = 0;
+  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5, into: 'leaf' });
   for (const [e, a] of ends) {
-    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd() });
-    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2 });
-    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a });
+    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd(), into: 'leaf' });
+    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2, into: 'leaf' });
+    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a, into: 'leaf' });
   }
-  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2 });
+  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2, into: 'leaf' });
 }
 // A birch: one slender white trunk (or two, splaying from one foot), dark and rough at its foot and marked with
 // black up its length, a few thin dark branches angling up, and an airy, tall crown of small leaf clusters along
@@ -10460,10 +10639,11 @@ function birch(x, z, k) {
     crown.push([top[0], top[1] + 0.08 * S, top[2]]);
     // the crown: a tall loose mass up the top of the trunk, with clusters at the branch tips and its peak
     const mid = [pts[2][0] * 0.5 + top[0] * 0.5, pts[2][1] * 0.4 + top[1] * 0.6, pts[2][2] * 0.5 + top[2] * 0.5], cs = twin ? 0.8 : 1;
-    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd });
+    LEAF_KIND = 1;
+    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd, into: 'leaf' });
     for (const [n, c] of crown.entries()) {
       const sz = (0.2 + rnd() * 0.08) * S * cs;
-      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6 });
+      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6, into: 'leaf' });
     }
   }
 }
@@ -11953,12 +12133,12 @@ function shrine(x, z, k) {
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 // (the buffers objects are drawn into: one set for building a chunk's at once, and one for a chunk streaming in
 // a band of rows at a time, which keeps its part-drawn objects over frames)
-const OBJ_BUFS = { obj: bufObj, glow: bufGlow, metal: new Buf(), prism: new Buf(), trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider };
-const BAND_BUFS = { obj: new Buf(), glow: new Buf(), metal: new Buf(), prism: new Buf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf() };
+const OBJ_BUFS = { obj: bufObj, glow: bufGlow, metal: new Buf(), prism: new Buf(), leaf: bufLeaf, trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider };
+const BAND_BUFS = { obj: new Buf(), glow: new Buf(), metal: new Buf(), prism: new Buf(), leaf: new LeafBuf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf() };
 const OBJ_BAND = 8;      // rows of tiles in a band
 let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUFS
 function objBufs(B, clear) {
-  OUT = B.obj; GLOW = B.glow; METAL = B.metal; PRISMB = B.prism; TRUNK = B.trunk; CANOPY = B.canopy; PLANT = B.plant; WEB = B.web; SPIDER = B.spider;
+  OUT = B.obj; GLOW = B.glow; METAL = B.metal; PRISMB = B.prism; LEAFB = B.leaf; TRUNK = B.trunk; CANOPY = B.canopy; PLANT = B.plant; WEB = B.web; SPIDER = B.spider;
   if (clear) for (const k in B) B[k].n = 0;
 }
 function objRows(cx, cz, ra, rb) {
@@ -11991,12 +12171,13 @@ function furrows(c, r, i) {
     if (FIELD[after] !== dir) t3(R1, L1, T1, foot, foot, top);
   }
 }
-const OBJ_MESHES = ['obj', 'glow', 'metal', 'prism', 'trunk', 'plant', 'canopy', 'web', 'spider'];
+const OBJ_MESHES = ['obj', 'glow', 'metal', 'prism', 'leaf', 'trunk', 'plant', 'canopy', 'web', 'spider'];
 function objMesh(B, ch, k) {
   if (k === 'obj') ch.obj = B.obj.mesh(groundMat);
   else if (k === 'glow') ch.glow = B.glow.mesh(glowMat);
   else if (k === 'metal') ch.metal = B.metal.mesh(metalMat);
   else if (k === 'prism') ch.prism = B.prism.mesh(prismMat(1, true));
+  else if (k === 'leaf') ch.leaf = B.leaf.mesh(leafMat);
   else if (k === 'trunk') ch.trunk = B.trunk.mesh(trunkMat);
   else if (k === 'plant') ch.plant = B.plant.mesh(plantMat);
   else if (k === 'canopy') { ch.canopy = B.canopy.mesh(castOnlyMat); if (ch.canopy) ch.canopy.castShadow = true; }
@@ -13523,7 +13704,7 @@ function roomsSettled(c, r) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.leaf, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -13599,7 +13780,7 @@ function rebuildObjects(c, r) {
   if (ch.redo) { ch.redo = false; if (bandOwner === ch) bandOwner = null; showDetached(ch); }
   const tmp = {};
   buildObjects(ch.cx, ch.cz, tmp);
-  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'metal', tmp.metal); swapMesh(ch, 'prism', tmp.prism); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
+  swapMesh(ch, 'obj', tmp.obj); swapMesh(ch, 'glow', tmp.glow); swapMesh(ch, 'metal', tmp.metal); swapMesh(ch, 'prism', tmp.prism); swapMesh(ch, 'leaf', tmp.leaf); swapMesh(ch, 'trunk', tmp.trunk); swapMesh(ch, 'plant', tmp.plant); swapMesh(ch, 'canopy', tmp.canopy); swapMesh(ch, 'web', tmp.web); swapMesh(ch, 'spider', tmp.spider);
   grassChunk(ch.cx, ch.cz);
 }
 function rebuildPieces(c, r) {
@@ -17457,21 +17638,22 @@ function detach(i, c, r) {
   let d = detached.get(i);
   if (d) return d;
   const o = OB[i];
-  const save = [OUT, GLOW, METAL, PRISMB];
-  OUT = bufTmp; GLOW = bufTmpGlow; METAL = bufTmpMetal; PRISMB = bufTmpPrism; bufTmp.n = 0; bufTmpGlow.n = 0; bufTmpMetal.n = 0; bufTmpPrism.n = 0;
+  const save = [OUT, GLOW, METAL, PRISMB, LEAFB];
+  OUT = bufTmp; GLOW = bufTmpGlow; METAL = bufTmpMetal; PRISMB = bufTmpPrism; LEAFB = bufTmpLeaf; bufTmp.n = 0; bufTmpGlow.n = 0; bufTmpMetal.n = 0; bufTmpPrism.n = 0; bufTmpLeaf.n = 0;
   drawObject(o, c, r);
   const [x, z] = objPos(c, r, o), y = LV[i] * STEP;
   // recentre on the trunk so it can shake and topple about its foot
-  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; }
+  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism, bufTmpLeaf]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; }
   const g = new GFX.Group();
   const m = bufTmp.mesh(groundMat); if (m) g.add(m);
   // (and what of it glows: the fantasy ores' crystal tips, seams and embers)
   const mg = bufTmpGlow.mesh(glowMat); if (mg) g.add(mg);
   const mm = bufTmpMetal.mesh(metalMat); if (mm) g.add(mm);
   const mp = bufTmpPrism.mesh(prismMat(1, true)); if (mp) g.add(mp);
+  const ml = bufTmpLeaf.mesh(leafMat); if (ml) g.add(ml);
   g.position.set(x, y, z);
   scene.add(g);
-  [OUT, GLOW, METAL, PRISMB] = save;
+  [OUT, GLOW, METAL, PRISMB, LEAFB] = save;
   d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false };
   detached.set(i, d);
   // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
@@ -24610,6 +24792,16 @@ const TUNING = [
     [TREE_SIZE, 'fern', 'Fern size', 0.3, 3, 0.05],
     [TREE_SIZE, 'swamp', 'Swamp tree size (mossy, gnarled)', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'grave', 'Graveyard tree size (webbed, gnarled)', 0.4, 2.5, 0.05],
+    [LEAF, 'smooth', 'Oak, birch and pine leaves: smooth shading (0 faceted, 1 smooth)', 0, 1, 0.01],
+    [LEAF, 'flutter', 'Leaves: flutter in the wind (tiles)', 0, 0.15, 0.005],
+    [LEAF, 'flutterSpeed', 'Leaves: flutter speed', 0, 4, 0.05],
+    [LEAF, 'holes', 'Leaves: see-through gaps between leaves (0 none)', 0, 1, 0.01],
+    [LEAF, 'holeEdge', 'Leaves: gaps gathered toward the crowns\' edges (0 even)', 0, 1, 0.01],
+    [LEAF, 'oakLeaf', 'Leaves: oak leaf size (tiles)', 0.03, 0.6, 0.005],
+    [LEAF, 'birchLeaf', 'Leaves: birch leaf size (tiles)', 0.03, 0.6, 0.005],
+    [LEAF, 'pineLeaf', 'Leaves: pine needle fan size (tiles)', 0.03, 0.6, 0.005],
+    [LEAF, 'holeShadow', 'Leaves: gaps in their shadows too (0 off, 1 on)', 0, 1, 1],
+    [LEAF, 'inside', 'Leaves: the crown\'s inside, seen through a gap (brightness)', 0, 1.5, 0.01],
   ]],
   ['Graveyard spiders', [
     [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],
@@ -25267,7 +25459,7 @@ function worldPart(m) {
   if (t === buildMat) return 'built pieces';
   if (t === windowMat) return 'glass';
   if (t === roofMat || t === slateMat || t === slateSteep) return 'roofs';
-  if (t === groundMat || t === glowMat || t === metalMat) return 'trees + rocks + props';
+  if (t === groundMat || t === glowMat || t === metalMat || t === leafMat) return 'trees + rocks + props';
   if (t === trunkMat) return 'trunks';
   if (t === plantMat) return 'plants';
   if (m.isInstancedMesh || m.castShadow && !m.geometry.attributes.color) return 'foes + hero';
@@ -25419,7 +25611,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 564, crashSeen = new Map();
+const GAME_VERSION = 565, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
