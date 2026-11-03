@@ -234,6 +234,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v606:** (Jordan couldn't find a guard house) The guard house now hangs a shield with crossed swords on the wall either side of its door, both in one colouring per house, so it reads from the street the way the tavern's and bank's signs do. It's the two-story stone building with the training yard (dummies, archery butts, a brazier) beside it, in every large town.
 
+**v607:** (Jordan) The hearths' and braziers' modelled flames glow brighter and wave back and forth, fluttering like the wheat and sails: the glow buffers (GlowBuf) carry a fire's foot and a flutter weight per vertex, and glowMat is now a shader that sways and stretches tagged flames round their foot and flickers their brightness (FLAME_WAVE, T > Hearth fires).
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
