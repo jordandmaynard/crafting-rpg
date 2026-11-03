@@ -4264,7 +4264,12 @@ function raiseTownHouses(t, n) {
     for (const [c, r] of tiles) for (let e = 0; e < 4; e++) {
       if (set.has(T(c + DC[e], r + DR[e]))) continue;
       const [ec, er, ew] = edgeOf(c, r, e), isDoor = c === doorAt[0] && r === doorAt[1] && e === back;
-      (ew ? WW : WN)[T(ec, er)] = isDoor ? 2 : window(set, c, r, e) ? (stone ? 14 : 13) : (stone ? 4 : 1);
+      // (2026-11-03, Jordan: the bank's front) its walls pale dressed stone, bronze double doors in a marble surround,
+      // plain walls either side of them for the pilasters and lanterns
+      const bank = role === 'bank', byDoor = bank && e === back && Math.abs(c - doorAt[0]) + Math.abs(r - doorAt[1]) === 1;
+      (ew ? WW : WN)[T(ec, er)] = isDoor ? (bank ? 11 : 2) : !byDoor && window(set, c, r, e) ? (stone ? 14 : 13) : (stone ? 4 : 1);
+      if (bank) BANK_WALLS.add(edgeKey(ec, er, ew));
+      if (bank && isDoor) BANK_DOORS.add(edgeKey(ec, er, ew));
       piece(ec, er);
       if (isDoor) door = [ec, er, ew];
     }
@@ -4448,6 +4453,8 @@ function chapelSteeple(ca, at, ridge, stone, lead, darkC, bandC) {
   box(0, yc + 0.3, B, 0.24, 0.05, 0.05, '#c9a24a');
 }
 const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Map();
+// (2026-11-03) the banks' ground-floor walls (edge keys: pale dressed stone, bars on their windows) and doors (the grand entrance)
+const BANK_WALLS = new Set(), BANK_DOORS = new Set();
 const chapels = [];   // (v493: medium towns' chapels, drawn and lit as a cathedral is, cathAt keyed by their door tile too)   // (ROSE_WALLS: wall key -> the rose it's cut for)
 // (v433) the rose window: its centre this far up its story's wall, the hole through the wall round it
 // (v434) out: where the glass stands across the wall (the inside face, so the hole's own lip takes none of its light);
@@ -4897,7 +4904,7 @@ function townLamps(t, own) {
     if (nearCorner) continue;
     let door = false, ns = null;
     for (let e = 0; e < 4; e++) {
-      if (wallOn(c, r, e) === 2) door = true;
+      if (isDoorVal(wallOn(c, r, e)) && !isFenceVal(wallOn(c, r, e))) door = true;
       const j = T(c + DC[e], r + DR[e]);
       if (ns === null && TSTREET[j] && TN[j] === own) ns = e === 1 || e === 3;
     }
@@ -5523,7 +5530,13 @@ function finishTowns() {
   buildDockProxies();
   for (const t of towns) {
     for (const hse of t.houses) {
-      makeDoor(...hse.door); makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
+      if (hse.role === 'bank') {
+        // (the bank's bronze double doors: two half leaves in the one doorway, meeting in the middle)
+        const a = makeDoor(...hse.door, 'tombdoor', false, 0, true), b = makeDoor(...hse.door, 'tombdoor', true, 0, true), key = dKey(...hse.door, 0);
+        a.pair = b; b.pair = a; doors.set(key, a); doors.set('pair:' + key, b);
+        bankLanterns(t, hse);
+      } else makeDoor(...hse.door);
+      makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
       if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.up.tiles, hse.color, hse.cathedral ? cathRoof(hse.cathedral) : null, 1); }
     }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
@@ -6562,7 +6575,7 @@ function placeScenery(c, r) {
       if (cell !== 'yard' || PATH[i]) return;
       const d = Math.hypot(dx, dz);
       // keep the step outside each door clear
-      for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2) return;
+      for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2 || wallOn(c, r, e) === 11) return;
       if (d >= t.R - 2 && k2 > 0.7) OB[i] = O.OAK;
       else if (k2 < 0.05) OB[i] = O.BUSH;
       return;
@@ -12735,6 +12748,7 @@ function wallPieceRaw(c, r, w, type, cut) {
       p = at(a, y + MARBLE_H / 2); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 0.22, sy: MARBLE_H, sz: 0.32, ry });
       p = at(a, y + MARBLE_H - 0.06); part(G.box, MARBLE_LT, p[0], p[1], p[2], { sx: 0.3, sy: 0.12, sz: 0.38, ry });
     }
+    if (!PDY && BANK_DOORS.has(edgeKey(c, r, w))) bankEntrance(c, r, w, y, at, ry);
     return;
   }
   if (type === 5) {
@@ -12804,21 +12818,21 @@ function wallPieceRaw(c, r, w, type, cut) {
   if (type === 14 && !cut) { stoneWindowWall(c, r, w, y, at, ry, k); return; }
   if (type === 4 && !cut && ROSE_WALLS.has(edgeKey(c, r, w) + PCUT)) { roseWall(c, r, w, y, at, ry, k, ROSE_WALLS.get(edgeKey(c, r, w) + PCUT)); return; }
   if (type === 4 || type === 14) {
-    const top = cut ? CUT_H : WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
+    const top = cut ? CUT_H : WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows, St = stoneOf(c, r, w);
     // a mortar core the full length and height, so the joints between blocks never show through
     const m = at(0.5, y + top / 2);
-    part(G.box, '#4a4652', m[0], m[1], m[2], { sx: 1, sy: top, sz: 0.27, ry });
+    part(G.box, St.core, m[0], m[1], m[2], { sx: 1, sy: top, sz: 0.27, ry });
     for (let row = 0; row < rows; row++) {
       const off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, n, a) => a.indexOf(v) === n && v <= 1);
       for (let n = 0; n + 1 < edges.length; n++) {
         const a0 = edges[n], a1 = edges[n + 1], kk = hs(c * 5 + row, r * 3 + n, 54 + w);
         const p = at((a0 + a1) / 2, y + rh * (row + 0.5));
-        part(G.box, shade(CC('#8a8694'), 0.8 + kk * 0.3), p[0], p[1], p[2], { sx: a1 - a0 - 0.03, sy: rh - 0.03, sz: 0.32, ry });
+        part(G.box, shade(CC(St.block), 0.8 + kk * 0.3), p[0], p[1], p[2], { sx: a1 - a0 - 0.03, sy: rh - 0.03, sz: 0.32, ry });
       }
     }
     // (v539: none on a wall inside a building, rooms on both sides, which would poke up through a flat stone roof)
     const sk = PCUT / (2 * SNN) * SNN, inner = roomOf.has(sk + i) && roomOf.has(sk + j);
-    if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC('#7e7a88'), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
+    if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC(St.crenel), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
     return;
   }
   if (cut) {
@@ -13097,6 +13111,57 @@ function shutters(at, ym, ry, out, hw, hh, pick, ha = hw, off = 0.14, sides = 3)
 const WINDOW_HW = 0.4;   // (a timber window's half-width: the glass to within a frame's width of the corner posts)
 // (letting go of a shutter, lead or bay slider draws every built piece again)
 function redrawPieces() { for (const ch of chunks.values()) setPieces(ch); }
+// (2026-11-03, Jordan: the bank in pale dressed stone, its windows barred) a stone wall's colours by where it is
+const STONE_PLAIN = { block: '#8a8694', core: '#4a4652', crenel: '#7e7a88', cap: '#7c7886', bars: false };
+const STONE_BANK = { block: '#c4baa6', core: '#7a7264', crenel: '#b6ac98', cap: '#b2a894', bars: true };
+const stoneOf = (c, r, w) => !PDY && BANK_WALLS.has(edgeKey(c, r, w)) ? STONE_BANK : STONE_PLAIN;
+// iron bars over a stone window, on its outside: uprights cut to the arch and two cross bars
+function windowBars(c, r, w, y, at, ry) {
+  const s = windowOutside(c, r, w) || 1, W = STONE_WIN.W, R2 = 4 * W * W, o = 0.2;
+  const bar = (a, yy, sx, sy) => { const p = at(a, yy); p[w ? 0 : 2] += s * o; part(G.box, IRON_RAIL, p[0], p[1], p[2], { sx, sy, sz: 0.03, ry }); };
+  for (const dx of [-0.24, -0.12, 0, 0.12, 0.24]) {
+    const top = STONE_WIN.spring + Math.sqrt(Math.max(0, R2 - (Math.abs(dx) + W) ** 2)) - 0.02, bot = STONE_WIN.sill;
+    bar(0.5 + dx, y + (bot + top) / 2, 0.028, top - bot);
+  }
+  for (const h of [STONE_WIN.sill + 0.22, STONE_WIN.spring]) bar(0.5, y + h, 2 * W - 0.02, 0.03);
+}
+// the bank's grand entrance, on the outside of its door's marble surround: a pilaster either side (base, shaft,
+// capital) on the plain walls beside it, an entablature over the doorway, a stepped pediment over that with a gilded
+// coin in it, and a wall lantern on each pilaster (its light: bankLanterns)
+const BANK_LANTERN = { a: 0.17, y: 1.5, out: 0.46 };
+function bankEntrance(c, r, w, y, at, ry) {
+  const s = windowOutside(c, r, w) || 1;
+  const B = (col, a, yy, sx, sy, o, sz) => { const p = at(a, yy); p[w ? 0 : 2] += s * o; part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
+  for (const a of [-BANK_LANTERN.a, 1 + BANK_LANTERN.a]) {
+    B(MARBLE_DK, a, y + 0.09, 0.3, 0.18, 0.2, 0.14);
+    B(MARBLE_LT, a, y + 0.98, 0.22, 1.6, 0.2, 0.1);
+    for (const da of [-0.06, 0.06]) B(MARBLE_DK, a + da, y + 0.98, 0.02, 1.5, 0.256, 0.012);   // (flutes)
+    B(MARBLE_DK, a, y + 1.84, 0.3, 0.12, 0.2, 0.14);
+    // the lantern: a bracket out from the pilaster, a cage, its glass, a cap
+    const ly = y + BANK_LANTERN.y, lo = BANK_LANTERN.out;
+    B(IRON_RAIL, a, ly + 0.17, 0.035, 0.035, (0.25 + lo) / 2, lo - 0.25);
+    B(IRON_RAIL, a, ly + 0.1, 0.03, 0.12, lo, 0.03);
+    B(IRON_RAIL, a, ly - 0.12, 0.16, 0.03, lo, 0.16);
+    B('#ffd890', a, ly - 0.03, 0.11, 0.15, lo, 0.11);
+    for (const [da, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) B(IRON_RAIL, a + da * 0.065, ly - 0.03, 0.02, 0.17, lo + dz * 0.065, 0.02);
+    B(IRON_RAIL, a, ly + 0.07, 0.19, 0.04, lo, 0.19);
+  }
+  // the entablature and the pediment
+  B(MARBLE, 0.5, y + 1.97, 1.74, 0.14, 0.2, 0.14);
+  B(MARBLE_DK, 0.5, y + 2.05, 1.8, 0.04, 0.21, 0.17);
+  for (let k = 0; k < 4; k++) B(k % 2 ? MARBLE_LT : MARBLE, 0.5, y + 2.12 + k * 0.1, 1.6 - k * 0.38, 0.1, 0.2, 0.12);
+  B('#d8b04a', 0.5, y + 2.22, 0.16, 0.16, 0.27, 0.02);
+  B('#a07a28', 0.5, y + 2.22, 0.1, 0.1, 0.282, 0.008);
+}
+// the bank's two wall lanterns lit: town lamps at their glass ([x, z, kind 0, -, height])
+function bankLanterns(t, h) {
+  const [ec, er, w] = h.door, [ic, ir] = h.inside, mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
+  const ox = mx - (ic + 0.5), oz = mz - (ir + 0.5), L = Math.hypot(ox, oz) || 1, nx = ox / L, nz = oz / L, base = LV[T(ic, ir)] * STEP;
+  for (const a of [-BANK_LANTERN.a, 1 + BANK_LANTERN.a]) {
+    const x = (w ? ec : ec + a) + nx * BANK_LANTERN.out, z = (w ? er + a : er) + nz * BANK_LANTERN.out;
+    t.lamps.push([x, z, 0, null, base + BANK_LANTERN.y - groundAt(x, z) - 0.03]);
+  }
+}
 const STONE_WIN = { W: 0.33, sill: 0.45, spring: 0.95 };   // (v414: wider, its frame to within a frame's width of the tile's ends; was 0.2, 0.55, 1.12)
 // a stone wall with a pointed (equilateral) gothic arch window: the courses go round it, cut in fine slices where
 // they meet the arch so its curve shows; a paler stone frame and sill, glass, a mullion and a transom
@@ -13156,13 +13221,14 @@ function roseWall(c, r, w, y, at, ry, k, q) {
   for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, thin ? 0.2 : 0.34, shade(CC('#7e7a88'), k), thin ? 0.07 : 0);
 }
 function stoneWindowWall(c, r, w, y, at, ry, k) {
+  const St = stoneOf(c, r, w);
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
   const W = STONE_WIN.W, sill = STONE_WIN.sill, spring = STONE_WIN.spring, R = 2 * W, apex = spring + Math.sqrt(3) * W, F = 0.05;   // (F: the frame's width)
   // the opening's half-width at height h over the wall's foot (0 outside it)
   const half = h => h < sill || h > apex ? 0 : h <= spring ? W : Math.max(0, Math.sqrt(R * R - (h - spring) ** 2) - W);
   const X0 = 0.5 - W - F - 0.01, X1 = 0.5 + W + F + 0.01;   // (the column the window and its frame stand in)
-  const core = '#4a4652';
+  const core = St.core;
   // the core and courses outside the window's column, as the plain wall has them
   for (const [a0, a1] of [[0, X0], [X1, 1]]) box((a0 + a1) / 2, y + top / 2, a1 - a0, top, 0.27, core);
   for (let row = 0; row < rows; row++) {
@@ -13170,13 +13236,13 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
     const h0 = rh * row, h1 = rh * (row + 1), clear = h1 <= sill - F || h0 >= apex + F;
     // (rows the window reaches are drawn below, block by block round its frame)
     if (clear) for (let n = 0; n + 1 < edges.length; n++) {
-      const kk = hs(c * 5 + row, r * 3 + n, 54 + w), col = shade(CC('#8a8694'), 0.8 + kk * 0.3);
+      const kk = hs(c * 5 + row, r * 3 + n, 54 + w), col = shade(CC(St.block), 0.8 + kk * 0.3);
       box((edges[n] + edges[n + 1]) / 2, y + (h0 + h1) / 2, edges[n + 1] - edges[n] - 0.03, rh - 0.03, 0.32, col);
     }
   }
   // the window's column: stone below the frame and over it, and fine slices between, each stone | frame | glass |
   // frame | stone, the frame being the same arch drawn F wider
-  const colStone = shade(CC('#8a8694'), 0.92), frame = shade(CC('#b4b0bc'), k), WO = W + F, apexO = spring + Math.sqrt(3) * WO;
+  const colStone = shade(CC(St.block), 0.92), frame = shade(CC('#b4b0bc'), k), WO = W + F, apexO = spring + Math.sqrt(3) * WO;
   const halfO = h => h < sill - F || h > apexO ? 0 : h <= spring ? WO : Math.max(0, Math.sqrt(4 * WO * WO - (h - spring) ** 2) - WO);
   box(0.5, y + (sill - F) / 2, X1 - X0, sill - F, 0.3, colStone);
   box(0.5, y + (apexO + top) / 2, X1 - X0, top - apexO, 0.3, colStone);
@@ -13207,7 +13273,7 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
       const h0 = row * rh, h1 = h0 + rh, off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, m, a) => a.indexOf(v) === m && v <= 1);
       let fMax = 0, fMin = 1;
       for (let q = 0; q <= 16; q++) { const f = fo(h0 + rh * q / 16); fMax = Math.max(fMax, f); fMin = Math.min(fMin, f); }
-      const colOf = m => shade(CC('#8a8694'), 0.8 + hs(c * 5 + row, r * 3 + m, 54 + w) * 0.3);
+      const colOf = m => shade(CC(St.block), 0.8 + hs(c * 5 + row, r * 3 + m, 54 + w) * 0.3);
       // stone between |a - 0.5| = lo and hi on one side, from yy0 to yy1, cut at the blocks' edges
       const span = (sgn, lo, hi, yy0, yy1) => {
         if (hi - lo < 0.003) return;
@@ -13240,7 +13306,8 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   box(0.5, y + (sill + apex) / 2 - 0.02, 0.03, apex - sill - 0.04, 0.07, '#2a2630');   // mullion
   // (v415) leaded diamonds, cut to the arch
   leadedPanes(at, y, ry, (a, h) => Math.abs(a - 0.5) <= half(h) - 0.01, 0.5 - W, 0.5 + W, sill + 0.01, apex);
-  for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, 0.34, shade(CC('#7e7a88'), k));   // (the crenels, as the plain wall)
+  for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, 0.34, shade(CC(St.crenel), k));   // (the crenels, as the plain wall)
+  if (St.bars) windowBars(c, r, w, y, at, ry);
 }
 // (only: a Set of the stories to draw, the rest left alone; null = all of them. v424: the cutaway redraws just the
 // stories whose walls it cut or stood up again, not the whole chunk)
@@ -13396,7 +13463,7 @@ const ironBar = new GFX.BoxGeometry(0.03, FENCE_H - 0.12, 0.03), ironTip = new G
 const studGeo = new GFX.BoxGeometry(0.045, 0.045, 0.11);
 // kind: 'door', 'gate', 'irondoor', 'irongate' or 'tombdoor' (flip: hung at the far end, the other half of a pair)
 const bronzeMat = flatMat({ color: '#4f8a76', roughness: 0.5, metalness: 0.4 }), bronzeDkMat = flatMat({ color: '#2e5a4c', roughness: 0.6, metalness: 0.3 });
-function makeDoor(c, r, w, kind = 'door', flip = false, k = 0) {
+function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
   const gate = kind === 'gate' || kind === 'irongate';
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP + k * WALL_H;
   const pivot = new GFX.Group(), at0 = flip ? 0.92 : 0.08;
@@ -13448,6 +13515,7 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0) {
     for (const yy of [0.25, DOOR_H / 2 + 0.1, DOOR_H - 0.25]) { const b = new GFX.Mesh(new GFX.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
     const ring = new GFX.Mesh(new GFX.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
   }
+  if (half) leaf.scale.x = 0.5;   // (one of a pair in a single doorway)
   pivot.add(leaf);
   scene.add(shadowy(pivot));
   if (k) pivot.visible = k <= shownStory;
@@ -13760,9 +13828,10 @@ function flatStoneRoof(rm, open, fy, k) {
       const [ec, er, w] = edgeOf(c, r, d), i = T(ec, er), j = w ? T(ec - 1, er) : T(ec, er - 1), ry = w ? Math.PI / 2 : 0;
       const y1 = Math.max(LV[i], LV[j]) * STEP + k * WALL_H + WALL_H - 0.12, capTop = fy + 0.01, stone = v === 4 || v === 14;
       const P = (a, yy, o) => part(G.box, o.col, w ? ec : ec + a, yy, w ? er + a : er, { sx: o.sx, sy: o.sy, sz: o.sz, ry });
-      if (capTop > y1) P(0.5, (y1 + capTop) / 2, { col: '#7c7886', sx: 1.31, sy: capTop - y1, sz: 0.31 });
+      const St = k ? STONE_PLAIN : stoneOf(ec, er, w);
+      if (capTop > y1) P(0.5, (y1 + capTop) / 2, { col: St.cap, sx: 1.31, sy: capTop - y1, sz: 0.31 });
       const kk = 0.92 + hs(ec, er, 50 + w) * 0.14, m0 = stone ? y1 + 0.2 : capTop, m1 = capTop + FLAT_CRENEL;
-      if (m1 > m0) for (const a of [0.2, 0.8]) P(a, (m0 + m1) / 2, { col: shade(CC('#7e7a88'), kk), sx: 0.3, sy: m1 - m0, sz: 0.34 });
+      if (m1 > m0) for (const a of [0.2, 0.8]) P(a, (m0 + m1) / 2, { col: shade(CC(St.crenel), kk), sx: 0.3, sy: m1 - m0, sz: 0.34 });
     }
     for (let j = 0; j < 2; j++) {
       const off = (r * 2 + j) % 2 ? 0.25 : 0;
@@ -21915,7 +21984,7 @@ function lampLight(l, p, k, night) {
   }
   l.color.set('#ffb060'); l.distance = 4.5;
   // a hearth's fire burns low in its pit, brighter and with more flicker than a lamp
-  l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : 1.2), p[1]);
+  l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : p[4] ?? 1.2), p[1]);
   l.intensity = p[2] ? (0.7 + night * 1.5) * (0.85 + Math.sin(time * 13 + k) * 0.08 + Math.sin(time * 31) * 0.05) : (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + p[0] * 1.3 + p[1] * 0.7) * 0.06);
 }
 // A soft glow round every town lamp's lantern (v411), lit or not, so the lamps far off (that have no light of their
@@ -21961,8 +22030,8 @@ let haloMesh = null;
 function buildHalos() {
   if (haloMesh) { scene.remove(haloMesh); haloMesh.geometry.dispose(); haloMesh = null; }
   const pos = [], corner = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
-  for (const t of towns) for (const [x, z] of t.lamps) {
-    const y = groundAt(x, z) + 1.13;
+  for (const t of towns) for (const [x, z, , , ly] of t.lamps) {
+    const y = groundAt(x, z) + (ly != null ? ly - 0.07 : 1.13);
     for (const [a, b] of C) { pos.push(x, y, z); corner.push(a, b); }
   }
   if (!pos.length) return;
@@ -26640,7 +26709,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 596, crashSeen = new Map();
+const GAME_VERSION = 597, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
