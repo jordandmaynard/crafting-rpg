@@ -12992,12 +12992,12 @@ function wallPieceRaw(c, r, w, type, cut) {
     return;
   }
   if (type === 3) {
+    // (v621, Jordan: no more uneven sharpened tops: every log is sawn off level, just under the roof's eaves)
     for (let n = 0; n < 5; n++) {
-      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.12 + kk * 0.16, col = shade(CC(n % 2 ? '#6a4a2c' : '#7a5634'), 0.88 + kk * 0.2);
+      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.04, col = shade(CC(n % 2 ? '#6a4a2c' : '#7a5634'), 0.88 + kk * 0.2);
       let p = at(0.1 + n * 0.2, y + h / 2); part(G.cyl8, col, p[0], p[1], p[2], { sx: 0.2, sy: h, sz: 0.2 });
-      if (!cut) { p = at(0.1 + n * 0.2, y + h + 0.08); part(G.cone4, shade(col, 0.9), p[0], p[1], p[2], { sx: 0.2, sy: 0.16, sz: 0.2, ry: Math.PI / 4 }); }
-      // the sawn end of a cut log shows paler
-      else { p = at(0.1 + n * 0.2, y + h); part(G.cyl8, '#c89a62', p[0], p[1], p[2], { sx: 0.17, sy: 0.02, sz: 0.17 }); }
+      // the sawn end of a log shows paler
+      p = at(0.1 + n * 0.2, y + h); part(G.cyl8, cut ? '#c89a62' : shade(CC('#b08656'), 0.9 + kk * 0.15), p[0], p[1], p[2], { sx: 0.17, sy: 0.02, sz: 0.17 });
     }
     for (const yy of cut ? [0.3] : [0.3, WALL_H - 0.45]) { const p = at(0.5, y + yy); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.26, ry }); }
     return;
@@ -13855,10 +13855,72 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 });
 // (v427) the same slates on a steeper roof: the cathedral's nave
 const slateSteep = new GFX.ShaderMaterial({ uniforms: { s: SLATE_U.s, slope: { value: CATH.pitch }, tSlate: SLATE_U.tSlate }, vertexColors: true, side: GFX.DoubleSide, lit: true, code: slateMat.code });
+// Thatch (v621, Jordan: log buildings' roofs thatched, a normal map with the straw running down the slope). A tileable
+// height field of courses (THATCH_TEX.rows down the texture, which is y down the slope as the slates' is), each course
+// a row of straw bundles of uneven widths running straight down it, thickest at the course's ragged lower edge (the
+// butt ends) and tucked under the course below. Laid by slateMat's shader with its own texture and settings.
+// T > Thatch roofs.
+const THATCH = { bump: 1.6, row: 0.25, span: 2, shade: 0.8 };
+const THATCH_TEX = { across: 256, rows: 4, cell: 64, bundle: [6, 13], ragged: 10 };
+const THATCH_COLOR = '#a8854e';
+function makeThatchTex() {
+  const P = THATCH_TEX, SW = P.across, rh = P.cell, nR = P.rows, SH = nR * rh, h = new Float32Array(SW * SH);
+  let seed = 71;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const UNDER = 0.12;   // (the course below's hidden top, showing between the butt ends)
+  for (let row = 0; row < nR; row++) {
+    // this course's bundles: [x0, width, end (pixels short of the course's lower edge), lightness, wobble phase]
+    const bs = [];
+    for (let x = 0; x < SW;) {
+      let wd = Math.round(P.bundle[0] + rnd() * (P.bundle[1] - P.bundle[0]));
+      if (SW - (x + wd) < P.bundle[0]) wd = SW - x;   // (the last one fills to the edge, so it tiles)
+      bs.push({ x, wd, end: rnd() * P.ragged, lt: rnd(), ph: rnd() * 6.28 });
+      x += wd;
+    }
+    for (const b of bs) for (let py = 0; py < rh; py++) {
+      const f = py / rh, y = row * rh + py;
+      for (let px = 0; px < b.wd; px++) {
+        const x = b.x + px, u = (px + 0.5) / b.wd;
+        let v;
+        if (py > rh - b.end) v = UNDER;   // (short of the lower edge: the course below shows)
+        else {
+          v = 0.3 + 0.55 * Math.pow(f, 1.4);                    // (thickening toward the butt ends)
+          v *= 0.55 + 0.45 * Math.sin(u * Math.PI);             // (each bundle rounded across)
+          v += (b.lt - 0.5) * 0.12;                             // (some bundles lighter, some darker)
+          // (a few loose straws: thin grooves running down the bundle)
+          const g = Math.sin(u * Math.PI * 3 + b.ph + py * 0.05);
+          v -= Math.max(0, g - 0.75) * 0.25;
+        }
+        h[y * SW + x] = Math.max(0, v);
+      }
+    }
+  }
+  const at0 = (a, x, y) => a[((y + SH) % SH) * SW + ((x + SW) % SW)];
+  // (blurred along the straw only a little and across it once, so the bundles stay crisp down the slope)
+  const src = h.slice();
+  for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+    let t = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) t += at0(src, x + dx, y + dy); h[y * SW + x] = t / 9;
+  }
+  const out = new Uint8Array(SW * SH * 4), at = (x, y) => at0(h, x, y);
+  for (let y = 0; y < SH; y++) for (let x = 0; x < SW; x++) {
+    const nx = -(at(x + 1, y) - at(x - 1, y)) * 2.4, ny = -(at(x, y + 1) - at(x, y - 1)) * 2.4, l = Math.hypot(nx, ny, 1), o = (y * SW + x) * 4;
+    out[o] = Math.round((nx / l * 0.5 + 0.5) * 255); out[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255); out[o + 2] = Math.round((1 / l * 0.5 + 0.5) * 255);
+    out[o + 3] = Math.round(Math.min(1, Math.max(0, at(x, y))) * 255);
+  }
+  const t = new GFX.DataTexture(out, SW, SH);
+  t.wrapS = t.wrapT = GFX.RepeatWrapping;
+  return t;
+}
+const THATCH_U = { s: { value: { x: 1.6, y: 1, z: 2, w: 0.8 } }, slope: { value: ROOF_SLOPE }, tSlate: { value: makeThatchTex() } };
+function updateThatchU() { const v = THATCH_U.s.value; v.x = THATCH.bump; v.y = THATCH.row * THATCH_TEX.rows; v.z = THATCH.span; v.w = THATCH.shade; }
+const thatchMat = new GFX.ShaderMaterial({ uniforms: THATCH_U, vertexColors: true, side: GFX.DoubleSide, lit: true, code: slateMat.code });
 // (v439) roofs drawn before the other opaque things, so the floors, walls and furniture under them are never shaded
-roofMat.drawFirst = slateMat.drawFirst = slateSteep.drawFirst = true;
+roofMat.drawFirst = slateMat.drawFirst = slateSteep.drawFirst = thatchMat.drawFirst = true;
 // is a building timber (most of its walls, on its story and the one over it, timber or timber windows)?
-function timberBuilding(rm) {
+function timberBuilding(rm) { return wallsMostly(rm, v => v === 1 || v === 13); }
+// (v621) is it a log cabin (most of its walls, on its story and the one over it, log walls)?
+function logBuilding(rm) { return wallsMostly(rm, v => v === 3); }
+function wallsMostly(rm, is) {
   const k = rm.k || 0, set = rm.set;
   let tim = 0, other = 0;
   for (const kk of [k, k + 1]) {
@@ -13867,7 +13929,7 @@ function timberBuilding(rm) {
       if (set.has(T(c + DC[d], r + DR[d]))) continue;
       const [ec, er, ew] = edgeOf(c, r, d), i = T(ec, er), v = kk ? (ew ? UP[kk].WW : UP[kk].WN).get(i) : (ew ? WW : WN)[i];
       if (!v || v === 2 || v === 5) continue;
-      if (v === 1 || v === 13) tim++; else other++;
+      if (is(v)) tim++; else other++;
     }
   }
   return tim > other;
@@ -13974,12 +14036,13 @@ function roofMesh(rm, o = {}) {   // rm: a building
     return m;
   };
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const slate = !o.snow && timberBuilding(rm);
-  const tileA = o.snow ? CC('#eef3f8') : CC(rm.color), tileB = o.snow ? CC('#e2eaf2') : shade(tileA, 0.87), ridge = o.snow ? CC('#4a3220') : shade(tileA, 0.68);
+  const slate = !o.snow && timberBuilding(rm), thatch = !o.snow && !slate && logBuilding(rm);
+  const tileA = o.snow ? CC('#eef3f8') : CC(thatch ? THATCH_COLOR : rm.color), tileB = o.snow ? CC('#e2eaf2') : shade(tileA, 0.87), ridge = o.snow ? CC('#4a3220') : shade(tileA, thatch ? 0.55 : 0.68);
+  const eave = thatch ? 0.2 : 0.14;   // (thatch hangs thicker over the walls)
   const snowLip = CC('#f4f8fb'), ice = CC('#cfe6f6');
   const Y = (x, z) => base + Math.min(2.6, f(x, z)) * ROOF_SLOPE;
   rm.roofY = Y;
-  const colAt = h => { if (slate) return tileA; const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
+  const colAt = h => { if (slate || thatch) return tileA; const band = Math.floor((h - base) / ROOF_SLOPE * 3); return band % 2 ? tileB : tileA; };
   for (const [c, r] of open) {
     const pts = [];
     for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) { const x = c + i / 2, z = r + j / 2; pts.push([x, Y(x, z), z]); }
@@ -13996,7 +14059,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     for (let d = 0; d < 4; d++) {
       if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
       const [ka, kb] = EDGE_K[d], ax = c + CX[ka], az = r + CZ[ka], bx = c + CX[kb], bz = r + CZ[kb];
-      quad([ax, base, az], [ax, base - 0.14, az], [bx, base - 0.14, bz], [bx, base, bz], ridge);
+      quad([ax, base, az], [ax, base - eave, az], [bx, base - eave, bz], [bx, base, bz], ridge);
       if (o.snow) {
         // the snow's edge rolled over the eave, and icicles under it
         const ox = DC[d] * 0.07, oz = DR[d] * 0.07;
@@ -14009,7 +14072,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     }
   }
   if (o.extra) o.extra(base);
-  const m = bufTmp.mesh(slate ? slateMat : roofMat);
+  const m = bufTmp.mesh(slate ? slateMat : thatch ? thatchMat : roofMat);
   OUT = save;
   return m;
 }
@@ -24121,7 +24184,7 @@ function update(dt) {
 
   updateGhost();
   updatePlotWalls();
-  updateStoryGrid(); updateGrassHide(); updateGlassU(); updateDetailU(); updateRoses(); updateSlateU();
+  updateStoryGrid(); updateGrassHide(); updateGlassU(); updateDetailU(); updateRoses(); updateSlateU(); updateThatchU();
   updateSky();
   updateLamps();
 
@@ -27042,6 +27105,12 @@ const TUNING = [
     [SLATE, 'width', 'Slate width (tiles)', 0.08, 0.6, 0.01],
     [SLATE, 'shade', 'Gaps and the tops of rows darker', 0, 2, 0.01],
   ]],
+  ['Thatch roofs', [
+    [THATCH, 'bump', 'Straw relief on log buildings\' roofs (0 off)', 0, 3, 0.01],
+    [THATCH, 'row', 'Course height (tiles)', 0.08, 0.6, 0.01],
+    [THATCH, 'span', 'Straw bundles: tiles the pattern spans across (wider = fatter bundles)', 0.5, 6, 0.01],
+    [THATCH, 'shade', 'Gaps between bundles and courses darker', 0, 2, 0.01],
+  ]],
   ['Bevels', [
     [DETAIL, 'strength', 'Chipped bevels on walls, floors and stairs: how far they bend (0 off)', 0, 5, 0.01],
     [DETAIL, 'bevel', 'Bevel width (times)', 0, 4, 0.05],
@@ -27269,7 +27338,7 @@ function worldPart(m) {
   const t = m.material;
   if (t === buildMat) return 'built pieces';
   if (t === windowMat) return 'glass';
-  if (t === roofMat || t === slateMat || t === slateSteep) return 'roofs';
+  if (t === roofMat || t === slateMat || t === slateSteep || t === thatchMat) return 'roofs';
   if (t === groundMat || t === glowMat || t === metalMat) return 'trees + rocks + props';
   if (t === trunkMat) return 'trunks';
   if (t === plantMat) return 'plants';
@@ -27428,7 +27497,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 620, crashSeen = new Map();
+const GAME_VERSION = 621, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
