@@ -17318,6 +17318,8 @@ const boats = [];
 // shallows of the open sea, which take the lake mist (GROUND_HAZE.lake); OPEN: each sea tile's 0..1, smooth over reach.
 const SEA_SWELL = { height: 1, reach: 6, length: 1.95, pitch: 1.45, roll: 0.45, haze: 0.2 };   // (v504: pitch and roll apart)
 const OPEN = new Float32Array(N * N), SEA = new Uint8Array(N * N), MIST = new Uint8Array(N * N);
+// (v675) each sea tile's distance (tiles, to 255) from anything that isn't sea: past DOLPHINS.deep, the dolphins' water
+const SEAD = new Uint8Array(N * N);
 // (v506, Jordan) each mist tile's distance (tiles, to 255) from the sea or a river beside it, so the mist fades out
 // there (over GROUND_HAZE.lakeFade) instead of stopping at a hard line
 const MISTD = new Uint8Array(N * N);
@@ -17340,14 +17342,14 @@ function computeOpenSea() {
   const R = Math.max(1, Math.ceil(SEA_SWELL.reach)) + 1;
   for (let h = 0; h < n; h++) {
     const i = q[h], c = i % N, r = (i - c) / N, di = d[i];
-    if (di >= R) continue;
+    // (v675: on out to the middle of the sea, for SEAD, the dolphins' deep water; OPEN only looks R out)
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
       const cc = c + dc, rr = r + dr, j = rr * N + cc;
       if ((dc || dr) && cc >= 0 && rr >= 0 && cc < N && rr < N && d[j] === 65535) { d[j] = di + 1; q[n++] = j; }
     }
   }
   const reach = Math.max(0.5, SEA_SWELL.reach);
-  for (let i = 0; i < NN; i++) if (SEA[i]) OPEN[i] = smooth(0, reach, Math.min(d[i], R) - 0.5);
+  for (let i = 0; i < NN; i++) if (SEA[i]) { OPEN[i] = smooth(0, reach, Math.min(d[i], R) - 0.5); SEAD[i] = Math.min(d[i], 255); } else SEAD[i] = 0;
   // (v506) how far into each body of mist from the open water (sea, rivers) that isn't misty
   MISTD.fill(255); n = 0;
   for (let i = 0; i < NN; i++) if (WL[i] && !LV[i] && !LAVA[i] && !MIST[i]) { MISTD[i] = 0; q[n++] = i; }
@@ -17773,6 +17775,249 @@ function updateBoats(dt) {
     [H.x, H.z] = boatWorld(b, H.bu, H.bv);
     H.y = boatHeroY(b);
   }
+}
+// ---------- Sea life ----------
+// (v675, Jordan) Gulls and dolphins. Over the calmer open water (the bays, inlets, straits and shallows: not the open
+// sea or an ocean, a river or a lake) gulls fly by now and then while you're out on it, one alone or a few in an
+// echelon (a slanting line, each a little behind and to one side of the one ahead), flapping and gliding by turns,
+// weaving and banking a little, crying now and then. Out on the deep sea (SEAD: DOLPHINS.deep tiles or more from
+// anything that isn't sea), sail straight (within `straight` radians) at full ahead for `wait` seconds (to half as
+// long again) and a pod comes up from below beside the ship and paces it, some alongside, one riding the bow, each
+// leaping out of the water a few times; they swing round with you as you turn. Leave deep water (or slow right down,
+// or after `stay` seconds; 0 stays as long as you're out there) and they dive and fall behind. T > Sea life.
+const GULL_KINDS = new Set(['bay', 'inlet', 'strait', 'shallows']);
+// every: seconds between flights (on average); flock: share that are echelons; most: birds in the biggest one;
+// speed: tiles a second; height: over the water (tiles); flap: wingbeats a second; night: 1 flies by night too
+const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 4.5, size: 1, flap: 3, night: 0, cry: 1 };
+// deep: tiles from any coast; wait: seconds at full ahead, steady, before they come; straight: how far off your
+// heading you can drift meanwhile (radians); stay: seconds they pace you (0 no end); fewest/most: pod size; jumps:
+// most leaps each; leap: their height (×); depth: how deep they swim between (tiles); beat: tail beats a second;
+// cooldown: seconds before another pod can come
+const DOLPHINS = { on: 1, deep: 10, wait: 10, straight: 0.3, stay: 90, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 45 };
+const SEA_SPAWN = { gulls: 0, dolphins: 0 };   // (T > Sea life buttons)
+const seaLife = { flights: [], gullT: 5, pod: null, runT: 0, runH: 0, runGoal: 10, coolT: 0 };
+let SEA_GEOS = null;
+// the gull's and the dolphin's pieces, made once (in boatMat, flat lit with its own colours)
+function seaLifeGeos() {
+  if (SEA_GEOS) return SEA_GEOS;
+  const make = fn => {
+    const B = new Buf(), was = partAll;
+    partAll = B;
+    try { fn(B); } finally { partAll = was; }
+    return B.mesh(boatMat).geometry;
+  };
+  // a flat piece of points [x, z] at height y, as a fan
+  const flat = (B, pts, col, y = 0) => { const c = CC(col), P = pts.map(p => p.length === 3 ? p : [p[0], y, p[1]]); for (let k = 1; k + 1 < P.length; k++) tri(P[0], P[k], P[k + 1], c, c, c, B); };
+  const W = '#eeeee8', GR = '#a3a9b2', DK = '#25272b', Y = '#e0ac38';
+  const gBody = make(() => {
+    part(G.ico, W, 0, 0, 0, { sx: 0.17, sy: 0.15, sz: 0.52 });
+    part(G.ico, W, 0, 0.05, 0.25, { s: 0.15 });
+    part(G.cone4, Y, 0, 0.035, 0.37, { rx: Math.PI / 2, sx: 0.045, sy: 0.12, sz: 0.04 });
+    part(G.box, W, 0, 0.01, -0.3, { sx: 0.13, sy: 0.02, sz: 0.16 });
+    part(G.box, DK, 0.055, 0.075, 0.29, { s: 0.022 }); part(G.box, DK, -0.055, 0.075, 0.29, { s: 0.022 });
+  });
+  // a wing from its shoulder (x 0) out to its elbow, and from the elbow to its black tip; grey above, white under
+  const inner = [[0, 0.1], [0.34, 0.07], [0.34, -0.1], [0, -0.15]], outer = [[0, 0.07], [0.24, 0.05], [0.24, -0.09], [0, -0.1]], tip = [[0.24, 0.05], [0.42, -0.06], [0.24, -0.09]];
+  const wing = (pts, s, top, under) => make(B => { const p = pts.map(([x, z]) => [x * s, z]); flat(B, p, top, 0.006); flat(B, p, under, -0.006); });
+  const gInner = [1, -1].map(s => wing(inner, s, GR, W));
+  const gOuter = [1, -1].map(s => make(B => {
+    const p = outer.map(([x, z]) => [x * s, z]), t = tip.map(([x, z]) => [x * s, z]);
+    flat(B, p, GR, 0.006); flat(B, p, W, -0.006); flat(B, t, DK, 0.006); flat(B, t, DK, -0.006);
+  }));
+  // the dolphin: grey-blue above, pale under, its body from the tail's root (z -0.3) to its beak (z 1.2), and its
+  // tail from there back to the flukes, beating up and down
+  const D = '#56636f', P = '#b7c0c6', Dd = '#47525d';
+  const dFront = make(B => {
+    part(G.ico, D, 0, 0, 0.3, { sx: 0.44, sy: 0.42, sz: 1.3 });
+    part(G.ico, P, 0, -0.07, 0.34, { sx: 0.37, sy: 0.32, sz: 1.12 });
+    part(G.ico, D, 0, 0.02, 0.86, { sx: 0.3, sy: 0.28, sz: 0.42 });
+    part(G.cone6, Dd, 0, -0.04, 1.1, { rx: Math.PI / 2, sx: 0.12, sy: 0.24, sz: 0.1 });
+    part(G.box, '#15181b', 0.13, 0.03, 0.92, { s: 0.035 }); part(G.box, '#15181b', -0.13, 0.03, 0.92, { s: 0.035 });
+    // the dorsal fin, swept back, and the flippers
+    flat(B, [[0.012, 0.17, 0.38], [0.012, 0.5, -0.12], [0.012, 0.17, -0.02]], Dd);
+    flat(B, [[-0.012, 0.17, 0.38], [-0.012, 0.5, -0.12], [-0.012, 0.17, -0.02]], Dd);
+    for (const s of [1, -1]) flat(B, [[0.17 * s, -0.12, 0.6], [0.44 * s, -0.27, 0.32], [0.17 * s, -0.12, 0.38]], Dd);
+  });
+  const dTail = make(B => {
+    seg(G.frust7, D, [0, 0, 0.12], [0, 0.02, -0.78], 0.2);
+    for (const s of [1, -1]) flat(B, [[0, 0.02, -0.66], [0.38 * s, 0, -1.0], [0.3 * s, 0.01, -1.06], [0.05 * s, 0.02, -0.88]], Dd);
+    flat(B, [[0.05, 0.02, -0.88], [-0.05, 0.02, -0.88], [0, 0.02, -0.66]], Dd);
+  });
+  SEA_GEOS = { gBody, gInner, gOuter, dFront, dTail };
+  return SEA_GEOS;
+}
+const seaMesh = geo => shadowy(new GFX.Mesh(geo, boatMat));
+// the water's surface at (x, z) over water at level wl, on its swell
+const seaSurfY = (wl, x, z) => wl * STEP - 0.16 + waterSwell(x, z);
+const angGap = (a, b) => { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; };
+function gullWaterAt(x, z) {
+  const c = Math.floor(x), r = Math.floor(z);
+  if (c < 0 || r < 0 || c >= N || r >= N) return false;
+  const f = FEAT[T(c, r)];
+  return f >= 0 && GULL_KINDS.has(features[f].kind);
+}
+function deepSeaAt(x, z) {
+  const c = Math.floor(x), r = Math.floor(z);
+  if (c < 0 || r < 0 || c >= N || r >= N) return false;
+  const i = T(c, r);
+  return !!SEA[i] && SEAD[i] >= DOLPHINS.deep;
+}
+// a flight of gulls across where you are, from out of sight on one side to out of sight on the other
+function spawnGulls() {
+  const S = seaLifeGeos(), Gl = GULLS, flock = Math.random() < Gl.flock && Gl.most >= 2;
+  const n = flock ? 2 + Math.floor(Math.random() * Math.max(1, Math.round(Gl.most) - 1)) : 1;
+  const a = Math.random() * Math.PI * 2, dx = Math.sin(a), dz = Math.cos(a), L = 30, off = (Math.random() * 2 - 1) * 9;
+  const wl = H.boat ? H.boat.wl : WL[T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1))];
+  const speed = Gl.speed * (0.85 + Math.random() * 0.3);
+  const fl = {
+    x0: H.x - dx * L + dz * off, z0: H.z - dz * L - dx * off, dx, dz, y: wl * STEP + Gl.height * (0.8 + Math.random() * 0.5),
+    speed, life: (2 * L + n * 1.5) / Math.max(0.5, speed), t: 0, weave: 0.6 + Math.random() * 1.2, wf: 0.25 + Math.random() * 0.25, wp: Math.random() * 6.28,
+    side: Math.random() < 0.5 ? 1 : -1, cried: Gl.cry < 0.5 || Math.random() < 0.35, birds: [],
+  };
+  for (let k = 0; k < n; k++) {
+    const g = new GFX.Group(), wings = [];
+    g.add(seaMesh(S.gBody));
+    for (const s of [0, 1]) {
+      const sh = new GFX.Group(), el = new GFX.Group();
+      sh.position.set(s ? -0.06 : 0.06, 0.03, 0.03);
+      sh.add(seaMesh(S.gInner[s]));
+      el.position.set(s ? -0.34 : 0.34, 0, 0);
+      el.add(seaMesh(S.gOuter[s]));
+      sh.add(el); g.add(sh);
+      wings.push([sh, el, s ? -1 : 1]);
+    }
+    g.scale.setScalar(Gl.size * (0.9 + Math.random() * 0.2));
+    scene.add(g);
+    fl.birds.push({ k, g, wings, ph: Math.random() * 6.28, A: 0.6, flapping: Math.random() < 0.7, swapT: 0.5 + Math.random() * 2,
+      back: k * 1.25 + (k ? (Math.random() - 0.5) * 0.3 : 0), across: k * 0.95 * fl.side, up: k * 0.08 + (Math.random() - 0.5) * 0.2, rate: 0.92 + Math.random() * 0.16 });
+  }
+  seaLife.flights.push(fl);
+  return fl;
+}
+function updateGulls(dt) {
+  const S = seaLife, Gl = GULLS;
+  const over = Gl.on > 0.5 && gullWaterAt(H.x, H.z) && (Gl.night > 0.5 || sunDir[1] > 0.02);
+  if (over) {
+    S.gullT -= dt;
+    if (S.gullT <= 0) { if (S.flights.length < 2) spawnGulls(); S.gullT = Math.max(1, Gl.every) * (0.5 + Math.random()); }
+  } else if (S.gullT < 3) S.gullT = 3 + Math.random() * 4;   // (come onto it and the first flight's along soon)
+  for (const fl of S.flights) {
+    fl.t += dt;
+    for (const bd of fl.birds) {
+      // the line ripples: each bird follows the weave a little after the one ahead
+      const tt = fl.t - bd.k * 0.3, w = fl.weave * Math.sin(tt * fl.wf + fl.wp), wv = fl.weave * fl.wf * Math.cos(tt * fl.wf + fl.wp), wa = -fl.weave * fl.wf * fl.wf * Math.sin(tt * fl.wf + fl.wp);
+      const s = fl.t * fl.speed - bd.back, px = fl.dz, pz = -fl.dx;   // (p: to the flight's left)
+      const x = fl.x0 + fl.dx * s + px * (bd.across + w), z = fl.z0 + fl.dz * s + pz * (bd.across + w);
+      const y = fl.y + bd.up + 0.18 * Math.sin(fl.t * 0.9 + bd.k * 1.7);
+      const vx = fl.dx * fl.speed + px * wv, vz = fl.dz * fl.speed + pz * wv;
+      bd.g.position.set(x, y, z);
+      bd.g.rotation.set(-0.04 * Math.cos(fl.t * 0.9 + bd.k * 1.7), Math.atan2(vx, vz), clamp(-wa * 1.6, -0.45, 0.45), 'YXZ');
+      // flapping a while, then gliding a while with its wings held a little up
+      bd.swapT -= dt;
+      if (bd.swapT <= 0) { bd.flapping = !bd.flapping; bd.swapT = bd.flapping ? 1 + Math.random() * 1.8 : 1.5 + Math.random() * 3; }
+      bd.A += ((bd.flapping ? 0.62 : 0) - bd.A) * Math.min(1, dt * 4);
+      bd.ph += dt * Math.PI * 2 * Gl.flap * bd.rate * (0.4 + 0.6 * bd.A / 0.62);
+      const sh = 0.1 + bd.A * Math.sin(bd.ph), el = bd.A * 0.75 * Math.sin(bd.ph - 0.7) - 0.06 * (1 - bd.A / 0.62);
+      for (const [S0, E0, sd] of bd.wings) { S0.rotation.z = sh * sd; E0.rotation.z = el * sd; }
+      if (!fl.cried && Math.hypot(x - H.x, z - H.z) < 10) { fl.cried = true; sfx.gull(); }
+    }
+  }
+  for (const fl of S.flights) if (fl.t >= fl.life || Gl.on < 0.5) for (const bd of fl.birds) scene.remove(bd.g);
+  S.flights = S.flights.filter(fl => fl.t < fl.life && Gl.on >= 0.5);
+}
+// a pod up from below beside boat b: one riding the bow, the rest alongside, either side
+function spawnPod(b) {
+  const S = seaLifeGeos(), D = DOLPHINS, lo = Math.max(1, Math.round(D.fewest)), hi = Math.max(lo, Math.round(D.most));
+  const n = lo + Math.floor(Math.random() * (hi - lo + 1)), list = [];
+  for (let k = 0; k < n; k++) {
+    const sd = k % 2 ? 1 : -1, bow = k === 0 && n > 2;
+    const su = bow ? (Math.random() < 0.5 ? -0.6 : 0.6) : sd * (BOAT.beam + 1.1 + Math.random() * 1.8);
+    const sv = bow ? BOAT.bow + 1.3 : -1.5 + Math.random() * 6;
+    const g = new GFX.Group(), tail = new GFX.Group();
+    g.add(seaMesh(S.dFront));
+    tail.position.set(0, 0, -0.3); tail.add(seaMesh(S.dTail)); g.add(tail);
+    g.scale.setScalar(D.size * (0.85 + Math.random() * 0.3));
+    const [x, z] = boatWorld(b, su * 1.5, sv - 7);
+    g.position.set(x, -50, z);
+    scene.add(g);
+    list.push({ g, tail, su, sv, ph: Math.random() * 6.28, x, z, d: -3.5, hd: b.h, jump: null, jumps: Math.max(0, Math.round(D.jumps * (0.5 + Math.random() * 0.5))),
+      nextJump: 4.5 + Math.random() * 6, above: false, beat: Math.random() * 6.28 });
+  }
+  seaLife.pod = { boat: b, t: 0, state: 'rise', leaveT: 0, outT: 0, slowT: 0, list };
+  return seaLife.pod;
+}
+function updateDolphins(dt) {
+  const S = seaLife, D = DOLPHINS, b = H.boat;
+  S.coolT = Math.max(0, S.coolT - dt);
+  if (!S.pod) {
+    // full ahead, steady, out on the deep sea: they find you
+    const full = b && H.helm && b.notch >= BOAT.notches && b.speed >= BOAT.speed * 0.95;
+    if (D.on > 0.5 && full && S.coolT <= 0 && deepSeaAt(b.x, b.z)) {
+      if (!S.runT || Math.abs(angGap(b.h, S.runH)) > D.straight) { S.runT = 1e-3; S.runH = b.h; S.runGoal = Math.max(0, D.wait) * (1 + Math.random() * 0.5); }
+      else { S.runT += dt; if (S.runT >= S.runGoal) { S.runT = 0; spawnPod(b); } }
+    } else S.runT = 0;
+    if (!S.pod) return;
+  }
+  const P = S.pod, B = P.boat;
+  P.t += dt;
+  P.outT = deepSeaAt(B.x, B.z) ? 0 : P.outT + dt;
+  P.slowT = B.speed < BOAT.speed * 0.3 ? P.slowT + dt : 0;
+  if (P.state !== 'dive' && (H.boat !== B || P.outT > 1.5 || P.slowT > 8 || (D.stay > 0 && P.t > D.stay) || D.on < 0.5)) { P.state = 'dive'; P.leaveT = 0; }
+  if (P.state === 'rise' && P.t > 3.5) P.state = 'pace';
+  if (P.state === 'dive') P.leaveT += dt;
+  const bvx = Math.sin(B.h) * B.speed, bvz = Math.cos(B.h) * B.speed, k = 1 - Math.exp(-dt * 1.3), g = 9.8;
+  for (const f of P.list) {
+    // its spot beside the boat, wandering a little; diving, they drop behind and out
+    let su = f.su + 0.35 * Math.sin(P.t * 0.37 + f.ph), sv = f.sv + 1.1 * Math.sin(P.t * 0.23 + f.ph * 1.3);
+    if (P.state === 'dive') { sv -= P.leaveT * 2.2; su *= 1 + P.leaveT * 0.25; }
+    const [tx, tz] = boatWorld(B, su, sv), ox = f.x, oz = f.z;
+    f.x += bvx * dt + (tx - f.x) * k; f.z += bvz * dt + (tz - f.z) * k;
+    const vx = (f.x - ox) / dt, vz = (f.z - oz) / dt, hs = Math.hypot(vx, vz);
+    if (hs > 0.3) f.hd += angGap(Math.atan2(vx, vz), f.hd) * Math.min(1, dt * 5);
+    // its depth: cruising just under, its fin breaking the surface as it comes up to breathe; up from deep as it
+    // comes, down deep as it goes
+    const cruise = -D.depth + 0.06 * Math.sin(P.t * 1.3 + f.ph) + 0.32 * Math.max(0, Math.sin(P.t * 0.45 + f.ph * 2)) ** 8;
+    const want = P.state === 'rise' ? -3.5 + (cruise + 3.5) * smooth(0, 3.5, P.t) : P.state === 'dive' ? cruise - P.leaveT * 1.3 : cruise;
+    const od = f.d;
+    let vy;
+    if (!f.jump && P.state === 'pace' && f.jumps > 0 && (f.nextJump -= dt) <= 0) {
+      const big = Math.random() < 0.3;
+      f.jump = { t: 0, J: (big ? 1.35 : 0.95) * Math.sqrt(Math.max(0.05, D.leap)), d0: f.d };
+      f.jumps--; f.nextJump = 3 + Math.random() * 6;
+    }
+    if (f.jump) {
+      // out and over in an arc, as anything thrown up falls: back in where it left, J seconds on
+      const j = f.jump; j.t += dt;
+      const v0 = 0.5 * g * j.J;
+      f.d = j.d0 + v0 * j.t - 0.5 * g * j.t * j.t; vy = v0 - g * j.t;
+      if (j.t >= j.J) { f.d = j.d0; f.jump = null; }
+    } else { f.d += (want - f.d) * Math.min(1, dt * 2.5); vy = (f.d - od) / dt; }
+    const sy = seaSurfY(B.wl, f.x, f.z);
+    f.g.position.set(f.x, sy + f.d, f.z);
+    f.g.rotation.set(-Math.atan2(vy, Math.max(hs, 2)), f.hd, f.jump ? 0.25 * Math.sin(f.jump.t / f.jump.J * Math.PI) * (f.su > 0 ? 1 : -1) : 0, 'YXZ');
+    // the tail beating: hard as it swims, easing off in the air
+    f.beat += dt * Math.PI * 2 * D.beat * (f.jump ? 0.4 : 1);
+    f.tail.rotation.x = Math.sin(f.beat) * (f.jump ? 0.12 : 0.32);
+    // a splash as it breaks the surface, and as it goes back in
+    const above = f.d > 0;
+    if (above !== f.above && (f.jump || !above)) {
+      if (Math.hypot(f.x - camTarget.x, f.z - camTarget.z) < 30) {
+        playFx('splash', { x: f.x, y: sy, z: f.z, dir: f.hd, scale: above ? 0.8 : 1.1, ground: () => sy });
+        if (!above) sfx.splash();
+      }
+    }
+    f.above = above;
+  }
+  if (P.state === 'dive' && P.leaveT > 4) {
+    for (const f of P.list) scene.remove(f.g);
+    S.pod = null; S.coolT = D.cooldown; S.runT = 0;
+  }
+}
+// once a frame (dt 0 while the game holds still)
+function updateSeaLife(dt) {
+  if (!(dt > 0)) return;
+  updateGulls(dt);
+  updateDolphins(dt);
 }
 function boatHeroY(b) {
   const y = boatDeckY(b), hb = boatHB(BOAT.gangV), s = H.bu * b.side;
@@ -19738,6 +19983,9 @@ const sfx = {
   xp: () => { beep(784, 0.05, { type: 'sine', vol: 0.03 }); beep(1175, 0.07, { type: 'sine', vol: 0.03, at: 0.04 }); },
   levelUp: () => [523, 659, 784, 1047, 1319].forEach((f, i) => beep(f, 0.16, { type: 'triangle', at: i * 0.07, vol: 0.06 })),
   coin: () => { beep(988, 0.05, { vol: 0.03 }); beep(1319, 0.08, { vol: 0.03, at: 0.04 }); },
+  // (v675) a gull's cry, two falling mews; a dolphin back into the water
+  gull: () => { beep(1500, 0.16, { type: 'sine', slide: -600, vol: 0.012 }); beep(1400, 0.2, { type: 'sine', slide: -650, vol: 0.01, at: 0.22 }); },
+  splash: () => { beep(320, 0.1, { type: 'sawtooth', slide: -220, vol: 0.012 }); beep(180, 0.14, { type: 'triangle', slide: -90, vol: 0.02, at: 0.03 }); },
   dirge: () => [392, 349, 311, 262].forEach((f, i) => beep(f, 0.3, { type: 'triangle', at: i * 0.25, vol: 0.06 })),
 };
 
@@ -28749,6 +28997,33 @@ const TUNING = [
     [BIRDS, 'puff', 'Feathers puff', 0, 1, 0.01],
     [BIRDS, 'tailFan', 'Tail fans', 0, 2, 0.05],
   ]],
+  ['Sea life', [
+    [GULLS, 'on', 'Gulls over bays, inlets, straits and shallows (0 off)', 0, 1, 1],
+    [GULLS, 'every', 'Gulls: a flight every (seconds, on average)', 2, 90, 1],
+    [GULLS, 'flock', 'Gulls: share that fly in an echelon', 0, 1, 0.05],
+    [GULLS, 'most', 'Gulls: most in an echelon', 2, 9, 1],
+    [GULLS, 'speed', 'Gulls: speed (tiles a second)', 1, 12, 0.1],
+    [GULLS, 'height', 'Gulls: height over the water (tiles)', 1, 12, 0.1],
+    [GULLS, 'flap', 'Gulls: wingbeats a second', 0.5, 8, 0.1],
+    [GULLS, 'size', 'Gulls: size', 0.3, 3, 0.05],
+    [GULLS, 'night', 'Gulls fly by night too (1)', 0, 1, 1],
+    [GULLS, 'cry', 'Gulls cry now and then (1)', 0, 1, 1],
+    [SEA_SPAWN, 'gulls', 'Gulls: a flight now', 'action', () => spawnGulls()],
+    [DOLPHINS, 'on', 'Dolphins on the deep sea (0 off)', 0, 1, 1],
+    [DOLPHINS, 'deep', 'Dolphins: deep water is this many tiles from any coast (or calmer water)', 2, 60, 1],
+    [DOLPHINS, 'wait', 'Dolphins: seconds at full ahead, steady, before they come', 0, 120, 1],
+    [DOLPHINS, 'straight', 'Dolphins: how far off your heading you can drift meanwhile (radians)', 0.05, 1.5, 0.05],
+    [DOLPHINS, 'stay', 'Dolphins: seconds they pace you (0 until you leave deep water)', 0, 600, 5],
+    [DOLPHINS, 'fewest', 'Dolphins: fewest in a pod', 1, 10, 1],
+    [DOLPHINS, 'most', 'Dolphins: most in a pod', 1, 12, 1],
+    [DOLPHINS, 'jumps', 'Dolphins: most leaps each', 0, 12, 1],
+    [DOLPHINS, 'leap', 'Dolphins: leap height', 0.2, 3, 0.05],
+    [DOLPHINS, 'depth', 'Dolphins: how deep they swim between leaps (tiles)', 0.2, 2, 0.05],
+    [DOLPHINS, 'beat', 'Dolphins: tail beats a second', 0.3, 5, 0.1],
+    [DOLPHINS, 'size', 'Dolphins: size', 0.3, 3, 0.05],
+    [DOLPHINS, 'cooldown', 'Dolphins: seconds before another pod can come', 0, 600, 5],
+    [SEA_SPAWN, 'dolphins', 'Dolphins: a pod now beside your boat', 'action', () => { if (H.boat && !seaLife.pod) spawnPod(H.boat); }],
+  ]],
   ['Ore rocks', [
     [ORE_LOOK, 'copper', 'Copper colour', 'color'],
     [ORE_LOOK, 'iron', 'Iron colour', 'color'],
@@ -29629,6 +29904,7 @@ function frameBody(now) {
   updateSmoke();
   updateAmbient();
   updateFx(running && !held ? dt : 0);
+  updateSeaLife(running && !held ? dt : 0);
   updateHeat();
   updateTrample(dt);
   updateGrass();
@@ -29672,7 +29948,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 674, crashSeen = new Map();
+const GAME_VERSION = 675, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -30139,6 +30415,11 @@ window.GAME = {
     return out;
   },
   boats: () => boats.map(b => ({ x: +b.x.toFixed(2), z: +b.z.toFixed(2), h: +b.h.toFixed(2), wl: b.wl, side: b.side, speed: +b.speed.toFixed(2), notch: b.notch, anchor: +b.anchor.toFixed(2), plank: +b.plank.toFixed(2), dock: [b.dock.c, b.dock.r] })),
+  // (v675) the gulls and dolphins about now
+  seaLife: () => ({ flights: seaLife.flights.map(f => f.birds.length), gullWater: gullWaterAt(H.x, H.z), deep: deepSeaAt(H.x, H.z), runT: +seaLife.runT.toFixed(2), coolT: +seaLife.coolT.toFixed(1),
+    pod: seaLife.pod ? { state: seaLife.pod.state, t: +seaLife.pod.t.toFixed(1), n: seaLife.pod.list.length, jumps: seaLife.pod.list.map(f => f.jumps) } : null }),
+  gullsNow: () => spawnGulls().birds.length,
+  dolphinsNow: () => H.boat ? spawnPod(H.boat).list.length : 0,
   aboard: () => H.boat ? { u: +H.bu.toFixed(2), v: +H.bv.toFixed(2), helm: !!H.helm, boat: boats.indexOf(H.boat) } : null,
   pipeKeys: () => [...renderer._pipelines.entries()].map(([k, v]) => k.slice(0, 40) + (v ? '' : ' NULL')).filter(k => /shadow/.test(k)),
   light: h => (h !== undefined && (SKY.timeOfDay = h, advanceClock(0), updateSky()), { hour: SKY.timeOfDay, sunY: sunDir[1], sun: sun.intensity, sunCol: sun.color.getHexString(), hemi: hemi.intensity, hemiCol: hemi.color.getHexString(), exposure, day: daylight() }),
