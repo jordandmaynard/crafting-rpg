@@ -7723,7 +7723,8 @@ function renderProxies() {
   renderer.setRenderTarget(proxyRT); renderer.clear();
   renderer.passName = 'proxy reflections';
   renderer.clipBelow = h - 0.02;
-  try { renderer.render(scene, reflCam); } finally { renderer.clipBelow = null; }
+  seaLifeMirror(h, true);
+  try { renderer.render(scene, reflCam); } finally { renderer.clipBelow = null; seaLifeMirror(h, false); }
   renderer.setRenderTarget(maskRT); renderer.clear();
   renderer.passName = 'proxy mask';
   cam.layers.set(9); renderer.render(scene, cam);
@@ -18113,12 +18114,12 @@ const GULL_KINDS = new Set(['bay', 'inlet', 'strait', 'shallows']);
 // speed: tiles a second; height: over the water (tiles); flap: wingbeats a second; night: 1 flies by night too
 // (v680, Jordan) gliding, its wings are arched as seen from the front: raised from the shoulder (arch, radians) and
 // bent down from the elbow (droop)
-const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 4.5, size: 1, flap: 3, night: 0, cry: 1, arch: 0.3, droop: 0.55 };
+const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 10.6, size: 1, flap: 3, night: 0, cry: 1, arch: 0.3, droop: 0.55 };
 // deep: tiles from any coast; wait: seconds at full ahead, steady, before they come; straight: how far off your
 // heading you can drift meanwhile (radians); stay: seconds they pace you (0 no end); fewest/most: pod size; jumps:
 // most leaps each; leap: their height (×); depth: how deep they swim between (tiles); beat: tail beats a second;
 // cooldown: seconds before another pod can come
-const DOLPHINS = { on: 1, deep: 10, wait: 10, straight: 0.3, stay: 90, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 45 };
+const DOLPHINS = { on: 1, deep: 8, wait: 4, straight: 0.3, stay: 90, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 45 };
 const SEA_SPAWN = { gulls: 0, dolphins: 0 };   // (T > Sea life buttons)
 const seaLife = { flights: [], gullT: 5, pod: null, runT: 0, runH: 0, runGoal: 10, coolT: 0 };
 let SEA_GEOS = null;
@@ -18265,6 +18266,9 @@ function spawnPod(b) {
     g.scale.setScalar(D.size * (0.85 + Math.random() * 0.3));
     const [x, z] = boatWorld(b, su * 1.5, sv - 7);
     g.position.set(x, -50, z);
+    // (v681, Jordan) seen by the water's mirror too (layer 9, as the boats are), cut off where it meets the water
+    // (seaLifeMirror sets it on level water for that pass)
+    g.traverse(o => o.layers.enable(9));
     scene.add(g);
     list.push({ g, tail, su, sv, ph: Math.random() * 6.28, x, z, d: -3.5, hd: b.h, jump: null, jumps: Math.max(0, Math.round(D.jumps * (0.5 + Math.random() * 0.5))),
       nextJump: 4.5 + Math.random() * 6, above: false, beat: Math.random() * 6.28 });
@@ -18319,7 +18323,8 @@ function updateDolphins(dt) {
       if (j.t >= j.J) { f.d = j.d0; f.jump = null; }
     } else { f.d += (want - f.d) * Math.min(1, dt * 2.5); vy = (f.d - od) / dt; }
     const sy = seaSurfY(B.wl, f.x, f.z);
-    f.g.position.set(f.x, sy + f.d, f.z);
+    f.y = sy + f.d;
+    f.g.position.set(f.x, f.y, f.z);
     f.g.rotation.set(-Math.atan2(vy, Math.max(hs, 2)), f.hd, f.jump ? 0.25 * Math.sin(f.jump.t / f.jump.J * Math.PI) * (f.su > 0 ? 1 : -1) : 0, 'YXZ');
     // the tail beating: hard as it swims, easing off in the air
     f.beat += dt * Math.PI * 2 * D.beat * (f.jump ? 0.4 : 1);
@@ -18338,6 +18343,14 @@ function updateDolphins(dt) {
     for (const f of P.list) scene.remove(f.g);
     S.pod = null; S.coolT = D.cooldown; S.runT = 0;
   }
+}
+// (v681) the mirror pass (renderProxies) mirrors and cuts at one flat level h, but the dolphins ride the swell: for
+// that pass each is set as deep under h as it is under the water where it swims, so the cut falls where it breaks
+// the surface (on), and put back after (off)
+function seaLifeMirror(h, on) {
+  const P = seaLife.pod;
+  if (!P) return;
+  for (const f of P.list) if (f.y !== undefined) f.g.position.y = on ? h + f.d : f.y;
 }
 // once a frame (dt 0 while the game holds still)
 function updateSeaLife(dt) {
@@ -30290,7 +30303,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 680, crashSeen = new Map();
+const GAME_VERSION = 681, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

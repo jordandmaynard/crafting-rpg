@@ -351,6 +351,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v678:** (Jordan) A shelf off the shoals: past them the sea and lake bed no longer drops off a cliff but slopes on down (0.3 a tile) from the shoal's foot until it meets the old bed, so the floor by a beach is one broad shallow valley with no hard line; the deep sea is as deep as before.
 **v679:** (Jordan) Lake and sea beds swirl in rounded patches like the ground (T > Ground patches), so their square tiles of sand and silt melt into each other and into the shoals' sand.
 **v680:** (Jordan) Gulls glide with arched wings as seen from the front: raised from the shoulder (GULLS.arch 0.3) and bent down from the elbow (GULLS.droop 0.55), easing into it as they stop flapping; the head is carried level, in line with the body. T > Sea life.
+**v681:** (Jordan) Dolphins are reflected by the water's mirrored proxy pass (layer 9, like the boats) instead of the screen-space reflections, cut off at the water: for the mirror pass each is set as deep under the mirror's level as it is under the swell where it swims (seaLifeMirror). Jordan's Sea life tuning: gull height 10.6, dolphin deep 8, wait 4.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
