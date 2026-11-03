@@ -5138,67 +5138,70 @@ const BEDS = new Map();        // (v452) both tiles of every town bed -> { c, r 
 // its cliff tops too, with a 1 x 3 archway (ARCHES, townArch) where each of its main streets goes out, and a small
 // stone guard hut, 2 x 2 where it fits or else 1 x 1, against the wall either side of it (t.huts).
 const ARCHES = new Map();      // tile of an archway's middle edge -> { c, r, w, o, y, key }
+let TOWN_POSTS = false;      // (any large town walled: buildPieces looks for wall posts)
 const ARCH_END = new Set();    // the corner points (T(x, z)) an archway's piers stand on: the wall puts no post there
 function fenceTowns() {
   const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
   towns.forEach((t, k) => {
-    const big = t.tier === 2, kind = big ? KIND_VAL.townwall : t.tier === 1 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [], gd = [];
+    const own = k + 1, big = t.tier === 2;
+    if (big) TOWN_POSTS = true;
+    const kind = big ? KIND_VAL.townwall : t.tier === 1 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [];
     t.gates = []; t.arches = []; t.huts = [];
+    // (v628, Jordan: never block a way out with walls) a large town's main streets go out under archways: where each
+    // street leaves the town, its three tiles' edges stay open, and any of the town's own ragged ground past that line
+    // in the three-wide way out counts as outside (corridor), so the wall turns out along it instead of across it
+    const open = new Set(), corridor = new Set(), arches = [];
+    if (big) for (let d = 0; d < 4; d++) {
+      let e = 0;
+      while (e < t.R + 3 && TN[T(t.c + DC[d] * (e + 1), t.r + DR[d] * (e + 1))] === own) e++;
+      const pc = -DR[d], pr = DC[d], cc = (j, w) => t.c + DC[d] * (e + j) + pc * w, rr = (j, w) => t.r + DR[d] * (e + j) + pr * w;
+      const mid = T(cc(0, 0), rr(0, 0)), out = T(cc(1, 0), rr(1, 0));
+      if (!(TSTREET[mid] || PATH[mid]) || !LV[out] || WT[out] || LAVA[out] || !terrainOpen(mid, out, d)) continue;
+      for (let j = 1; j < 5; j++) for (let w = -1; w <= 1; w++) if (TN[T(cc(j, w), rr(j, w))] === own) corridor.add(T(cc(j, w), rr(j, w)));
+      for (let w = -1; w <= 1; w++) { const [a, b, ww] = edgeOf(cc(0, w), rr(0, w), d); open.add(edgeKey(a, b, ww)); }
+      arches.push([cc(0, 0), rr(0, 0), d]);
+    }
     for (let r = t.r - t.R - 2; r <= t.r + t.R + 2; r++) for (let c = t.c - t.R - 2; c <= t.c + t.R + 2; c++) {
       const i = T(c, r);
-      if (BI[i] !== TOWN || TN[i] !== k + 1) continue;
+      if (BI[i] !== TOWN || TN[i] !== own || corridor.has(i)) continue;
       for (let d = 0; d < 4; d++) {
         const n = i + DI[d];
-        if (BI[n] === TOWN || WT[n]) continue;
-        if (!terrainOpen(i, n, d) && !(big && LV[n] && !LAVA[n] && !CY[n])) continue;
+        if ((BI[n] === TOWN && !corridor.has(n)) || WT[n]) continue;
+        if (!terrainOpen(i, n, d) && !(big && LV[n] && !LAVA[n] && !CY[n] && !SH[n])) continue;   // (a large town's wall runs along its cliff tops too, never by a ramp)
         if (DOCK_WAY[i] && DOCK_WAY[n]) continue;   // (open where a dock's road comes in)
         const [ec, er, w] = edgeOf(c, r, d), arr = w ? WW : WN, e = T(ec, er);
-        if (arr[e]) continue;
+        if (arr[e] || open.has(edgeKey(ec, er, w))) continue;
         const gate = PATH[i] && PATH[n];
         arr[e] = gate ? KIND_VAL.gate : kind; piece(ec, er);
-        if (gate) { t.gates.push([ec, er, w]); gd.push([ec, er, w, c, r, d]); }
-        else if (c === t.c || r === t.r) { ends.push([ec, er, w]); gd.push([ec, er, w, c, r, d]); }
+        if (gate) t.gates.push([ec, er, w]);
+        else if (c === t.c || r === t.r) ends.push([ec, er, w]);
       }
     }
-    if (!t.gates.length && ends.length) { const [ec, er, w] = ends[0]; (w ? WW : WN)[T(ec, er)] = KIND_VAL.gate; t.gates.push(ends[0]); }
-    if (!big) return;
-    // a large town's main streets go out under archways, not gates
-    for (const g of gd) {
-      const at = t.gates.findIndex(q => q[0] === g[0] && q[1] === g[1] && q[2] === g[2]);
-      if (at >= 0 && townArch(t, k + 1, g)) t.gates.splice(at, 1);
-    }
+    if (!t.gates.length && !arches.length && ends.length) { const [ec, er, w] = ends[0]; (w ? WW : WN)[T(ec, er)] = KIND_VAL.gate; t.gates.push(ends[0]); }
+    for (const [c, r, d] of arches) townArch(t, own, c, r, d, corridor);
+    // (a post's chunk has pieces to build, even where the walls it stands on are all in the next one)
+    if (big) for (let z = t.r - t.R - 3; z <= t.r + t.R + 4; z++) for (let x = t.c - t.R - 3; x <= t.c + t.R + 4; x++) if (townWallPost(x, z)) piece(x, z);
   });
 }
-// the archway over a main street's way out of a large town (g: its middle edge and the town tile and side it's on),
-// if the street's lanes either side reach the wall there too
-function townArch(t, own, [ec, er, w, c, r, d]) {
-  if (c !== t.c && r !== t.r) return false;
-  const pc = -DR[d], pr = DC[d], flank = [];
-  for (const s of [-1, 1]) {
-    const fc = c + s * pc, fr = r + s * pr, fi = T(fc, fr);
-    if (BI[fi] !== TOWN || TN[fi] !== own || BI[fi + DI[d]] === TOWN || LV[fi] !== LV[T(c, r)]) return false;
-    const [a, b, ww] = edgeOf(fc, fr, d), v = (ww ? WW : WN)[T(a, b)];
-    if (v && v !== KIND_VAL.townwall) return false;
-    flank.push([a, b, ww]);
-  }
-  for (const [a, b, ww] of [...flank, [ec, er, w]]) (ww ? WW : WN)[T(a, b)] = 0;
-  const o = w ? DC[d] : DR[d], arch = { c: ec, r: er, w, o, d, tc: c, tr: r, y: LV[T(c, r)] * STEP, key: dKey(ec, er, w) };
-  ARCHES.set(T(ec, er), arch); t.arches.push(arch);
+// the archway where a large town's main street leaves it (c, r: the street's last tile, d: the way out)
+function townArch(t, own, c, r, d, corridor) {
+  const [ec, er, w] = edgeOf(c, r, d), i = T(c, r);
+  const o = w ? DC[d] : DR[d], arch = { c: ec, r: er, w, o, d, tc: c, tr: r, y: LV[i] * STEP, key: dKey(ec, er, w) };
+  ARCHES.set(T(ec, er), arch); t.arches.push(arch); buildCount[Math.floor(er / CH) * NC + Math.floor(ec / CH)]++;
   // (its piers stand on the corner points a tile and a half either side of the middle)
   const ends = w ? [[ec, er - 1], [ec, er + 2]] : [[ec - 1, er], [ec + 2, er]];
   for (const [x, z] of ends) ARCH_END.add(T(x, z));
-  for (const s of [-1, 1]) townHut(t, own, c, r, d, s);
-  return true;
+  for (const s of [-1, 1]) townHut(t, own, c, r, d, s, corridor);
 }
 // a guard hut beside an archway, on side s of the street: stone walls, a stone floor, its door onto the street (or,
 // a single tile one, into the town) and a window looking in. Not if it would crowd a building or block a way.
-function townHut(t, own, c, r, d, s) {
+function townHut(t, own, c, r, d, s, corridor) {
   const pc = -DR[d] * s, pr = DC[d] * s, L = LV[T(c, r)];
   const at = (a, j) => [c + pc * a - DC[d] * j, r + pr * a - DR[d] * j];
   const ok = (hc, hr) => {
     const i = T(hc, hr);
     return BI[i] === TOWN && TN[i] === own && LV[i] === L && !SH[i] && !FL[i] && !TSTREET[i] && !PATH[i] && !WT[i] && !BR[i] && !LAVA[i] && !CY[i] &&
-      !stairAt.has(i) && !pillars.has(i) && !DOCK_WAY[i] && !DOCK_NEAR[i] && !UP[1].FL.has(i) && !OBJ[OB[i]].tile && OB[i] !== O.FOUNTAIN && !GUARD_YARD.has(i);
+      !stairAt.has(i) && !pillars.has(i) && !DOCK_WAY[i] && !DOCK_NEAR[i] && !UP[1].FL.has(i) && !OBJ[OB[i]].tile && OB[i] !== O.FOUNTAIN && !GUARD_YARD.has(i) && !corridor.has(i);
   };
   let tiles = null;
   for (const size of [2, 1]) {
@@ -13102,16 +13105,45 @@ function wallPiece(c, r, w, type) {
 // cutaway lowers it like a house's wall (updateCutaway: townWallCuts).
 const TOWN_WALL = { top: WALL_H - 0.12, thick: 0.46, post: 0.66, block: '#a09a8c', core: '#5e5a52', cap: '#b2ac9e' };
 const isTownWall = (c, r, w) => c >= 0 && r >= 0 && c < N && r < N && (w ? WW : WN)[T(c, r)] === 15;
-// does corner point (x, z) take a post, and is it edge (c, r, w)'s to draw (the first of the wall's edges there)?
-function townWallPost(x, z, c, r, w) {
-  if (ARCH_END.has(T(x, z))) return false;
-  const at = [];
-  if (isTownWall(x - 1, z, 0)) at.push([x - 1, z, 0]);
-  if (isTownWall(x, z, 0)) at.push([x, z, 0]);
-  if (isTownWall(x, z - 1, 1)) at.push([x, z - 1, 1]);
-  if (isTownWall(x, z, 1)) at.push([x, z, 1]);
-  if (!at.length || (at.length === 2 && at[0][2] === at[1][2])) return false;
-  return at[0][0] === c && at[0][1] === r && at[0][2] === w;
+// does corner point (x, z) take a post: where the wall turns or stops (not where it runs straight on, nor at an
+// archway's piers)? (v628, Jordan) Posts are drawn on their own (townWallPosts, from the tile at that corner point),
+// coursed like the wall, and lowered whenever a wall they stand on is (POST_KEY)
+const POST_KEY = x => 8 * SNN + x;   // (cut keys past every story's edge keys)
+function townWallPost(x, z) {
+  if (x < 1 || z < 1 || x >= N - 1 || z >= N - 1 || ARCH_END.has(T(x, z))) return false;
+  const a = isTownWall(x - 1, z, 0), b = isTownWall(x, z, 0), c = isTownWall(x, z - 1, 1), d = isTownWall(x, z, 1), n = a + b + c + d;
+  return n > 0 && !(n === 2 && ((a && b) || (c && d)));
+}
+function townWallPosts(x, z) {
+  if (!townWallPost(x, z)) return;
+  const L = Math.max(LV[T(x - 1, z - 1)], LV[T(x, z - 1)], LV[T(x - 1, z)], LV[T(x, z)]);
+  let y = 0;
+  // (on the level of the walls it stands on)
+  for (const [c, r, w] of [[x - 1, z, 0], [x, z, 0], [x, z - 1, 1], [x, z, 1]]) if (isTownWall(c, r, w)) { const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1); y = Math.max(y, Math.max(LV[i], LV[j]) * STEP); }
+  if (!y) y = L * STEP;
+  const save = emitSurf, key1 = POST_KEY(T(x, z)) + 1;
+  emitSurf = null; SURF = SURF_STONE;
+  try {
+    const n0 = OUT.n; townPostRaw(x, z, y, false); cutTag(OUT, n0, key1, 1);
+    const n1 = OUT.n; townPostRaw(x, z, y, true); cutTag(OUT, n1, key1, -1);
+  } finally { emitSurf = save; SURF = 0; }
+}
+function townPostRaw(x, z, y, cut) {
+  const TW = TOWN_WALL, s = TW.post, ph = cut ? CUT_H : TW.top + 0.3, k = 0.92 + hs(x, z, 157) * 0.14;
+  const bx = (dx, dz, yy, sx, sy, sz, col) => part(G.box, col, x + dx, yy, z + dz, { sx, sy, sz });
+  bx(0, 0, y + 0.13, s + 0.08, 0.26, s + 0.08, shade(CC(TW.core), 1.2));
+  bx(0, 0, y + ph / 2, s - 0.06, ph, s - 0.06, TW.core);
+  // courses of two blocks, laid the other way each course, like quoins
+  const rows = Math.max(1, Math.round(ph / 0.3)), rh = ph / rows;
+  for (let row = 0; row < rows; row++) for (const h of [-1, 1]) {
+    const kk = hs(x * 7 + row, z * 3 + h, 159), yy = y + rh * (row + 0.5), col = shade(CC(TW.block), 0.82 + kk * 0.28);
+    if ((row + x + z) % 2) bx(h * s / 4, 0, yy, s / 2 - 0.03, rh - 0.03, s, col);
+    else bx(0, h * s / 4, yy, s, rh - 0.03, s / 2 - 0.03, col);
+  }
+  if (!cut) {
+    bx(0, 0, y + ph + 0.05, s + 0.1, 0.1, s + 0.1, shade(CC(TW.cap), k));
+    bx(0, 0, y + ph + 0.27, s * 0.55, 0.34, s * 0.55, shade(CC(TW.cap), k * 0.95));
+  }
 }
 function townWallPiece(c, r, w, y, at, ry, cut) {
   const TW = TOWN_WALL, th = TW.thick, top = cut ? CUT_H : TW.top, k = 0.92 + hs(c, r, 50 + w) * 0.14;
@@ -13131,16 +13163,6 @@ function townWallPiece(c, r, w, y, at, ry, cut) {
   if (!cut) {
     bx(0.5, 0, y + top + 0.04, 1.02, 0.08, th + 0.06, shade(CC(TW.cap), k));
     for (const a of [0.25, 0.75]) bx(a, o * th / 4, y + top + 0.23, 0.32, 0.3, th / 2, shade(CC(TW.cap), k * (0.92 + hs(c * 2 + a * 4, r, 156 + w) * 0.12)));
-  }
-  const ends = w ? [[0, c, r], [1, c, r + 1]] : [[0, c, r], [1, c + 1, r]];
-  for (const [a, x, z] of ends) {
-    if (!townWallPost(x, z, c, r, w)) continue;
-    const ph = cut ? CUT_H : top + 0.3, s = TW.post;
-    bx(a, 0, y + ph / 2, s, ph, s, shade(CC(TW.block), 0.9 + hs(x, z, 158) * 0.15));
-    if (!cut) {
-      bx(a, 0, y + ph + 0.05, s + 0.1, 0.1, s + 0.1, shade(CC(TW.cap), k));
-      bx(a, 0, y + ph + 0.27, s * 0.55, 0.34, s * 0.55, shade(CC(TW.cap), k * 0.95));
-    }
   }
 }
 // The archway a large town's main street goes out under (ARCHES, fenceTowns): two piers on the corner points a tile
@@ -13170,7 +13192,13 @@ function townArchRaw(ar, cut) {
   for (const s of [-1, 1]) {
     bx(s * pa, bc, y + 0.13, A.pier + 0.08, 0.26, A.depth + 0.08, shade(CC(TOWN_WALL.core), 1.2));
     const rows = Math.max(1, Math.round(top / 0.35)), rh = top / rows;
-    for (let row = 0; row < rows; row++) bx(s * pa, bc, y + rh * (row + 0.5), A.pier, rh - 0.02, A.depth, shade(CC(A.stone), 0.82 + hs(c * 3 + row, r + s, 160 + w) * 0.28));
+    bx(s * pa, bc, y + top / 2, A.pier - 0.06, top, A.depth - 0.06, TOWN_WALL.core);
+    // (v628: two blocks a course, split the other way each course)
+    for (let row = 0; row < rows; row++) for (const h of [-1, 1]) {
+      const col = shade(CC(A.stone), 0.82 + hs(c * 3 + row, r + s * 5 + h, 160 + w) * 0.28), yy = y + rh * (row + 0.5);
+      if (row % 2) bx(s * pa + h * A.pier / 4, bc, yy, A.pier / 2 - 0.03, rh - 0.03, A.depth, col);
+      else bx(s * pa, bc + h * A.depth / 4, yy, A.pier, rh - 0.03, A.depth / 2 - 0.03, col);
+    }
     if (!cut) bx(s * pa, bc, y + A.spring - 0.05, A.pier + 0.08, 0.1, A.depth + 0.06, shade(CC(A.vous), 1.05));   // (the impost, where the arch springs)
   }
   if (cut) return;
@@ -13866,6 +13894,7 @@ function buildPieces(cx, cz, ch, only = null) {
     if (st) drawStair(st);
     const ar = ARCHES.get(i);
     if (ar) townArchPiece(ar);
+    if (TOWN_POSTS) townWallPosts(c, r);
     const pd = PROP_DRAW.get(i);   // (the ground floor's wall hangings, lowered with their wall by the cutaway)
     if (pd) for (const q of pd) if (q.hang) drawProp(q, false);
   }
@@ -14611,8 +14640,9 @@ function townWallCuts(sy, cy) {
   for (let r = hr - R; r <= hr + R; r++) for (let c = hc - R; c <= hc + R; c++) {
     if (c < 0 || r < 0 || c >= N || r >= N) continue;
     const i = T(c, r);
-    if (WN[i] === 15 && want(c + 0.5, r, (r - H.z) * cy, TOWN_WALL_CUT.wall)) wantCut.add(dKey(c, r, 0));
-    if (WW[i] === 15 && want(c, r + 0.5, (c - H.x) * sy, TOWN_WALL_CUT.wall)) wantCut.add(dKey(c, r, 1));
+    // (a post comes down with any wall it stands on)
+    if (WN[i] === 15 && want(c + 0.5, r, (r - H.z) * cy, TOWN_WALL_CUT.wall)) { wantCut.add(dKey(c, r, 0)); wantCut.add(POST_KEY(i)); wantCut.add(POST_KEY(T(c + 1, r))); }
+    if (WW[i] === 15 && want(c, r + 0.5, (c - H.x) * sy, TOWN_WALL_CUT.wall)) { wantCut.add(dKey(c, r, 1)); wantCut.add(POST_KEY(i)); wantCut.add(POST_KEY(T(c, r + 1))); }
     const ar = ARCHES.get(i);
     if (ar && want(ar.w ? c : c + 0.5, ar.w ? r + 0.5 : r, ar.w ? (c - H.x) * sy : (r - H.z) * cy, TOWN_WALL_CUT.arch, 1)) wantCut.add(ar.key);
   }
@@ -27826,7 +27856,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 627, crashSeen = new Map();
+const GAME_VERSION = 628, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
