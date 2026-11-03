@@ -261,6 +261,9 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune .title { font-family: var(--display); font-size: 11px; color: var(--gold); }
 .tune button { font-family: var(--body); font-size: 17px; letter-spacing: 0; padding: 2px 9px; border-width: 2px; box-shadow: 2px 2px 0 #000; }
 .tune .tune-close { margin-left: auto; line-height: 1; }
+.tune .tune-head { flex-wrap: wrap; }
+.tune .tune-find { order: 3; flex: 1 0 100%; box-sizing: border-box; padding: 4px 6px; font: inherit; color: var(--bone); background: rgba(0, 0, 0, 0.35); border: 2px solid var(--panel-edge); }
+.tune label[hidden], .tune .tune-act[hidden] { display: none; }
 .tune .tune-act { display: block; width: 100%; margin: 4px 0; text-align: left; }
 .tune details { border-top: 2px solid var(--panel-edge); padding: 4px 0; }
 .tune summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 4px 0; user-select: none; }
@@ -25607,8 +25610,13 @@ function tuneCopy(text, btn, out, label) {
     navigator.clipboard.writeText(text).then(() => { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = label; }, 1200); }, fallback);
   } catch (err) { fallback(); }
 }
+// (v568, Jordan) the sections listed A to Z (each one's values kept in their own order), and a filter box at the top:
+// typing keeps a section whole when its name matches, otherwise only its values whose label or key match (opened
+// while filtering, without forgetting which you'd closed); Escape clears it
+let tuneFilter = '';
 function createTuningPanel(el, spec, heading = 'Tuning') {
   const sliders = [], readouts = [];
+  spec = spec.slice().sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
   const defaults = spec.flatMap(([, items]) => items.map(([o, k]) => [o, k, o[k]]));
   function build() {
     el.innerHTML = '';
@@ -25622,7 +25630,15 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
     close.setAttribute('aria-label', 'Close');
     close.addEventListener('click', () => { el.hidden = true; });
     head.append(title, close);
+    const find = Object.assign(document.createElement('input'), { type: 'search', className: 'tune-find', placeholder: 'Filter (e.g. haze, water)', value: tuneFilter });
+    find.setAttribute('aria-label', 'Filter the tuning values');
+    // (typing here mustn't walk, attack or close the panel)
+    for (const ev of ['keydown', 'keyup']) find.addEventListener(ev, e => { e.stopPropagation(); if (ev === 'keydown' && e.key === 'Escape') { find.value = ''; tuneFilter = ''; applyFilter(); find.blur(); } });
+    find.addEventListener('input', () => { tuneFilter = find.value; applyFilter(); });
+    head.append(find);
     el.append(head);
+    const secs = [];
+    let filtering = false;
     const out = document.createElement('textarea');
     out.readOnly = true;
     out.hidden = true;
@@ -25631,7 +25647,9 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
       const [name, items] = g;
       const sec = document.createElement('details');
       sec.open = !tuneClosed.has(name);
-      sec.addEventListener('toggle', () => { if (sec.open) tuneClosed.delete(name); else tuneClosed.add(name); saveTuneClosed(); });
+      sec.addEventListener('toggle', () => { if (filtering) return; if (sec.open) tuneClosed.delete(name); else tuneClosed.add(name); saveTuneClosed(); });
+      const rowsOf = [];
+      secs.push({ sec, name, rows: rowsOf });
       const sum = document.createElement('summary');
       const h = document.createElement('h3');
       h.textContent = name;
@@ -25649,7 +25667,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
         if (min === 'action') {
           const b = tuneButton(label, 'tune-act');
           b.addEventListener('click', () => { max(); b.blur(); });
-          sec.append(b);
+          sec.append(b); rowsOf.push([b, (label + ' ' + key).toLowerCase()]);
           continue;
         }
         // a value the game measures, shown as it changes
@@ -25657,7 +25675,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
           val.textContent = obj[key].toFixed(tuneDecimals(step));
           readouts.push({ obj, key, val, step });
           row.append(text, val);
-          sec.append(row);
+          sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
           continue;
         }
         // one of a few values (max: the list)
@@ -25667,7 +25685,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
           for (const v of max) pick.append(Object.assign(document.createElement('option'), { value: v, textContent: v + '×', selected: v === obj[key] }));
           pick.addEventListener('change', () => { obj[key] = parseFloat(pick.value); val.textContent = obj[key] + '×'; pick.blur(); if (apply) apply(obj[key]); });
           row.append(text, val, pick);
-          sec.append(row);
+          sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
           continue;
         }
         if (min === 'color') {
@@ -25676,7 +25694,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
           pick.addEventListener('input', () => { obj[key] = pick.value; val.textContent = pick.value; });
           pick.addEventListener('change', () => pick.blur());
           row.append(text, val, pick);
-          sec.append(row);
+          sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
           continue;
         }
         val.textContent = obj[key].toFixed(tuneDecimals(step));
@@ -25690,7 +25708,7 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
         input.addEventListener('change', () => { if (!input.matches(':focus-visible')) input.blur(); if (apply) apply(obj[key]); });
         sliders.push({ obj, key, input, val, step });
         row.append(text, val, input);
-        sec.append(row);
+        sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
       }
       el.append(sec);
     }
@@ -25702,6 +25720,19 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
     reset.addEventListener('click', () => { for (const [o, k, v] of defaults) o[k] = v; build(); });
     buttons.append(all, reset);
     el.append(buttons, out);
+    function applyFilter() {
+      const q = tuneFilter.trim().toLowerCase();
+      filtering = true;
+      for (const { sec, name, rows } of secs) {
+        const whole = !q || name.toLowerCase().includes(q);
+        let any = whole;
+        for (const [r, t] of rows) { const on = whole || t.includes(q); r.hidden = !on; any = any || on; }
+        sec.hidden = !any;
+        sec.open = q ? any : !tuneClosed.has(name);
+      }
+      filtering = false;
+    }
+    applyFilter();
   }
   return {
     toggle() { el.hidden = !el.hidden; if (!el.hidden) build(); },
@@ -25892,7 +25923,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 567, crashSeen = new Map();
+const GAME_VERSION = 568, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
