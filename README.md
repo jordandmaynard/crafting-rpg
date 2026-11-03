@@ -220,6 +220,8 @@ Jordan's Wanderer's Kit world map pack (art/deliveries/wanderers-kit-world-map-v
 
 The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The wheel zooms about the cursor, dragging pans, and a click picks a seen town for fast travel. Anything you haven't explored is cut out of the map down to opaque parchment, in hard 8-tile cells, and so is everything outside the world. Markers and names show only where you've been. A paper compass rose and a live scale (1 tile = 1.6 m) sit at the bottom right, and a paper footer carries the help and the fast travel button. The folio drags by its leather. While it's open the minimap hides (Jordan). The map's debug and seed tools (seed, PLOTS, BANDS, NEW WORLD, REVEAL ALL, LOAD SEED, EACH LOAD) moved into Options under WORLD, and N and P still work on the map.
 
+**v596:** (Jordan: a notice board should never overlap a wall) Notice boards (the quest boards) only go on a tile with no wall or fence on any side and no building floor beside it, corners included, since the board's roof is wider than a tile. Only if a town has no such tile left does it fall back to the old rule, so every town keeps its board.
+
 **v595:** (Jordan) The quest tracker's progress bar (track and fill) sits 3px higher on its entry (track top 47, fill top 50, at 1080p).
 
 **v594:** (Jordan) A one-pixel black stroke round the quest tracker's seals and items (the crossed swords for kill quests), one screen pixel whatever the UI scale, and round the seals floating over the quest boards (built into their atlas: each seal a pixel in from its cell, the stroke as solid as the most solid of its eight neighbours).
