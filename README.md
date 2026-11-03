@@ -335,6 +335,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v665:** (Jordan) Desert towns' planters are woven baskets instead of copper pots. Each has a bellied body with a rolled rim and is one world mesh (buildBaskets) drawn in basketMat. That material wraps the thatch's straw height map round the basket, so the straw runs round it in coils stacked up its side (BASKET). The ficus and the soil are unchanged.
 
+**v667:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
+
 **v666:** (Jordan) Mosque and prayer house.
 - The mosque's arcade columns are sandstone (sandColumn) and set MOSQUE.colOut back under the gallery, so their capitals no longer stick out past its edge.
 - The mosque's floor is a zellige tile mosaic centred on the hall (mosaicFloor, mosaicColor, MOSAIC_AT): a banded border, a star medallion in the middle and a field of eight-pointed stars.
