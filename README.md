@@ -258,6 +258,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v618:** (Jordan) Hearth fires tuning as defaults (flames 2.4, size 1.1, smoke 1.7, smoke size 0.95). Lantern glass (street lamps, the bank's and guard house's wall lanterns) is one colour at one brightness on every face, unlit and brighter (glow tag -1 in glowMat; wall lanterns go in a new per-chunk piece glow mesh, ch.pglow). T > Lantern glass.
 
+**v619:** (Jordan) Lantern glass has a day and a night brightness (T > Lantern glass), eased between by daylight() as the sun sets and rises.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
