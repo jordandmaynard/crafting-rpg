@@ -5286,6 +5286,10 @@ function townLook(t) {
 }
 // the look of the town whose ground is on either side of an edge (tiles i, j); null outside every town
 function lookAt(i, j) { const k = TN[i] || TN[j]; return k && towns[k - 1] ? townLook(towns[k - 1]) : null; }
+// (v653, Jordan) tile i is in a town walled in sandstone: desert ground and deep sand lie over it (it is still town)
+function sandTown(i) { const k = TN[i]; return k > 0 && BI[i] === TOWN && !!towns[k - 1] && townLook(towns[k - 1]).stone === 'sand'; }
+// a street, lane, plaza or road tile (the sand is cleared off it)
+function streetTile(i) { return !!PATH[i] || (!!TN[i] && townCell(i % N, Math.floor(i / N)) !== 'yard'); }
 const ARCHES = new Map();      // tile of an archway's middle edge -> { c, r, w, o, y, key }
 let TOWN_POSTS = false;      // (any large town walled: buildPieces looks for wall posts)
 const ARCH_END = new Set();    // the corner points (T(x, z)) an archway's piers stand on: the wall puts no post there
@@ -5898,7 +5902,7 @@ function placeCabins() {
 // Cobblestones (v408) on a large town's streets, lanes and plaza: one flat mesh a town just over the ground, its
 // stones a normal map (like the obelisks' carving) from a tileable Voronoi height field two tiles across, the
 // mortar between them darker
-const COBBLE = { bump: 1.4, stones: 12, color: '#8e877c', plaza: '#a0968a' };
+const COBBLE = { bump: 1.4, stones: 12, color: '#8e877c', plaza: '#a0968a', sand: '#c29c66', sandPlaza: '#cfac78' };   // (v653: sand*, towns walled in sandstone)
 function makeCobbleTex() {
   const S = 256, n = COBBLE.stones, pts = [];
   let seed = 11;
@@ -5952,11 +5956,11 @@ function buildCobbles() {
   if (!COBBLE_U.tCobble) COBBLE_U.tCobble = { value: makeCobbleTex() };
   towns.forEach((t, n) => {
     if (t.tier !== 2) return;
-    const pos = [], col = [];
+    const pos = [], col = [], sand = townLook(t).stone === 'sand';
     for (let r = t.r - t.R; r <= t.r + t.R; r++) for (let c = t.c - t.R; c <= t.c + t.R; c++) {
       const i = T(c, r);
       if (TN[i] !== n + 1 || !TSTREET[i]) continue;
-      const y = LV[i] * STEP + 0.012, k = shade(CC(TSTREET[i] === 2 ? COBBLE.plaza : COBBLE.color), 0.93 + hs(c, r, 410) * 0.1);
+      const y = LV[i] * STEP + 0.012, k = shade(CC(TSTREET[i] === 2 ? (sand ? COBBLE.sandPlaza : COBBLE.plaza) : sand ? COBBLE.sand : COBBLE.color), 0.93 + hs(c, r, 410) * 0.1);
       for (const [x, z] of [[c, r], [c, r + 1], [c + 1, r + 1], [c, r], [c + 1, r + 1], [c + 1, r]]) { pos.push(x, y, z); col.push(k.r, k.g, k.b); }
     }
     const geo = new GFX.BufferGeometry();
@@ -8242,7 +8246,8 @@ function groundColor(c, r, i, j) {
   if (GROT[t] === 1) return shade(GROT_BED, 0.8 + hs(c, r, i * 2 + j) * 0.35);   // pebbles under a grotto's pool
   if (WT[t] === 1) return shade(BOG_MUD, 0.85 + hs(c, r, i * 2 + j) * 0.2);   // mud under swamp water
   if (FIELD[t]) return shade(TILLED, 0.9 + hs(c, r, i * 2 + j) * 0.12);   // a field's tilled earth (its ridges: furrows)
-  let b = BI[t];
+  const sandy = sandTown(t);
+  let b = sandy ? DESERT : BI[t];
   // dither into the neighbouring biome near a border, as Bone Road does
   if (hs(c, r, i * 2 + j + 3) > 0.55) {
     const nc = c + (i ? 1 : -1), nr = r + (j ? 1 : -1);
@@ -8253,7 +8258,7 @@ function groundColor(c, r, i, j) {
   let base = (c + r) % 2 ? p.a : p.b;
   if (BI[t] === TOWN) {
     const cell = townCell(c, r);
-    if (cell === 'plaza') base = (i + j + c + r) % 2 ? PLAZA : PLAZA_B;
+    if (cell === 'plaza') base = sandy ? ((i + j + c + r) % 2 ? p.road : p.roadB) : (i + j + c + r) % 2 ? PLAZA : PLAZA_B;
     else if (cell === 'street' || PATH[t]) base = (i + j) % 2 ? p.road : p.roadB;
   } else if (PATH[t]) {
     const q = PAL[BI[t]];
@@ -8459,7 +8464,7 @@ function* groundSteps(cx, cz, ch) {
   for (let r = r0; r < r0 + CH; r++) {
     if (r > r0 && (r - r0) % 4 === 0) { yield; OUT = bufGround; }
     for (let c = c0; c < c0 + CH; c++) {
-      const i = T(c, r), s = SH[i], pal = PAL[BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
+      const i = T(c, r), s = SH[i], pal = PAL[sandTown(i) ? DESERT : BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
       if (!L && WL[i]) { if (LAVA[i]) molten = true; else wet = true; }
       if (SHOAL[i]) wet = true;   // (the water over a shoal)
       // the tile's 3 x 3 points, and which of them its higher neighbours lift
@@ -9124,7 +9129,7 @@ function grassChunk(cx, cz) {
     let kind = 0, mask = 0, y = 0;
     if (WT[i] === 1 && LV[i] && !BR[i]) { if (!GROT[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; } }
     else if (FIELD[i]) { if (LV[i] && !SH[i]) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
-    else if (GRASS_KIND[b] && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || townCell(c, r) === 'yard')) {
+    else if (GRASS_KIND[b] && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || (townCell(c, r) === 'yard' && !sandTown(i)))) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
         // a quarter grows grass if it's smooth ground (flat or a ramp's slope: see smoothQ), clear of a solid
@@ -9509,7 +9514,7 @@ function updateCuts(dt) {
 // quarter on its slope, with 16-32 which way it rises and 64 if half a level a tile. With DRIFT.ramps on, the
 // layer lies over ramps: each covered quarter's ground is its middle's height carried along its slope to the
 // point (dGround), so it follows the ramp and rounds its top and foot. Its colour is the ground's own (groundTex), darker and, in snow, bluer down a trench.
-const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.9, rim: 0.94, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.19, whirl: 1.6, arrowHole: 0.4 };
+const DRIFT = { on: 1, snowMin: 0.14, snowMax: 0.48, sandMin: 0.14, sandMax: 0.3, size: 1, press: 0.9, rim: 0.94, radius: 0.5, recover: 90, foes: 1, snowSlow: 0, sandSlow: 0, smooth: 0.93, cliffs: 1, ramps: 1, outline: 0, fine: 1, span: 0.19, whirl: 1.6, arrowHole: 0.4, bank: 0.9, folk: 1 };
 const DRIFT_S = 6, DRIFT_R = 24, DRIFT_M = DRIFT_S * DRIFT_R * 2;
 const driftTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 driftTex.regions = [];
@@ -9517,7 +9522,9 @@ driftTex.regions = [];
 function driftChunk(c0, r0, ph, W, smoothQ) {
   const d = driftTex.image.data, N2 = N * 2;
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
-    const i = T(c, r), b = BI[i], kind = b === SNOW ? 1 : b === DESERT ? 2 : 0;
+    // (v653: a town walled in sandstone lies under sand too, but its streets are cleared, the sand heaped in banks
+    // along them (128 in a: a covered quarter a quarter tile from a street's), and nothing is buried round its props)
+    const i = T(c, r), b = BI[i], sandy = b === TOWN && sandTown(i), kind = b === SNOW ? 1 : b === DESERT || sandy ? 2 : 0;
     // (a ramp on this tile or one beside it: the ground's light is smoothed round here, see groundShapeMat)
     let nearRamp = false;
     for (let dr = -1; dr <= 1 && !nearRamp; dr++) for (let dc = -1; dc <= 1; dc++) {
@@ -9532,7 +9539,8 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
     }
     // (v506) under open water (a lake, river or the sea; not a swamp pool): its bed takes no sun shadow, see groundShapeMat
     const wet = WL[i] && !LV[i] && !LAVA[i];
-    const open = kind && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk);
+    const open = kind && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk)
+      && !(sandy && (streetTile(i) || PROP_AT.has(i) || stairAt.has(i)));
     const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
     for (let q = 0; q < 4; q++) {
       const lx = (c - c0) * 2 + (q & 1), lz = (r - r0) * 2 + (q >> 1), h0 = ph[(lz + 1) * W + lx + 1];
@@ -9571,7 +9579,15 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
           for (let bb = 0; bb < 2 && bs; bb++) for (let aa = 0; aa < 2; aa++) if (Math.abs(ph[(lz + 1 + bb) * W + lx + 1 + aa] - tileSurf(c, r, u0 + aa / 2, v0 + bb / 2)) > 1e-4) { bs = false; break; }
         } else bs = sm;
       }
-      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0) | (wet ? 16 : 0) | (bs ? 96 : 0);
+      let bank = false;
+      if (sandy && bits & 3) {
+        const gx = c * 2 + (q & 1), gz = r * 2 + (q >> 1);
+        for (let dz = -1; dz <= 1 && !bank; dz++) for (let dx = -1; dx <= 1; dx++) {
+          const tc = (gx + dx) >> 1, tr = (gz + dz) >> 1;
+          if ((tc !== c || tr !== r) && tc >= 0 && tr >= 0 && tc < N && tr < N && streetTile(T(tc, tr))) { bank = true; break; }
+        }
+      }
+      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0) | (wet ? 16 : 0) | (bs ? 96 : 0) | (bank ? 128 : 0);
     }
   }
   driftTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
@@ -9606,6 +9622,7 @@ const DRIFT_U = {
   depth: { value: { x: 0.18, y: 0.38, z: 0.14, w: 0.3 } },   // snow's least and most depth, sand's (tiles)
   look: { value: { x: 0.15, y: 0.92, z: 0.35, w: 0 } },      // the drifts' waves a tile, how far down a trench goes, a rim's height, smooth normals
   edge: { value: { x: 0, y: 0, z: 0, w: 0 } },               // right up to cliffs (1 on), over ramps (1 on), per-pixel normals (1 on), how far apart the smooth normals' samples are (tiles)
+  bank: { value: { x: 0.9, y: 0, z: 0, w: 0 } },             // (v653) the banks along a sand town's streets: height (of the depth)
 };
 const driftMat = new GFX.ShaderMaterial({ uniforms: DRIFT_U, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
@@ -9669,14 +9686,14 @@ fn dPoint(xz: vec2f) -> DP {
   let qp = xz * 2.0 - 0.5;
   let base = vec2i(floor(qp));
   let f = fract(qp);
-  var cov = 0.0; var hc = 0.0; var hall = 1e9; var col = vec3f(0.0); var wcol = 0.0; var sand = 0.0; var slope = false;
+  var cov = 0.0; var hc = 0.0; var hall = 1e9; var col = vec3f(0.0); var wcol = 0.0; var sand = 0.0; var slope = false; var bank = 0.0;
   for (var k = 0; k < 4; k++) {
     let o = vec2i(k & 1, k >> 1);
     let q = clamp(base + o, vec2i(0), lim);
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
     let t = textureLoad(tDrift, q, 0);
     hall = min(hall, dH(t));
-    if (dCov(t)) { cov += w; hc += dGround(t, q, xz) * w; if ((u32(round(t.a * 255.0)) & 3u) == 2u) { sand += w; } }
+    if (dCov(t)) { cov += w; hc += dGround(t, q, xz) * w; let ka = u32(round(t.a * 255.0)); if ((ka & 3u) == 2u) { sand += w; } if ((ka & 128u) != 0u) { bank += w; } }
     if (dSlope(t)) { slope = true; }
     let g = textureLoad(tGround, q, 0);
     if (g.a > 0.002) { col += g.rgb * 2.0 * w; wcol += w; }
@@ -9706,7 +9723,9 @@ fn dPoint(xz: vec2f) -> DP {
     let uv = (xz - U.dV.xy) / U.dV.z;
     if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) { s = dDeform(uv); }
   }
-  let lift = 1.0 - s.x * U.look.y + s.y * (1.0 - s.x) * U.look.z;
+  var lift = 1.0 - s.x * U.look.y + s.y * (1.0 - s.x) * U.look.z;
+  // (v653) the bank heaped along a cleared street, higher and lower along it, pressed down where it's walked through too
+  if (bank > 0.0) { lift += bank * U.bank.x * (0.55 + 0.9 * dNoise(xz * 1.3 + vec2f(5.3, 2.1))) * (1.0 - s.x * U.look.y); }
   return DP(ground + deep * cov * lift - 0.08 * (1.0 - cov), isSand, s.x, col, wcol, cov);
 }
 @vertex fn vs(v: VIn) -> VOut {
@@ -9791,6 +9810,7 @@ function updateDrift(dt) {
   Object.assign(u.depth.value, { x: D.snowMin, y: D.snowMax, z: D.sandMin, w: D.sandMax });
   Object.assign(u.look.value, { x: D.size, y: D.press, z: D.rim, w: D.smooth });
   u.edge.value.x = D.cliffs; u.edge.value.y = D.ramps; u.edge.value.z = D.fine; u.edge.value.w = D.span;
+  u.bank.value.x = D.bank;
   const bodies = [];
   // (the whirlwind's blade ploughs a hollow round you, as it cuts the grass and clears the ground haze)
   if (H.alive && !H.flip) bodies.push({ x: H.x, z: H.z, radius: H.whirl >= 0 && D.whirl > 0 ? Math.max(D.radius, D.whirl) : D.radius, strength: 1 });
@@ -9805,6 +9825,16 @@ function updateDrift(dt) {
     }
     near.sort((a, b) => a[0] - b[0]);
     for (const [, f] of near) bodies.push({ x: f.x, z: f.z, radius: f.def.rad * 1.15, strength: 1 });
+  }
+  // (v653, Jordan) townsfolk plough the sand too, the nearest first
+  if (D.folk > 0.5) {
+    const near = [];
+    for (const t of folkTowns) if (t.batches) for (const p of t.folk) {
+      const l = Math.hypot(p.x - H.x, p.z - H.z);
+      if (l < 22) near.push([l, p]);
+    }
+    near.sort((a, b) => a[0] - b[0]);
+    for (const [, p] of near) bodies.push({ x: p.x, z: p.z, radius: D.radius * 0.8, strength: 1 });
   }
   drift.update({ hero: [H.x, H.z], dt, bodies, recover: D.recover });
   Object.assign(u.dV.value, { x: drift.view[0], y: drift.view[1], z: drift.view[2], w: 1 });
@@ -27920,6 +27950,8 @@ const TUNING = [
     [DRIFT, 'arrowHole', 'Hole an arrow coming down pokes (tiles across; 0 none)', 0, 1.5, 0.05],
     [DRIFT, 'recover', 'Seconds a trench takes to fill back in', 5, 600, 5],
     [DRIFT, 'foes', 'Foes plough trenches too (1 on, 0 off)', 0, 1, 1],
+    [DRIFT, 'folk', 'Townsfolk plough trenches too (1 on, 0 off)', 0, 1, 1],
+    [DRIFT, 'bank', 'Sand towns: bank heaped along the streets (of the depth)', 0, 3, 0.05],
     [DRIFT, 'snowSlow', 'How much snow slows you (0 not at all)', 0, 0.9, 0.01],
     [DRIFT, 'sandSlow', 'How much sand slows you (0 not at all)', 0, 0.9, 0.01],
     [DRIFT, 'smooth', 'Smooth normals (0 faceted, 1 smooth)', 0, 1, 0.01],
@@ -28759,7 +28791,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 652, crashSeen = new Map();
+const GAME_VERSION = 653, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

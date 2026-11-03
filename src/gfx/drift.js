@@ -11,7 +11,7 @@ import { Texture } from './materials.js';
 
 const CPT = 6;            // cells a tile
 const N = 288;            // cells across (48 tiles)
-const MAX_BODIES = 16;
+const MAX_BODIES = 32;
 
 const WGSL = /* wgsl */ `
 struct P {
