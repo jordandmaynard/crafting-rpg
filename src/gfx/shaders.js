@@ -270,13 +270,15 @@ fn ggx(f0: vec3f, rough: f32, N: vec3f, V: vec3f, L: vec3f) -> vec3f {
 fn insideFill(w: vec3f, N: vec3f) -> vec3f {
   if (F.insideA.w <= 0.0) { return vec3f(0.0); }
   let t = vec2i(floor(w.xz - F.insideB.xy));
-  if (t.x < 0 || t.y < 0 || t.x > 31 || t.y > 31 || w.y < F.insideB.z || w.y > F.insideB.w) { return vec3f(0.0); }
+  // (2026-11-03, Jordan: a stair tread speckled while you were upstairs: its top sat exactly on the bottom height, so
+  // pixel by pixel it fell either side; the bottom now fades in over 0.3 m instead of cutting off)
+  if (t.x < 0 || t.y < 0 || t.x > 31 || t.y > 31 || w.y < F.insideB.z - 0.15 || w.y > F.insideB.w) { return vec3f(0.0); }
   let n = u32(t.y * 32 + t.x);
   let word = F.insideBits[n >> 7u][(n >> 5u) & 3u];
   if (((word >> (n & 31u)) & 1u) == 0u) { return vec3f(0.0); }
   let hemi = mix(F.insideC.w, 1.0, 0.5 + 0.5 * N.y);
   let key = 1.6 * max(dot(N, F.insideC.xyz), 0.0);
-  return F.insideA.rgb * mix(hemi, key, F.insideD.x);
+  return F.insideA.rgb * mix(hemi, key, F.insideD.x) * smoothstep(F.insideB.z - 0.15, F.insideB.z + 0.15, w.y);
 }
 // the lit colour of a surface at world point w with normal N
 fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N: vec3f, receive: bool) -> vec3f {

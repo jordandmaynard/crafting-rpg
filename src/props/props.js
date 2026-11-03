@@ -1215,7 +1215,7 @@ function rainBarrel(L, C) {
   const zb = backZ(1), zc = zb + 0.27, top = 0.72;
   for (const dz of [-0.12, 0.12]) part(G.box, C.dark, 0, 0.05, zc + dz, { sx: 0.5, sy: 0.1, sz: 0.08 });
   barrel([0, 0.1, zc], [0, top, zc], 0.2, 0.23, C.light, { head: false });
-  part(G.cyl12, WATER, 0, top + 0.006, zc, { sx: 0.36, sy: 0.004, sz: 0.36 });
+  if (!L.live) part(G.cyl12, WATER, 0, top + 0.006, zc, { sx: 0.36, sy: 0.004, sz: 0.36 });   // (the game draws it in the fountain's water)
   ring(0.188, top + 0.02, 12, 0.024, 0.03, shade(C.light, 0.9), 4);
   if (L.chute) {
     seg(G.box, C.dark, [0.04, 1.9, zb + 0.05], [0.04, 0.84, zc - 0.02], 0.035);
