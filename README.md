@@ -311,6 +311,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v650:** (Jordan: black patches on the desert houses' upper walls) The recesses' back colour shared its name with the recess's sizes in DES_T, so it was drawn with no colour (black, and black in the fountain's reflection); it's DES_T.back now.
 
+**v651:** (Jordan: many upper floors looked windowless) Every desert upper wall without a lattice bay now has a flush pointed window in its recess: glass behind a star lattice, a wooden frame and sill, wedge stones over it (DES_T.flush).
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).

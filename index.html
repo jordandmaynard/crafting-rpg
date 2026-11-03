@@ -4757,6 +4757,7 @@ const DES_T = {
   door: { W: 0.35, R: 0.45, spring: 1.16, ring: 0.1 },        // (the arched door: half width, the arcs' radius, springing, wedge stones)
   recess: { W: 0.3, R: 0.42, spring: 1.12, foot: 0.22 },       // (the pointed recess in each upper wall)
   bay: { W: 0.2, y0: 0.5, y1: 1.36, depth: 0.26 },             // (the upper windows' lattice bays)
+  flush: { W: 0.17, R: 0.26, y0: 0.55, spring: 1.12 },          // (v651: the flush lattice window in every other upper wall's recess)
   band: 1.7, grid: 0.11, bar: 0.022, awnings: 0.4, catchers: 0.6,
 };
 const desertEdge = (c, r, w, k = Math.round(PDY / WALL_H)) => !!DESERT_WALLS[k]?.has(edgeKey(c, r, w));
@@ -14268,8 +14269,18 @@ function desertUpper(c, r, w, y, at, ry, win, cut) {
   // the plaster: a core (its outer face the recess's back), and a skin over it everywhere but the recess
   const core = (a0, a1, h0, h1) => { if (a1 - a0 > 0.003 && h1 - h0 > 0.003) B((a0 + a1) / 2, y + (h0 + h1) / 2, a1 - a0, h1 - h0, -0.03, 0.14, D.back, SURF_PLASTER); };
   const skin = (a0, a1, h0, h1) => { if (a1 - a0 > 0.003 && h1 - h0 > 0.003) B((a0 + a1) / 2, y + (h0 + h1) / 2, a1 - a0, h1 - h0, 0.07, 0.06, D.plaster, SURF_PLASTER); };
+  // (v651, Jordan: walls without a bay looked windowless) a plain wall gets a flush pointed window in its recess
+  const F = D.flush, fApex = F.spring + archRise(F.W, F.R);
   if (win) { core(x0, 0.5 - BW.W, yb, yt); core(0.5 + BW.W, x1, yb, yt); core(0.5 - BW.W, 0.5 + BW.W, yb, BW.y0); core(0.5 - BW.W, 0.5 + BW.W, BW.y1, yt); }
-  else core(x0, x1, yb, yt);
+  else {
+    core(x0, 0.5 - F.W, yb, F.spring); core(0.5 + F.W, x1, yb, F.spring); core(0.5 - F.W, 0.5 + F.W, yb, F.y0);
+    const nf = Math.ceil((fApex - F.spring) / 0.03);
+    for (let q = 0; q < nf; q++) {
+      const ha = F.spring + (fApex - F.spring) * q / nf, hb = F.spring + (fApex - F.spring) * (q + 1) / nf, f = archHalf(F.W, F.R, ha - F.spring);
+      core(x0, 0.5 - f, ha, hb); core(0.5 + f, x1, ha, hb);
+    }
+    core(x0, x1, fApex, yt);
+  }
   const apex = Q.spring + archRise(Q.W, Q.R);
   skin(x0, x1, yb, Q.foot);
   skin(x0, 0.5 - Q.W, Q.foot, Q.spring); skin(0.5 + Q.W, x1, Q.foot, Q.spring);
@@ -14289,7 +14300,21 @@ function desertUpper(c, r, w, y, at, ry, win, cut) {
     B(a, y + 1.6, 0.065, 0.065, 0.112, 0.01, D.cream, SURF_SMOOTH, Math.PI / 4);
     B(a, y + 1.6, 0.028, 0.028, 0.118, 0.008, D.tealDk, SURF_SMOOTH, Math.PI / 4);
   }
-  if (!win) return;
+  if (!win) {
+    // the flush window: glass in the wall, a star lattice in front of it, a wooden frame and sill, wedge stones over it
+    const inside = (a, h) => h < F.spring || Math.abs(a - 0.5) <= archHalf(F.W, F.R, h - F.spring);
+    B(0.5, y + (F.y0 + F.spring) / 2, 2 * F.W, F.spring - F.y0, -0.06, 0.02, GLASS, 0, 0, 'glass');
+    const nf = Math.ceil((fApex - F.spring) / 0.03);
+    for (let q = 0; q < nf; q++) {
+      const ha = F.spring + (fApex - F.spring) * q / nf, hb = F.spring + (fApex - F.spring) * (q + 1) / nf, f = archHalf(F.W, F.R, hb - F.spring);
+      if (f > 0.004) B(0.5, y + (ha + hb) / 2, 2 * f, hb - ha, -0.06, 0.02, GLASS, 0, 0, 'glass');
+    }
+    starLattice(B, y, inside, 0.5 - F.W, 0.5 + F.W, F.y0, fApex, 0.0, 0.03);
+    for (const sg of [-1, 1]) B(0.5 + sg * (F.W + 0.015), y + (F.y0 + F.spring) / 2, 0.04, F.spring - F.y0, 0.015, 0.06, D.woodDk, SURF_WOOD);
+    B(0.5, y + F.y0 - 0.02, 2 * F.W + 0.1, 0.05, 0.03, 0.09, D.light);
+    voussoirs(B, y, F.W, F.R, 0.045, F.spring, 4, 0.02, 0.05, D.woodDk, c * 11 + r * 5 + w);
+    return;
+  }
   // the bay: glass in the wall, a floor on brackets out in the recess, latticed front and sides, a hood
   const o0 = 0.04, o1 = o0 + BW.depth, mid = (BW.y0 + BW.y1) / 2, wd = D.wood, dk = D.woodDk;
   B(0.5, y + mid, 2 * BW.W, BW.y1 - BW.y0, -0.03, 0.03, GLASS, 0, 0, 'glass');
@@ -28700,7 +28725,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 650, crashSeen = new Map();
+const GAME_VERSION = 651, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
