@@ -4020,6 +4020,8 @@ function townYards(t, n) {
   const near = new Set(), mark = (c, r) => { for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) near.add(T(c + a, r + b)); };
   for (const h of t.houses) { const f = doorFront(h); if (f >= 0) mark(f % N, Math.floor(f / N)); }
   for (const [ec, er, ew] of t.gates || []) { mark(ec, er); mark(ew ? ec - 1 : ec, ew ? er : er - 1); }
+  for (const a of t.arches || []) { const pc = -DR[a.d], pr = DC[a.d]; for (const s of [-1, 0, 1]) mark(a.tc + pc * s, a.tr + pr * s); }
+  for (const h of t.huts || []) { const f = doorFront(h); if (f >= 0) mark(f % N, Math.floor(f / N)); }
   const free = (c, r, plaza) => {
     const i = T(c, r);
     return TN[i] === own && LV[i] === L0 && !taken(i) && !FL[i] && !WT[i] && !BR[i] && !SH[i] && !LAVA[i] && !pillars.has(i) && !stairAt.has(i) && !PROP_AT.has(i) &&
@@ -5093,30 +5095,107 @@ const TOWN_PLANTER_GAP = 4;
 const TABLES = [];
 const TOWN_PROP = new Map();   // (v452) town workbench tile -> what it's drawn as: 'saw' | 'grinder' | 'smelter' | 'alchemy' | 'crate'
 const BEDS = new Map();        // (v452) both tiles of every town bed -> { c, r (head), d (head to foot), i, j, color, house, town }
-// Every town is fenced round wherever its edge can be walked across (in wood, or in dry stone), with a gate
-// where each street runs out into a road. A town no road reaches still gets a gate at a street's end.
+// Every town is fenced round wherever its edge can be walked across, with a gate where each street runs out into a
+// road. A town no road reaches still gets a gate at a street's end. (2026-11-03, Jordan: by size) A hamlet has a
+// wooden fence, a medium town a low dry-stone wall, and a large town a full stone wall (15, townWallPiece), along
+// its cliff tops too, with a 1 x 3 archway (ARCHES, townArch) where each of its main streets goes out, and a small
+// stone guard hut, 2 x 2 where it fits or else 1 x 1, against the wall either side of it (t.huts).
+const ARCHES = new Map();      // tile of an archway's middle edge -> { c, r, w, o, y, key }
+const ARCH_END = new Set();    // the corner points (T(x, z)) an archway's piers stand on: the wall puts no post there
 function fenceTowns() {
   const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
   towns.forEach((t, k) => {
-    const kind = hs(t.c, t.r, 97) > 0.5 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [];
-    t.gates = [];
+    const big = t.tier === 2, kind = big ? KIND_VAL.townwall : t.tier === 1 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [], gd = [];
+    t.gates = []; t.arches = []; t.huts = [];
     for (let r = t.r - t.R - 2; r <= t.r + t.R + 2; r++) for (let c = t.c - t.R - 2; c <= t.c + t.R + 2; c++) {
       const i = T(c, r);
       if (BI[i] !== TOWN || TN[i] !== k + 1) continue;
       for (let d = 0; d < 4; d++) {
         const n = i + DI[d];
-        if (BI[n] === TOWN || WT[n] || !terrainOpen(i, n, d)) continue;
+        if (BI[n] === TOWN || WT[n]) continue;
+        if (!terrainOpen(i, n, d) && !(big && LV[n] && !LAVA[n] && !CY[n])) continue;
         if (DOCK_WAY[i] && DOCK_WAY[n]) continue;   // (open where a dock's road comes in)
         const [ec, er, w] = edgeOf(c, r, d), arr = w ? WW : WN, e = T(ec, er);
         if (arr[e]) continue;
         const gate = PATH[i] && PATH[n];
         arr[e] = gate ? KIND_VAL.gate : kind; piece(ec, er);
-        if (gate) t.gates.push([ec, er, w]);
-        else if (c === t.c || r === t.r) ends.push([ec, er, w]);
+        if (gate) { t.gates.push([ec, er, w]); gd.push([ec, er, w, c, r, d]); }
+        else if (c === t.c || r === t.r) { ends.push([ec, er, w]); gd.push([ec, er, w, c, r, d]); }
       }
     }
     if (!t.gates.length && ends.length) { const [ec, er, w] = ends[0]; (w ? WW : WN)[T(ec, er)] = KIND_VAL.gate; t.gates.push(ends[0]); }
+    if (!big) return;
+    // a large town's main streets go out under archways, not gates
+    for (const g of gd) {
+      const at = t.gates.findIndex(q => q[0] === g[0] && q[1] === g[1] && q[2] === g[2]);
+      if (at >= 0 && townArch(t, k + 1, g)) t.gates.splice(at, 1);
+    }
   });
+}
+// the archway over a main street's way out of a large town (g: its middle edge and the town tile and side it's on),
+// if the street's lanes either side reach the wall there too
+function townArch(t, own, [ec, er, w, c, r, d]) {
+  if (c !== t.c && r !== t.r) return false;
+  const pc = -DR[d], pr = DC[d], flank = [];
+  for (const s of [-1, 1]) {
+    const fc = c + s * pc, fr = r + s * pr, fi = T(fc, fr);
+    if (BI[fi] !== TOWN || TN[fi] !== own || BI[fi + DI[d]] === TOWN || LV[fi] !== LV[T(c, r)]) return false;
+    const [a, b, ww] = edgeOf(fc, fr, d), v = (ww ? WW : WN)[T(a, b)];
+    if (v && v !== KIND_VAL.townwall) return false;
+    flank.push([a, b, ww]);
+  }
+  for (const [a, b, ww] of [...flank, [ec, er, w]]) (ww ? WW : WN)[T(a, b)] = 0;
+  const o = w ? DC[d] : DR[d], arch = { c: ec, r: er, w, o, d, tc: c, tr: r, y: LV[T(c, r)] * STEP, key: dKey(ec, er, w) };
+  ARCHES.set(T(ec, er), arch); t.arches.push(arch);
+  // (its piers stand on the corner points a tile and a half either side of the middle)
+  const ends = w ? [[ec, er - 1], [ec, er + 2]] : [[ec - 1, er], [ec + 2, er]];
+  for (const [x, z] of ends) ARCH_END.add(T(x, z));
+  for (const s of [-1, 1]) townHut(t, own, c, r, d, s);
+  return true;
+}
+// a guard hut beside an archway, on side s of the street: stone walls, a stone floor, its door onto the street (or,
+// a single tile one, into the town) and a window looking in. Not if it would crowd a building or block a way.
+function townHut(t, own, c, r, d, s) {
+  const pc = -DR[d] * s, pr = DC[d] * s, L = LV[T(c, r)];
+  const at = (a, j) => [c + pc * a - DC[d] * j, r + pr * a - DR[d] * j];
+  const ok = (hc, hr) => {
+    const i = T(hc, hr);
+    return BI[i] === TOWN && TN[i] === own && LV[i] === L && !SH[i] && !FL[i] && !TSTREET[i] && !PATH[i] && !WT[i] && !BR[i] && !LAVA[i] && !CY[i] &&
+      !stairAt.has(i) && !pillars.has(i) && !DOCK_WAY[i] && !DOCK_NEAR[i] && !UP[1].FL.has(i) && !OBJ[OB[i]].tile && OB[i] !== O.FOUNTAIN && !GUARD_YARD.has(i);
+  };
+  let tiles = null;
+  for (const size of [2, 1]) {
+    const tt = [];
+    for (let j = 0; j < size; j++) for (let a = 2; a < 2 + size; a++) tt.push(at(a, j));
+    if (!tt.every(p => ok(...p))) continue;
+    // (a tile clear of every other building all round it)
+    const set = new Set(tt.map(p => T(...p)));
+    let crowd = false;
+    for (const [hc, hr] of tt) for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const n = T(hc + a, hr + b); if (!set.has(n) && (FL[n] || UP[1].FL.has(n) || stairAt.has(n))) crowd = true; }
+    if (!crowd) { tiles = tt; break; }
+  }
+  if (!tiles) return;
+  const set = new Set(tiles.map(p => T(...p))), two = tiles.length > 1;
+  const dirOf = (dc, dr) => { for (let e = 0; e < 4; e++) if (DC[e] === dc && DR[e] === dr) return e; return -1; };
+  const toStreet = dirOf(-pc, -pr), inward = (d + 2) & 3;
+  const [dc0, dr0] = two ? at(2, 1) : at(2, 0), doorD = two ? toStreet : inward;
+  const [wc, wr] = two ? at(3, 1) : [null, null];
+  let door = null;
+  for (const [hc, hr] of tiles) {
+    const i = T(hc, hr);
+    FL[i] = 2; OB[i] = 0; t.lampAt?.delete(i); t.planterAt?.delete(i);
+    buildCount[Math.floor(hr / CH) * NC + Math.floor(hc / CH)]++;
+    for (let e = 0; e < 4; e++) {
+      if (set.has(T(hc + DC[e], hr + DR[e]))) continue;
+      const [ec, er, ew] = edgeOf(hc, hr, e), arr = ew ? WW : WN, isDoor = hc === dc0 && hr === dr0 && e === doorD;
+      if (!arr[T(ec, er)]) buildCount[Math.floor(er / CH) * NC + Math.floor(ec / CH)]++;
+      arr[T(ec, er)] = isDoor ? KIND_VAL.door : hc === wc && hr === wr && e === inward ? KIND_VAL.stonewindow : KIND_VAL.stonewall;
+      if (isDoor) door = [ec, er, ew];
+    }
+  }
+  const hut = { tiles, door, inside: [dc0, dr0], color: '#7c7886', hut: true }, f = doorFront(hut);
+  if (f >= 0) { t.lampAt?.delete(f); t.planterAt?.delete(f); }   // (its step kept clear)
+  t.huts.push(hut);
 }
 // Every graveyard has an old iron fence round it, broken: whole runs of it gone, a gap wherever a road comes
 // through, and a few broken lines of railing across its middle where plots were once fenced apart. They belong
@@ -5716,6 +5795,7 @@ function finishTowns() {
       if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.up.tiles, hse.color, hse.cathedral ? cathRoof(hse.cathedral) : null, 1); }
     }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
+    for (const h of t.huts || []) { makeDoor(...h.door); makeRoom(h.tiles, h.color); }
   }
   buildHalos();   // (after the bank's lanterns are in t.lamps)
   buildGrottoFalls();
@@ -12764,8 +12844,8 @@ const isDoorKind = k => k === 'door' || k === 'gate' || k === 'irondoor' || k ==
 // what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall, 5 wooden fence,
 // 6 dry-stone wall, 7 gate, 8 iron railings, 9 iron gate, 10 iron door
 // (11 a mausoleum's bronze door, 12 its marble wall: never built by hand)
-const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate', 'ironfence', 'irongate', 'irondoor', 'tombdoor', 'marblewall', 'woodwindow', 'stonewindow'];
-const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10, tombdoor: 11, marblewall: 12, woodwindow: 13, stonewindow: 14 };
+const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate', 'ironfence', 'irongate', 'irondoor', 'tombdoor', 'marblewall', 'woodwindow', 'stonewindow', 'townwall'];
+const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10, tombdoor: 11, marblewall: 12, woodwindow: 13, stonewindow: 14, townwall: 15 };
 // (v373, Jordan: windowed walls, 13 timber and 14 stone. One goes up over a plain wall of its own sort for just the
 // glass; taken down, it gives back the wall's cost and the glass)
 const WINDOW_OF = { woodwindow: 'wall', stonewindow: 'stonewall' }, WINDOW_GLASS = { glassPane: 2 };
@@ -12783,7 +12863,8 @@ function wallOn(c, r, d) {
   return (w ? WW : WN)[T(ec, er)];
 }
 // the walls and doors that close in rooms: fences and gates don't
-function roomWall(c, r, d, k = 0) { const v = k ? upWallOn(c, r, d, k) : wallOn(c, r, d); return isFenceVal(v) ? 0 : v; }
+// (a large town's wall, 15, doesn't either: it would make the whole town one room)
+function roomWall(c, r, d, k = 0) { const v = k ? upWallOn(c, r, d, k) : wallOn(c, r, d); return isFenceVal(v) || v === 15 ? 0 : v; }
 const buildCount = new Uint16Array(NC * NC);
 // ---------- Stories (v369, Jordan) ----------
 // The ground floor is story 0 (the FL, WN and WW arrays). Above it are up to STORY_MAX more, each kept sparsely: maps
@@ -12955,7 +13036,7 @@ const CUT_H = 0.55;
 function wallPiece(c, r, w, type) {
   const save = emitSurf;
   // (marble all smooth; fences, gates and log walls wood; dry stone stone; iron none; the rest by each part's colour)
-  const fixed = type === 11 || type === 12 ? SURF_SMOOTH : type === 3 || type === 5 || type === 7 ? SURF_WOOD : type === 6 ? SURF_STONE : type === 8 || type === 9 ? 0 : -1;
+  const fixed = type === 11 || type === 12 ? SURF_SMOOTH : type === 3 || type === 5 || type === 7 ? SURF_WOOD : type === 6 || type === 15 ? SURF_STONE : type === 8 || type === 9 ? 0 : -1;
   emitSurf = fixed < 0 ? wallSurf : null; SURF = Math.max(0, fixed);
   // (v425: built into the chunk's pieces, a wall the cutaway can lower is drawn whole and as its stub, see cutTag;
   // doors, fences, gates, dry stone and railings are never lowered)
@@ -12971,6 +13052,101 @@ function wallPiece(c, r, w, type) {
       cutTag(OUT, n1, key1, -1);
     }
   } finally { emitSurf = save; SURF = 0; }
+}
+// (2026-11-03, Jordan) A large town's wall (15): thick coursed stone on a footing, a coping along its top and merlons
+// on its outer half (a walk behind them on the town side), and a square post wherever it turns or stops. The
+// cutaway lowers it like a house's wall (updateCutaway: townWallCuts).
+const TOWN_WALL = { top: WALL_H - 0.12, thick: 0.46, post: 0.66, block: '#a09a8c', core: '#5e5a52', cap: '#b2ac9e' };
+const isTownWall = (c, r, w) => c >= 0 && r >= 0 && c < N && r < N && (w ? WW : WN)[T(c, r)] === 15;
+// does corner point (x, z) take a post, and is it edge (c, r, w)'s to draw (the first of the wall's edges there)?
+function townWallPost(x, z, c, r, w) {
+  if (ARCH_END.has(T(x, z))) return false;
+  const at = [];
+  if (isTownWall(x - 1, z, 0)) at.push([x - 1, z, 0]);
+  if (isTownWall(x, z, 0)) at.push([x, z, 0]);
+  if (isTownWall(x, z - 1, 1)) at.push([x, z - 1, 1]);
+  if (isTownWall(x, z, 1)) at.push([x, z, 1]);
+  if (!at.length || (at.length === 2 && at[0][2] === at[1][2])) return false;
+  return at[0][0] === c && at[0][1] === r && at[0][2] === w;
+}
+function townWallPiece(c, r, w, y, at, ry, cut) {
+  const TW = TOWN_WALL, th = TW.thick, top = cut ? CUT_H : TW.top, k = 0.92 + hs(c, r, 50 + w) * 0.14;
+  const o = BI[T(c, r)] === TOWN ? -1 : 1;   // (which way is out, across the wall)
+  const P = (a, b, yy) => w ? [c + b, yy, r + a] : [c + a, yy, r + b];
+  const bx = (a, b, yy, sx, sy, sz, col) => { const p = P(a, b, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
+  bx(0.5, 0, y + 0.12, 1, 0.24, th + 0.1, shade(CC(TW.core), 1.2));
+  bx(0.5, 0, y + top / 2, 1, top, th - 0.06, TW.core);
+  const rows = Math.max(1, Math.round(top / 0.3)), rh = top / rows;
+  for (let row = 0; row < rows; row++) {
+    const off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, n, a) => a.indexOf(v) === n && v <= 1);
+    for (let n = 0; n + 1 < edges.length; n++) {
+      const a0 = edges[n], a1 = edges[n + 1], kk = hs(c * 5 + row, r * 3 + n, 154 + w);
+      bx((a0 + a1) / 2, 0, y + rh * (row + 0.5), a1 - a0 - 0.03, rh - 0.03, th, shade(CC(TW.block), 0.8 + kk * 0.3));
+    }
+  }
+  if (!cut) {
+    bx(0.5, 0, y + top + 0.04, 1.02, 0.08, th + 0.06, shade(CC(TW.cap), k));
+    for (const a of [0.25, 0.75]) bx(a, o * th / 4, y + top + 0.23, 0.32, 0.3, th / 2, shade(CC(TW.cap), k * (0.92 + hs(c * 2 + a * 4, r, 156 + w) * 0.12)));
+  }
+  const ends = w ? [[0, c, r], [1, c, r + 1]] : [[0, c, r], [1, c + 1, r]];
+  for (const [a, x, z] of ends) {
+    if (!townWallPost(x, z, c, r, w)) continue;
+    const ph = cut ? CUT_H : top + 0.3, s = TW.post;
+    bx(a, 0, y + ph / 2, s, ph, s, shade(CC(TW.block), 0.9 + hs(x, z, 158) * 0.15));
+    if (!cut) {
+      bx(a, 0, y + ph + 0.05, s + 0.1, 0.1, s + 0.1, shade(CC(TW.cap), k));
+      bx(a, 0, y + ph + 0.27, s * 0.55, 0.34, s * 0.55, shade(CC(TW.cap), k * 0.95));
+    }
+  }
+}
+// The archway a large town's main street goes out under (ARCHES, fenceTowns): two piers on the corner points a tile
+// and a half either side of the street's middle, a round arch of voussoirs over the three tiles between them with its
+// keystone, coursed stone filling up to a coping and merlons, the whole set out past the wall's outside face. Lowered
+// to its piers' stubs by the cutaway when it stands between you and the camera.
+const TOWN_ARCH = { half: 1.48, spring: 1.45, ring: 0.32, depth: 0.82, back: 0.16, pier: 0.74, top: 3.5, stone: '#aaa496', vous: '#b8b2a2', key: '#cbc5b4' };
+function townArchPiece(ar) {
+  const save = emitSurf;
+  emitSurf = null; SURF = SURF_STONE;
+  try {
+    const n0 = OUT.n;
+    townArchRaw(ar, false);
+    cutTag(OUT, n0, ar.key + 1, 1);
+    const n1 = OUT.n;
+    townArchRaw(ar, true);
+    cutTag(OUT, n1, ar.key + 1, -1);
+  } finally { emitSurf = save; SURF = 0; }
+}
+function townArchRaw(ar, cut) {
+  const { c, r, w, o, y } = ar, A = TOWN_ARCH, hf = A.half, ry = w ? -Math.PI / 2 : 0;
+  const x0 = w ? c : c + 0.5, z0 = w ? r + 0.5 : r, bc = A.depth / 2 - A.back;
+  const P = (a, b, yy) => w ? [x0 + b * o, yy, z0 + a] : [x0 + a, yy, z0 + b * o];
+  const bx = (a, b, yy, sx, sy, sz, col, rz = 0) => { const p = P(a, b, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, rz }); };
+  const top = cut ? CUT_H : A.top, pa = hf + A.pier / 2;
+  // the piers, in courses, on a footing
+  for (const s of [-1, 1]) {
+    bx(s * pa, bc, y + 0.13, A.pier + 0.08, 0.26, A.depth + 0.08, shade(CC(TOWN_WALL.core), 1.2));
+    const rows = Math.max(1, Math.round(top / 0.35)), rh = top / rows;
+    for (let row = 0; row < rows; row++) bx(s * pa, bc, y + rh * (row + 0.5), A.pier, rh - 0.02, A.depth, shade(CC(A.stone), 0.82 + hs(c * 3 + row, r + s, 160 + w) * 0.28));
+    if (!cut) bx(s * pa, bc, y + A.spring - 0.05, A.pier + 0.08, 0.1, A.depth + 0.06, shade(CC(A.vous), 1.05));   // (the impost, where the arch springs)
+  }
+  if (cut) return;
+  // the ring of voussoirs, the keystone in the middle
+  const n = 9, Rm = hf + A.ring / 2 - 0.02, len = Math.PI * (hf + A.ring) / n * 1.02;
+  for (let q = 0; q < n; q++) {
+    const th = (q + 0.5) / n * Math.PI, keyQ = q === (n >> 1);
+    bx(Math.cos(th) * Rm, bc, y + A.spring + Math.sin(th) * Rm, keyQ ? len * 0.8 : len, A.ring + (keyQ ? 0.14 : 0), A.depth + 0.04, keyQ ? A.key : shade(CC(A.vous), 0.88 + hs(c + q, r, 162 + w) * 0.2), th - Math.PI / 2);
+  }
+  // the stone over it, row by row, kept outside the ring
+  const outer = hf + A.ring * 0.5;
+  for (let y0 = 0; y0 < top - A.spring - 1e-3; y0 += 0.3) {
+    const y1 = Math.min(top - A.spring, y0 + 0.3), u = y0 < outer ? Math.sqrt(outer * outer - y0 * y0) : 0, col = shade(CC(A.stone), 0.85 + hs(c, r + y0 * 10, 164 + w) * 0.22);
+    if (u <= 0) bx(0, bc, y + A.spring + (y0 + y1) / 2, 2 * hf, y1 - y0, A.depth - 0.04, col);
+    else if (u < hf - 0.02) for (const s of [-1, 1]) bx(s * (u + hf) / 2, bc, y + A.spring + (y0 + y1) / 2, hf - u, y1 - y0, A.depth - 0.04, col);
+  }
+  // a coping right across, and merlons along its outer edge
+  const span = 2 * (hf + A.pier);
+  bx(0, bc, y + top + 0.05, span + 0.08, 0.1, A.depth + 0.1, shade(CC(TOWN_WALL.cap), 1));
+  for (let q = 0; q < 5; q++) bx((q - 2) * (span - 0.4) / 4, A.depth - A.back - 0.16, y + top + 0.27, 0.4, 0.34, 0.3, shade(CC(TOWN_WALL.cap), 0.9 + hs(c + q, r, 166 + w) * 0.15));
 }
 // warm and dark is timber, warm and pale is plaster, the greys are stone
 function wallSurf(k) {
@@ -13088,6 +13264,7 @@ function wallPieceRaw(c, r, w, type, cut) {
     for (const yy of cut ? [0.3] : [0.3, WALL_H - 0.45]) { const p = at(0.5, y + yy); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.26, ry }); }
     return;
   }
+  if (type === 15) { townWallPiece(c, r, w, y, at, ry, cut); return; }
   if (type === 14 && !cut) { stoneWindowWall(c, r, w, y, at, ry, k); return; }
   if (type === 4 && !cut && ROSE_WALLS.has(edgeKey(c, r, w) + PCUT)) { roseWall(c, r, w, y, at, ry, k, ROSE_WALLS.get(edgeKey(c, r, w) + PCUT)); return; }
   if (type === 4 || type === 14) {
@@ -13227,7 +13404,7 @@ function glassMesh(b) {
 // GI as plain slabs instead: a whole wall full height, a window as its sill and the wall over it (nothing between,
 // so the sky and bounced light come in), a doorway as its lintel. [bottom, top, colour] a slab.
 const WALL_GI = {
-  1: [[0, WALL_H, '#cdb894']], 3: [[0, WALL_H, '#7a5432']], 4: [[0, WALL_H, '#8a8694']], 12: [[0, MARBLE_H, MARBLE]],
+  1: [[0, WALL_H, '#cdb894']], 3: [[0, WALL_H, '#7a5432']], 4: [[0, WALL_H, '#8a8694']], 15: [[0, WALL_H, '#8a8694']], 12: [[0, MARBLE_H, MARBLE]],
   2: [[WALL_H - 0.1, WALL_H, '#4a3020']], 10: [[WALL_H - 0.1, WALL_H, '#4a4650']], 11: [[TOMB_DOOR_H, MARBLE_H, MARBLE]],
   13: [[0, 0.56, '#cdb894'], [1.59, WALL_H, '#cdb894']],   // (BAY.y0, BAY.y1) 14: [[0, 0.45, '#8a8694'], [1.52, WALL_H, '#8a8694']],
 };
@@ -13643,6 +13820,8 @@ function buildPieces(cx, cz, ch, only = null) {
     if (ca) cathExtras(ca);
     const st = stairs.get(i);
     if (st) drawStair(st);
+    const ar = ARCHES.get(i);
+    if (ar) townArchPiece(ar);
     const pd = PROP_DRAW.get(i);   // (the ground floor's wall hangings, lowered with their wall by the cutaway)
     if (pd) for (const q of pd) if (q.hang) drawProp(q, false);
   }
@@ -14368,6 +14547,7 @@ function updateCutaway(inside) {
     for (const q of cat.cols) if ((q.x - H.x) * sy + (q.z - H.z) * cy > 0.3) wantCut.add(q.key);
     for (const q of cat.towers) if ((q.x - H.x) * sy + (q.z - H.z) * cy > 0.5) wantCut.add(q.key);
   }
+  townWallCuts(sy, cy);
   if (wantCut.size === cutEdges.size) { let same = true; for (const k of wantCut) if (!cutEdges.has(k)) { same = false; break; } if (same) return; }
   cutEdges.clear();
   for (const k of wantCut) cutEdges.add(k);
@@ -14375,6 +14555,23 @@ function updateCutaway(inside) {
   const a = CUT_U.cuts.value; let n = 0;
   for (const k of cutEdges) { if (n >= CUT_MAX) break; a[n++] = k; }
   CUT_U.cutN.value = n;
+}
+// (2026-11-03) a large town's wall and archways close by, between you and the camera, come down to their stubs,
+// so you're never lost behind them (TOWN_WALL_CUT: how near, in tiles, for the wall and for an archway)
+const TOWN_WALL_CUT = { wall: 4, arch: 6.5 };
+function townWallCuts(sy, cy) {
+  if (!towns.some(t => t.tier === 2 && Math.hypot(t.c - H.x, t.r - H.z) < t.R + 10)) return;
+  const hc = Math.floor(H.x), hr = Math.floor(H.z), R = Math.ceil(TOWN_WALL_CUT.arch) + 2;
+  // (an archway also while you're under it: it stands out past the wall)
+  const want = (mx, mz, line, near, under = -1e-3) => Math.hypot(mx - H.x, mz - H.z) < near && (mx - H.x) * sy + (mz - H.z) * cy > -under && line > -under;
+  for (let r = hr - R; r <= hr + R; r++) for (let c = hc - R; c <= hc + R; c++) {
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const i = T(c, r);
+    if (WN[i] === 15 && want(c + 0.5, r, (r - H.z) * cy, TOWN_WALL_CUT.wall)) wantCut.add(dKey(c, r, 0));
+    if (WW[i] === 15 && want(c, r + 0.5, (c - H.x) * sy, TOWN_WALL_CUT.wall)) wantCut.add(dKey(c, r, 1));
+    const ar = ARCHES.get(i);
+    if (ar && want(ar.w ? c : c + 0.5, ar.w ? r + 0.5 : r, ar.w ? (c - H.x) * sy : (r - H.z) * cy, TOWN_WALL_CUT.arch, 1)) wantCut.add(ar.key);
+  }
 }
 // after a wall or door goes up or comes down, look again at the rooms on both sides of it
 function refreshRooms(c, r, w, k = 0) {
@@ -27584,7 +27781,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 625, crashSeen = new Map();
+const GAME_VERSION = 626, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -27869,6 +28066,12 @@ window.GAME = {
     return null;
   },
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
+  // (2026-11-03) each town's perimeter by size: its wall pieces by kind, archways, guard huts (tiles each)
+  townWalls: () => towns.map(t => {
+    const kinds = {};
+    for (let r = t.r - t.R - 3; r <= t.r + t.R + 3; r++) for (let c = t.c - t.R - 3; c <= t.c + t.R + 3; c++) for (const v of [WN[T(c, r)], WW[T(c, r)]]) if (v === 5 || v === 6 || v === 7 || v === 15) kinds[WALL_KIND[v]] = (kinds[WALL_KIND[v]] || 0) + 1;
+    return { name: t.name, tier: t.tier, kinds, arches: (t.arches || []).length, huts: (t.huts || []).map(h => h.tiles.length), gates: (t.gates || []).length };
+  }),
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
   wildFences: () => wildFence.size,
   farms: () => farms.map(f => ({ c: f.c, r: f.r, house: f.house.length, door: !!f.door, gate: !!f.gate, fields: f.fields.map(x => [x.dir, x.tiles.length]),
