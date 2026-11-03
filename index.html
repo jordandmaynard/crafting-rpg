@@ -8394,7 +8394,7 @@ function* groundSteps(cx, cz, ch) {
 // surface of the water tiles round it (so where a river steps down a level, the lower tile's upper half is a
 // rapid), and carries how deep the water is there (negative where the bank rises over it: the shoreline),
 // the way it flows, and whether it falls.
-const wPos = [], wDepth = [], wFlow = [], wFall = [], wOpen = [];
+const wPos = [], wDepth = [], wFlow = [], wFall = [], wOpen = [], wShore = [];
 function waterPoint(x2, z2, out) {
   const ca = x2 & 1 ? x2 >> 1 : (x2 >> 1) - 1, cb = x2 >> 1, ra = z2 & 1 ? z2 >> 1 : (z2 >> 1) - 1, rb = z2 >> 1;
   let hi = -1, lo = 99, fx = 0, fz = 0, n = 0;
@@ -8409,14 +8409,25 @@ function waterPoint(x2, z2, out) {
   }
   out[0] = hi * STEP - 0.16; out[1] = n ? fx / n / 127 : 0; out[2] = n ? fz / n / 127 : 0; out[3] = hi - lo;
 }
+// how much of the water round half-grid point (x2, z2) lies over a shoal (0-1): its swells are lowered that much
+function shoreAt(x2, z2) {
+  const ca = x2 & 1 ? x2 >> 1 : (x2 >> 1) - 1, cb = x2 >> 1, ra = z2 & 1 ? z2 >> 1 : (z2 >> 1) - 1, rb = z2 >> 1;
+  let n = 0, s = 0;
+  for (let r = ra; r <= rb; r++) for (let c = ca; c <= cb; c++) {
+    if (c < 0 || r < 0 || c >= N || r >= N) continue;
+    const i = T(c, r);
+    if (SHOAL[i]) { s++; n++; } else if (!LV[i] && WL[i] && !LAVA[i]) n++;
+  }
+  return n ? s / n : 0;
+}
 function buildWater(c0, r0, grid, GW, ch) {
-  wPos.length = wDepth.length = wFlow.length = wFall.length = wOpen.length = 0;
+  wPos.length = wDepth.length = wFlow.length = wFall.length = wOpen.length = wShore.length = 0;
   const pts = new Float32Array(GW * GW * 4), o = [0, 0, 0, 0];
   for (let j = 0; j < GW; j++) for (let k = 0; k < GW; k++) { waterPoint(c0 * 2 + k, r0 * 2 + j, o); pts.set(o, (j * GW + k) * 4); }
   const vert = (j, k) => {
     const q = (j * GW + k) * 4, y = pts[q];
     wPos.push(c0 + k / 2, y, r0 + j / 2); wDepth.push(y - grid[j * GW + k]); wFlow.push(pts[q + 1], pts[q + 2]); wFall.push(pts[q + 3]);
-    wOpen.push(openAt(c0 + k / 2, r0 + j / 2));
+    wOpen.push(openAt(c0 + k / 2, r0 + j / 2)); wShore.push(shoreAt(c0 * 2 + k, r0 * 2 + j));
   };
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
     const i = T(c, r);
@@ -8434,6 +8445,7 @@ function buildWater(c0, r0, grid, GW, ch) {
   g.setAttribute('wFlow', new GFX.Float32BufferAttribute(wFlow, 2));
   g.setAttribute('wFall', new GFX.Float32BufferAttribute(wFall, 1));
   g.setAttribute('wOpen', new GFX.Float32BufferAttribute(wOpen, 1));
+  g.setAttribute('wShore', new GFX.Float32BufferAttribute(wShore, 1));
   ch.water = new GFX.Mesh(g, waterMulMat); ch.water.renderOrder = 2;
   ch.water2 = new GFX.Mesh(g, waterAddMat); ch.water2.renderOrder = 3;
   ch.water.layers.set(2); ch.water2.layers.set(2);   // drawn after the world, over a copy of it
@@ -9998,7 +10010,9 @@ fn seaSwell(p: vec2f) -> vec3f {
   let amp = U.swellAmp * (1.0 - clamp(length(v.wFlow) * 1.4, 0.0, 0.85)) * (1.0 - sat(v.wFall));
   let ss = seaSwell(w.xz);
   let seaA = U.seaAmp * v.wOpen;
-  let h = amp * sw.x + seaA * ss.x;
+  // (v634: over a shoal the swells are lowered by their full height, so a crest only just reaches the still water's
+  // line up the beach and never runs past the water's edge, where it would be cut off in a straight line)
+  let h = amp * sw.x + seaA * ss.x - v.wShore * (amp + seaA);
   w.y += h;
   var o: VOut;
   o.pos = F.viewProj * w;
@@ -10259,7 +10273,7 @@ const ROT_C = mat2x2f(0.8, 0.6, -0.6, 0.8);
   return vec4f(mix(vec3f(1.0), mul, f), 1.0);
 }`;
 const makeWaterMat = add => new GFX.ShaderMaterial({
-  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32', wOpen: 'f32' }, code: WATER_WGSL,
+  uniforms: Object.assign({ passAdd: { value: add ? 1 : 0 } }, WATER_U), attributes: { wDepth: 'f32', wFlow: 'vec2f', wFall: 'f32', wOpen: 'f32', wShore: 'f32' }, code: WATER_WGSL,
   transparent: true, depthWrite: add, side: GFX.DoubleSide, blending: GFX.CustomBlending, blendEquation: GFX.AddEquation,
   blendSrc: add ? GFX.OneFactor : GFX.ZeroFactor, blendDst: add ? GFX.OneFactor : GFX.SrcColorFactor,
 });
@@ -12541,6 +12555,7 @@ function buildFountains() {
   g.setAttribute('wFlow', new GFX.Float32BufferAttribute(flow, 2));
   g.setAttribute('wFall', new GFX.Float32BufferAttribute(fall, 1));
   g.setAttribute('wOpen', new GFX.Float32BufferAttribute(new Float32Array(fall.length), 1));
+  g.setAttribute('wShore', new GFX.Float32BufferAttribute(new Float32Array(fall.length), 1));
   fountMats.forEach((mat, n) => { const m = new GFX.Mesh(g, mat); m.renderOrder = 2 + n; m.layers.set(2); m.matrixAutoUpdate = false; m.castShadow = false; scene.add(m); fountMeshes.push(m); });
   const fg = new GFX.BufferGeometry();
   fg.setAttribute('position', new GFX.Float32BufferAttribute(fpos, 3));
@@ -27875,7 +27890,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 633, crashSeen = new Map();
+const GAME_VERSION = 634, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

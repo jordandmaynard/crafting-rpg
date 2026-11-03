@@ -281,6 +281,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v632:** (Jordan: the town wall flickered on and off as you walked by it) A large town's wall and its posts always stand now; the cutaway lowers only an archway you're near or under, and the guard huts' walls as any building's.
 **v633:** (Jordan) The shoal's sand blends into the beach's with the rounded ground patches (no blocky seam between the two rows), but still never into the grass.
+**v634:** (Jordan) Over shoals the swells are lowered by their full height, so a crest only reaches the still water's line on the beach and is never cut off in a straight line at the water's edge; they come back to full height off the shoal's far edge.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
