@@ -1171,7 +1171,7 @@ import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_W
 import { Ragdoll, RAGDOLL } from './src/ragdoll.js';
 import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShapes } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
-import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, makeDolphinMat } from './src/sea/sealife.js';
+import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -18133,7 +18133,7 @@ const GULL_KINDS = new Set(['bay', 'inlet', 'strait', 'shallows']);
 // speed: tiles a second; height: over the water (tiles); flap: wingbeats a second; night: 1 flies by night too
 // (v680, Jordan) gliding, its wings are arched as seen from the front: raised from the shoulder (arch, radians) and
 // bent down from the elbow (droop)
-const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 10.6, size: 1, flap: 3, night: 0, cry: 1, arch: 0.3, droop: 0.55 };
+const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 10.6, size: 1, flap: 3, night: 0, cry: 1, arch: 0.3, droop: 0.55, model: 1, smooth: 0 };   // (model: v687, 1 one skinned shell, 0 the first; smooth: its normals)
 // deep: tiles from any coast; wait: seconds at full ahead, steady, before they come; straight: how far off your
 // heading you can drift meanwhile (radians); stay: seconds they pace you (0 no end); fewest/most: pod size; jumps:
 // most leaps each; leap: their height (×); depth: how deep they swim between (tiles); beat: tail beats a second;
@@ -18173,11 +18173,11 @@ function spawnGulls() {
     side: Math.random() < 0.5 ? 1 : -1, cried: Gl.cry < 0.5 || Math.random() < 0.35, birds: [],
   };
   for (let k = 0; k < n; k++) {
-    const { g, wings } = gullModel(boatMat);
+    const m = gullModel(boatMat, GULLS.model, dolphinMat), g = m.g;
     shadowy(g);
     g.scale.setScalar(Gl.size * (0.9 + Math.random() * 0.2));
     scene.add(g);
-    fl.birds.push({ k, g, wings, ph: Math.random() * 6.28, A: 0.6, flapping: Math.random() < 0.7, swapT: 0.5 + Math.random() * 2,
+    fl.birds.push({ k, g, m, ph: Math.random() * 6.28, A: 0.6, flapping: Math.random() < 0.7, swapT: 0.5 + Math.random() * 2,
       back: k * 1.25 + (k ? (Math.random() - 0.5) * 0.3 : 0), across: k * 0.95 * fl.side, up: k * 0.08 + (Math.random() - 0.5) * 0.2, rate: 0.92 + Math.random() * 0.16 });
   }
   seaLife.flights.push(fl);
@@ -18207,11 +18207,11 @@ function updateGulls(dt) {
       bd.A += ((bd.flapping ? 0.62 : 0) - bd.A) * Math.min(1, dt * 4);
       bd.ph += dt * Math.PI * 2 * Gl.flap * bd.rate * (0.4 + 0.6 * bd.A / 0.62);
       const [sh, el] = gullWings(bd.ph, bd.A, Gl.arch, Gl.droop);
-      poseGull(bd, sh, el);
+      poseGull(bd.m, sh, el, GULLS.smooth > 0.5);
       if (!fl.cried && Math.hypot(x - H.x, z - H.z) < 10) { fl.cried = true; sfx.gull(); }
     }
   }
-  for (const fl of S.flights) if (fl.t >= fl.life || Gl.on < 0.5) for (const bd of fl.birds) scene.remove(bd.g);
+  for (const fl of S.flights) if (fl.t >= fl.life || Gl.on < 0.5) for (const bd of fl.birds) dropSeaModel(bd.m);
   S.flights = S.flights.filter(fl => fl.t < fl.life && Gl.on >= 0.5);
 }
 // a pod up from below beside boat b: one riding the bow, the rest alongside, either side
@@ -29368,6 +29368,8 @@ const TUNING = [
     [GULLS, 'night', 'Gulls fly by night too (1)', 0, 1, 1],
     [GULLS, 'cry', 'Gulls cry now and then (1)', 0, 1, 1],
     [GULLS, 'arch', 'Gulls gliding: wings raised from the shoulder (radians)', -0.5, 1, 0.01],
+    [GULLS, 'model', 'Gulls: model, 0 first, 1 skinned shell (from the next flight)', 0, 1, 1],
+    [GULLS, 'smooth', 'Gulls: 0 faceted, 1 smooth shading (skinned model)', 0, 1, 1],
     [GULLS, 'droop', 'Gulls gliding: wings bent down from the elbow (radians)', -0.5, 1.2, 0.01],
     [SEA_SPAWN, 'gulls', 'Gulls: a flight now', 'action', () => spawnGulls()],
     [DOLPHINS, 'on', 'Dolphins on the deep sea (0 off)', 0, 1, 1],
@@ -30319,7 +30321,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 686, crashSeen = new Map();
+const GAME_VERSION = 687, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

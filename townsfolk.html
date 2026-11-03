@@ -128,11 +128,11 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     <h2 class="folkOnly">Move</h2>
     <div class="row folkOnly" id="anims"></div>
     <h2 class="seaOnly">Creature</h2>
-    <div class="row seaOnly"><button data-sea="dolphin">Dolphin</button><button data-sea="dolphin0" title="The first dolphin, before the skinned one">First dolphin</button><button data-sea="gull">Gull</button></div>
+    <div class="row seaOnly"><button data-sea="dolphin">Dolphin</button><button data-sea="dolphin0" title="The first dolphin, before the skinned one">First dolphin</button><button data-sea="gull">Gull</button><button data-sea="gull0" title="The first gull, before the one-shell gull">First gull</button></div>
     <h2 class="seaOnly">Move</h2>
     <div class="row seaOnly"><button data-smove="0" id="smove0"></button><button data-smove="1" id="smove1"></button></div>
     <h2 class="seaOnly">Shading</h2>
-    <div class="row seaOnly"><button data-shade="0">Faceted</button><button data-shade="1" title="The skinned dolphin's normals smoothed">Smooth</button></div>
+    <div class="row seaOnly"><button data-shade="0">Faceted</button><button data-shade="1" title="The skinned dolphin's and gull's normals smoothed">Smooth</button></div>
     <h2 class="boatOnly">Sails</h2>
     <div class="row boatOnly"><button data-sails="1" class="on">Set</button><button data-sails="0.5">Reefed</button><button data-sails="0">Furled</button></div>
     <h2 class="boatOnly">Anchor</h2>
@@ -177,7 +177,8 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, design as folkDesign, desertDress, DESERT_JOBS, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
 import { PROPS, PROP_IDS, PROP_GROUPS, WOODS, seeded, rollProp, describeProp, buildProp, propStage } from './src/props/props.js';
-import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, makeDolphinMat, GULL_COLORS, DOLPHIN_COLORS } from './src/sea/sealife.js';
+import { GULL_PALETTE } from './src/sea/gull.js';
+import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat, GULL_COLORS, DOLPHIN_COLORS } from './src/sea/sealife.js';
 import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat, hangChain } from './src/boats/brig.js';
 
 const $ = id => document.getElementById(id);
@@ -230,7 +231,7 @@ S.sails = 1;
 S.anchor = 0; S.anchorGoal = 0;
 S.seed = hashM ? +hashM[3] : store.get(SEED_KEY[S.pool], 1);
 const isBoats = () => S.pool === 'boats', isProps = () => S.pool === 'props', isSea = () => S.pool === 'sea';
-S.sea = ['dolphin', 'dolphin0', 'gull'].includes(store.get('sea', 'dolphin')) ? store.get('sea', 'dolphin') : 'dolphin'; S.smove = 0;
+S.sea = ['dolphin', 'dolphin0', 'gull', 'gull0'].includes(store.get('sea', 'dolphin')) ? store.get('sea', 'dolphin') : 'dolphin'; S.smove = 0;
 // (v21) the desert toggle: a town design as worn in a sandstone town (v22: the watch too, the clergy as the mosque's)
 S.desert = store.get('desert', false);
 const design = s => isBoats() ? rollLivery(s) : S.pool === 'town' && S.desert ? desertDress(folkDesign(s, 'town')) : folkDesign(s, S.pool);
@@ -267,7 +268,7 @@ function rebuild() {
   document.body.classList.toggle('props', isProps());
   document.body.classList.toggle('sea', isSea());
   $('outfitH').textContent = isBoats() ? 'Livery' : isProps() ? 'Prop' : isSea() ? 'Colours' : 'Outfit';
-  $('lineBtn').textContent = isProps() ? `All ${PROPS[S.prop].group.toLowerCase()}` : isBoats() ? 'Lineup of 3' : isSea() ? 'All three' : 'Lineup of 7';
+  $('lineBtn').textContent = isProps() ? `All ${PROPS[S.prop].group.toLowerCase()}` : isBoats() ? 'Lineup of 3' : isSea() ? 'All four' : 'Lineup of 7';
   if (isSea()) return rebuildSea();
   if (isProps()) return rebuildProps();
   if (isBoats()) return rebuildBoats();
@@ -310,15 +311,17 @@ const SEA_INFO = {
   dolphin: { name: 'Dolphin', job: 'Deep sea · pods pace a ship at full ahead · 3.6 tiles long, six bones', moves: ['Swim', 'Leap'],
     colors: { back: '#526f7b', side: '#79979e', belly: '#c4d2cb', fins: '#587a86', eye: '#14242b', mouth: '#344f5a' } },
   dolphin0: { name: 'First dolphin', job: 'The first build · 2.3 tiles long, hinged tail', moves: ['Swim', 'Leap'], colors: DOLPHIN_COLORS },
-  gull: { name: 'Gull', job: 'Bays, inlets, straits and shallows · 0.84 tiles across the wings', moves: ['Flap', 'Glide'], colors: GULL_COLORS },
+  gull0: { name: 'First gull', job: 'The first build · body and hinged wing pieces', moves: ['Flap', 'Glide'], colors: GULL_COLORS },
+  // (v27) one shell weighted to five bones, a herring gull's proportions
+  gull: { name: 'Gull', job: 'Bays, inlets, straits and shallows · 2 tiles across the wings, 0.87 long · five bones', moves: ['Flap', 'Glide'], colors: GULL_PALETTE },
 };
 function rebuildSea() {
-  for (const f of folks) if (f.sea && f.sea !== 'gull') dropDolphinModel(f);
-  const kinds = S.mode === 'one' ? [S.sea] : ['dolphin', 'dolphin0', 'gull'];
+  for (const f of folks) if (f.sea) dropSeaModel(f);
+  const kinds = S.mode === 'one' ? [S.sea] : ['dolphin', 'dolphin0', 'gull', 'gull0'];
   folks = kinds.map((k, i) => {
-    const m = k === 'gull' ? gullModel(SEA_MAT) : dolphinModel(SEA_MAT, k === 'dolphin' ? 1 : 0, SEA_SKIN);
+    const m = k.startsWith('gull') ? gullModel(SEA_MAT, k === 'gull' ? 1 : 0, SEA_SKIN) : dolphinModel(SEA_MAT, k === 'dolphin' ? 1 : 0, SEA_SKIN);
     m.sea = k; m.g.rotation.order = 'YXZ';
-    m.g.position.x = kinds.length > 1 ? [-2.6, 0.6, 2.8][i] : 0;
+    m.g.position.x = kinds.length > 1 ? [-4.2, -0.6, 1.9, 4.2][i] : 0;
     scene.add(m.g);
     return m;
   });
@@ -333,9 +336,9 @@ function rebuildSea() {
 }
 // a sea creature's pose at time t
 function poseSea(m, t) {
-  if (m.sea === 'gull') {
+  if (m.sea.startsWith('gull')) {
     const flap = S.smove === 0, [sh, el] = gullWings(t * Math.PI * 2 * 3, flap ? 0.62 : 0, 0.3, 0.55);
-    poseGull(m, sh, el);
+    poseGull(m, sh, el, S.smooth);
     m.g.position.y = 0.55 + 0.04 * Math.sin(t * 1.7);
     m.g.rotation.x = -0.04 * Math.cos(t * 1.7);
     return;
@@ -533,9 +536,9 @@ function frame(now) {
   // frame the figure (or the lineup) whatever the canvas's shape, from DOLL_VIEW's height and aim (a boat: its
   // length and its masts)
   const boatsOn = isBoats(), propsOn = isProps(), seaOn = isSea();
-  const aspect = w / h, span = seaOn ? (S.mode === 'one' ? (S.sea === 'gull' ? 1.1 : S.sea === 'dolphin' ? 4 : 2.6) : 7.6) : propsOn ? S.propSpan : boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = seaOn ? (S.smove === 1 && (S.mode !== 'one' || S.sea !== 'gull') ? 2.6 : 1.2) : propsOn ? 2.6 : boatsOn ? 10 : 1.45;
+  const aspect = w / h, span = seaOn ? (S.mode === 'one' ? (S.sea === 'gull' ? 2.2 : S.sea === 'gull0' ? 1.8 : S.sea === 'dolphin' ? 4 : 2.6) : 11) : propsOn ? S.propSpan : boatsOn ? (S.mode === 'one' ? 10.5 : 3 * 11) : S.mode === 'one' ? 0.75 : 7 * 0.78, tall = seaOn ? (S.smove === 1 && (S.mode !== 'one' || !S.sea.startsWith('gull')) ? 2.6 : 1.2) : propsOn ? 2.6 : boatsOn ? 10 : 1.45;
   const vf = 20 * Math.PI / 180, need = Math.max(tall / 2 / Math.tan(vf / 2), span / 2 / (Math.tan(vf / 2) * aspect));
-  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = seaOn ? (S.smove === 1 && (S.mode !== 'one' || S.sea !== 'gull') ? 1.1 : 0.55) : propsOn ? 0.9 : boatsOn ? 3 : 0.6;
+  const dist = need / S.zoom, a = S.tilt * Math.PI / 180, aimY = seaOn ? (S.smove === 1 && (S.mode !== 'one' || !S.sea.startsWith('gull')) ? 1.1 : 0.55) : propsOn ? 0.9 : boatsOn ? 3 : 0.6;
   cam.fov = 20; cam.aspect = aspect; cam.updateProjectionMatrix();
   cam.position.set(0, aimY + Math.sin(a) * dist, Math.cos(a) * dist);
   cam.lookAt(0, aimY, 0); cam.updateMatrixWorld();

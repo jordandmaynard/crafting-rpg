@@ -5,6 +5,7 @@
 // dolphin is its body and a tail hinged at its root, beating up and down. Forward is +z, up +y, its left +x.
 import * as GFX from '../gfx/index.js';
 import { makeDolphin, poseDolphinSkin, disposeDolphin } from './dolphin.js';
+import { gullShape, gullSkin, poseGullSkin } from './gull.js';
 
 export const GULL_COLORS = { white: '#eeeee8', grey: '#a3a9b2', tip: '#25272b', beak: '#e0ac38' };
 export const DOLPHIN_COLORS = { back: '#56636f', belly: '#b7c0c6', fins: '#47525d', eye: '#15181b' };
@@ -110,8 +111,20 @@ export function seaLifeShapes() {
   GEOS = { gBody, gInner, gOuter, dFront, dTail };
   return GEOS;
 }
-// a gull in mat: { g, wings: [[shoulder, elbow, side 1 left / -1 right], ...] }
-export function gullModel(mat) {
+// a gull: style 1 (v687, the default) one shell weighted to bones (src/sea/gull.js) in skinMat (makeDolphinMat: its
+// own normals), style 0 the first one (a body and hinged wing pieces) in mat. { g, style, wings | gull }
+export function gullModel(mat, style = 1, skinMat = null) {
+  if (style >= 1) {
+    const shape = gullShape(), skin = gullSkin(shape), geo = new GFX.BufferGeometry(), n = shape.triangles.length * 3;
+    const position = new GFX.BufferAttribute(new Float32Array(n), 3), nrm = new GFX.BufferAttribute(new Float32Array(n), 3);
+    geo.setAttribute('position', position); geo.setAttribute('color', new GFX.BufferAttribute(shape.colors, 3)); geo.setAttribute('nrm', nrm);
+    const mesh = new GFX.Mesh(geo, skinMat || mat), g = new GFX.Group();
+    mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false;
+    g.add(mesh);
+    const m = { g, style: 1, gull: { mesh, skin, position, nrm } };
+    poseGull(m, 0.3, -0.55);
+    return m;
+  }
   const S = seaLifeShapes(), g = new GFX.Group(), wings = [];
   g.add(new GFX.Mesh(S.gBody, mat));
   for (const s of [0, 1]) {
@@ -123,10 +136,26 @@ export function gullModel(mat) {
     sh.add(el); g.add(sh);
     wings.push([sh, el, sd]);
   }
-  return { g, wings };
+  return { g, style: 0, wings };
 }
-// its wings at shoulder and elbow angles (radians, up from level; each wing the same, mirrored)
-export function poseGull(m, shoulder, elbow) { for (const [sh, el, sd] of m.wings) { sh.rotation.z = shoulder * sd; el.rotation.z = elbow * sd; } }
+// its wings at shoulder and elbow angles (radians, up from level; each wing the same, mirrored); smooth: the shell's
+// normals smoothed (else faceted)
+export function poseGull(m, shoulder, elbow, smooth = false) {
+  if (m.gull) {
+    const G = m.gull, pos = poseGullSkin(G.skin, shoulder, elbow), ids = G.skin.shape.triangles, out = G.position.array;
+    for (let i = 0; i < ids.length; i++) { const j = ids[i] * 3; out[i * 3] = pos[j]; out[i * 3 + 1] = pos[j + 1]; out[i * 3 + 2] = pos[j + 2]; }
+    G.position.needsUpdate = true;
+    dolphinNormals(pos, ids, G.nrm.array, smooth); G.nrm.needsUpdate = true;
+    return;
+  }
+  for (const [sh, el, sd] of m.wings) { sh.rotation.z = shoulder * sd; el.rotation.z = elbow * sd; }
+}
+// done with a sea creature: off the scene, and a skinned one's own buffers freed
+export function dropSeaModel(m) {
+  if (m.g.parent) m.g.parent.remove(m.g);
+  if (m.dolphin) m.dolphin.mesh.geometry.dispose();
+  if (m.gull) m.gull.mesh.geometry.dispose();
+}
 // the wings' angles at a flap's phase ph, flapping by A (0 gliding .. 0.62 full beats), arched by arch and droop
 // when gliding (the game's GULLS.arch and droop)
 export function gullWings(ph, A, arch, droop) {
@@ -201,7 +230,4 @@ export function poseDolphinModel(m, cycles, amp = 1, smooth = false) {
   } else m.tail.rotation.x = Math.sin(cycles * Math.PI * 2) * 0.32 * amp;
 }
 // done with it: the skinned one's own buffer freed
-export function dropDolphinModel(m) {
-  if (m.g.parent) m.g.parent.remove(m.g);
-  if (m.dolphin) m.dolphin.mesh.geometry.dispose();
-}
+export const dropDolphinModel = m => dropSeaModel(m);
