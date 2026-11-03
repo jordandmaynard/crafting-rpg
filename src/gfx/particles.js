@@ -758,7 +758,7 @@ export class FxRunner {
     const base = this._point(fx, e.at);
     const anchorW = e.anchor === 'target' ? this._point(fx, 'target') : e.anchor ? this._world(fx, e.anchor) : base;
     const sh = e.shape || 'point', grow = sh.grow ? Math.max(0.02, u) : 1;
-    const ground = this.game.ground;
+    const ground = o.ground || this.game.ground;   // (o.ground: a ground of its own, such as the water's surface)
     for (let i = 0; i < n; i++) {
       // where in its shape (local, about its middle), and the way out of the middle
       let lx = 0, ly = 0, lz = 0, ox = 0, oy = 0, oz = 0;
