@@ -6,6 +6,7 @@
 import * as GFX from '../gfx/index.js';
 import { makeDolphin, poseDolphinSkin, disposeDolphin } from './dolphin.js';
 import { gullShape, gullSkin, poseGullSkin } from './gull.js';
+import { seagullShape, seagullSkin, poseSeagullSkin } from './seagull.js';
 
 export const GULL_COLORS = { white: '#eeeee8', grey: '#a3a9b2', tip: '#25272b', beak: '#e0ac38' };
 export const DOLPHIN_COLORS = { back: '#56636f', belly: '#b7c0c6', fins: '#47525d', eye: '#15181b' };
@@ -111,18 +112,19 @@ export function seaLifeShapes() {
   GEOS = { gBody, gInner, gOuter, dFront, dTail };
   return GEOS;
 }
-// a gull: style 1 (v687, the default) one shell weighted to bones (src/sea/gull.js) in skinMat (makeDolphinMat: its
+// a gull: style 2 (v688) Jordan's delivered seagull (src/sea/seagull.js, six bones, 1.72 across, its own authored
+// glide), style 1 (v687, the default) one shell weighted to bones (src/sea/gull.js) in skinMat (makeDolphinMat: its
 // own normals), style 0 the first one (a body and hinged wing pieces) in mat. { g, style, wings | gull }
 export function gullModel(mat, style = 1, skinMat = null) {
   if (style >= 1) {
-    const shape = gullShape(), skin = gullSkin(shape), geo = new GFX.BufferGeometry(), n = shape.triangles.length * 3;
+    const dl = style >= 2, shape = dl ? seagullShape() : gullShape(), skin = dl ? seagullSkin(shape) : gullSkin(shape), geo = new GFX.BufferGeometry(), n = shape.triangles.length * 3;
     const position = new GFX.BufferAttribute(new Float32Array(n), 3), nrm = new GFX.BufferAttribute(new Float32Array(n), 3);
     geo.setAttribute('position', position); geo.setAttribute('color', new GFX.BufferAttribute(shape.colors, 3)); geo.setAttribute('nrm', nrm);
     const mesh = new GFX.Mesh(geo, skinMat || mat), g = new GFX.Group();
     mesh.castShadow = mesh.receiveShadow = true; mesh.frustumCulled = false;
     g.add(mesh);
-    const m = { g, style: 1, gull: { mesh, skin, position, nrm } };
-    poseGull(m, 0.3, -0.55);
+    const m = { g, style: dl ? 2 : 1, gull: { mesh, skin, position, nrm } };
+    if (dl) poseGull(m, 0, 0, false, 0); else poseGull(m, 0.3, -0.55);
     return m;
   }
   const S = seaLifeShapes(), g = new GFX.Group(), wings = [];
@@ -139,10 +141,11 @@ export function gullModel(mat, style = 1, skinMat = null) {
   return { g, style: 0, wings };
 }
 // its wings at shoulder and elbow angles (radians, up from level; each wing the same, mirrored); smooth: the shell's
-// normals smoothed (else faceted)
-export function poseGull(m, shoulder, elbow, smooth = false) {
+// normals smoothed (else faceted). The delivered seagull (style 2) has its own beat instead: ph the flap's phase
+// (radians), flap 0 its authored glide .. 1 full beats (the shoulder and elbow angles are not used)
+export function poseGull(m, shoulder, elbow, smooth = false, ph = 0, flap = 0) {
   if (m.gull) {
-    const G = m.gull, pos = poseGullSkin(G.skin, shoulder, elbow), ids = G.skin.shape.triangles, out = G.position.array;
+    const G = m.gull, pos = m.style === 2 ? poseSeagullSkin(G.skin, ph / (Math.PI * 2), 'flap', flap, 1, 0) : poseGullSkin(G.skin, shoulder, elbow), ids = G.skin.shape.triangles, out = G.position.array;
     for (let i = 0; i < ids.length; i++) { const j = ids[i] * 3; out[i * 3] = pos[j]; out[i * 3 + 1] = pos[j + 1]; out[i * 3 + 2] = pos[j + 2]; }
     G.position.needsUpdate = true;
     dolphinNormals(pos, ids, G.nrm.array, smooth); G.nrm.needsUpdate = true;
