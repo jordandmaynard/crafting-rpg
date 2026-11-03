@@ -3877,10 +3877,16 @@ function tavernFront(t, n, h, ctx) {
     if (v === 1 || v === 13 || v === 4 || v === 14) spots.push({ c: nc, r: nr, k: 0, v, slide: v === 13 || v === 14 ? 0.47 * (p === ((out + 3) & 3) ? 1 : -1) : 0 });
   }
   if (upWallOn(ic, ir, out, 1) === 1) spots.push({ c: ic, r: ir, k: 1, v: 1, slide: 0 });
-  // (2026-11-03, Jordan couldn't find the guard house) the guard house hangs a shield with crossed swords either side of
-  // its door, in one colouring a house; the tavern and the bank hang their sign on one side
+  // (2026-11-03, Jordan) the guard house hangs one shield with crossed swords beside its door, on a wall with no
+  // window (none if both have one); the tavern and the bank hang their sign on one side
   const guard = h.role === 'guard', crest = guard ? { ...rollProp('shield', 1 + Math.floor(hs(ic, ir, 556) * 99998)), swords: true } : null;
-  for (const s of guard ? spots.filter(s => !s.k) : spots.length ? [spots[Math.floor(hs(ic, ir, 553) * spots.length)]] : []) {
+  const pickFrom = guard ? spots.filter(s => !s.k && s.v === 4) : spots;
+  // (both walls beside the door windowed: the nearest plain one along the front, two or three tiles from the door)
+  if (guard && !pickFrom.length) for (let m = 2; m <= 3 && !pickFrom.length; m++) for (const p of [(out + 1) & 3, (out + 3) & 3]) {
+    const nc = ic + DC[p] * m, nr = ir + DR[p] * m;
+    if (set.has(T(nc, nr)) && wallOn(nc, nr, out) === 4) pickFrom.push({ c: nc, r: nr, k: 0, v: 4, slide: 0 });
+  }
+  for (const s of pickFrom.length ? [pickFrom[Math.floor(hs(ic, ir, 553) * pickFrom.length)]] : []) {
     const oc = s.c + DC[out], or = s.r + DR[out], [ec, er, ew] = edgeOf(s.c, s.r, out);
     propPut(h, s.k, guard ? 'shield' : h.role === 'bank' ? 'bankSign' : 'tavernSign', [[oc, or]], out, s.v, ctx, { cut: dKey(ec, er, ew, s.k) + 1, y0: storyY(s.k, ins), look: guard ? crest : { up: !!s.k }, slide: s.slide });
     buildCount[Math.floor(or / CH) * NC + Math.floor(oc / CH)]++;   // (drawn with the pieces of the chunk it hangs over)
@@ -4356,6 +4362,7 @@ function raiseTownHouses(t, n) {
       (ew ? WW : WN)[T(ec, er)] = isDoor ? (bank ? 11 : 2) : !byDoor && window(set, c, r, e) ? (stone ? 14 : 13) : (stone ? 4 : 1);
       if (bank) BANK_WALLS.add(edgeKey(ec, er, ew));
       if (role === 'guard') GUARD_WALLS[0].add(edgeKey(ec, er, ew));
+      if (role === 'guard' && isDoor) GUARD_DOORS.add(edgeKey(ec, er, ew));
       if (bank && isDoor) BANK_DOORS.add(edgeKey(ec, er, ew));
       piece(ec, er);
       if (isDoor) door = [ec, er, ew];
@@ -4544,7 +4551,7 @@ const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new
 // (2026-11-03) the banks' ground-floor walls (edge keys: pale dressed stone, bars on their windows) and doors (the grand entrance)
 const BANK_WALLS = new Set(), BANK_DOORS = new Set();
 // (2026-11-03, Jordan: the guard house in dark stone, both floors) its walls' edgeKeys, by story
-const GUARD_WALLS = [new Set(), new Set()];
+const GUARD_WALLS = [new Set(), new Set()], GUARD_DOORS = new Set();
 // (2026-11-03, Jordan) the guard house's training yard: a stretch of yard L tiles along one of its walls (not the
 // door's) and D (4, or 3) out from it, every tile of it ok; the roomiest of its three sides. Kept from the houses
 // built after it and from the trees and bushes (GUARD_YARD), and furnished by townYards (guardYard).
@@ -5645,7 +5652,7 @@ function finishTowns() {
         const a = makeDoor(...hse.door, 'tombdoor', false, 0, true), b = makeDoor(...hse.door, 'tombdoor', true, 0, true), key = dKey(...hse.door, 0);
         a.pair = b; b.pair = a; doors.set(key, a); doors.set('pair:' + key, b);
         bankLanterns(t, hse);
-      } else makeDoor(...hse.door);
+      } else { makeDoor(...hse.door); if (hse.role === 'guard') bankLanterns(t, hse); }
       makeRoom(hse.tiles, hse.color, hse.chapel ? cathRoof(hse.chapel) : null);
       if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.up.tiles, hse.color, hse.cathedral ? cathRoof(hse.cathedral) : null, 1); }
     }
@@ -13040,6 +13047,7 @@ function wallPieceRaw(c, r, w, type, cut) {
   }
   let p = at(0.5, y + WALL_H - 0.05); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 1.04, sy: 0.1, sz: 0.24, ry });
   for (const a of [0, 1]) { p = at(a, y + WALL_H / 2); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 0.16, sy: WALL_H, sz: 0.26, ry }); }
+  if (type === 2 && !PDY && GUARD_DOORS.has(edgeKey(c, r, w))) guardLantern(c, r, w, y, at, ry);
 }
 // The timber walls' look (v414): plaster, the dark oak of the beams, how thick they are, and the braces (T > Walls)
 const TIMBER = { plaster: '#d9cba8', beam: '#4a3020', width: 0.09, braces: 1, pairs: 0.4 };   // (braces: share of walls with a diagonal; pairs: share of those with two)
@@ -13323,10 +13331,26 @@ function bankEntrance(c, r, w, y, at, ry) {
   B('#d8b04a', 0.5, y + 2.22, 0.16, 0.16, 0.27, 0.02);
   B('#a07a28', 0.5, y + 2.22, 0.1, 0.1, 0.282, 0.008);
 }
-// the bank's two wall lanterns lit: town lamps at their glass ([x, z, kind 0, -, height])
+// (2026-11-03, Jordan: a lantern like the bank's on the wall right over the guard house's door) its bracket from the
+// wall's outer face over the door's beam, the lantern hung from it (lit: bankLanterns, GUARD_LANTERN)
+const GUARD_LANTERN = { y: 2.04, out: 0.4 };   // (its foot over the top of a door swung out, DOOR_H 1.88)
+function guardLantern(c, r, w, y, at, ry) {
+  const s = windowOutside(c, r, w) || 1;
+  const B = (col, a, yy, sx, sy, o, sz) => { const p = at(a, yy); p[w ? 0 : 2] += s * o; part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
+  const ly = y + GUARD_LANTERN.y, lo = GUARD_LANTERN.out, a = 0.5;
+  B(IRON_RAIL, a, ly + 0.22, 0.12, 0.12, 0.16, 0.03);                       // (the plate on the wall)
+  B(IRON_RAIL, a, ly + 0.22, 0.035, 0.035, (0.16 + lo) / 2, lo - 0.16);     // (the arm)
+  B(IRON_RAIL, a, ly + 0.14, 0.03, 0.12, lo, 0.03);
+  B(IRON_RAIL, a, ly - 0.12, 0.16, 0.03, lo, 0.16);
+  B('#ffd890', a, ly - 0.03, 0.11, 0.15, lo, 0.11);
+  for (const [da, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) B(IRON_RAIL, a + da * 0.065, ly - 0.03, 0.02, 0.17, lo + dz * 0.065, 0.02);
+  B(IRON_RAIL, a, ly + 0.07, 0.19, 0.04, lo, 0.19);
+}
+// the bank's two wall lanterns lit: town lamps at their glass ([x, z, kind 0, -, height]); the guard house's one
 function bankLanterns(t, h) {
   const [ec, er, w] = h.door, [ic, ir] = h.inside, mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   const ox = mx - (ic + 0.5), oz = mz - (ir + 0.5), L = Math.hypot(ox, oz) || 1, nx = ox / L, nz = oz / L, base = LV[T(ic, ir)] * STEP;
+  if (h.role === 'guard') { const x = mx + nx * GUARD_LANTERN.out, z = mz + nz * GUARD_LANTERN.out; t.lamps.push([x, z, 0, null, base + GUARD_LANTERN.y - groundAt(x, z) - 0.03]); return; }
   for (const a of [-BANK_LANTERN.a, 1 + BANK_LANTERN.a]) {
     const x = (w ? ec : ec + a) + nx * BANK_LANTERN.out, z = (w ? er + a : er) + nz * BANK_LANTERN.out;
     t.lamps.push([x, z, 0, null, base + BANK_LANTERN.y - groundAt(x, z) - 0.03]);

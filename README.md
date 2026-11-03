@@ -248,6 +248,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v613:** (Jordan's video of the "cut-off smoke") The pale flickering patches with hard edges on roofs and walls were the town hearths' firelight: a point light casts no shadow, so a hearth inside lit the roof faces and walls over it from within. A hearth now lights its room only while you're inside that building.
 
+**v614:** (Jordan: only one shield by the guard house door, on a wall with no window, and a lantern like the bank's right over the door) One crossed-sword shield now, on a plain stretch of wall beside the door, or two or three tiles along the front if both walls beside it have windows. A wall lantern (guardLantern: a plate, an arm and a caged glass, as the bank's) hangs over the door, its foot above where the door swings, lit as a town lamp (GUARD_LANTERN, bankLanterns).
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
