@@ -150,7 +150,7 @@ function bedding(top, W, L, blanket) {
 const heater = (w, h0, h1) => { const c = [[-w, h0], [-w, 0], [-w * 0.9, h1 * 0.36], [-w * 0.6, h1 * 0.7], [-w * 0.3, h1 * 0.91], [0, h1]]; return [...c, ...c.slice(0, -1).reverse().map(([x, y]) => [-x, y])]; };
 
 // ---------- the props ----------
-// group: where it's listed; tiles [w, d]; wall: backs onto a wall; thin: flat on its wall, walked over (the game);
+// group: where it's listed; tiles [w, d]; wall: backs onto a wall; thin: flat on its wall or slim (a candle stand), walked over (the game);
 // hang: hangs from the ceiling (no floor tile);
 // use and goes: from the doc; roll(r) -> the seeded look (null: none); build(L, C) draws it (C: the wood's colours);
 // describe(L) -> rows [label, value, colour]
@@ -566,7 +566,7 @@ export const PROPS = {
       }
       part(G.box, '#8a2a24', b[0], y + b[1], z + 0.043, { sx: 0.03, sy: 0.03, sz: 0.004, rz: Math.PI / 4 });
     } },
-  candleStand: { name: 'Candle stand', group: 'Lights', tiles: [1, 1], use: 'Light', goes: 'Chapel, cathedral, bank, clergy house',
+  candleStand: { name: 'Candle stand', group: 'Lights', tiles: [1, 1], thin: true, use: 'Light', goes: 'Chapel, cathedral, bank, clergy house',
     build() {
       for (let k = 0; k < 3; k++) { const a = k * Math.PI * 2 / 3; seg(G.cyl6, IRON, [0, 0.16, 0], [Math.cos(a) * 0.2, 0, Math.sin(a) * 0.2], 0.014); }
       seg(G.cyl6, IRON, [0, 0.14, 0], [0, 1.22, 0], 0.016);
