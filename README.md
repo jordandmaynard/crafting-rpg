@@ -222,6 +222,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v599:** (Jordan) Fountain water in the GPU effects: white water and beads breaking over the bowl's lip, droplets shed off the streams, and where they land a splash, white water, ripples and a low mist drifting off the basin, plus a little mist off the lip (T > Fountain water; 0 brings back the old spray).
 
+**v600:** (Jordan) Lava bubbles in the GPU effects: a molten dome swells up out of the melt riding its ripples, then pops, throwing drops of melt out in a ring that splash down and cool to crust, with a flash, a ring of light, sparks and a wisp of smoke (new DOME style in particles.js; T > Lava: 'Bubbles as rising domes', 'Molten drops'; 0 brings back the painted bubbles).
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
