@@ -220,6 +220,9 @@ struct VOut {
     fade = (1.0 - smoothstep(0.4, 1.0, k)) * (0.65 + 0.35 * fxHash(floor(U.now.x * 30.0) + q.g.y * 91.0));
     cover = 0.0;
   }
+  // (a puff is a ball: its flat card stands at the ball's front, so the half of it that leans away from us doesn't
+  // sink into a roof or a wall the ball only touches, and get cut off by it)
+  if (st == ${FX.PUFF} || st == ${FX.FLAME}) { w += toEye(at) * size * 0.9; }
   o.pos = F.viewProj * vec4f(w, 1.0);
   o.uv = corner; o.st = st; o.wpos = at; o.pix = w;
   o.col = fxRamp(ramp, tone);

@@ -244,6 +244,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v610:** (Jordan: the chimney smoke looked edge-on) The town chimneys' smoke puffs are camera-facing balls, but blown down the wind they ran together into flat-looking sheets: now fewer, rounder puffs, each its own size, shade and drift, with more turbulence and drag, so they billow apart.
 
+**v612:** (Jordan: only the bottom of the smoke puffs drew) A puff's card faces the camera, so over a roof its top half leaned back into the roof and was hidden; puffs and flames now stand their card at the front of their ball (moved toward the eye by 0.9 × their size), so nothing they only touch cuts them.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
