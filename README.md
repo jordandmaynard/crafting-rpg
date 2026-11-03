@@ -254,6 +254,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v616:** (Jordan: make the smoke like Crafting and Conquest's) A new SMOKE particle style after C&C's puffs.js: one of four soft smoke sprites (textures/dust_1-4.png, from C&C) on a card turned to the camera round the upright, spinning slowly, swelling 2-3x as it slows and rises, fading in over its first tenth and out over the rest, lit flat by the sky and the day in a warm grey ('soot' ramp), soft against what's behind it. Chimney smoke, brazier smoke and lava pop smoke use it.
 
+**v617:** (Jordan) Hearth fires tuning as defaults: flame size 1.65, embers 0.45, smoke size 0.85; modelled flames sway 0.06, flutter 0.015, speed 2.65, stretch 0.23, flicker 0.59.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
