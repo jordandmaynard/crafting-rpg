@@ -18111,7 +18111,9 @@ function updateBoats(dt) {
 const GULL_KINDS = new Set(['bay', 'inlet', 'strait', 'shallows']);
 // every: seconds between flights (on average); flock: share that are echelons; most: birds in the biggest one;
 // speed: tiles a second; height: over the water (tiles); flap: wingbeats a second; night: 1 flies by night too
-const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 4.5, size: 1, flap: 3, night: 0, cry: 1 };
+// (v680, Jordan) gliding, its wings are arched as seen from the front: raised from the shoulder (arch, radians) and
+// bent down from the elbow (droop)
+const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 4.5, size: 1, flap: 3, night: 0, cry: 1, arch: 0.3, droop: 0.55 };
 // deep: tiles from any coast; wait: seconds at full ahead, steady, before they come; straight: how far off your
 // heading you can drift meanwhile (radians); stay: seconds they pace you (0 no end); fewest/most: pod size; jumps:
 // most leaps each; leap: their height (×); depth: how deep they swim between (tiles); beat: tail beats a second;
@@ -18134,10 +18136,11 @@ function seaLifeGeos() {
   const W = '#eeeee8', GR = '#a3a9b2', DK = '#25272b', Y = '#e0ac38';
   const gBody = make(() => {
     part(G.ico, W, 0, 0, 0, { sx: 0.17, sy: 0.15, sz: 0.52 });
-    part(G.ico, W, 0, 0.05, 0.25, { s: 0.15 });
-    part(G.cone4, Y, 0, 0.035, 0.37, { rx: Math.PI / 2, sx: 0.045, sy: 0.12, sz: 0.04 });
+    // (v680, Jordan) the head carried level, in line with the body
+    part(G.ico, W, 0, 0.01, 0.27, { s: 0.15 });
+    part(G.cone4, Y, 0, 0, 0.39, { rx: Math.PI / 2, sx: 0.045, sy: 0.12, sz: 0.04 });
     part(G.box, W, 0, 0.01, -0.3, { sx: 0.13, sy: 0.02, sz: 0.16 });
-    part(G.box, DK, 0.055, 0.075, 0.29, { s: 0.022 }); part(G.box, DK, -0.055, 0.075, 0.29, { s: 0.022 });
+    part(G.box, DK, 0.055, 0.035, 0.31, { s: 0.022 }); part(G.box, DK, -0.055, 0.035, 0.31, { s: 0.022 });
   });
   // a wing from its shoulder (x 0) out to its elbow, and from the elbow to its black tip; grey above, white under
   const inner = [[0, 0.1], [0.34, 0.07], [0.34, -0.1], [0, -0.15]], outer = [[0, 0.07], [0.24, 0.05], [0.24, -0.09], [0, -0.1]], tip = [[0.24, 0.05], [0.42, -0.06], [0.24, -0.09]];
@@ -18240,7 +18243,7 @@ function updateGulls(dt) {
       if (bd.swapT <= 0) { bd.flapping = !bd.flapping; bd.swapT = bd.flapping ? 1 + Math.random() * 1.8 : 1.5 + Math.random() * 3; }
       bd.A += ((bd.flapping ? 0.62 : 0) - bd.A) * Math.min(1, dt * 4);
       bd.ph += dt * Math.PI * 2 * Gl.flap * bd.rate * (0.4 + 0.6 * bd.A / 0.62);
-      const sh = 0.1 + bd.A * Math.sin(bd.ph), el = bd.A * 0.75 * Math.sin(bd.ph - 0.7) - 0.06 * (1 - bd.A / 0.62);
+      const fk = clamp(bd.A / 0.62, 0, 1), sh = (1 - fk) * Gl.arch + fk * 0.1 + bd.A * Math.sin(bd.ph), el = bd.A * 0.75 * Math.sin(bd.ph - 0.7) - (1 - fk) * Gl.droop;
       for (const [S0, E0, sd] of bd.wings) { S0.rotation.z = sh * sd; E0.rotation.z = el * sd; }
       if (!fl.cried && Math.hypot(x - H.x, z - H.z) < 10) { fl.cried = true; sfx.gull(); }
     }
@@ -29337,6 +29340,8 @@ const TUNING = [
     [GULLS, 'size', 'Gulls: size', 0.3, 3, 0.05],
     [GULLS, 'night', 'Gulls fly by night too (1)', 0, 1, 1],
     [GULLS, 'cry', 'Gulls cry now and then (1)', 0, 1, 1],
+    [GULLS, 'arch', 'Gulls gliding: wings raised from the shoulder (radians)', -0.5, 1, 0.01],
+    [GULLS, 'droop', 'Gulls gliding: wings bent down from the elbow (radians)', -0.5, 1.2, 0.01],
     [SEA_SPAWN, 'gulls', 'Gulls: a flight now', 'action', () => spawnGulls()],
     [DOLPHINS, 'on', 'Dolphins on the deep sea (0 off)', 0, 1, 1],
     [DOLPHINS, 'deep', 'Dolphins: deep water is this many tiles from any coast (or calmer water)', 2, 60, 1],
@@ -30285,7 +30290,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 679, crashSeen = new Map();
+const GAME_VERSION = 680, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
