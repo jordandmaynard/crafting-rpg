@@ -8849,7 +8849,7 @@ function beachFlip(y00, y10, y01, y11) {
   // (the odd corner 01 or 10: split along 10-01, through it; 00 or 11, or none (a plain slope): along 00-11)
   return e(y00, y11) && (e(y00, y10) !== e(y00, y01));
 }
-const GROUND_SHAPE = { on: 1, wobble: 0.55, size: 2.8, blend: 1, rampSmooth: 1, rampSpan: 0.3, beachSmooth: 1, beachSpan: 0.4 };
+const GROUND_SHAPE = { on: 1, wobble: 0.55, size: 2.8, blend: 1, rampSmooth: 1, rampSpan: 0.3, beachSmooth: 1, beachSpan: 0.4, beachLip: 1 };
 const groundTex = new GFX.DataTexture(new Uint8Array(N * N * 16), N * 2, N * 2);
 groundTex.regions = [];
 function buildGround(cx, cz, ch) {
@@ -9955,6 +9955,12 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
       const cc = c + dc, rr = r + dr;
       if (cc >= 0 && rr >= 0 && cc < N && rr < N && SH[T(cc, rr)] && LV[T(cc, rr)]) { nearRamp = true; break; }
     }
+    // (the water tile under a shoal's drop-off: its bank's light can be rounded into the shoal's)
+    let lip = false, bs32 = false;
+    if (!LV[i] && WL[i] && !LAVA[i]) for (let dr = -1; dr <= 1 && !lip; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const cc = c + dc, rr = r + dr;
+      if (cc >= 0 && rr >= 0 && cc < N && rr < N && SHOAL[T(cc, rr)]) { lip = true; break; }
+    }
     // (v631: a beach or shoal on this tile or one beside it: its light is smoothed too, see groundShapeMat)
     let nearBeach = false;
     for (let dr = -1; dr <= 1 && !nearBeach; dr++) for (let dc = -1; dc <= 1; dc++) {
@@ -10006,6 +10012,9 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
           for (let bb = 0; bb < 2 && bs; bb++) for (let aa = 0; aa < 2; aa++) if (Math.abs(ph[(lz + 1 + bb) * W + lx + 1 + aa] - tileSurf(c, r, u0 + aa / 2, v0 + bb / 2)) > 1e-4) { bs = false; break; }
         } else bs = sm;
       }
+      // (Jordan: 32 without 64 marks the bank under a shoal's drop-off, which the beach smoothing rounds over when
+      // GROUND_SHAPE.beachLip is on: see groundShapeMat)
+      if (!bs && lip) bs32 = true; else bs32 = false;
       let bank = false;
       if (sandy && bits & 3) {
         const gx = c * 2 + (q & 1), gz = r * 2 + (q >> 1);
@@ -10014,7 +10023,7 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
           if ((tc !== c || tr !== r) && tc >= 0 && tr >= 0 && tc < N && tr < N && streetTile(T(tc, tr))) { bank = true; break; }
         }
       }
-      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0) | (wet ? 16 : 0) | (bs ? 96 : 0) | (bank ? 128 : 0);
+      d[t] = bits; d[t + 1] = e >> 8; d[t + 2] = e & 255; d[t + 3] = kind | (sm ? 8 : 0) | (sm && nearRamp ? 4 : 0) | (wet ? 16 : 0) | (bs ? 96 : bs32 ? 32 : 0) | (bank ? 128 : 0);
     }
   }
   driftTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
@@ -10271,6 +10280,7 @@ function updateDrift(dt) {
 function updateGroundU() {
   const U = GROUND_U;
   Object.assign(U.gsV.value, { x: GROUND_SHAPE.on, y: GROUND_SHAPE.wobble, z: GROUND_SHAPE.size, w: GROUND_SHAPE.blend });
+  U.bch.value.x = GROUND_SHAPE.beachLip;
   Object.assign(U.rmp.value, { x: GROUND_SHAPE.rampSmooth, y: GROUND_SHAPE.rampSpan, z: GROUND_SHAPE.beachSmooth, w: GROUND_SHAPE.beachSpan });
 }
 // the ground: lit as the other flat-shaded things are, its patches of colour rounded and its light smoothed round ramps
@@ -10278,6 +10288,7 @@ const GROUND_U = {
   tGround: { value: groundTex },
   gsV: { value: { x: 1, y: 1.1, z: 1.2, w: 1 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
   tDrift: { value: driftTex },
+  bch: { value: { x: 1, y: 0, z: 0, w: 0 } },      // round the light over a shoal's drop-off (on 1)
   rmp: { value: { x: 1, y: 0.3, z: 1, w: 0.4 } },   // smooth light round ramps (0-1), how far round each point it looks (tiles); the same for beaches (v631)
 };
 const groundShapeMat = new GFX.ShaderMaterial({ uniforms: GROUND_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
@@ -10320,7 +10331,8 @@ fn gHB(p: vec2f) -> vec2f {
     let o = vec2i(k & 1, k >> 1);
     let t = textureLoad(tDrift, clamp(b + o, vec2i(0), lim), 0);
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
-    if ((u32(round(t.a * 255.0)) & 64u) != 0u) { h += ((round(t.g * 255.0) * 256.0 + round(t.b * 255.0)) / 1024.0 - 16.0) * w; ws += w; }
+    let fa = u32(round(t.a * 255.0));
+    if ((fa & 64u) != 0u || (U.bch.x > 0.5 && (fa & 32u) != 0u)) { h += ((round(t.g * 255.0) * 256.0 + round(t.b * 255.0)) / 1024.0 - 16.0) * w; ws += w; }
   }
   return vec2f(h / max(ws, 1e-4), select(0.0, 1.0, ws > 0.2));
 }
@@ -10342,7 +10354,7 @@ fn gsJoin(a: u32, b: u32) -> bool {
     let lim = vec2i(${N * 2 - 1});
     let fl = u32(round(textureLoad(tDrift, clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), lim), 0).a * 255.0));
     let rampy = (fl & 4u) != 0u && U.rmp.x > 0.001;
-    let beachy = (fl & 32u) != 0u && U.rmp.z > 0.001;
+    let beachy = (fl & 32u) != 0u && ((fl & 64u) != 0u || U.bch.x > 0.5) && U.rmp.z > 0.001;
     if (rampy || beachy) {
       let e = select(U.rmp.y, U.rmp.w, beachy && !rampy);
       let amt = select(U.rmp.x, U.rmp.z, beachy && !rampy);
@@ -29091,6 +29103,7 @@ const TUNING = [
     [GROUND_SHAPE, 'rampSpan', 'Ramps: how far the smoothing reaches (tiles)', 0.05, 0.8, 0.01],
     [GROUND_SHAPE, 'beachSmooth', 'Beaches: smooth the light where they meet each other and the land (0 faceted, 1 full)', 0, 1, 0.01],
     [GROUND_SHAPE, 'beachSpan', 'Beaches: how far the smoothing reaches (tiles)', 0.05, 0.8, 0.01],
+    [GROUND_SHAPE, 'beachLip', "Beaches: round the light over the shoal's drop-off into the cliff (0 hard edge, 1 on)", 0, 1, 1],
   ]],
   ['Deep snow and sand', [
     [DRIFT, 'on', 'Deep snow and sand (1 on, 0 off)', 0, 1, 1],
