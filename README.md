@@ -362,6 +362,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v688:** (Jordan) Jordan's delivered seagull is a third gull (src/sea/seagull.js as delivered, the zip in art/deliveries: one shell of 436 vertices and 868 triangles, six bones, 1.72 tiles across the wings, its own authored arched glide). GULLS.model 2 flies it (from the next flight; 1, the one-shell gull, stays the default); it beats from the same flap phase and flap/glide easing as the others, so GULLS.arch and droop don't shape it. It draws in the same normal-lit material, faceted or smooth (GULLS.smooth). Viewer v29: Delivered gull, and the lineup is all five.
 **v690:** (Jordan) Lakes: no mist on the water; the bed is the shore's dirt all the way across (a little darker in the deeps), sloping down on the shelf from the shoals; and the lake's dirt shoals now swirl and blend in rounded patches like the rest of the ground (they had been left out).
+**v691:** (Jordan) The belt's XP fill no longer spills over its frame: it was drawn 320 x 19 from the kit's old track spot, over the new frame's gold rim and square at its rounded ends. It now sits 318 x 18 inside the frame's glass, cut to the glass's round ends by ui/belt/xp-mask.webp (the frame's interior, made by art/src/xp-mask.py), with its leading edge rounded the same way rather than sliced flat.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
