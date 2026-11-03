@@ -7025,8 +7025,10 @@ function renderWorld() {
   camera.layers.set(2); renderer.render(scene, camera);
   renderer.passName = 'hero';
   camera.layers.set(1); renderer.render(scene, camera);
+  if (fxParts.solidMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
   renderer.passName = 'swamp water, ground haze';
   camera.layers.set(3); renderer.render(scene, camera);
+  if (fxParts.clearMesh.visible) { renderer.passName = 'effects'; camera.layers.set(FX_CLEAR_LAYER); renderer.render(scene, camera); }
   // the aim decal, over a copy of the depth so far
   if (on && aimMesh.visible) {
     AIM_U.tD.value = renderer.snapshot(outlineRT).depth;
@@ -17141,6 +17143,7 @@ let debris = [], dust = [], orbs = [], fallers = [];
 const dustGeo = new GFX.BoxGeometry(0.09, 0.09, 0.09);
 const chipGeo = new GFX.BoxGeometry(0.07, 0.05, 0.07);
 function puff(x, y, z, color = '#c8bca0', n = 8, spread = 0.9) {
+  if (FX_TUNE.on > 0.5) { fxDust(x, y, z, color, n, spread); return; }
   for (let i = 0; i < n; i++) {
     const m = new GFX.Mesh(dustGeo, new GFX.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }));
     m.position.set(x, y + 0.1, z); scene.add(m);
@@ -17152,10 +17155,249 @@ function puff(x, y, z, color = '#c8bca0', n = 8, spread = 0.9) {
 const chipMats = { wood: flatMat({ color: '#8a5a32' }), stone: flatMat({ color: '#8c8a96' }), copperOre: flatMat({ color: '#d4773e' }), ironOre: flatMat({ color: '#b9bfc9' }),
   ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', flatMat({ color: m.ore })])) };
 function chips(x, y, z, kind, n = 5) {
+  if (FX_TUNE.on > 0.5) { fxChips(x, y, z, kind, n); return; }
   for (let i = 0; i < n; i++) {
     const m = new GFX.Mesh(chipGeo, chipMats[kind].clone()); m.material.transparent = true;
     m.position.set(x, y, z); scene.add(m);
     debris.push({ m, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 2, ax: (Math.random() - 0.5) * 14, az: (Math.random() - 0.5) * 14, life: 0.8 });
+  }
+}
+// ---------- Spell and world effects (T > Spell effects) ----------
+// Particles stepped on the GPU (src/gfx/particles.js): sparks, embers, glints, lit smoke and dust, flame that cools
+// into smoke, rings and pools on the ground, beams and bolts, and solid bits (shards, chunks, drops, crystals out of
+// the ground) that bounce, settle and dither away. Effects are written as phases (a charge, the release, a spread,
+// a hold, a fade), each with its emitters, lights and moments (a hit, a shake, a hit-stop), in FX_LIB below; every
+// colour comes from a ramp in FX_RAMPS, read in hard steps for the flat look. The dust puffs and chips that every
+// hit and fall throws up are drawn this way too. The ideas behind it were learnt from pixelfx and Sprite Fusion's
+// pixel effects (choreography in phases, light over fills, ramps that cool); the code is our own.
+const FX_SOLID_LAYER = 12, FX_CLEAR_LAYER = 13;
+const FX_TUNE = { on: 1, density: 1, glow: 1, size: 1, steps: 1, bands: 3, lights: 1, shake: 1, hitStop: 1 };
+const FX_RAMPS = {
+  smoke: ['#1c1a1e', '#2e2b30', '#433f45', '#58545a', '#6e6a70', '#86828a', '#9e9aa2', '#b8b4bc'],
+  dust: ['#3a2e22', '#5a4a38', '#7a6650', '#988468', '#b0a084', '#c4b69c', '#d6cab4', '#e6dccc'],
+  fire: ['#2a0a06', '#5c1408', '#9a260c', '#d24a12', '#f07a1c', '#ffae34', '#ffd870', '#fff4c8'],
+  frost: ['#0e1a3a', '#16336a', '#1f5aa0', '#3488cc', '#5cb4e6', '#94d8f4', '#cdf0fc', '#ffffff'],
+  arcane: ['#1a0a30', '#34145a', '#58228c', '#7e3ab8', '#a85ad8', '#c886ec', '#e4b8f8', '#fff0ff'],
+  holy: ['#3a2a08', '#6a4c10', '#a07a1c', '#d0a830', '#ecc850', '#f8e07c', '#fff2b8', '#ffffff'],
+  heal: ['#06240e', '#0e4a1c', '#1a7a2e', '#2ea844', '#52cc62', '#8ae68a', '#c4f6bc', '#f4fff0'],
+  poison: ['#141e06', '#24380a', '#3c5a10', '#5a7e18', '#7ea024', '#a4c43c', '#ccdf78', '#eef8c0'],
+  storm: ['#0a0e2a', '#18225a', '#2a3e94', '#4a6ccc', '#7aa0ec', '#acc8fa', '#dce8ff', '#ffffff'],
+  blood: ['#1e0204', '#3a0508', '#5c0a10', '#821218', '#a81c22', '#c83a34', '#e06a5a', '#f4a294'],
+  water: ['#0a2030', '#103a52', '#1a5a78', '#2a7c9c', '#4aa0bc', '#7cc2d6', '#b4e0ec', '#eaf8fc'],
+  shadow: ['#06040a', '#100a18', '#1c1028', '#2a183a', '#3c2250', '#523070', '#70489a', '#9a72c8'],
+  earth: ['#1e1814', '#352a22', '#4c3e32', '#655444', '#7e6c5a', '#988670', '#b2a28c', '#ccbea8'],
+};
+const fxParts = new GFX.FxParticles(renderer, { cap: MOBILE ? 4096 : 8192, solidCap: MOBILE ? 512 : 1024, shared: { tRefrD: WATER_U.tRefrD, refr: WATER_U.refr } });
+for (const k in FX_RAMPS) fxParts.ramp(k, FX_RAMPS[k]);
+// (layers of their own, drawn in renderWorld: the solid ones after the hero, the see-through ones after the smoke
+// and haze)
+fxParts.clearMesh.layers.set(FX_CLEAR_LAYER); fxParts.solidMesh.layers.set(FX_SOLID_LAYER);
+scene.add(fxParts.clearMesh, fxParts.solidMesh);
+// the brightest two lights the effects ask for each frame (flares at a strike, a fireball's glow)
+const fxLights = [0, 1].map(() => { const l = addLight(new GFX.PointLight('#ffffff', 0, 5, 2)); l.visible = false; return l; });
+const fxShake = { t: 0, amp: 0, off: new GFX.Vector3() };
+let fxHitStop = 0;
+const fxRun = new GFX.FxRunner(fxParts, {
+  ground: (x, z) => surfaceY(x, z),
+  shake: a => { fxShake.amp = Math.max(fxShake.amp * Math.max(0, 1 - fxShake.t / 0.35), a); fxShake.t = 0; },
+  hitStop: s => { fxHitStop = Math.max(fxHitStop, s * FX_TUNE.hitStop); },
+  sound: n => { if (sfx[n]) sfx[n](); },
+  onEvent: (name, fx) => { if (fx.o.onEvent) fx.o.onEvent(name, fx); },
+});
+// play an effect from FX_LIB by name at o ({ x, y, z, dir, target, scale, ramp, onEvent(name) }); returns its handle
+function playFx(name, o) {
+  const def = FX_LIB[name];
+  if (!def || FX_TUNE.on < 0.5) return null;
+  return fxRun.play(def, o);
+}
+// the effects' step, once a frame before the world is drawn (dt 0 while the game holds still)
+function updateFx(dt) {
+  const T = FX_TUNE, L = fxParts.look;
+  L.x = T.steps; L.y = T.glow; L.z = T.size; L.w = T.bands;
+  fxRun.density = T.density;
+  fxParts.wind[0] = SMOKE.wind; fxParts.wind[2] = SMOKE.wind * 0.35;
+  if (dt > 0) fxRun.update(dt);
+  fxParts.update(dt);
+  const want = T.lights > 0.5 ? fxRun.lights.slice().sort((a, b) => b.k - a.k) : [];
+  fxLights.forEach((l, i) => {
+    const w = want[i];
+    l.visible = !!w && w.k > 0.02;
+    if (!l.visible) return;
+    l.position.set(w.x, w.y, w.z); l.color.set(w.color || '#ffffff'); l.intensity = w.k; l.distance = w.range;
+  });
+  fxShake.t += dt;
+  const left = Math.max(0, 1 - fxShake.t / 0.35), a = fxShake.amp * left * left * 0.14 * T.shake;
+  if (a > 1e-4) fxShake.off.set((Math.random() - 0.5) * 2 * a, (Math.random() - 0.5) * a, (Math.random() - 0.5) * 2 * a);
+  else fxShake.off.set(0, 0, 0);
+}
+// A library of effects to build spells from. Points are local: x to the caster's right, y up, z ahead; 'target'
+// is where it's aimed. See FxRunner (src/gfx/particles.js) for every field.
+const FX_LIB = {
+  // ice crystals burst out of the ground in a ring round the caster: cold gathers into a core over your head, a white
+  // flash, a front of frost and vapour runs out over the ground raising crystals as it goes, they glint, then melt
+  frostNova: { phases: [
+    { name: 'charge', dur: 0.45, light: { at: [0, 1.2, 0], color: '#8fd0ff', k: [0, 2.5], range: 4 }, emit: [
+      { style: 'glint', rate: 34, at: [0, 1.2, 0], shape: { sphere: [1.2, 2.2] }, gather: 1, life: [0.3, 0.45], size: [0.14, 0.04], ramp: 'frost', tone: [0.9, 1], glow: 3 },
+      { style: 'puff', rate: 14, onGround: true, shape: { ring: [2, 3.4], y: [0, 0.15] }, gather: 0.8, life: [0.45, 0.6], size: [0.3, 0.12], ramp: 'frost', tone: [0.95, 0.85], alpha: 0.45 },
+      { style: 'glow', rate: 24, at: [0, 1.2, 0], shape: { sphere: 0.15 }, life: 0.2, size: [0.12, 0.3], ramp: 'frost', tone: [0.8, 1], glow: 2.2 },
+    ] },
+    { name: 'release', dur: 0.06, event: 'hit', shake: 0.5, stop: 0.06, sfx: 'clink', flash: { at: [0, 1, 0], color: '#cfeeff', k: 6, range: 7, life: 0.5 }, emit: [
+      { style: 'ring', count: 1, onGround: true, size: [0.3, 4.3], life: 0.55, ramp: 'frost', tone: [1, 0.6], glow: 2.5, stretch: 0.18, cover: 0.3 },
+      { style: 'shard', count: 26, at: [0, 1.2, 0], shape: { sphere: 0.2 }, out: [3, 7], up: [1, 4], grav: 1, drag: 0.6, bounce: 0.35, floor: true, life: [1, 1.6], size: [[0.06, 0.12], [0.04, 0.08]], spin: [-12, 12], ramp: 'frost', tone: [[0.7, 1], [0.6, 0.9]], glow: 0.3 },
+      { style: 'glint', count: 12, at: [0, 1.2, 0], shape: { sphere: 0.3 }, out: [1, 3], drag: 2, life: [0.3, 0.6], size: [0.2, 0.05], ramp: 'frost', tone: [1, 1], glow: 3 },
+    ] },
+    { name: 'spread', dur: 0.6, emit: [
+      { style: 'crystal', rate: [70, 25], onGround: true, shape: { ring: [0.8, 4], grow: true }, life: [1.7, 2.3], size: [[0.4, 1.1], [0.4, 1.1]], ramp: 'frost', tone: [[0.6, 0.95], [0.5, 0.8]], glow: 0.25 },
+      { style: 'puff', rate: 60, onGround: true, shape: { ring: 4, grow: true, y: [0, 0.2] }, out: [0.3, 1], up: [0.1, 0.4], drag: 1.5, life: [0.6, 1], size: [[0.2, 0.35], [0.5, 0.8]], ramp: 'frost', tone: [0.95, 0.85], alpha: 0.45 },
+      { style: 'glow', rate: 30, onGround: true, shape: { ring: 4, grow: true, y: [0.1, 0.6] }, up: [0.5, 1.5], grav: 0.1, turb: 0.4, life: [0.8, 1.4], size: 0.04, ramp: 'frost', tone: [1, 1], glow: 2 },
+      { style: 'disc', count: 1, onGround: true, size: [4.3, 4.3], life: 2.9, ramp: 'frost', tone: [0.85, 0.75], alpha: 0.5, cover: 1, glow: 0.15 },
+    ] },
+    { name: 'hold', dur: 1.1, light: { at: [0, 0.8, 0], color: '#8fd0ff', k: [1.2, 0.5], range: 5 }, emit: [
+      { style: 'glint', rate: 14, onGround: true, shape: { ring: [0.5, 4], y: [0.15, 1] }, life: [0.3, 0.6], size: [0.16, 0.05], ramp: 'frost', tone: [1, 1], glow: 3 },
+      { style: 'glow', rate: 22, at: [0, 2.6, 0], shape: { disc: 3.5 }, grav: 0.04, turb: 0.3, drag: 1, life: [1.3, 1.8], size: 0.035, ramp: 'frost', tone: [1, 1], glow: 1.5 },
+    ] },
+    { name: 'melt', dur: 0.8, emit: [
+      { style: 'drop', rate: 26, onGround: true, shape: { ring: [0.6, 3.8], y: [0.2, 0.6] }, grav: 1, floor: true, life: [0.5, 0.8], size: 0.04, stretch: 0.1, ramp: 'frost', tone: [0.8, 0.9], glow: 0.2 },
+      { style: 'puff', rate: 22, onGround: true, shape: { disc: 3.8, y: [0, 0.2] }, up: [0.3, 0.7], grav: -0.05, drag: 1, turb: 0.3, life: [0.8, 1.2], size: [[0.2, 0.3], [0.5, 0.7]], ramp: 'frost', tone: [0.95, 0.9], alpha: 0.3 },
+    ] },
+  ] },
+  // a ball of fire thrown at the target: it gathers in the hand, flies on an arc trailing flame, sparks and smoke, and
+  // bursts in a flash: a fireball of flame that rolls up into smoke, sparks that bounce, clods, a scorch, embers
+  fireball: { phases: [
+    { name: 'charge', dur: 0.22, light: { at: [0.35, 1.2, 0.45], color: '#ffa040', k: [0.5, 2.5], range: 4 }, emit: [
+      { style: 'flame', rate: 70, at: [0.35, 1.2, 0.45], shape: { sphere: 0.4 }, gather: 1, life: [0.18, 0.26], size: [0.12, 0.2], ramp: 'fire', tone: [0.7, 1], glow: 2 },
+      { style: 'spark', rate: 30, at: [0.35, 1.2, 0.45], shape: { sphere: [0.5, 0.9] }, gather: 1, life: [0.2, 0.26], size: 0.04, stretch: 0.08, ramp: 'fire', tone: [1, 0.8], glow: 3 },
+    ] },
+    { name: 'fly', dur: 0.45, sfx: 'swoosh', move: { from: [0.35, 1.2, 0.6], to: { t: [0, 0.4, 0] }, arc: 0.6 }, light: { at: 'head', color: '#ffa040', k: 3, range: 5, flicker: 0.2 }, emit: [
+      { style: 'flame', rate: 130, at: 'head', shape: { sphere: 0.12 }, jitter: 0.4, grav: -0.5, drag: 1, morph: 0.55, smoke: 'smoke', life: [0.3, 0.5], size: [[0.25, 0.35], [0.1, 0.15]], ramp: 'fire', tone: [1, 0.4], glow: 2.5 },
+      { style: 'spark', rate: 40, at: 'head', jitter: 2, grav: 0.5, life: [0.2, 0.35], size: 0.04, stretch: 0.08, ramp: 'fire', tone: [1, 0.6], glow: 3 },
+      { style: 'glow', count: 1, at: 'head', life: 0.45, size: [0.35, 0.35], ramp: 'fire', tone: [1, 1], glow: 3 },
+    ] },
+    { name: 'impact', dur: 0.05, event: 'hit', shake: 0.7, stop: 0.07, sfx: 'fell', flash: { at: { t: [0, 0.8, 0] }, color: '#ffb060', k: 8, range: 8, life: 0.6 }, emit: [
+      { style: 'flame', count: 40, at: { t: [0, 0.4, 0] }, shape: { sphere: 0.4 }, out: [2, 5], up: [1, 3], drag: 3, grav: -1, morph: 0.45, smoke: 'smoke', life: [0.6, 1.1], size: [[0.4, 0.7], [0.6, 1]], ramp: 'fire', tone: [1, 0.35], glow: 2.5 },
+      { style: 'puff', count: 18, at: { t: [0, 0.5, 0] }, shape: { sphere: 0.5 }, out: [1, 3], up: [1, 2], drag: 2, grav: -0.4, turb: 0.4, delay: [0.05, 0.3], life: [1.5, 2.5], size: [[0.4, 0.6], [1, 1.5]], ramp: 'smoke', tone: [0.6, 0.3], alpha: 0.6 },
+      { style: 'spark', count: 40, at: { t: [0, 0.4, 0] }, out: [4, 10], up: [2, 6], grav: 1, drag: 0.8, bounce: 0.4, floor: true, stretch: 0.06, life: [0.4, 0.9], size: 0.06, ramp: 'fire', tone: [1, 0.5], glow: 4 },
+      { style: 'chunk', count: 10, at: { t: [0, 0.3, 0] }, out: [2, 5], up: [3, 6], grav: 1, floor: true, bounce: 0.3, spin: [-10, 10], life: [1.6, 2.4], size: [0.07, 0.07], ramp: 'earth', tone: [[0.3, 0.6], [0.3, 0.6]] },
+      { style: 'ring', count: 1, at: 'target', onGround: true, size: [0.3, 3.5], life: 0.4, ramp: 'fire', tone: [1, 0.6], glow: 2, stretch: 0.25, cover: 0.2 },
+      { style: 'disc', count: 1, at: 'target', onGround: true, size: [2.2, 2.4], life: 6, ramp: 'smoke', tone: [0, 0], alpha: 0.75, cover: 1 },
+      { style: 'glow', count: 30, at: { t: [0, 0.5, 0] }, out: [0.5, 2], up: [1, 2], grav: -0.3, turb: 0.8, drag: 0.6, life: [1.5, 3], size: 0.04, ramp: 'fire', tone: [1, 0.6], glow: 3 },
+    ] },
+    { name: 'burn', dur: 1.6, light: { at: { t: [0, 0.6, 0] }, color: '#ff8a30', k: [2.5, 0], range: 5, flicker: 0.3 }, emit: [
+      { style: 'flame', rate: [40, 0], at: 'target', onGround: true, shape: { disc: 1.1 }, up: [0.6, 1.2], grav: -0.6, turb: 0.5, drag: 1, morph: 0.6, smoke: 'smoke', life: [0.4, 0.7], size: [[0.15, 0.25], [0.05, 0.08]], ramp: 'fire', tone: [1, 0.35], glow: 2 },
+    ] },
+  ] },
+  // a bolt out of a darkening sky onto the target: a cloud gathers over it and the ground glows, then the bolt (jagged,
+  // forking, re-struck a few times), a white flash, sparks, a scorch; it crackles as it fades
+  lightning: { phases: [
+    { name: 'gather', dur: 0.55, light: { at: { t: [0, 1, 0] }, color: '#7aa0ec', k: [0, 1.5], range: 3 }, emit: [
+      { style: 'puff', rate: 26, at: { t: [0, 5.5, 0] }, shape: { disc: 1.6 }, jitter: 0.3, drag: 1, turb: 0.3, life: [1, 1.4], size: [[0.6, 1], [1.2, 1.6]], ramp: 'storm', tone: [0.15, 0.1], alpha: 0.75 },
+      { style: 'glint', rate: 20, at: { t: [0, 0.2, 0] }, shape: { ring: [0.3, 1.2] }, up: [0.5, 1.5], life: [0.25, 0.4], size: [0.12, 0.03], ramp: 'storm', tone: [1, 1], glow: 3 },
+      { style: 'disc', count: 1, at: 'target', onGround: true, size: [0.4, 1.6], life: 0.6, ramp: 'storm', tone: [0.9, 1], alpha: 0.6, cover: 0, glow: 1.5 },
+    ] },
+    { name: 'strike', dur: 0.26, event: 'hit', shake: 0.6, stop: 0.05, sfx: 'hit', flash: { at: { t: [0, 2, 0] }, color: '#cfe0ff', k: 10, range: 9, life: 0.35 }, emit: [
+      { bolt: { from: { t: [0.3, 6.5, -0.2] }, to: 'target', jag: 0.7, segments: 10, forks: 0.35, width: 0.16, life: 0.09, every: 0.06 }, ramp: 'storm', glow: 4 },
+      { style: 'spark', count: 46, at: { t: [0, 0.2, 0] }, out: [3, 9], up: [2, 6], grav: 1, drag: 0.6, bounce: 0.5, floor: true, stretch: 0.07, life: [0.3, 0.8], size: 0.05, ramp: 'storm', tone: [1, 0.7], glow: 4 },
+      { style: 'ring', count: 1, at: 'target', onGround: true, size: [0.2, 2.6], life: 0.35, ramp: 'storm', tone: [1, 0.8], glow: 3, stretch: 0.2, cover: 0 },
+      { style: 'disc', count: 1, at: 'target', onGround: true, size: [1.3, 1.5], life: 5, ramp: 'smoke', tone: [0, 0], alpha: 0.7, cover: 1 },
+      { style: 'puff', count: 10, at: 'target', onGround: true, shape: { disc: 0.6 }, out: [0.5, 1.5], up: [0.5, 1], drag: 1.5, grav: -0.2, life: [1, 1.6], size: [[0.25, 0.4], [0.6, 0.9]], ramp: 'smoke', tone: [0.5, 0.3], alpha: 0.55 },
+    ] },
+    { name: 'crackle', dur: 0.7, light: { at: { t: [0, 0.5, 0] }, color: '#9ab8ff', k: [1.5, 0], range: 4, flicker: 0.7 }, emit: [
+      { bolt: { from: { t: [0, 0.1, 0] }, to: { t: [0.9, 0.05, 0.4] }, jag: 0.25, segments: 4, forks: 0, width: 0.05, life: 0.06, every: 0.12 }, ramp: 'storm', glow: 3 },
+      { bolt: { from: { t: [0, 0.1, 0] }, to: { t: [-0.7, 0.05, -0.6] }, jag: 0.25, segments: 4, forks: 0, width: 0.05, life: 0.06, every: 0.17 }, ramp: 'storm', glow: 3 },
+      { style: 'glint', rate: [20, 0], at: 'target', onGround: true, shape: { disc: 1.4, y: [0.05, 0.4] }, life: [0.15, 0.3], size: [0.1, 0.03], ramp: 'storm', tone: [1, 1], glow: 3 },
+    ] },
+  ] },
+  // healing: motes rise swirling round you out of a glowing ring that closes in, glints, a bloom of light
+  heal: { phases: [
+    { name: 'rise', dur: 1.4, sfx: 'heal', light: { at: [0, 1, 0], color: '#9cff9a', k: [0.5, 1.8], range: 4 }, emit: [
+      { style: 'glow', rate: 55, onGround: true, shape: { ring: [0.3, 1.4], y: [0, 0.2] }, up: [0.6, 1.4], swirl: 2, turb: 0.2, life: [0.9, 1.4], size: [0.07, 0.02], ramp: 'heal', tone: [0.8, 1], glow: 2.5 },
+      { style: 'glint', rate: 18, at: [0, 1, 0], shape: { sphere: 0.9 }, life: [0.3, 0.5], size: [0.12, 0.03], ramp: 'heal', tone: [1, 1], glow: 3 },
+      { style: 'ring', count: 1, onGround: true, size: [1.9, 0.4], life: 1.2, ramp: 'heal', tone: [0.9, 1], glow: 2, stretch: 0.14, cover: 0 },
+      { style: 'disc', count: 1, onGround: true, size: [1.7, 1.2], life: 1.9, ramp: 'heal', tone: [0.8, 0.9], alpha: 0.5, cover: 0, glow: 1 },
+    ] },
+    { name: 'bloom', dur: 0.05, event: 'heal', flash: { at: [0, 1.2, 0], color: '#c4ffbc', k: 4, range: 5, life: 0.5 }, emit: [
+      { style: 'glint', count: 22, at: [0, 1.2, 0], shape: { sphere: 0.3 }, out: [1, 2.4], drag: 2, life: [0.4, 0.7], size: [0.16, 0.04], ramp: 'heal', tone: [1, 1], glow: 3 },
+    ] },
+    { name: 'fade', dur: 0.8, emit: [
+      { style: 'glow', rate: [24, 0], onGround: true, shape: { ring: [0.3, 1.2] }, up: [0.6, 1.2], swirl: 2, life: [0.8, 1.2], size: [0.06, 0.02], ramp: 'heal', tone: [0.8, 1], glow: 2 },
+    ] },
+  ] },
+  // a poison cloud that settles over the target and lingers (till stopped), bubbling
+  poisonCloud: { phases: [
+    { name: 'swell', dur: 0.6, emit: [
+      { style: 'puff', count: 30, at: 'target', onGround: true, shape: { disc: 1.5, y: [0.1, 0.6] }, out: [0.5, 1.2], drag: 1, grav: -0.05, turb: 0.6, life: [2, 3], size: [[0.3, 0.5], [0.8, 1.2]], ramp: 'poison', tone: [[0.4, 0.6], [0.3, 0.5]], alpha: 0.55 },
+    ] },
+    { name: 'linger', dur: 1, loop: true, light: { at: { t: [0, 0.6, 0] }, color: '#a8d040', k: 0.6, range: 4 }, emit: [
+      { style: 'puff', rate: 18, at: 'target', onGround: true, shape: { disc: 1.8, y: [0.1, 0.7] }, out: [0.1, 0.4], drag: 1, grav: -0.04, turb: 0.6, life: [2, 3], size: [[0.3, 0.5], [0.8, 1.2]], ramp: 'poison', tone: [[0.4, 0.6], [0.3, 0.5]], alpha: 0.5 },
+      { style: 'glow', rate: 8, at: 'target', onGround: true, shape: { disc: 2 }, up: [0.4, 0.8], life: 0.6, size: [0.05, 0.1], ramp: 'poison', tone: [0.9, 1], glow: 1.5 },
+    ] },
+    { name: 'thin', dur: 1.5 },
+  ] },
+  // a campfire (till stopped): flames that lick up and cool into smoke, embers, a flickering light
+  campfire: { phases: [
+    { name: 'burn', dur: 1, loop: true, light: { at: [0, 0.5, 0], color: '#ff9a40', k: 2.2, range: 5, flicker: 0.3 }, emit: [
+      { style: 'flame', rate: 34, onGround: true, shape: { disc: 0.25 }, up: [0.8, 1.4], grav: -0.8, turb: 0.5, drag: 1, morph: 0.6, smoke: 'smoke', life: [0.5, 0.8], size: [[0.18, 0.28], [0.06, 0.1]], ramp: 'fire', tone: [1, 0.35], glow: 2 },
+      { style: 'glow', rate: 4, onGround: true, shape: { disc: 0.2, y: 0.2 }, up: [1, 2], turb: 1.2, life: [1.5, 2.5], size: 0.03, ramp: 'fire', tone: [1, 0.5], glow: 3 },
+    ] },
+    { name: 'out', dur: 0.8, emit: [
+      { style: 'puff', rate: 14, onGround: true, shape: { disc: 0.3 }, up: [0.5, 1], grav: -0.3, turb: 0.4, life: [1.2, 1.8], size: [[0.15, 0.2], [0.4, 0.6]], ramp: 'smoke', tone: [0.5, 0.3], alpha: 0.5 },
+    ] },
+  ] },
+  // something falling into water: drops thrown up that fall back, rings spreading, a little spray
+  splash: { phases: [
+    { name: 'splash', dur: 0.05, emit: [
+      { style: 'drop', count: 24, shape: { disc: 0.2, y: 0.05 }, out: [1, 2.5], up: [2.5, 4.5], grav: 1, floor: true, stretch: 0.08, life: [0.6, 0.9], size: 0.05, ramp: 'water', tone: [0.8, 1], glow: 0.2 },
+      { style: 'ring', count: 2, onGround: true, delay: [0, 0.18], size: [0.2, 1.3], life: 0.75, ramp: 'water', tone: [1, 0.8], glow: 0.6, cover: 0.5, stretch: 0.12 },
+      { style: 'puff', count: 6, shape: { disc: 0.3, y: 0.1 }, out: [0.3, 0.8], up: [0.5, 1], drag: 2, life: [0.5, 0.8], size: [[0.15, 0.25], [0.4, 0.6]], ramp: 'water', tone: [0.95, 0.9], alpha: 0.4 },
+    ] },
+    { name: 'settle', dur: 1 },
+  ] },
+  // a bleeding wound's tick: a few drops off the body that land as splats and dry
+  bleed: { phases: [
+    { name: 'drip', dur: 0.05, emit: [
+      { style: 'drop', count: [3, 5], at: [0, 0.55, 0], shape: { sphere: 0.15 }, out: [0.3, 0.9], up: [0.5, 1.5], grav: 1, floor: true, stretch: 0.1, life: [0.9, 1.3], size: 0.045, ramp: 'blood', tone: [[0.4, 0.6], [0.3, 0.4]] },
+      { style: 'disc', count: [1, 2], onGround: true, delay: [0.3, 0.45], shape: { ring: [0.15, 0.5] }, size: [[0.14, 0.2], [0.2, 0.3]], life: 4, ramp: 'blood', tone: [0.25, 0.12], alpha: 0.85, cover: 1 },
+    ] },
+    { name: 'dry', dur: 0.5 },
+  ] },
+};
+// (T > Spell effects) play one d tiles ahead of the hero (at the spot itself when there), stopping it after `stop` s
+function fxTry(name, d, stop = 0, there = false) {
+  const fx = Math.sin(H.face), fz = Math.cos(H.face), tx = H.x + fx * d, tz = H.z + fz * d;
+  const at = there ? { x: tx, y: surfaceY(tx, tz), z: tz } : { x: H.x, y: H.y, z: H.z };
+  const h = playFx(name, { ...at, dir: H.face, target: { x: tx, y: surfaceY(tx, tz), z: tz } });
+  if (h && stop) setTimeout(() => h.stop(), stop * 1000);
+  return h;
+}
+// dust and chips (kicked up by hits, falls, landings and building), as GPU particles: puffs that swell, thin and
+// lift, and bits that bounce and settle; FX_TUNE.on 0 brings back the old cube ones
+function fxDust(x, y, z, color, n, spread) {
+  const ramp = fxParts.tint(color), gy = surfaceY(x, z);
+  for (let i = 0; i < Math.round(n * FX_TUNE.density); i++) {
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.6, sp = spread * (0.6 + Math.random() * 0.6);
+    fxParts.spawn({ style: GFX.FX.PUFF, x: x + Math.cos(a) * 0.1, y: y + 0.12, z: z + Math.sin(a) * 0.1, vx: Math.cos(a) * sp, vz: Math.sin(a) * sp, vy: 0.5 + Math.random() * 0.6,
+      life: 0.55 + Math.random() * 0.45, size0: 0.08 + Math.random() * 0.05, size1: 0.24 + Math.random() * 0.12, drag: 2.5, grav: -0.08, turb: 0.2, floor: gy,
+      ramp, tone0: 0.7, tone1: 0.85, alpha: 0.8 });
+  }
+}
+// lava spitting: two glowing drops thrown up that fall back in
+function lavaSpit(x, y, z) {
+  if (FX_TUNE.on < 0.5) { puff(x, y, z, Math.random() < 0.5 ? '#ff8a30' : '#ffc040', 2, 0.25); return; }
+  const ramp = fxParts.ramp('fire');
+  for (let i = 0; i < 2; i++) {
+    const a = Math.random() * 6.283;
+    fxParts.spawn({ style: GFX.FX.GLOW, x, y: y + 0.05, z, vx: Math.cos(a) * 0.4, vz: Math.sin(a) * 0.4, vy: 1.2 + Math.random() * 0.8, grav: 1, floor: y,
+      life: 0.45 + Math.random() * 0.2, size0: 0.05, size1: 0.03, ramp, tone0: 1, tone1: 0.6, glow: 2.5 });
+  }
+}
+const CHIP_HEX = { wood: '#8a5a32', stone: '#8c8a96', copperOre: '#d4773e', ironOre: '#b9bfc9', ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', m.ore])) };
+function fxChips(x, y, z, kind, n) {
+  const ramp = fxParts.tint(CHIP_HEX[kind] || '#8c8a96'), gy = surfaceY(x, z);
+  for (let i = 0; i < n; i++) {
+    const tone = 0.45 + Math.random() * 0.25;
+    fxParts.spawn({ style: kind === 'wood' ? GFX.FX.SHARD : GFX.FX.CHUNK, x, y, z, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 2,
+      life: 1.1 + Math.random() * 0.5, size0: 0.045, size1: 0.04, grav: 1, drag: 0.3, bounce: 0.3, floor: gy, spin: (Math.random() - 0.5) * 24,
+      ramp, tone0: tone, tone1: tone });
   }
 }
 const GRAV = 9;
@@ -18469,7 +18711,7 @@ function bleedFoe(f, dt) {
   if (b.tick <= 0) {
     b.tick += b.every;
     hurtFoe(f, b.dmg, f.x, f.z, 0, '#ff5a4a');
-    puff(f.x, f.y + 0.5, f.z, '#a01810', 2, 0.3);
+    if (!playFx('bleed', { x: f.x, y: f.y, z: f.z, dir: Math.random() * 6.283 })) puff(f.x, f.y + 0.5, f.z, '#a01810', 2, 0.3);
   }
   if (b.t <= 0) f.bleed = null;
 }
@@ -20298,7 +20540,7 @@ function ventSmoke(dt) {
     const i = T(c, r);
     if (OB[i] === O.VENT) {
       // (their smoke: see buildSmoke)
-    } else if (LAVA[i] && !LV[i] && Math.random() < 0.012 * 60 * dt * LAVA_FX.spatter) puff(c + Math.random(), WL[i] * STEP - LAVA_DROP, r + Math.random(), Math.random() < 0.5 ? '#ff8a30' : '#ffc040', 2, 0.25);
+    } else if (LAVA[i] && !LV[i] && Math.random() < 0.012 * 60 * dt * LAVA_FX.spatter) lavaSpit(c + Math.random(), WL[i] * STEP - LAVA_DROP, r + Math.random());
   }
 }
 // any of the wastes within a screen or so (checked coarsely)
@@ -23360,7 +23602,8 @@ function updateCamera(dt) {
     const fov = Math.max(5, Math.min(60, VIEW.fov)), d = spanH / 2 / Math.tan(fov * Math.PI / 360);
     if (camera.fov !== fov || Math.abs(camera.near - d * 0.25) > 1e-6) { camera.fov = fov; camera.near = d * 0.25; camera.far = d + 260; camera.updateProjectionMatrix(); }
     camera.position.set(camTarget.x + Math.sin(yaw) * Math.cos(Math.PI / 6) * d, camTarget.y + d * Math.sin(Math.PI / 6), camTarget.z + Math.cos(yaw) * Math.cos(Math.PI / 6) * d);
-    camera.lookAt(camTarget);
+    camera.position.add(fxShake.off);
+    camera.lookAt(v3.copy(camTarget).add(fxShake.off));
     camera.updateMatrixWorld();
     const dpr = devicePixelRatio || 1, s0 = Math.round(-pxScale * dpr) / dpr;
     cv.style.transform = `translate(${s0}px, ${s0}px)`;
@@ -23369,7 +23612,9 @@ function updateCamera(dt) {
   camera = orthoCam;
   // 30° elevation at a 45° yaw makes grid lines a strict 2:1 pixel staircase
   camera.position.set(camTarget.x + Math.sin(yaw) * CAM_DIST, camTarget.y + CAM_DIST * Math.tan(Math.PI / 6), camTarget.z + Math.cos(yaw) * CAM_DIST);
-  camera.lookAt(camTarget);
+  // (an effect's shake moves the view, in whole big pixels like any other move)
+  camera.position.add(fxShake.off);
+  camera.lookAt(v3.copy(camTarget).add(fxShake.off));
   // render from a camera snapped to whole big pixels, then slide the finished image by the leftover
   camRight.set(Math.cos(yaw), 0, -Math.sin(yaw));
   camUp.set(-0.5 * Math.sin(yaw), Math.sqrt(3) / 2, -0.5 * Math.cos(yaw));
@@ -24919,6 +25164,26 @@ const TUNING = [
     [SMOKE, 'ventColor2', 'Vents: second colour', 'color'],
     [SMOKE, 'hearthColor', 'Hearths: colour', 'color'],
   ]],
+  ['Spell effects', [
+    [FX_TUNE, 'on', 'GPU effects (0: the old cube dust and chips, no spells)', 0, 1, 1],
+    [FX_TUNE, 'density', 'How many particles (× every count and rate)', 0.1, 2, 0.05],
+    [FX_TUNE, 'glow', 'Glow (× every particle\'s own light)', 0, 3, 0.05],
+    [FX_TUNE, 'size', 'Size (× every particle)', 0.3, 3, 0.05],
+    [FX_TUNE, 'steps', 'Colours in hard steps along each ramp (1), or blended (0)', 0, 1, 1],
+    [FX_TUNE, 'bands', 'Smoke and dust lit in bands (0 smooth)', 0, 6, 1],
+    [FX_TUNE, 'lights', 'Effects light the world (flashes, fireballs)', 0, 1, 1],
+    [FX_TUNE, 'shake', 'Screen shake (×)', 0, 3, 0.05],
+    [FX_TUNE, 'hitStop', 'Hit-stop: the moment everything holds still on a big hit (×)', 0, 3, 0.05],
+    [FX_TUNE, 'frostNova', 'Cast: frost nova round you', 'action', () => fxTry('frostNova', 0)],
+    [FX_TUNE, 'fireball', 'Cast: fireball 6 tiles ahead', 'action', () => fxTry('fireball', 6)],
+    [FX_TUNE, 'lightning', 'Cast: lightning 5 tiles ahead', 'action', () => fxTry('lightning', 5)],
+    [FX_TUNE, 'heal', 'Cast: healing on you', 'action', () => fxTry('heal', 0)],
+    [FX_TUNE, 'poisonCloud', 'Cast: poison cloud 5 tiles ahead (6 s)', 'action', () => fxTry('poisonCloud', 5, 6)],
+    [FX_TUNE, 'campfire', 'A campfire 2.5 tiles ahead (10 s)', 'action', () => fxTry('campfire', 2.5, 10, true)],
+    [FX_TUNE, 'splash', 'A splash 2 tiles ahead', 'action', () => fxTry('splash', 2, 0, true)],
+    [FX_TUNE, 'bleed', 'A bleed 1.5 tiles ahead', 'action', () => fxTry('bleed', 1.5, 0, true)],
+    [FX_TUNE, 'clear', 'Clear every effect', 'action', () => { fxRun.stopAll(); fxParts.clear(); }],
+  ]],
   ['Ambient life', [
     [AMBIENT, 'butterflies', 'Meadow butterflies by day (0 off)', 0, 2, 0.05],
     [AMBIENT, 'bfSize', 'Butterflies: size', 0.02, 0.4, 0.01],
@@ -25556,7 +25821,12 @@ function frameBody(now) {
   }
   pollPad(dt);
   prof.lap('input');
-  if (started && !mapOpen && !optsOpen && !spikes.holding && !veilBusy()) update(dt);
+  // (a heavy blow holds everything still for a moment: the hit-stop, FX_TUNE.hitStop)
+  const held = fxHitStop > 0;
+  if (held) fxHitStop = Math.max(0, fxHitStop - real);
+  const running = started && !mapOpen && !optsOpen && !spikes.holding && !veilBusy();
+  if (running && !held) update(dt);
+  else if (running) {}
   else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
   prof.lap('game update (hero, foes, effects)');
   updateCamera(dt);
@@ -25568,6 +25838,7 @@ function frameBody(now) {
   updateSpray();
   updateSmoke();
   updateAmbient();
+  updateFx(running && !held ? dt : 0);
   updateHeat();
   updateTrample(dt);
   updateGrass();
@@ -25712,7 +25983,9 @@ window.GAME = {
   buildTest: (shade, cull) => { setBuildTest(shade, !!cull); return BUILD_TEST; },
   splitWorld: v => { PROF_SPLIT.world = !!v; if (!prof.on) toggleProfiler(); return WORLD_PARTS; },
   matTris: () => { const out = {}; scene.traverse(o => { if (!o.isMesh || !o.visible || !o.geometry || !o.geometry.attributes.position) return; const k = (typeof worldPart === 'function' ? worldPart(o) : 'x') + (o.layers.mask === 1 ? '' : ' L' + o.layers.mask); const n = o.geometry.attributes.position.count / 3; out[k] = (out[k] || 0) + Math.round(n); }); return out; },
-  compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  // (v565) effects: play one from FX_LIB d tiles ahead, and what's live
+  fx: (name, d = 3) => !!fxTry(name, d), fxState: () => ({ live: fxRun.live.length, lights: fxRun.lights.length, now: fxParts.now, busy: fxParts.busy }),
+  compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, fxParts.clearMat, fxParts.solidMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(LIFT.length).fill(0), ob = {};

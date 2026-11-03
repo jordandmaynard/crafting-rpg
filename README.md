@@ -154,6 +154,7 @@ Emberwild draws with raw WebGPU through a small library of its own, shaped like 
 - `exposure.js`: eye adaptation (see Eye adaptation and HDR).
 - `bloom.js`: bloom (see Bloom and the grade).
 - `groundhaze.js`: the liquid ground haze (see Ground haze).
+- `particles.js`: spell and world effects (see Spell effects): GPU-stepped particles in a ring of slots, drawn see-through and solid, and FxRunner, which plays effects written as phases.
 - `renderer.js`: draws a scene into the canvas or a render target: the sun's shadow map first when it's due, then everything the camera's layers see, solid things nearest first and see-through things farthest first, culled to the view. All of a frame's passes go in one command buffer.
 
 The water, lava, trunk cutaway and outline shaders are WGSL, inline in `index.html`.
@@ -710,6 +711,20 @@ Mode icons from Jordan's Wanderer's Kit mode icons v1 (art/deliveries/wanderers-
 **v357:** crafting window text spacing (Jordan): the "Owned / Needed" caption sits below the materials panel's top border and corner notch (panel padding 12px top, list 88px), and the status line starts at left 140 (16px) so it clears the bottom-left corner bracket.
 
 **v356:** stack counts everywhere have a 1px black stroke (--nStroke) so they read over icons (Jordan). Fixed a crash: walking away from a station while the mouse was over one of its squares (showInfo read the closed station; Jordan saw it on v346).
+
+## Spell effects (v565)
+
+Particles stepped on the GPU (`src/gfx/particles.js`), for spells and for the world's own effects. The CPU writes a particle into a ring of slots once, when it's spawned (where, how fast, how long it lives, how it moves and looks); a compute pass steps every live one each frame (gravity or lift, drag, a pull toward its anchor, a swirl round it, turbulence, the wind, a bounce off its own floor), and two draws read the same buffer: everything soft or glowing in one premultiplied pass (a particle can add light, cover what's behind it, or both), and solid bits in another (lit, outlined, dithering away at the end of their life).
+
+Particle styles: glow (embers, motes, fireflies), spark (stretched along its speed, a hot head and cooling tail), glint (a twinkle), puff (smoke, dust, vapour, lit as a ball in bands), flame (self-lit, cooling down its ramp, turning into smoke part way), ring and disc (lying on the ground: shock fronts, scorches, pools of light), beam (a bolt segment), and solid shards, chunks, drops and crystals that shoot up out of the ground and sink back.
+
+Colours come from ramps (FX_RAMPS: fire, frost, arcane, holy, heal, poison, storm, blood, water, shadow, earth, smoke, dust), dark to bright, read in hard steps; each particle walks along its ramp over its life.
+
+Effects (FX_LIB in index.html) are written as phases, each with emitters (a burst as it begins or a rate through it, from a point, sphere, ring, disc, box or line, a spreading front with `grow`), a light that swells or a flash that dies away, and moments for the game (a hit event, screen shake, a short hit-stop). A phase can loop until the effect is stopped, and can move a 'head' point across it (a thrown fireball). The first ones: frost nova, fireball, lightning, heal, poison cloud, campfire, splash and bleed.
+
+The dust puffs and chips that hits, falls and building throw up, lava spitting and bleeding wounds use it too. T > Spell effects tunes it (density, glow, size, hard steps, smoke banding, effect lights, shake, hit-stop) and casts each effect in front of you. The ideas were learnt from pixelfx and Sprite Fusion's pixel effects (choreography in phases, light over flat fills, ramps that cool); the code is our own.
+
+**v565:** GPU particle effects (see Spell effects): src/gfx/particles.js, FX_LIB with eight effects, T > Spell effects; dust, chips, lava spit and bleeding moved onto it; screen shake and hit-stop; ShaderMaterials can read storage buffers (`mat.storage`).
 
 ## Life in the air
 
