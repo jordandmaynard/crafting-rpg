@@ -277,6 +277,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v629:** (Jordan) The shoal keeps the beach's slope: the sand runs on down at the same angle, 0.36 under its level at the cliff, and you can wade to its far edge.
 
 **v630:** (Jordan: walls and pillars must never block an archway's way out) Where a large town's side lanes end short of its main street, the wall used to run across them inside the archway, with posts at its ends. Now every tile of the three-wide way in, up to the arch's line, counts as inside the town for the wall (fill), so the wall only runs along the passage's sides, out at the archway's piers.
+**v631:** (Jordan) Beaches can be smooth shaded: where beaches, shoals and the land meet, the light is smoothed over the facets the way it is over ramps (T > Ground patches: Beaches smooth, 0 for the old facets, and its span). The shoal's drop-off into the deep water stays a hard edge.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
