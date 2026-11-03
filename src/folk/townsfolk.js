@@ -306,6 +306,72 @@ export function design(seed, pool = 'town') {
   }
   return d;
 }
+// ---------- (v21, Jordan) desert dress ----------
+// In a town walled in sandstone the everyday trades dress for the heat: a turban or a round cap (a headscarf for
+// the women), a long tunic to the shin over trousers (sometimes a short vest over it) or an ankle-length kaftan
+// with a trimmed front, a wide cloth sash, slippers or sandals. desertDress(d) gives a town design's desert
+// version: the same person (body, face, hair, job, name, tool, apron, gloves...) with their clothes rolled again
+// from a stream of their own (so design() and every seed's ordinary look are untouched). Jobs not listed keep their
+// clothes: the watch's uniforms and the clergy's vestments. 'work' wears the tunic, 'robe' the kaftan, 'either' rolls.
+export const DESERT_JOBS = {
+  elder: 'robe', smith: 'work', tanner: 'work', woodcutter: 'work', goodfolk: 'either', lamplighter: 'work',
+  ironmonger: 'work', armorer: 'work', glazier: 'work', mason: 'work', herbalist: 'robe', innkeeper: 'either', carter: 'work', sweeper: 'work',
+  masterSmith: 'work', jeweller: 'robe', merchant: 'robe', banker: 'robe', cartographer: 'robe', busker: 'either', flowerSeller: 'either',
+  crier: 'either', gossip: 'either', pickpocket: 'work',
+};
+const DESERT = {
+  turban: [['white', 6], ['linen', 3], ['oat', 2], ['woad', 1], ['madder', 1], ['weld', 1], ['navy', 1]],
+  cap: [['white', 3], ['umber', 3], ['brown', 2], ['madder', 1], ['charcoal', 1]],
+  scarf: [['white', 2], ['linen', 2], ['madder', 2], ['woad', 2], ['teal', 2], ['ochre', 1], ['plum', 1], ['oat', 1]],
+  kaftan: [['madder', 3], ['crimson', 2], ['navy', 2], ['teal', 2], ['woad', 2], ['ochre', 2], ['white', 2], ['oat', 1], ['plum', 1]],
+  richKaftan: [['crimson', 3], ['navy', 2], ['plum', 2], ['teal', 2], ['madder', 2], ['white', 1]],
+  tunic: [['white', 5], ['linen', 4], ['oat', 3], ['wool', 1], ['ochre', 1]],
+  vest: [['umber', 3], ['brown', 3], ['madder', 2], ['teal', 1], ['navy', 1], ['ochre', 1]],
+  dress: [['madder', 2], ['woad', 2], ['ochre', 2], ['teal', 2], ['oat', 1], ['linen', 1], ['plum', 1], ['rose', 1]],
+  trousers: [['umber', 3], ['charcoal', 2], ['brown', 2], ['oat', 1], ['navy', 1], ['linen', 1]],
+  sash: [['madder', 3], ['weld', 2], ['teal', 2], ['woad', 2], ['white', 1], ['crimson', 2], ['gold', 1], ['ochre', 1]],
+  trim: [['gold', 3], ['weld', 2], ['white', 2], ['teal', 2], ['crimson', 1]],
+};
+const DESERT_RICH = ['jeweller', 'merchant', 'banker'];
+export function desertDress(d0) {
+  const how = DESERT_JOBS[d0.job];
+  if (!how || d0.hostile) return d0;
+  const d = JSON.parse(JSON.stringify(d0)), r = folkRand(((d0.seed >>> 0) ^ 0x5a17d35e) >>> 0 || 7), fem = d.body === 'fem';
+  const tint = list => { const k = pick(r, list); return { dye: k, color: jitter(r, DYES[k][0]) }; };
+  const wear = how === 'either' ? (r() < 0.45 ? 'robe' : 'work') : how;
+  // the head: a turban or a round cap, a headscarf for a woman (now and then bare-headed)
+  const hat = fem ? pick(r, [['headscarf', 6], ['none', 1]]) : pick(r, wear === 'robe' ? [['turban', 6], ['taqiyah', 2], ['none', 1]] : [['turban', 4], ['taqiyah', 3], ['none', 1]]);
+  d.head = hat === 'none' ? { item: 'none' } : Object.assign({ item: hat }, tint(hat === 'turban' ? DESERT.turban : hat === 'taqiyah' ? DESERT.cap : DESERT.scarf));
+  if (hat === 'headscarf') d.head.trim = shade(d.head.color, -0.2);
+  const stock = d.legs.stockings;
+  if (wear === 'robe') {
+    // the kaftan, to the ankle, its front edged in a trim
+    d.torso = Object.assign({ item: 'robe', kaftan: true }, tint(DESERT_RICH.includes(d.job) ? DESERT.richKaftan : DESERT.kaftan));
+    d.torso.trim = tint(DESERT.trim).color;
+    d.legs = { item: 'robe', dye: d.torso.dye, color: d.torso.color, stockings: stock };
+  } else if (fem) {
+    // a long dress in a desert dye (or a blouse over a long skirt), the hem to the ankle
+    if (r() < 0.6) { d.torso = Object.assign({ item: 'dress' }, tint(DESERT.dress)); d.legs = { item: 'dress', dye: d.torso.dye, color: d.torso.color, stockings: stock }; }
+    else { d.torso = Object.assign({ item: 'blouse' }, tint(DESERT.tunic)); d.legs = Object.assign({ item: 'longSkirt', stockings: stock }, tint(DESERT.dress)); }
+    d.torso.trim = shade(d.torso.color, -0.35);
+  } else {
+    // a long tunic to the shin over trousers, sometimes a short vest over it
+    const vest = r() < 0.35;
+    if (vest) { d.torso = Object.assign({ item: 'vest', long: true }, tint(DESERT.vest)); d.torso.under = tint(DESERT.tunic); }
+    else d.torso = Object.assign({ item: 'tunic', long: true }, tint(DESERT.tunic));
+    d.torso.trim = shade(d.torso.color, -0.35);
+    d.legs = Object.assign({ item: 'trousers', stockings: stock }, tint(DESERT.trousers));
+  }
+  // slippers or sandals (cloth wraps)
+  d.feet = { item: pick(r, [['shoes', 3], ['wraps', 2]]) };
+  d.feet.color = d.feet.item === 'wraps' ? jitter(r, LEATHER[Math.floor(r() * LEATHER.length)], 0.05) : tint([['ochre', 1], ['madder', 1], ['umber', 2], ['oat', 1]]).color;
+  d.feet.sole = shade(d.feet.color, -0.4);
+  // a wide cloth sash at the waist, in place of a leather belt
+  d.belt = r() < (wear === 'robe' ? 0.9 : 0.75) ? { color: tint(DESERT.sash).color, sash: true, wide: true } : null;
+  d.cloak = null; d.shawl = null; d.neckerchief = null;
+  d.desert = true;
+  return d;
+}
 // a design in words, for the viewer's readout
 export function describe(d) {
   const nice = s => s.replace(/([A-Z])/g, ' $1').toLowerCase();
@@ -313,8 +379,8 @@ export function describe(d) {
     ['Body', `${d.body === 'fem' ? 'feminine' : 'masculine'}, ${d.age}, height ${d.height.toFixed(2)}`],
     ['Hair', `${nice(d.hairStyle)}, ${nice(d.hairName)}${d.beard !== 'none' ? ', ' + nice(d.beard) + (d.beard === 'full' ? ' beard' : '') : ''}`, d.hair],
     ['Head', d.head.item === 'none' ? 'nothing' : `${nice(d.head.item)}${d.head.dye ? ', ' + d.head.dye : ''}`, d.head.color],
-    ['Torso', `${nice(d.torso.item)}, ${d.torso.dye}${d.torso.under ? ' over ' + d.torso.under.dye : ''}`, d.torso.color],
-    ['Legs', WHOLE.includes(d.legs.item) ? `the ${nice(d.legs.item)}'s skirt` : `${nice(d.legs.item)}, ${d.legs.dye}`, d.legs.color],
+    ['Torso', `${d.torso.long ? 'long ' : ''}${d.torso.kaftan ? 'kaftan' : nice(d.torso.item)}, ${d.torso.dye}${d.torso.under ? ' over ' + d.torso.under.dye : ''}`, d.torso.color],
+    ['Legs', WHOLE.includes(d.legs.item) ? `the ${d.torso.kaftan ? 'kaftan' : nice(d.legs.item)}'s skirt` : `${nice(d.legs.item)}, ${d.legs.dye}`, d.legs.color],
     ['Feet', `${nice(d.feet.item)}`, d.feet.color],
   ];
   if (d.bust) rows.splice(1, 0, ['Bust', `size ${d.bust.size.toFixed(2)}, lift ${d.bust.lift.toFixed(2)}, sag ${d.bust.sag.toFixed(2)}`]);
@@ -456,7 +522,9 @@ export function makeFolkKit(GFX) {
       }
     };
     if (skirted) skirtHalves(L.color, hem, L.item === 'skirt' ? 0.07 : ['dress', 'gown'].includes(L.item) ? 0.12 : 0.1);
-    else if (T.item === 'tunic') skirtHalves(T.color, 0.25, 0.02);
+    else if (T.item === 'tunic') skirtHalves(T.color, T.long ? 0.13 : 0.25, T.long ? 0.05 : 0.02);
+    // (v21) the desert's long tunic showing below a vest, to the shin
+    else if (T.long) skirtHalves(T.under ? T.under.color : T.color, 0.13, 0.05);
     else if (T.item === 'gambeson') skirtHalves(T.color, 0.25, 0.02);
     else if (T.item === 'doublet') skirtHalves(T.color, 0.3, 0.03);
     // the surplice: a white over-skirt to the knee on the cassock (its skirt kept for the sash and apron below)
@@ -548,6 +616,8 @@ export function makeFolkKit(GFX) {
     } else if (T.item === 'robe') {
       // a plain round collar in a darker fold
       box(chest, B.sh - 0.06, 0.025, B.dep + 0.012, 0, 0.66 - CH, 0, shade(T.color, -0.18));
+      // (v21) the kaftan: its front edge, crossing over to the right, in a band of trim
+      if (T.kaftan) chestPanel(0.025, 0.032, 0.455, 0.65, T.trim, fem ? 0.014 : 0.006, fem ? 0.012 : 0.006);
     } else if (T.item === 'surplice') {
       // the white surplice's yoke over the cassock
       box(chest, 0.09, 0.025, 0.006, 0, 0.65 - CH, frontAt(0.65) + 0.003, T.color);
@@ -576,8 +646,10 @@ export function makeFolkKit(GFX) {
       box(chest, 0.03, 0.07, 0.006, 0, 0.625 - CH, frontAt(0.625) + 0.003, shade(T.color, -0.3));
     }
     if (d.belt) {
-      const bw = fem ? hipAt(0.4)[0] + 0.012 : B.wa + 0.022, bd = fem ? hipAt(0.4)[1] + 0.02 : B.dep + 0.016;
-      box(body, bw, d.belt.sash ? 0.05 : 0.04, bd, 0, 0.42, 0, d.belt.color);
+      // (v21: the desert's wide sash stands out over a skirt's or long tunic's top)
+      const wide = d.belt.wide ? 0.03 : 0;
+      const bw = (fem ? hipAt(0.4)[0] + 0.012 : B.wa + 0.022) + wide, bd = (fem ? hipAt(0.4)[1] + 0.02 : B.dep + 0.016) + wide;
+      box(body, bw, d.belt.wide ? 0.07 : d.belt.sash ? 0.05 : 0.04, bd, 0, 0.42, 0, d.belt.color);
       if (d.belt.sash || d.belt.cord) box(body, d.belt.cord ? 0.02 : 0.04, d.belt.cord ? 0.18 : 0.12, 0.012, B.wa / 4, d.belt.cord ? 0.325 : 0.355, Math.max(bd / 2, skirtFront(0.36)) + 0.008, d.belt.color, skirtP ? -0.08 : 0);
       else if (d.belt.buckle) box(body, 0.04, 0.045, 0.012, 0, 0.42, bd / 2 + 0.006, '#c8a048');
     }
@@ -724,7 +796,8 @@ export function makeFolkKit(GFX) {
       }
     }
     // hair, then whatever's on the head over it
-    const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif' || hat === 'cultHood';
+    const hat = d.head.item, covered = hat !== 'none' && hat !== 'skullcap', hood = hat === 'hood' || hat === 'coif' || hat === 'cultHood' || hat === 'headscarf';
+    const wrapped = hat === 'hood' || hat === 'cultHood' || hat === 'headscarf';   // (hair tied up at the back is hidden too)
     const hc = d.hair, hs = d.hairStyle;
     const top = (h = 0.06) => { if (!covered) box(head, 0.2, h, 0.196, 0, 0.185 + h / 2, -0.002, hc); };
     const back = (h = 0.15, y = 0.13) => { if (!hood) box(head, 0.2, h, 0.05, 0, y, -0.08, hc); };
@@ -743,13 +816,13 @@ export function makeFolkKit(GFX) {
       if (!hood) for (const s of [1, -1]) box(head, 0.03, 0.15, 0.15, s * 0.1, 0.11, -0.01, hc);
     } else if (hs === 'bun') {
       top(); back(0.13, 0.14);
-      if (hat !== 'hood' && hat !== 'cultHood' && hat !== 'strawHat') box(head, 0.1, 0.09, 0.08, 0, hat === 'none' ? 0.2 : 0.17, -0.12, hc);
+      if (!wrapped && hat !== 'strawHat' && hat !== 'turban') box(head, 0.1, 0.09, 0.08, 0, hat === 'none' ? 0.2 : 0.17, -0.12, hc);
     } else if (hs === 'braid') {
       top(); back(0.15, 0.13); fringe();
-      if (hat !== 'hood' && hat !== 'cultHood') { box(head, 0.045, 0.03, 0.04, 0, 0.07, -0.115, shade(hc, -0.25)); for (let k = 0; k < 3; k++) box(head, 0.05 - k * 0.004, 0.055, 0.045, 0, 0.035 - k * 0.06, -0.115 - k * 0.006, hc, -0.08); }
+      if (!wrapped) { box(head, 0.045, 0.03, 0.04, 0, 0.07, -0.115, shade(hc, -0.25)); for (let k = 0; k < 3; k++) box(head, 0.05 - k * 0.004, 0.055, 0.045, 0, 0.035 - k * 0.06, -0.115 - k * 0.006, hc, -0.08); }
     } else if (hs === 'ponytail') {
       top(); back(0.13, 0.14);
-      if (hat !== 'hood' && hat !== 'cultHood') { box(head, 0.05, 0.03, 0.04, 0, 0.13, -0.11, shade(hc, -0.25)); box(head, 0.06, 0.18, 0.05, 0, 0.03, -0.125, hc, -0.12); }
+      if (!wrapped) { box(head, 0.05, 0.03, 0.04, 0, 0.13, -0.11, shade(hc, -0.25)); box(head, 0.06, 0.18, 0.05, 0, 0.03, -0.125, hc, -0.12); }
     }
     const H = d.head;
     if (hat === 'hood') {
@@ -846,6 +919,30 @@ export function makeFolkKit(GFX) {
       box(head, 0.206, 0.024, 0.206, 0, 0.222, 0, H.trim || shade(H.color, -0.35));
     } else if (hat === 'skullcap') {
       box(head, 0.14, 0.03, 0.13, 0, 0.255, -0.02, H.color);
+    } else if (hat === 'turban') {
+      // (v21) a turban: a wrap round the brow, a second laid over it at a slant, the crown and a dome on top, a fold
+      // crossing the front, and the end tucked in hanging at the back
+      box(head, 0.236, 0.07, 0.232, 0, 0.225, -0.006, H.color);
+      box(head, 0.244, 0.06, 0.238, 0, 0.268, -0.012, shade(H.color, -0.06), -0.1);
+      box(head, 0.2, 0.06, 0.196, 0, 0.3, -0.014, shade(H.color, 0.05));
+      box(head, 0.13, 0.03, 0.126, 0, 0.336, -0.014, H.color);
+      box(head, 0.19, 0.03, 0.02, 0, 0.25, 0.115, shade(H.color, -0.14), 0, 0.38);
+      box(head, 0.05, 0.13, 0.016, 0.035, 0.15, -0.13, shade(H.color, -0.04));
+    } else if (hat === 'taqiyah') {
+      // (v21) a round cap, a little wider than the head, a darker band at its rim
+      box(head, 0.222, 0.08, 0.218, 0, 0.24, -0.006, H.color);
+      box(head, 0.19, 0.025, 0.186, 0, 0.29, -0.006, shade(H.color, 0.06));
+      box(head, 0.23, 0.018, 0.226, 0, 0.205, -0.006, shade(H.color, -0.25));
+    } else if (hat === 'headscarf') {
+      // (v21) a headscarf: over the crown and down the back and the sides of the face, wrapped round the neck and
+      // falling over the shoulders, its edge framing the face
+      box(head, 0.226, 0.05, 0.218, 0, 0.217, -0.006, H.color);
+      box(head, 0.226, 0.26, 0.05, 0, 0.09, -0.097, H.color);
+      for (const s of [1, -1]) box(head, 0.03, 0.22, 0.19, s * 0.113, 0.11, -0.01, H.color);
+      box(head, 0.232, 0.022, 0.024, 0, 0.198, 0.096, H.trim || shade(H.color, -0.2));
+      box(chest, 0.17, 0.08, 0.15, 0, 0.695 - CH, 0, H.color);
+      box(chest, B.sh + 0.05, 0.06, B.dep + 0.06, 0, 0.655 - CH, -0.006, H.color);
+      box(chest, B.sh - 0.02, 0.05, B.dep + 0.03, 0, 0.61 - CH, -0.004, shade(H.color, -0.12));
     }
     // ---- arms: shoulder, elbow, wrist ----
     const armL = pivot(chest, B.shoulder, 0.64 - CH, 0), armR = pivot(chest, -B.shoulder, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
