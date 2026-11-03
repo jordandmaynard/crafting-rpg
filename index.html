@@ -4486,7 +4486,10 @@ function raiseTownHouses(t, n) {
     else if (role === 'guard') style = 'stone2';   // (2026-11-03, Jordan: two stories of stone, the barracks upstairs)
     else if (role) style = style.endsWith('2') ? 'stone2' : 'stone1';
     let two = style.endsWith('2');
-    const stone = style.startsWith('stone');
+    // (v649, Jordan: the desert tileset for every town walled in sandstone) all its houses but the bank and the guard
+    // house: stone below (sandstone), plaster and sandstone above, flat terracotta roofs (see DES_T)
+    const desert = townLook(t).stone === 'sand' && role !== 'bank' && role !== 'guard';
+    const stone = style.startsWith('stone') || desert;
     let plan = townPlan(w, dep, o0, two, c0 * 7 + r0 * 13 + d);
     // (v555, Jordan: a tavern is always two stories of timber, rooms over the bar) one that can't be, here, goes elsewhere
     if (role === 'tavern' && (!plan || plan.low.size < 20)) continue;   // (and roomy: the bar, tables and the hearth)
@@ -4512,7 +4515,7 @@ function raiseTownHouses(t, n) {
     if (stair) {
       const [ea, eb, da, db] = stair, cell = n => at(ea + da * n, eb + db * n);
       const [fc, fr] = cell(1), t0 = T(fc, fr), t1 = T(...cell(2)), dir = da ? (da > 0 ? p : (p + 2) & 3) : (db > 0 ? d : back);
-      st = { c: fc, r: fr, d: dir, k: 0, kind: 'woodstairs', t0, t1, land: T(...cell(3)), y0: storyY(0, t0), key: t0 };
+      st = { c: fc, r: fr, d: dir, k: 0, kind: desert ? 'stonestairs' : 'woodstairs', t0, t1, land: T(...cell(3)), y0: storyY(0, t0), key: t0 };
       stairs.set(t0, st); stairAt.set(t0, st); stairAt.set(t1, st); piece(fc, fr);
       clear.add(T(...cell(0))); clear.add(T(...cell(3)));
     }
@@ -4520,8 +4523,9 @@ function raiseTownHouses(t, n) {
     for (const [c, r] of tiles) {
       const i = T(c, r), [a, b] = a2b.get(i);
       FL[i] = stone ? 2 : 1; OB[i] = 0; piece(c, r);
+      if (desert) DESERT_TILES.add(i);
       if (two && upp.has(K(a, b))) { upTiles.push([c, r]); upSet.add(i); }
-      if (two && i !== st.t0 && i !== st.t1) { U.FL.set(i, 1); piece(c, r); }
+      if (two && i !== st.t0 && i !== st.t1) { U.FL.set(i, desert ? 2 : 1); piece(c, r); }
     }
     // a wall's place along its straight run: windows at every other place, never at a run's ends, the door or a stair
     const window = (S, c, r, e) => {
@@ -4545,6 +4549,8 @@ function raiseTownHouses(t, n) {
       if (role === 'guard') GUARD_WALLS[0].add(edgeKey(ec, er, ew));
       if (role === 'guard' && isDoor) GUARD_DOORS.add(edgeKey(ec, er, ew));
       if (bank && isDoor) BANK_DOORS.add(edgeKey(ec, er, ew));
+      if (desert) DESERT_WALLS[0].add(edgeKey(ec, er, ew));
+      if (desert && isDoor) DESERT_DOORS.add(dKey(ec, er, ew, 0));
       piece(ec, er);
       if (isDoor) door = [ec, er, ew];
     }
@@ -4555,17 +4561,18 @@ function raiseTownHouses(t, n) {
       const out = [];
       for (const [c, r] of tiles) for (let e = 0; e < 4; e++) {
         const i = T(c, r), j = T(c + DC[e], r + DR[e]);
-        if (upSet.has(i) && !upSet.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), role === 'guard' ? (window(upSet, c, r, e) ? 14 : 4) : window(upSet, c, r, e) ? 13 : 1); if (role === 'guard') GUARD_WALLS[1].add(edgeKey(ec, er, ew)); piece(ec, er); if (set.has(j)) out.push([ec, er, ew, c, r]); }
-        else if (!upSet.has(i) && !set.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), 5); piece(ec, er); }
+        if (upSet.has(i) && !upSet.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), role === 'guard' ? (window(upSet, c, r, e) ? 14 : 4) : window(upSet, c, r, e) ? 13 : 1); if (role === 'guard') GUARD_WALLS[1].add(edgeKey(ec, er, ew)); if (desert) DESERT_WALLS[1].add(edgeKey(ec, er, ew)); piece(ec, er); if (set.has(j)) out.push([ec, er, ew, c, r]); }
+        else if (!upSet.has(i) && !set.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), 5); if (desert) DESERT_WALLS[1].add(edgeKey(ec, er, ew)); piece(ec, er); }
       }
       if (out.length) {
         const ok = out.filter(([, , , c, r]) => T(c, r) !== st.land && !stairAt.has(T(c, r)));
         const [ec, er, ew] = (ok.length ? ok : out)[Math.floor((ok.length ? ok : out).length / 2)];
         (ew ? U.WW : U.WN).set(T(ec, er), 2); up.doors.push([ec, er, ew]);
+        if (desert) DESERT_DOORS.add(dKey(ec, er, ew, 1));
       }
     }
     // a balcony over the street (large towns, a full upper story): three planks out in front, railed, a door out to it
-    if (two && big && !setBack && !plan.terrace && role !== 'guard' && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
+    if (two && big && !desert && !setBack && !plan.terrace && role !== 'guard' && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
       const bal = [-1, 0, 1].map(a => at(a, 0)), free = bal.every(([c, r]) => !U.FL.has(T(c, r)) && !BALCONY.has(T(c, r))) && [-1, 0, 1].every(a => upp.has(K(a, 1)));
       if (free) {
         for (const [c, r] of bal) { const i = T(c, r); U.FL.set(i, 1); BALCONY.add(i); piece(c, r); }
@@ -4577,7 +4584,7 @@ function raiseTownHouses(t, n) {
         up.doors.push([ec, er, ew]);
       }
     }
-    t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up, role });
+    t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up, role, desert });
     if (drill) { t.houses[t.houses.length - 1].drill = drill; for (const i of drill.set) { keep.add(i); GUARD_YARD.add(i); } }
   }
   if (cath) t.houses.push(cath);   // (last, so the tannery and smithy stay the first two houses; a medium town's chapel likewise)
@@ -4733,6 +4740,26 @@ const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new
 const BANK_WALLS = new Set(), BANK_DOORS = new Set();
 // (2026-11-03, Jordan: the guard house in dark stone, both floors) its walls' edgeKeys, by story
 const GUARD_WALLS = [new Set(), new Set()], GUARD_DOORS = new Set();
+// (v649, Jordan's mockup: the desert house) In a town walled in sandstone (townLook stone 'sand') every house but the
+// bank and the guard house is built from the desert tileset: a sandstone ground story (stone walls, pointed-arch doors
+// in a ring of wedge stones, pointed windows filled with a wooden star lattice and no glass), a teal tile band on the
+// belt course between the stories, an upper story of cream plaster between sandstone posts with a pointed recess in
+// every wall and a latticed window bay in some, terraces railed by a sandstone parapet, a flat roof of terracotta
+// tiles behind a crenellated parapet, a windcatcher on some roofs, striped awnings over some windows, star lanterns.
+// The house's edge keys by story (DESERT_WALLS), its tiles (DESERT_TILES: sandstone flags, terracotta upstairs and on
+// the roof, sandstone stairs) and its doors (DESERT_DOORS, dKey: the arched leaves).
+const DESERT_WALLS = [new Set(), new Set(), new Set(), new Set()], DESERT_TILES = new Set(), DESERT_DOORS = new Set();
+const STONE_SAND = { block: '#d0a66e', core: '#7e5e3c', crenel: '#c89e68', cap: '#d6b27c', bars: false };
+const DES_T = {
+  light: '#e2c28c', plaster: '#ead8b2', recess: '#d2b98c', teal: '#2f8a8c', tealDk: '#1e4a68', cream: '#efe2c0', plum: '#7a3a5a',
+  wood: '#5a3418', woodDk: '#3a200e', tile: '#b8643c', tileB: '#a4553a', grout: '#6a4230', floor: '#c9a476', floorBed: '#6e5236',
+  awning: ['#a83a2a', '#ecdcb4'],
+  door: { W: 0.35, R: 0.45, spring: 1.16, ring: 0.1 },        // (the arched door: half width, the arcs' radius, springing, wedge stones)
+  recess: { W: 0.3, R: 0.42, spring: 1.12, foot: 0.22 },       // (the pointed recess in each upper wall)
+  bay: { W: 0.2, y0: 0.5, y1: 1.36, depth: 0.26 },             // (the upper windows' lattice bays)
+  band: 1.7, grid: 0.11, bar: 0.022, awnings: 0.4, catchers: 0.6,
+};
+const desertEdge = (c, r, w, k = Math.round(PDY / WALL_H)) => !!DESERT_WALLS[k]?.has(edgeKey(c, r, w));
 // (2026-11-03, Jordan) the guard house's training yard: a stretch of yard L tiles along one of its walls (not the
 // door's) and D (4, or 3) out from it, every tile of it ok; the roomiest of its three sides. Kept from the houses
 // built after it and from the trees and bushes (GUARD_YARD), and furnished by townYards (guardYard).
@@ -12766,6 +12793,8 @@ function planter(c, r) {
   }
 }
 function lamp(x, z) {
+  const li = T(Math.floor(x), Math.floor(z));
+  if (lookAt(li, li)?.stone === 'sand') return starLamp(x, z);   // (v649: a desert town's star lanterns)
   const y = groundAt(x, z);
   part(G.box, '#2c2738', x, y + 0.6, z, { sx: 0.08, sy: 1.2, sz: 0.08 });
   part(G.box, '#2c2738', x, y + 1.24, z, { sx: 0.22, sy: 0.05, sz: 0.22 });
@@ -13178,6 +13207,7 @@ function plankFloor(c, r) {
 // flagstones: four slabs a tile, offset row to row, over a dark mortar bed
 function stoneFloor(c, r) {
   const y = LV[T(c, r)] * STEP + PDY;
+  if (DESERT_TILES.has(T(c, r))) { desertFloor(c, r, y); return; }   // (v649)
   part(G.box, '#3e3a44', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
   for (let j = 0; j < 2; j++) {
     const off = (r * 2 + j) % 2 ? 0.25 : 0;
@@ -13299,7 +13329,7 @@ const CUT_H = 0.55;
 function wallPiece(c, r, w, type) {
   const save = emitSurf;
   // (marble all smooth; fences, gates and log walls wood; dry stone stone; iron none; the rest by each part's colour)
-  const fixed = type === 11 || type === 12 ? SURF_SMOOTH : type === 3 || type === 5 || type === 7 ? SURF_WOOD : type === 6 || type === 15 ? SURF_STONE : type === 8 || type === 9 ? 0 : -1;
+  const fixed = desertEdge(c, r, w) ? SURF_STONE : type === 11 || type === 12 ? SURF_SMOOTH : type === 3 || type === 5 || type === 7 ? SURF_WOOD : type === 6 || type === 15 ? SURF_STONE : type === 8 || type === 9 ? 0 : -1;
   emitSurf = fixed < 0 ? wallSurf : null; SURF = Math.max(0, fixed);
   // (v425: built into the chunk's pieces, a wall the cutaway can lower is drawn whole and as its stub, see cutTag;
   // doors, fences, gates, dry stone and railings are never lowered)
@@ -13457,6 +13487,12 @@ function wallPieceRaw(c, r, w, type, cut) {
   const at = (along, yy) => w ? [c, yy, r + along] : [c + along, yy, r];
   const k = 0.92 + hs(c, r, 50 + w) * 0.14;
   const door = type === 2 || type === 10 || type === 11;
+  // (v649) the desert tileset's own pieces (DES_T): its doors, upper walls and windows, its terraces' parapets
+  if (desertEdge(c, r, w)) {
+    if (type === 2) { desertDoor(c, r, w, y, at, ry); return; }
+    if (type === 1 || type === 13) { desertUpper(c, r, w, y, at, ry, type === 13, cut); return; }
+    if (type === 5) { desertParapet(c, r, w, y, at, ry); return; }
+  }
   if (type === 12) {
     // marble: a plain slab on a moulded foot, a vein or two through it, a band along its top, and a pilaster
     // at each end (all one shade, so where two walls meet theirs make one)
@@ -13583,7 +13619,8 @@ function wallPieceRaw(c, r, w, type, cut) {
     }
     // (v539: none on a wall inside a building, rooms on both sides, which would poke up through a flat stone roof)
     const sk = PCUT / (2 * SNN) * SNN, inner = roomOf.has(sk + i) && roomOf.has(sk + j);
-    if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC(St.crenel), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
+    if (St === STONE_SAND) { if (!cut && !PDY) desertBand(c, r, w, y, at, ry); }   // (v649: the belt course, no crenels)
+    else if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC(St.crenel), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
     return;
   }
   if (cut) {
@@ -13868,7 +13905,7 @@ const STONE_PLAIN = { block: '#8a8694', core: '#4a4652', crenel: '#7e7a88', cap:
 const STONE_BANK = { block: '#c4baa6', core: '#7a7264', crenel: '#b6ac98', cap: '#b2a894', bars: true };
 // (2026-11-03, Jordan: the guard house the bank's opposite, in dark stone on both its floors)
 const STONE_GUARD = { block: '#5a5664', core: '#2a2630', crenel: '#524e5c', cap: '#4c4854', bars: false };
-const stoneOf = (c, r, w, k = Math.round(PDY / WALL_H)) => { const e = edgeKey(c, r, w); return !k && BANK_WALLS.has(e) ? STONE_BANK : GUARD_WALLS[k]?.has(e) ? STONE_GUARD : STONE_PLAIN; };
+const stoneOf = (c, r, w, k = Math.round(PDY / WALL_H)) => { const e = edgeKey(c, r, w); return !k && BANK_WALLS.has(e) ? STONE_BANK : GUARD_WALLS[k]?.has(e) ? STONE_GUARD : DESERT_WALLS[k]?.has(e) ? STONE_SAND : STONE_PLAIN; };
 // iron bars over a stone window, on its outside: uprights cut to the arch and two cross bars
 function windowBars(c, r, w, y, at, ry) {
   const s = windowOutside(c, r, w) || 1, W = STONE_WIN.W, R2 = 4 * W * W, o = 0.2;
@@ -14000,7 +14037,7 @@ function roseWall(c, r, w, y, at, ry, k, q) {
   for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, thin ? 0.2 : 0.34, shade(CC('#7e7a88'), k), thin ? 0.07 : 0);
 }
 function stoneWindowWall(c, r, w, y, at, ry, k) {
-  const St = stoneOf(c, r, w);
+  const St = stoneOf(c, r, w), desert = St === STONE_SAND;   // (v649: a desert house's: a star lattice, no glass)
   const box = (a, yy, sx, sy, sz, col) => { const p = at(a, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, into: col === GLASS ? 'glass' : 'world' }); };
   const top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows;
   const W = STONE_WIN.W, sill = STONE_WIN.sill, spring = STONE_WIN.spring, R = 2 * W, apex = spring + Math.sqrt(3) * W, F = 0.05;   // (F: the frame's width)
@@ -14021,7 +14058,7 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
   }
   // the window's column: stone below the frame and over it, and fine slices between, each stone | frame | glass |
   // frame | stone, the frame being the same arch drawn F wider
-  const colStone = shade(CC(St.block), 0.92), frame = shade(CC('#b4b0bc'), k), WO = W + F, apexO = spring + Math.sqrt(3) * WO;
+  const colStone = shade(CC(St.block), 0.92), frame = shade(CC(desert ? DES_T.light : '#b4b0bc'), k), WO = W + F, apexO = spring + Math.sqrt(3) * WO;
   const halfO = h => h < sill - F || h > apexO ? 0 : h <= spring ? WO : Math.max(0, Math.sqrt(4 * WO * WO - (h - spring) ** 2) - WO);
   box(0.5, y + (sill - F) / 2, X1 - X0, sill - F, 0.3, colStone);
   box(0.5, y + (apexO + top) / 2, X1 - X0, top - apexO, 0.3, colStone);
@@ -14038,12 +14075,12 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
     // the frame and glass: straight below the springing (boxes), sliced up the arch
     box(0.5, y + sill - F / 2, WO * 2, F, 0.34, frame);
     for (const sgn of [-1, 1]) box(0.5 + sgn * (W + F / 2), y + (sill + spring) / 2, F, spring - sill, 0.34, frame);
-    box(0.5, y + (sill + spring) / 2, W * 2, spring - sill, 0.04, GLASS);
+    if (!desert) box(0.5, y + (sill + spring) / 2, W * 2, spring - sill, 0.04, GLASS);
     const na = Math.max(8, Math.ceil((apexO - spring) / SL)), da = (apexO - spring) / na;
     for (let s = 0; s < na; s++) {
       const h = spring + da * (s + 0.5), hw = half(h), fw = fo(h);
       for (const sgn of [-1, 1]) if (fw - hw > 0.004) box(0.5 + sgn * (hw + fw) / 2, y + h, fw - hw, da + 0.002, 0.34, frame);
-      if (hw > 0.004) box(0.5, y + h, hw * 2, da + 0.002, 0.04, GLASS);
+      if (hw > 0.004 && !desert) box(0.5, y + h, hw * 2, da + 0.002, 0.04, GLASS);
     }
     // the stone of the rows the window reaches: clear of the frame's widest point in the row, a box a block; between
     // that and the frame, thin slices; the joints where the plain wall has its gaps
@@ -14082,11 +14119,335 @@ function stoneWindowWall(c, r, w, y, at, ry, k) {
     }
   } finally { emitSurf = saveE; SURF = 0; }
   box(0.5, y + sill - 0.03, W * 2 + 0.16, 0.06, 0.38, frame);   // (the sill, standing out a little)
+  if (desert) {
+    // (v649) a wooden star lattice across the opening, open behind; the belt course over it, and an awning on some
+    const s = windowOutside(c, r, w) || 1;
+    starLattice(wallBox(at, w, ry, s), y, (a, h) => Math.abs(a - 0.5) <= half(h) - 0.004, 0.5 - W, 0.5 + W, sill, apex, 0, 0.04);
+    if (!PDY) { desertBand(c, r, w, y, at, ry); if (hs(c * 3 + w, r, 647) < DES_T.awnings) desertAwning(c, r, w, y, at, ry, s); }
+  } else {
   box(0.5, y + (sill + apex) / 2 - 0.02, 0.03, apex - sill - 0.04, 0.07, '#2a2630');   // mullion
   // (v415) leaded diamonds, cut to the arch
   leadedPanes(at, y, ry, (a, h) => Math.abs(a - 0.5) <= half(h) - 0.01, 0.5 - W, 0.5 + W, sill + 0.01, apex);
   for (const a of [0.2, 0.8]) box(a, y + top + 0.1, 0.3, 0.2, 0.34, shade(CC(St.crenel), k));   // (the crenels, as the plain wall)
+  }
   if (St.bars) windowBars(c, r, w, y, at, ry);
+}
+// ---------- The desert tileset (v649, Jordan's mockup; see DES_T) ----------
+// a part with its own surface (bevel) kind, whatever the piece around it is using
+function sp(surf, geo, col, x, y, z, o) {
+  const e = emitSurf, s0 = SURF;
+  emitSurf = null; SURF = surf;
+  try { part(geo, col, x, y, z, o); } finally { emitSurf = e; SURF = s0; }
+}
+// a box against a wall: a along it, yy up, o out from its middle toward its outside (s: which side that is), rz turned
+// in the wall's plane
+function wallBox(at, w, ry, s) {
+  return (a, yy, sx, sy, o, sz, col, surf = SURF_STONE, rz = 0, into) => {
+    const p = at(a, yy); p[w ? 0 : 2] += s * o;
+    sp(surf, G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, rz: rz * (w ? -1 : 1), into });
+  };
+}
+// a pointed arch of half-width W: two arcs of radius R (>= W) through its springing points, meeting at the top.
+// archHalf: its half-width h over the springing; archRise: how high its point stands over the springing
+const archHalf = (W, R, h) => h <= 0 ? W : Math.max(0, Math.sqrt(Math.max(0, R * R - h * h)) - (R - W));
+const archRise = (W, R) => Math.sqrt(R * R - (R - W) * (R - W));
+// the wedge stones round a pointed arch (its inner edge W, R), n a side, ring deep, a key stone at the point
+function voussoirs(B, y, W, R, ring, spring, n, o, sz, col, seed) {
+  const fa = Math.acos((R - W) / R), Rm = R + ring / 2, len = Rm * fa / n * 1.06;
+  for (const sg of [-1, 1]) for (let q = 0; q < n; q++) {
+    const f = fa * (q + 0.5) / n, a = 0.5 - sg * ((R - W) - Rm * Math.cos(f)), h = spring + Rm * Math.sin(f);
+    B(a, y + h, len, ring, o, sz, shade(CC(col), 0.88 + hs(seed + q * 7, sg + 3, 670) * 0.2), SURF_STONE, sg < 0 ? Math.PI / 2 - f : f - Math.PI / 2);
+  }
+  B(0.5, y + spring + archRise(W, R) + ring * 0.45, ring * 0.9, ring * 1.3, o, sz + 0.01, shade(CC(col), 1.05), SURF_STONE);
+}
+// a wooden star lattice over an opening (inside(a, h): within it, from a0 to a1 along the wall, h0 to h1 up it), o out
+// from the wall's middle: square bars, and diagonals through the squares' side midpoints, so a diamond sits in every
+// square and eight-pointed stars show where they cross
+function starLattice(B, y, inside, a0, a1, h0, h1, o, sz, g = DES_T.grid, col = DES_T.wood) {
+  const ac = (a0 + a1) / 2, hc = (h0 + h1) / 2, span = Math.max(a1 - a0, h1 - h0) + g, n = Math.ceil(span / g) + 1, SQ = Math.SQRT1_2;
+  const ok = (a, h) => a >= a0 && a <= a1 && h >= h0 && h <= h1 && inside(a, h);
+  // [along a, along h (the way it runs), the next line's step along a, along h, offset in steps]
+  for (const [da, dh, sa, sh, half] of [[1, 0, 0, 1, 0], [0, 1, 1, 0, 0], [SQ, SQ, 1, 0, 0.5], [SQ, -SQ, 1, 0, 0.5]]) for (let m = -n; m <= n; m++) {
+    const pa = ac + sa * (m + half) * g, ph = hc + sh * (m + half) * g;
+    let t0 = null, t1 = null;
+    for (let q = 0; q <= 120; q++) { const t = -span + 2 * span * q / 120; if (ok(pa + da * t, ph + dh * t)) { if (t0 === null) t0 = t; t1 = t; } }
+    if (t0 === null || t1 - t0 < 0.015) continue;
+    const tm = (t0 + t1) / 2;
+    B(pa + da * tm, y + ph + dh * tm, t1 - t0, DES_T.bar, o, sz, col, 0, Math.atan2(dh, da));
+  }
+}
+// the belt course on a ground-story wall's outside: a band of teal tiles set with cream diamonds under a sandstone
+// cornice, carried round the house's outer corners
+function desertBand(c, r, w, y, at, ry) {
+  const s = windowOutside(c, r, w) || 1, B = wallBox(at, w, ry, s), D = DES_T, b = D.band;
+  const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), ins = s > 0 ? j : i, step = w ? N : 1;
+  // (an end that is an outer corner of the house: the band runs on to meet the next wall's)
+  const e0 = DESERT_TILES.has(ins - step) ? 0 : 1, e1 = DESERT_TILES.has(ins + step) ? 0 : 1;
+  const run = (ext, o, sz, yy, sy, col, surf) => { const a0 = -e0 * ext, a1 = 1 + e1 * ext; B((a0 + a1) / 2, yy, a1 - a0, sy, o, sz, col, surf); };
+  run(0.18, 0.165, 0.03, y + b + 0.08, 0.16, D.teal, SURF_SMOOTH);
+  run(0.1875, 0.17, 0.035, y + b - 0.015, 0.03, D.light, SURF_STONE);
+  run(0.25, 0.055, 0.39, y + 1.93, 0.11, D.light, SURF_STONE);
+  for (let n = 0; n < 4; n++) {
+    const a = 0.125 + n * 0.25;
+    B(a, y + b + 0.08, 0.085, 0.085, 0.182, 0.012, D.cream, SURF_SMOOTH, Math.PI / 4);
+    B(a, y + b + 0.08, 0.04, 0.04, 0.19, 0.01, D.tealDk, SURF_SMOOTH, Math.PI / 4);
+  }
+  for (const a of [0.25, 0.5, 0.75]) B(a, y + b + 0.08, 0.03, 0.03, 0.183, 0.012, D.plum, SURF_SMOOTH, Math.PI / 4);
+}
+// a striped canvas awning over a ground-floor window, under the band, on two iron struts
+function desertAwning(c, r, w, y, at, ry, s) {
+  const D = DES_T, n = 6, L = 0.6, drop = 0.28, y0 = y + D.band - 0.06, o0 = 0.17, hw = 0.44;
+  const P = (a, yy, o) => { const p = at(a, yy); p[w ? 0 : 2] += s * o; return p; };
+  const sv = emitSurf, s0 = SURF; emitSurf = null; SURF = 0;
+  try {
+    for (let q = 0; q < n; q++) {
+      const a0 = 0.5 - hw + q * 2 * hw / n, a1 = a0 + 2 * hw / n, am = (a0 + a1) / 2, yv = y0 - drop, col = CC(D.awning[q % 2]), dk = shade(col, 0.82);
+      quad(P(a0, y0, o0), P(a1, y0, o0), P(a1, yv, o0 + L), P(a0, yv, o0 + L), col);
+      // the valance hanging from its front edge, a point to each stripe
+      quad(P(a0, yv, o0 + L), P(a1, yv, o0 + L), P(a1, yv - 0.07, o0 + L), P(a0, yv - 0.07, o0 + L), dk);
+      tri(P(a0, yv - 0.07, o0 + L), P(a1, yv - 0.07, o0 + L), P(am, yv - 0.13, o0 + L), dk);
+    }
+    for (const a of [0.5 - hw, 0.5 + hw]) tri(P(a, y0, o0), P(a, y0 - drop, o0 + L), P(a, y0 - drop, o0), CC(D.awning[0]));
+  } finally { emitSurf = sv; SURF = s0; }
+  const B = wallBox(at, w, ry, s);
+  B(0.5, y0 + 0.02, 2 * hw + 0.04, 0.05, o0 + 0.02, 0.05, D.woodDk, SURF_WOOD);   // (the batten it's nailed to)
+  for (const a of [0.5 - hw + 0.04, 0.5 + hw - 0.04]) seg(G.box, IRON_RAIL, P(a, y0 - drop - 0.32, o0), P(a, y0 - drop - 0.01, o0 + L - 0.03), 0.02);
+}
+// a ground-story (or terrace) door: sandstone courses round a pointed arch of wedge stones on jambs (the leaf, cut to
+// the arch, swings on its own mesh: makeDoor), the belt course over it on the ground story
+function desertDoor(c, r, w, y, at, ry) {
+  const s = windowOutside(c, r, w) || 1, B = wallBox(at, w, ry, s), D = DES_T, A = D.door, St = STONE_SAND;
+  const top = WALL_H - 0.12, rows = Math.round(top / 0.28), rh = top / rows, SL = 0.05;
+  const Wo = A.W + A.ring, Ro = A.R + A.ring, apexO = A.spring + archRise(Wo, Ro);
+  const outer = h => h < A.spring ? Wo : archHalf(Wo, Ro, h - A.spring);
+  B(0.5, y + 0.02, 1, 0.04, 0, 0.36, shade(CC(D.light), 0.85));   // (the threshold)
+  for (let row = 0; row < rows; row++) {
+    const h0 = row * rh, h1 = h0 + rh, off = row % 2 ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, m, a) => a.indexOf(v) === m && v <= 1);
+    const colOf = m => shade(CC(St.block), 0.8 + hs(c * 5 + row, r * 3 + m, 54 + w) * 0.3);
+    // (rows the arch reaches in thin slices, the stone carried in under the wedge stones so no gap shows)
+    const n = h1 <= A.spring || h0 >= apexO ? 1 : Math.ceil(rh / SL);
+    for (let q = 0; q < n; q++) {
+      const ya = h0 + rh * q / n, yb = h0 + rh * (q + 1) / n, f = Math.min(outer(ya), outer(yb));
+      const yLo = q === 0 ? ya + 0.015 : ya, yHi = q === n - 1 ? yb - 0.015 : yb;
+      for (const sg of [-1, 1]) {
+        const A0 = sg < 0 ? 0 : 0.5 + f, A1 = sg < 0 ? 0.5 - f : 1;
+        if (A1 - A0 < 0.004) continue;
+        B((A0 + A1) / 2, y + (ya + yb) / 2, A1 - A0, yb - ya + 0.002, 0, 0.27, St.core);
+        for (let m = 0; m + 1 < edges.length; m++) {
+          const a0 = Math.max(edges[m] + (edges[m] > 0 ? 0.015 : 0), A0), a1 = Math.min(edges[m + 1] - (edges[m + 1] < 1 ? 0.015 : 0), A1);
+          if (a1 - a0 > 0.004) B((a0 + a1) / 2, y + (yLo + yHi) / 2, a1 - a0, yHi - yLo, 0, 0.32, colOf(m));
+        }
+      }
+    }
+  }
+  // the jambs, three stones a side, and the arch over them
+  const jh = A.spring / 3;
+  for (const sg of [-1, 1]) for (let q = 0; q < 3; q++) {
+    const wide = q % 2 ? 0.03 : 0;
+    B(0.5 + sg * (A.W + (A.ring + wide) / 2), y + jh * (q + 0.5), A.ring + wide, jh + 0.002, 0, 0.34, shade(CC(D.light), 0.88 + hs(c * 3 + q, r + sg, 671 + w) * 0.18));
+  }
+  voussoirs(B, y, A.W, A.R, A.ring, A.spring, 5, 0, 0.34, D.light, c * 5 + r * 3 + w);
+  if (!PDY) desertBand(c, r, w, y, at, ry);
+}
+// an upper-story wall: cream plaster between sandstone posts on a sandstone foot, a band along its top, a pointed recess
+// rimmed in sandstone in its middle with teal tiles in the corners over it; win: a latticed bay window in the recess
+function desertUpper(c, r, w, y, at, ry, win, cut) {
+  const s = windowOutside(c, r, w) || 1, B = wallBox(at, w, ry, s), D = DES_T, Q = D.recess, BW = D.bay, St = STONE_SAND;
+  const top = WALL_H - 0.12, ph = cut ? CUT_H : top;
+  B(0.5, y + 0.06, 1, 0.12, 0, 0.26, shade(CC(D.light), 0.92));
+  // (the posts shaded by their corner point, so two walls' posts meeting there are one)
+  const rows = Math.max(1, Math.round(ph / 0.31)), rh = ph / rows;
+  for (const a of [0, 1]) {
+    const px = w ? c : c + a, pz = w ? r + a : r;
+    B(a, y + ph / 2, 0.2, ph, 0, 0.2, St.core);
+    for (let q = 0; q < rows; q++) B(a, y + rh * (q + 0.5), 0.24, rh - 0.025, 0, 0.24, shade(CC(St.block), 0.84 + hs(px * 3 + q, pz, 652) * 0.26));
+  }
+  const x0 = 0.12, x1 = 0.88, yb = 0.12, yt = cut ? ph : top - 0.14;
+  if (cut) { B(0.5, y + (yb + yt) / 2, x1 - x0, yt - yb, 0, 0.2, D.plaster, SURF_PLASTER); return; }
+  B(0.5, y + top - 0.07, 1, 0.14, 0, 0.26, D.light);
+  // the plaster: a core (its outer face the recess's back), and a skin over it everywhere but the recess
+  const core = (a0, a1, h0, h1) => { if (a1 - a0 > 0.003 && h1 - h0 > 0.003) B((a0 + a1) / 2, y + (h0 + h1) / 2, a1 - a0, h1 - h0, -0.03, 0.14, D.recess, SURF_PLASTER); };
+  const skin = (a0, a1, h0, h1) => { if (a1 - a0 > 0.003 && h1 - h0 > 0.003) B((a0 + a1) / 2, y + (h0 + h1) / 2, a1 - a0, h1 - h0, 0.07, 0.06, D.plaster, SURF_PLASTER); };
+  if (win) { core(x0, 0.5 - BW.W, yb, yt); core(0.5 + BW.W, x1, yb, yt); core(0.5 - BW.W, 0.5 + BW.W, yb, BW.y0); core(0.5 - BW.W, 0.5 + BW.W, BW.y1, yt); }
+  else core(x0, x1, yb, yt);
+  const apex = Q.spring + archRise(Q.W, Q.R);
+  skin(x0, x1, yb, Q.foot);
+  skin(x0, 0.5 - Q.W, Q.foot, Q.spring); skin(0.5 + Q.W, x1, Q.foot, Q.spring);
+  const ns = Math.ceil((apex - Q.spring) / 0.03);
+  for (let q = 0; q < ns; q++) {
+    const ha = Q.spring + (apex - Q.spring) * q / ns, hb = Q.spring + (apex - Q.spring) * (q + 1) / ns, f = archHalf(Q.W, Q.R, hb - Q.spring);
+    skin(x0, 0.5 - f, ha, hb); skin(0.5 + f, x1, ha, hb);
+  }
+  skin(x0, x1, apex, yt);
+  // the rim: wedge stones round the arch (over the skin's stepped edge), jambs and a sill
+  voussoirs(B, y, Q.W - 0.03, Q.R - 0.03, 0.08, Q.spring, 5, 0.105, 0.03, D.light, c * 7 + r * 3 + w);
+  for (const sg of [-1, 1]) B(0.5 + sg * (Q.W + 0.01), y + (Q.foot + Q.spring) / 2, 0.08, Q.spring - Q.foot, 0.105, 0.03, D.light);
+  B(0.5, y + Q.foot, 2 * Q.W + 0.12, 0.05, 0.105, 0.04, D.light);
+  // teal tiles in the corners over it
+  for (const a of [0.19, 0.81]) {
+    B(a, y + 1.6, 0.12, 0.12, 0.105, 0.012, D.teal, SURF_SMOOTH, Math.PI / 4);
+    B(a, y + 1.6, 0.065, 0.065, 0.112, 0.01, D.cream, SURF_SMOOTH, Math.PI / 4);
+    B(a, y + 1.6, 0.028, 0.028, 0.118, 0.008, D.tealDk, SURF_SMOOTH, Math.PI / 4);
+  }
+  if (!win) return;
+  // the bay: glass in the wall, a floor on brackets out in the recess, latticed front and sides, a hood
+  const o0 = 0.04, o1 = o0 + BW.depth, mid = (BW.y0 + BW.y1) / 2, wd = D.wood, dk = D.woodDk;
+  B(0.5, y + mid, 2 * BW.W, BW.y1 - BW.y0, -0.03, 0.03, GLASS, 0, 0, 'glass');
+  B(0.5, y + BW.y0 - 0.03, 2 * BW.W + 0.16, 0.06, (o0 + o1) / 2 + 0.01, BW.depth + 0.02, wd, SURF_WOOD);
+  for (const sg of [-1, 1]) {
+    const a = 0.5 + sg * (BW.W + 0.05);
+    B(a, y + BW.y0 - 0.17, 0.05, 0.22, o0 + 0.08, 0.08, dk, SURF_WOOD);
+    B(a, y + mid, 0.05, BW.y1 - BW.y0, o1 - 0.025, 0.05, dk, SURF_WOOD);
+    for (const h of [BW.y0 + 0.03, mid, BW.y1 - 0.03]) B(a, y + h, 0.03, 0.03, (o0 + o1) / 2, BW.depth, wd, 0);
+    for (const f of [0.33, 0.66]) B(a, y + mid, 0.025, BW.y1 - BW.y0, o0 + BW.depth * f, 0.025, wd, 0);
+  }
+  starLattice(B, y, () => true, 0.5 - BW.W - 0.025, 0.5 + BW.W + 0.025, BW.y0, BW.y1, o1 - 0.025, 0.03);
+  for (const h of [BW.y0 + 0.02, BW.y1 - 0.02]) B(0.5, y + h, 2 * BW.W + 0.12, 0.04, o1 - 0.025, 0.05, dk, SURF_WOOD);
+  B(0.5, y + BW.y1 + 0.03, 2 * BW.W + 0.2, 0.06, (o0 + o1) / 2 + 0.03, BW.depth + 0.1, wd, SURF_WOOD);
+  B(0.5, y + BW.y1 + 0.09, 2 * BW.W + 0.12, 0.06, (o0 + o1) / 2, BW.depth + 0.02, dk, SURF_WOOD);
+}
+// a terrace's railing: a low sandstone parapet, coped, a merlon in the middle and a post at each end
+function desertParapet(c, r, w, y, at, ry) {
+  const B = wallBox(at, w, ry, 1), St = STONE_SAND, D = DES_T, H = 0.62;
+  B(0.5, y + H / 2, 1, H, 0, 0.2, St.core);
+  for (let row = 0; row < 2; row++) {
+    const off = row ? 0.25 : 0, edges = [0, off, off + 0.5, 1].filter((v, m, a) => a.indexOf(v) === m && v <= 1);
+    for (let m = 0; m + 1 < edges.length; m++) B((edges[m] + edges[m + 1]) / 2, y + H * (row + 0.5) / 2, edges[m + 1] - edges[m] - 0.03, H / 2 - 0.03, 0, 0.24, shade(CC(St.block), 0.82 + hs(c * 5 + row, r * 3 + m, 655 + w) * 0.28));
+  }
+  B(0.5, y + H + 0.04, 1, 0.08, 0, 0.3, D.light);
+  for (const a of [0, 1]) { B(a, y + (H + 0.12) / 2, 0.28, H + 0.12, 0, 0.28, St.cap); B(a, y + H + 0.2, 0.3, 0.16, 0, 0.3, D.light); }
+  B(0.5, y + H + 0.16, 0.3, 0.16, 0, 0.24, shade(CC(D.light), 0.92 + hs(c, r, 657 + w) * 0.12));
+}
+// a building every tile of which is a desert house's
+function desertBuilding(rm) {
+  if (!rm.tiles.length) return false;
+  for (const [c, r] of rm.tiles) if (!DESERT_TILES.has(T(c, r))) return false;
+  return true;
+}
+// its flat roof (fy: the tiles' top, as the flat stone roof's): terracotta squares, a parapet of sandstone round its
+// outer walls with merlons along it, and on some top roofs a windcatcher at a corner
+function flatDesertRoof(rm, open, fy, k) {
+  const save = OUT; OUT = bufTmp; bufTmp.n = 0;
+  const y0 = fy - 0.04, D = DES_T, St = STONE_SAND, pTop = fy + 0.3;
+  for (const [c, r] of open) {
+    part(G.box, D.grout, c + 0.5, y0 + 0.01, r + 0.5, { sx: 1, sy: 0.02, sz: 1 });
+    for (let j = 0; j < 2; j++) for (let q = 0; q < 2; q++) {
+      const kk = hs(c * 2 + q, r * 2 + j, 660);
+      part(G.box, shade(CC(kk < 0.5 ? D.tile : D.tileB), 0.88 + hs(c * 2 + q, r * 2 + j, 661) * 0.2), c + 0.25 + q * 0.5, y0 + 0.025, r + 0.25 + j * 0.5, { sx: 0.47, sy: 0.03, sz: 0.47 });
+    }
+    for (let d = 0; d < 4; d++) {
+      if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
+      const v = roomWall(c, r, d, k);
+      if (!v) continue;
+      const [ec, er, w] = edgeOf(c, r, d), i = T(ec, er), j = w ? T(ec - 1, er) : T(ec, er - 1), ry = w ? Math.PI / 2 : 0;
+      const y1 = Math.max(LV[i], LV[j]) * STEP + k * WALL_H + WALL_H - 0.12;
+      const P = (a, yy, sx, sy, sz, col) => part(G.box, col, w ? ec : ec + a, yy, w ? er + a : er, { sx, sy, sz, ry });
+      // (one shade for the body and the coping, so where two walls' meet past the corners they're as one)
+      P(0.5, (y1 + pTop) / 2, 1.3, pTop - y1, 0.3, St.cap);
+      P(0.5, pTop + 0.03, 1.36, 0.06, 0.36, D.light);
+      for (const a of [0, 0.5, 1]) {
+        const hh = hs(Math.round((w ? ec : ec + a) * 2), Math.round((w ? er + a : er) * 2), 662);
+        P(a, pTop + 0.17, 0.28, 0.22, 0.28, shade(CC(D.light), 0.9 + hh * 0.15));
+      }
+    }
+  }
+  // (a windcatcher: only on a roof with nothing over it, where two of a tile's sides are its outer walls)
+  if (open.length === rm.tiles.length && open.length >= 6 && hs(open[0][0], open[0][1], 663 + k) < D.catchers) {
+    const out = (c, r, d) => !rm.set.has(T(c + DC[d], r + DR[d]));
+    const cands = open.filter(([c, r]) => [0, 1, 2, 3].some(d => out(c, r, d) && out(c, r, (d + 1) & 3)));
+    if (cands.length) { const [c, r] = cands[Math.floor(hs(cands[0][0], cands[0][1], 664) * cands.length) % cands.length]; windcatcher(c + 0.5, r + 0.5, fy, c * 3 + r); }
+  }
+  rm.roofY = () => fy;
+  const m = bufTmp.mesh(roofMat);
+  OUT = save;
+  return m;
+}
+// a windcatcher: a square sandstone tower on the roof, a teal band round its shaft, three pointed vents a side at the
+// top over a dark shaft, capped (part of the roof's mesh)
+function windcatcher(x, z, y, seed) {
+  const D = DES_T, St = STONE_SAND, s = 0.76, h0 = 0.6, vh = 0.62, half = s / 2;
+  const P = (dx, yy, dz, sx, sy, sz, col, o = {}) => part(G.box, col, x + dx, yy, z + dz, { sx, sy, sz, ...o });
+  const faces = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+  const F = (nx, nz, t, h, o) => [x + nx * o + (nz ? t : 0), h, z + nz * o + (nx ? t : 0)];
+  P(0, y + 0.1, 0, s, 0.2, s, shade(CC(St.block), 0.92 + hs(seed, 1, 665) * 0.12));
+  P(0, y + 0.3, 0, s + 0.02, 0.2, s + 0.02, D.teal);
+  P(0, y + 0.5, 0, s, 0.2, s, shade(CC(St.block), 0.92 + hs(seed, 2, 665) * 0.12));
+  for (const [nx, nz] of faces) for (const t of [-0.25, 0, 0.25]) {
+    const p = F(nx, nz, t, y + 0.3, half + 0.012);
+    part(G.box, D.cream, p[0], p[1], p[2], nz ? { sx: 0.08, sy: 0.08, sz: 0.01, rz: Math.PI / 4 } : { sx: 0.01, sy: 0.08, sz: 0.08, rx: Math.PI / 4 });
+    const q = F(nx, nz, t, y + 0.3, half + 0.018);
+    part(G.box, D.tealDk, q[0], q[1], q[2], nz ? { sx: 0.035, sy: 0.035, sz: 0.01, rz: Math.PI / 4 } : { sx: 0.01, sy: 0.035, sz: 0.035, rx: Math.PI / 4 });
+  }
+  P(0, y + h0 + 0.02, 0, s + 0.06, 0.04, s + 0.06, D.light);
+  const v0 = y + h0 + 0.04, mid = v0 + vh / 2, vt = v0 + vh;
+  P(0, mid, 0, s - 0.14, vh, s - 0.14, '#24160e');
+  for (const [dx, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) P(dx * (half - 0.05), mid, dz * (half - 0.05), 0.1, vh, 0.1, St.block);
+  const blk = CC(St.block);
+  for (const [nx, nz] of faces) {
+    for (const t of [-s / 6, s / 6]) { const p = F(nx, nz, t, mid, half - 0.04); part(G.box, St.block, p[0], p[1], p[2], nz ? { sx: 0.07, sy: vh, sz: 0.08 } : { sx: 0.08, sy: vh, sz: 0.07 }); }
+    // each vent's head brought to a point: a stone triangle in either top corner
+    const hT = vt - 0.12, ow = (s - 0.2 - 0.14) / 3;
+    for (const tc of [-s / 3, 0, s / 3]) for (const sg of [-1, 1]) {
+      const te = tc + sg * ow / 2;
+      tri(F(nx, nz, te, hT - 0.15, half - 0.006), F(nx, nz, te, hT, half - 0.006), F(nx, nz, tc, hT, half - 0.006), blk);
+    }
+  }
+  P(0, vt - 0.06, 0, s, 0.12, s, St.block);
+  P(0, vt + 0.05, 0, s + 0.08, 0.1, s + 0.08, D.light);
+  P(0, vt + 0.14, 0, s - 0.12, 0.08, s - 0.12, St.cap);
+  for (const [dx, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) P(dx * (half - 0.02), vt + 0.17, dz * (half - 0.02), 0.12, 0.14, 0.12, D.light);
+}
+// a desert house's floor: sandstone flags on the ground story, terracotta squares upstairs and on its terraces
+function desertFloor(c, r, y) {
+  const D = DES_T;
+  if (PDY > 0) {
+    part(G.box, D.grout, c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+    SURF = SURF_STONE;
+    for (let j = 0; j < 2; j++) for (let q = 0; q < 2; q++) {
+      const kk = hs(c * 2 + q, r * 2 + j, 666);
+      part(G.box, shade(CC(kk < 0.5 ? D.tile : D.tileB), 0.88 + hs(c * 2 + q, r * 2 + j, 667) * 0.2), c + 0.25 + q * 0.5, y + 0.035, r + 0.25 + j * 0.5, { sx: 0.46, sy: 0.05, sz: 0.46 });
+    }
+    SURF = 0;
+    return;
+  }
+  part(G.box, D.floorBed, c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
+  for (let j = 0; j < 2; j++) {
+    const off = (r * 2 + j) % 2 ? 0.25 : 0;
+    for (let k = -1; k < 2; k++) {
+      const x0 = Math.max(0, k * 0.5 + off), x1 = Math.min(1, (k + 1) * 0.5 + off);
+      if (x1 - x0 < 0.05) continue;
+      const col = shade(CC(D.floor), 0.86 + hs(c, r, 44 + j * 3 + k) * 0.24);
+      SURF = SURF_STONE; part(G.box, col, c + (x0 + x1) / 2, y + 0.035, r + 0.25 + j * 0.5, { sx: x1 - x0 - 0.04, sy: 0.05, sz: 0.46 }); SURF = 0;
+    }
+  }
+}
+// a desert town's street lamp: a dark post and, on a brass plate, a lantern of two crossed boxes of light (an
+// eight-pointed star seen from above) in brass ribs under a pointed cap
+function starLamp(x, z) {
+  const y = groundAt(x, z), br = '#8a6a34', dk = '#3a2a1e';
+  part(G.box, dk, x, y + 0.08, z, { sx: 0.2, sy: 0.16, sz: 0.2 });
+  part(G.box, dk, x, y + 0.56, z, { sx: 0.07, sy: 0.96, sz: 0.07 });
+  part(G.box, br, x, y + 1.04, z, { sx: 0.2, sy: 0.04, sz: 0.2, ry: Math.PI / 8 });
+  const g0 = GLOW.n;
+  part(G.box, '#ffcf7a', x, y + 1.13, z, { sx: 0.13, sy: 0.13, sz: 0.13, into: 'glow' });
+  part(G.box, '#ffcf7a', x, y + 1.13, z, { sx: 0.13, sy: 0.13, sz: 0.13, ry: Math.PI / 4, into: 'glow' });
+  if (GLOW.tag) GLOW.tag(g0, 0, 0, 0, -1);   // (its glass: LANTERN_GLASS)
+  for (let q = 0; q < 8; q++) { const a = q * Math.PI / 4 + Math.PI / 8; part(G.box, br, x + Math.cos(a) * 0.085, y + 1.13, z + Math.sin(a) * 0.085, { sx: 0.016, sy: 0.15, sz: 0.016 }); }
+  part(G.box, br, x, y + 1.215, z, { sx: 0.19, sy: 0.03, sz: 0.19, ry: Math.PI / 8 });
+  part(G.cone4, br, x, y + 1.3, z, { sx: 0.19, sy: 0.14, sz: 0.19, ry: Math.PI / 4 });
+  part(G.oct, br, x, y + 1.4, z, { sx: 0.04, sy: 0.06, sz: 0.04 });
+}
+// the arched door's leaf: planks to the springing, then slices narrowing to the point, so it fills the arch
+function archLeaf(leaf) {
+  const A = DES_T.door, rise = archRise(A.W, A.R), n = 10;
+  const add = (sx, sy, x, yy) => { const b = new GFX.Mesh(new GFX.BoxGeometry(sx, sy, 0.08), doorWood); b.position.set(x, yy, 0); leaf.add(b); };
+  add(2 * A.W, A.spring, A.W, A.spring / 2);
+  for (let q = 0; q < n; q++) {
+    const h0 = rise * q / n, h1 = rise * (q + 1) / n, hw = archHalf(A.W, A.R, h1) - 0.005;
+    if (hw > 0.01) add(2 * hw, h1 - h0 + 0.002, A.W, A.spring + (h0 + h1) / 2);
+  }
+  for (const yy of [0.28, A.spring - 0.12]) { const b = new GFX.Mesh(new GFX.BoxGeometry(2 * A.W + 0.02, 0.05, 0.1), doorIron); b.position.set(A.W, yy, 0); leaf.add(b); }
+  const ring = new GFX.Mesh(new GFX.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(2 * A.W - 0.12, 0.62, 0); leaf.add(ring);
 }
 // (only: a Set of the stories to draw, the rest left alone; null = all of them. v424: the cutaway redraws just the
 // stories whose walls it cut or stood up again, not the whole chunk)
@@ -14143,7 +14504,7 @@ function buildPieces(cx, cz, ch, only = null) {
         const i = T(c, r), f = U.FL.get(i);
         if (f) {
           // (its underside: joists, seen from below and at its open edges)
-          part(G.box, f === 2 ? '#4a4650' : '#3a2a1c', c + 0.5, LV[i] * STEP + PDY - 0.07, r + 0.5, { sx: 1, sy: 0.14, sz: 1 });
+          part(G.box, f === 2 ? (DESERT_TILES.has(i) ? '#5a3e2a' : '#4a4650') : '#3a2a1c', c + 0.5, LV[i] * STEP + PDY - 0.07, r + 0.5, { sx: 1, sy: 0.14, sz: 1 });
           if (f === 2) stoneFloor(c, r); else plankFloor(c, r);
         }
         const wn = U.WN.get(i), ww = U.WW.get(i);
@@ -14205,12 +14566,13 @@ function drawStairRaw(st) {
   const tilt = (across, y, h, th, col) => part(G.box, col, bx + dx + px * across, y, bz + dz + pz * across, dx ? { sx: len, sy: h, sz: th, rz: dx > 0 ? a : -a } : { sx: th, sy: h, sz: len, rx: dz > 0 ? -a : a });
   const n = 8, run = 2 / n, rise = WALL_H / n, k0 = c * 9 + r * 5;
   if (kind === 'stonestairs') {
+    const sand = DESERT_TILES.has(st.t0);   // (v649: a desert house's, in sandstone)
     for (let s = 0; s < n; s++) {
-      const h = (s + 1) * rise, col = shade(CC('#8c8894'), 0.84 + hs(k0 + s, r, 92) * 0.26);
+      const h = (s + 1) * rise, col = shade(CC(sand ? '#c9a070' : '#8c8894'), 0.84 + hs(k0 + s, r, 92) * 0.26);
       P((s + 0.5) * run, 0, y0 + h / 2, run, 0.9, h, col);
       P((s + 0.5) * run + 0.01, 0, y0 + h + 0.015, run + 0.02, 0.92, 0.03, shade(col, 1.08));
     }
-    for (const side of [-0.48, 0.48]) tilt(side, y0 + WALL_H / 2 + 0.16, 0.36, 0.1, '#6e6a76');
+    for (const side of [-0.48, 0.48]) tilt(side, y0 + WALL_H / 2 + 0.16, 0.36, 0.1, sand ? '#a07c52' : '#6e6a76');
   } else {
     for (let s = 0; s < n; s++) {
       const col = shade(CC(s % 2 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(k0 + s, r, 90) * 0.14);
@@ -14253,7 +14615,9 @@ const bronzeMat = flatMat({ color: '#4f8a76', roughness: 0.5, metalness: 0.4 }),
 function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
   const gate = kind === 'gate' || kind === 'irongate';
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP + k * WALL_H;
-  const pivot = new GFX.Group(), at0 = flip ? 0.92 : 0.08;
+  // (v649) a desert house's door: a narrower leaf, its head pointed to fill the arch (archLeaf)
+  const arch = kind === 'door' && DESERT_DOORS.has(dKey(c, r, w, k)), AW = DES_T.door.W;
+  const pivot = new GFX.Group(), at0 = arch ? (flip ? 0.5 + AW : 0.5 - AW) : flip ? 0.92 : 0.08;
   pivot.position.set(w ? c : c + at0, y, w ? r + at0 : r);
   pivot.rotation.y = w ? -Math.PI / 2 : 0;
   const leaf = new GFX.Group();
@@ -14297,7 +14661,8 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
     for (let k = 0; k < 5; k++) { const b = new GFX.Mesh(gatePicket, gm); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
     for (const yy of [0.22, FENCE_H - 0.22]) { const b = new GFX.Mesh(gateRail, gm); b.position.set(0.42, yy, 0.045); leaf.add(b); }
     const brace = new GFX.Mesh(gateBrace, gm); brace.position.set(0.42, FENCE_H / 2, 0.05); brace.rotation.z = Math.atan2(FENCE_H - 0.44, 0.8); leaf.add(brace);
-  } else {
+  } else if (arch) archLeaf(leaf);
+  else {
     const plank = new GFX.Mesh(new GFX.BoxGeometry(0.84, DOOR_H, 0.08), doorWood);
     plank.position.set(0.42, DOOR_H / 2, 0); leaf.add(plank);
     for (const yy of [0.25, DOOR_H / 2 + 0.1, DOOR_H - 0.25]) { const b = new GFX.Mesh(new GFX.BoxGeometry(0.86, 0.06, 0.1), doorIron); b.position.set(0.42, yy, 0); leaf.add(b); }
@@ -14593,6 +14958,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
   const base = top * STEP + k * WALL_H + WALL_H - 0.02;
+  if (!o.snow && desertBuilding(rm)) return flatDesertRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);   // (v649)
   if (!o.snow && stoneBuilding(rm)) return flatStoneRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);
   // Chebyshev distance from a point to the nearest outside tile: 45° hips everywhere
   const f = (x, z) => {
@@ -28334,7 +28700,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 648, crashSeen = new Map();
+const GAME_VERSION = 649, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -28620,6 +28986,8 @@ window.GAME = {
   },
   spawnFoe: (kind, x, z) => { spawnFoe(kind, x, z); },
   // (2026-11-03) each town's perimeter by size: its wall pieces by kind, archways, guard huts (tiles each)
+  // (v649) the desert houses: how many, their walls by story, tiles, arched doors, and the towns walled in sandstone
+  desert: () => ({ houses: towns.reduce((n, t) => n + (t.houses || []).filter(h => h.desert).length, 0), walls: DESERT_WALLS.map(q => q.size), tiles: DESERT_TILES.size, doors: DESERT_DOORS.size, towns: towns.filter(t => t.look?.stone === 'sand').map(t => [t.name, t.tier]) }),
   townWalls: () => towns.map(t => {
     const kinds = {};
     for (let r = t.r - t.R - 3; r <= t.r + t.R + 3; r++) for (let c = t.c - t.R - 3; c <= t.c + t.R + 3; c++) for (const v of [WN[T(c, r)], WW[T(c, r)]]) if (v === 5 || v === 6 || v === 7 || v === 15) kinds[WALL_KIND[v]] = (kinds[WALL_KIND[v]] || 0) + 1;
