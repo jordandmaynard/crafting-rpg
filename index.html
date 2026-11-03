@@ -7686,6 +7686,25 @@ fn cutHide(ct: vec2f) -> bool {
 // what the pieces drawn now are made of (buildMat): 0 plain, 1 stone, 2 wood, 3 plaster, 4 smooth (marble: bevels only)
 const SURF_STONE = 1, SURF_WOOD = 2, SURF_PLASTER = 3, SURF_SMOOTH = 4, SURF_SLATE = 5;   // (5: a bare triangle laid with the slate roofs' map)
 let SURF = 0, emitSurf = null;   // (emitSurf: while set, it picks SURF for each part from its colour)
+// (v606) the glow buffers carry, for every vertex, a fire's foot and how much it flutters (0 for anything that
+// isn't a fire's flames; see glowMat): tag(from, x, y, z, k) marks what was emitted since `from`
+class GlowBuf extends Buf {
+  constructor() { super(); this.tags = []; }
+  tag(from, x, y, z, k) {
+    const last = this.tags[this.tags.length - 1];
+    if (last && last[1] * 3 > from) this.tags = [];   // (the buffer was started over since: those are stale)
+    if (this.n > from) this.tags.push([from / 3, this.n / 3, x, y, z, k]);
+  }
+  mesh(mat) {
+    const m = super.mesh(mat), v = this.n / 3, tags = this.tags;
+    this.tags = [];
+    if (!m) return m;
+    const f = new Float32Array(v * 4);
+    for (const [a, b, x, y, z, k] of tags) for (let i = a; i < Math.min(b, v); i++) { f[i * 4] = x; f[i * 4 + 1] = y; f[i * 4 + 2] = z; f[i * 4 + 3] = k; }
+    m.geometry.setAttribute('flame', new GFX.BufferAttribute(f, 4));
+    return m;
+  }
+}
 let OUT = new Buf(), GLOW = new GlowBuf(), METAL = new Buf(), PRISMB = new Buf(), TRUNK = new Buf(), CANOPY = new Buf(), PLANT = null, WEB = new Buf(), SPIDER = null;
 // (spiderwebs: threads too fine to outline, in a buffer of their own drawn with webMat)
 const bufWeb = new Buf();
@@ -7707,25 +7726,6 @@ class TreeBuf extends Buf {
   }
 }
 const bufTrunk = new TreeBuf(), bufCanopy = new Buf();
-// (v606) the glow buffers carry, for every vertex, a fire's foot and how much it flutters (0 for anything that
-// isn't a fire's flames; see glowMat): tag(from, x, y, z, k) marks what was emitted since `from`
-class GlowBuf extends Buf {
-  constructor() { super(); this.tags = []; }
-  tag(from, x, y, z, k) {
-    const last = this.tags[this.tags.length - 1];
-    if (last && last[1] * 3 > from) this.tags = [];   // (the buffer was started over since: those are stale)
-    if (this.n > from) this.tags.push([from / 3, this.n / 3, x, y, z, k]);
-  }
-  mesh(mat) {
-    const m = super.mesh(mat), v = this.n / 3, tags = this.tags;
-    this.tags = [];
-    if (!m) return m;
-    const f = new Float32Array(v * 4);
-    for (const [a, b, x, y, z, k] of tags) for (let i = a; i < Math.min(b, v); i++) { f[i * 4] = x; f[i * 4 + 1] = y; f[i * 4 + 2] = z; f[i * 4 + 3] = k; }
-    m.geometry.setAttribute('flame', new GFX.BufferAttribute(f, 4));
-    return m;
-  }
-}
 // plants that bend (grass, flowers, reeds, ferns, bushes) carry, for every vertex, the foot of the stem it's on and
 // how freely that bends (see plantMat)
 class PlantBuf extends Buf {
@@ -27349,7 +27349,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 607, crashSeen = new Map();
+const GAME_VERSION = 608, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
