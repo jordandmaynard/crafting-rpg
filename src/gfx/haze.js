@@ -541,7 +541,7 @@ export class LitHaze {
     if (this.glowTex) this.renderer._trash.push(this.glowTex);
     this.glowTex = this.device.createTexture({ label: 'haze glow', size: [S, S], format: OUT_FORMAT, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     this.glowView = this.glowTex.createView();
-    this.glowSize = S; this._marchKey = ''; this._glowKey = '';
+    this.glowSize = S; this._marchKey = ''; this._glowKey = ''; this._groundDone = '';
   }
   // what drawing reads: the haze a mosaic pixel (or null with it off) and the frame's hazeA, hazeB
   view() { return this.on ? this.outView : null; }
@@ -600,9 +600,15 @@ export class LitHaze {
         { binding: 2, resource: this.nearView }, { binding: 3, resource: this.farView },
         { binding: 4, resource: this.rangeView }, { binding: 5, resource: this.outView }] });
     }
+    // (v589) the ground map is made again only when what it reads has changed: the height field (groundKey, which
+    // the game bumps whenever a block of it is written: chunks coming into the window, things built or felled), the
+    // lava's glow strength or the map's size. It was made every frame, at ~170 reads a texel, for the same result.
+    const gk = f.groundKey === undefined ? null : f.groundKey + ':' + f.lava + ':' + this.glowSize;
+    const groundNow = ground && (gk === null || gk !== this._groundDone);
+    if (groundNow) this._groundDone = gk;
     // (separate passes, so the profiler times the ground, the march and the upsample apart)
     this.renderer.compute((enc, frameBG, frameOff) => {
-      if (ground) {
+      if (groundNow) {
         const pass = enc.beginComputePass({ label: 'lit haze ground' });
         pass.setBindGroup(0, frameBG, [frameOff]);
         pass.setBindGroup(1, this.emptyBG);

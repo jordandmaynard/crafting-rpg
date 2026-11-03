@@ -764,7 +764,25 @@ class Renderer {
     }
     return { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
   }
+  // (v589) the pipeline for a draw, remembered on its material: every draw used to build the full key below (the blend
+  // worked out afresh, JSON.stringify, a join) just to look it up, a good share of the frame's encoding time. The
+  // memo is kept by kind/colour/copies/clip and target format, and checked against the material's settings the key
+  // is made from, so changing any of them still finds (or makes) the right pipeline.
   _pipeline(kind, mat, hasColor, format, inst = false, clip = false) {
+    const memo = mat._pipeMemo || (mat._pipeMemo = new Map());
+    let byFmt = memo.get(format);
+    if (!byFmt) memo.set(format, byFmt = []);
+    const k = (kind === 'shader' ? 0 : kind === 'std' ? 1 : kind === 'basic' ? 2 : 3) | (hasColor ? 4 : 0) | (inst ? 8 : 0) | (clip ? 16 : 0);
+    const e = byFmt[k];
+    if (e && e.blending === mat.blending && e.blendSrc === mat.blendSrc && e.blendDst === mat.blendDst && e.keepAlpha === mat.keepAlpha
+      && e.transparent === mat.transparent && e.side === mat.side && e.depthTest === mat.depthTest && e.depthFunc === mat.depthFunc
+      && e.depthWrite === mat.depthWrite && e.colorWrite === mat.colorWrite) return e.p;
+    const p = this._pipelineKeyed(kind, mat, hasColor, format, inst, clip);
+    byFmt[k] = { p, blending: mat.blending, blendSrc: mat.blendSrc, blendDst: mat.blendDst, keepAlpha: mat.keepAlpha, transparent: mat.transparent,
+      side: mat.side, depthTest: mat.depthTest, depthFunc: mat.depthFunc, depthWrite: mat.depthWrite, colorWrite: mat.colorWrite };
+    return p;
+  }
+  _pipelineKeyed(kind, mat, hasColor, format, inst = false, clip = false) {
     const blend = kind === 'normal' ? undefined : this._blend(mat);
     const cull = kind === 'normal' ? 'none' : mat.side === M.DoubleSide ? 'none' : mat.side === M.BackSide ? 'front' : 'back';
     const depthCompare = !mat.depthTest ? 'always' : kind === 'normal' ? 'less-equal' : DEPTH_FUNC[mat.depthFunc] || 'less-equal';

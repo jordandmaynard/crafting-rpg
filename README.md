@@ -220,6 +220,8 @@ Jordan's Wanderer's Kit world map pack (art/deliveries/wanderers-kit-world-map-v
 
 The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The wheel zooms about the cursor, dragging pans, and a click picks a seen town for fast travel. Anything you haven't explored is cut out of the map down to opaque parchment, in hard 8-tile cells, and so is everything outside the world. Markers and names show only where you've been. A paper compass rose and a live scale (1 tile = 1.6 m) sit at the bottom right, and a paper footer carries the help and the fast travel button. The folio drags by its leather. While it's open the minimap hides (Jordan). The map's debug and seed tools (seed, PLOTS, BANDS, NEW WORLD, REVEAL ALL, LOAD SEED, EACH LOAD) moved into Options under WORLD, and N and P still work on the map.
 
+**v589:** (Jordan, after the G profile: lit haze and render encode were the long poles) The lit haze's ground map ('lit haze ground': bare ground and lava glow, ~170 reads a texel over 320×320) is made only when the GI height field has a block written (gi.hfVersion), the lava glow strength changes or the map is resized, not every frame. The renderer remembers each draw's pipeline on its material (by kind, colour, copies, clip and format, checked against the material's blend/side/depth/colour settings) instead of building a string key with JSON.stringify for every draw. T > Haze: block goes up to 3 (one ray per 3×3), steps down to 4.
+
 **v588:** (Jordan's tuning) Quest board marks: size 53 (was 44), lift 2.4 (was 2.15), range 20 (was 40).
 
 **v587:** (Jordan) The quest board seals' halo from v585 is gone; the seals are plain again. T > Quest board marks keeps size, height, bob and range.

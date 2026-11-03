@@ -253,7 +253,7 @@ export class HeightProbes {
     this.dirty = [];
     this.N = 0; this.cur = 0; this.gen = 1; this.frame = 0; this.cfgKey = '';
     this.mode = 0; this.strength = 1; this.minimum = 0; this.bias = 0.3;
-    this.grid = [0, 0]; this.hfOrigin = [0, 0];
+    this.grid = [0, 0]; this.hfOrigin = [0, 0]; this.hfVersion = 0;
     this.empty = { h: new Float32Array(GI_BLOCK * GI_BLOCK * 4), g: new Uint8Array(GI_BLOCK * GI_BLOCK * 4), b: new Uint8Array(GI_BLOCK * GI_BLOCK * 4), version: -1 };
     for (let i = 0; i < GI_BLOCK * GI_BLOCK; i++) this.empty.h.set([-1e4, 1, 0, 1], i * 4);
     this._allocate(48);
@@ -310,6 +310,7 @@ export class HeightProbes {
       q.writeTexture({ texture: this.hf, origin: at }, data.h, { bytesPerRow: GI_BLOCK * 16 }, size);
       q.writeTexture({ texture: this.gcol, origin: at }, data.g, { bytesPerRow: GI_BLOCK * 4 }, size);
       q.writeTexture({ texture: this.bcol, origin: at }, data.b, { bytesPerRow: GI_BLOCK * 4 }, size);
+      this.hfVersion++;   // (v589: what's read from the height field may have changed: the lit haze's ground map redoes)
       this.dirty.push([cx * GI_CHUNK - reach, cz * GI_CHUNK - reach, (cx + 1) * GI_CHUNK + reach, (cz + 1) * GI_CHUNK + reach]);
     }
     this.calm = this.dirty.length > dirty0 ? 0 : (this.calm || 0) + 1;
