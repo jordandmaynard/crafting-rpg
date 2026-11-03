@@ -90,6 +90,10 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 
 /* north on the minimap: turns to show where north is, and locks it up when lit */
 #flyLayer { position: fixed; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+/* (v580) the quest boards' state seals over the boards (updateQuestMarks); preloaded by name: ui/quest/mark-available.webp ui/quest/mark-active.webp ui/quest/mark-ready.webp */
+#questMarks { position: fixed; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+#questMarks img { position: absolute; left: 0; top: 0; width: calc(var(--qmSize, 44) * 1px * var(--ui, 1)); height: auto; will-change: transform; -webkit-user-drag: none; }
+body.noUI #questMarks, body.mapOpen #questMarks { display: none; }
 #xpFly { position: fixed; inset: 0; pointer-events: none; z-index: 8; overflow: hidden; }
 .xpSpark { position: absolute; left: 0; top: 0; border-radius: 50%; opacity: 0; will-change: transform;
   background: radial-gradient(circle, #ffffff 0 22%, #9ee6ff 38%, rgba(74, 184, 255, 0.85) 60%, rgba(74, 184, 255, 0) 72%);
@@ -939,6 +943,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 </div>
 <div id="dragIcon" hidden></div>
 <div id="flyLayer"></div>
+<div id="questMarks"></div>
 <div id="crashBox" class="plate" hidden><div class="crashBar"><b>SOMETHING WENT WRONG <span id="crashCount"></span></b><span><button id="crashCopy">COPY</button> <button id="crashClose" aria-label="Close">X</button></span></div><pre id="crashText"></pre></div>
 <div id="craft" hidden role="dialog" aria-modal="false" aria-labelledby="craftTitle">
   <img class="cw-frame" id="craftFrame" src="ui/crafting/frame-weapon.webp" alt="" draggable="false">
@@ -20169,6 +20174,36 @@ function boardNear() {
   }
   return best;
 }
+// (v580, Jordan) over each notice board near you, drawn in screen space like the flying items (not in the world's
+// pixels), the board's state as one of the kit's seals, cut from its status tags with a black edge baked on
+// (ui/quest/mark-*.webp): the green check if a quest there is ready to turn in, else the blue hourglass if all four
+// are under way, else the gold wheat (one or more to take). (size: px at 1080p; lift: m over the board's foot;
+// bob: m it rises and falls; range: m from you it shows within)
+const QUEST_MARK = { size: 44, lift: 2.15, bob: 0.05, range: 40 };
+function boardState(n) {
+  const B = QUESTS.get(n);
+  if (!B) return 'available';
+  if (B.slots.some(questReady)) return 'ready';
+  return B.slots.every(q => q.state === 'active') ? 'active' : 'available';
+}
+const questMarks = new Map();   // board prop -> { el, st }
+let boardList = null;
+const qmV = new GFX.Vector3();
+function updateQuestMarks() {
+  if (!boardList) { boardList = []; towns.forEach(t => { for (const q of t.yard?.props || []) if (q.id === 'noticeBoard') boardList.push(q); }); }
+  const layer = $('questMarks'), rect = cv.getBoundingClientRect(), on = started && questOpen < 0;
+  layer.style.setProperty('--qmSize', QUEST_MARK.size);
+  for (const q of boardList) {
+    let m = questMarks.get(q);
+    if (!on || Math.hypot(q.x - H.x, q.z - H.z) > QUEST_MARK.range) { if (m) { m.el.remove(); questMarks.delete(q); } continue; }
+    if (!m) { m = { el: document.createElement('img'), st: '' }; m.el.alt = ''; m.el.draggable = false; layer.appendChild(m.el); questMarks.set(q, m); }
+    const st = boardState(q.house.town);
+    if (st !== m.st) { m.st = st; m.el.src = `ui/quest/mark-${st}.webp`; }
+    qmV.set(q.x, q.y + QUEST_MARK.lift + Math.sin(time * 2.2 + q.x) * QUEST_MARK.bob, q.z).project(camera);
+    m.el.style.display = qmV.z > 1 ? 'none' : '';
+    m.el.style.transform = `translate(${rect.left + (qmV.x + 1) / 2 * rect.width}px, ${rect.top + (1 - qmV.y) / 2 * rect.height}px) translate(-50%, -50%)`;
+  }
+}
 const QB_CARDS = [[144, 156], [784, 156], [144, 556], [784, 556]];
 const qbScale = () => document.documentElement.style.setProperty('--qbS', Math.min((innerWidth - 32) / 1536, (innerHeight - 32) / 1024, 1).toFixed(4));
 addEventListener('resize', () => { if (questOpen >= 0) qbScale(); });
@@ -21257,6 +21292,7 @@ function updateStations(dt) {
     beep(f * (0.9 + Math.random() * 0.2), 0.08, { type, vol: 0.02 * (1 - humD / 7) + 0.004 });
   }
   updateFlights(dt);
+  updateQuestMarks();
   if (invOpen) litActs();
   if (openSt) {
     if (!stations.has(T(openSt.c, openSt.r)) || Math.hypot(stMid(openSt)[0] - H.x, stMid(openSt)[1] - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
@@ -26266,7 +26302,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 579, crashSeen = new Map();
+const GAME_VERSION = 580, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
