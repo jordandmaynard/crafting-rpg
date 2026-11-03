@@ -26524,6 +26524,169 @@ let fpsAcc = 0, fpsN = 0, fps = 0;
 // as "Section: key value, ..." lines, to paste back to Claude as new defaults.
 // spec: [[title, [[object, key, label, min, max, step, apply?], ...]]]; [object, key, label, 'color'] is a colour
 // picker. apply, if given, runs once the slider is let go.
+// ---------- Icon reference shots (v637) ----------
+// (Jordan: reference pictures for the art agent painting the missing icons) T > Icon reference > Take shots builds each
+// buildable that has no painted icon yet, one at a time, on open flat ground near you (for free, on a plot it borrows
+// for a moment), and draws it alone at the game's 30° view under the character view's studio lights; then it
+// dresses the hero in each armor set and draws them close up from the front and the back. Everything goes back as it
+// was, and the pictures come down as one zip with a README naming each one.
+const ICON_REF = {
+  pieces: [['woodstairs', 'Wood Stairs', 'flat'], ['stonestairs', 'Stone Stairs', 'flat'], ['woodwindow', 'Timber Window', 'wall', 'wall'],
+    ['stonewindow', 'Stone Window (arch)', 'wall', 'stonewall'], ['fence', 'Wood Fence', 'wall'], ['stonefence', 'Fieldstone Wall', 'wall'],
+    ['ironfence', 'Iron Fence', 'wall'], ['gate', 'Wooden Gate', 'wall'], ['irondoor', 'Iron Door', 'wall'], ['irongate', 'Iron Gate', 'wall'],
+    ['crate', 'Wooden Crate', 'flat'], ['chest', 'Iron Chest', 'flat']],
+  sets: ['leather', 'bone', 'chain', 'plate', 'verdane', 'caerite', 'orivane', 'auralith'],
+  px: 768,
+};
+const refCv = document.createElement('canvas'), refCam = new GFX.OrthographicCamera(-1, 1, 1, -1, 0.1, 60);
+let refTarget = null;
+// one studio picture: looking at (x, y, z) from the game's 30° height at yaw a, `span` tiles tall, these layers only,
+// and only meshes `keep` passes
+function refShot(x, y, z, span, w, h, layers, keep, a = Math.PI / 4) {
+  if (!refTarget) refTarget = renderer.canvasTarget(refCv);
+  if (refCv.width !== w || refCv.height !== h) { refCv.width = w; refCv.height = h; }
+  const hs = span / 2, ws = hs * w / h, d = 24, el = Math.PI / 6;
+  Object.assign(refCam, { left: -ws, right: ws, top: hs, bottom: -hs, near: 0.1, far: 60 }); refCam.updateProjectionMatrix();
+  refCam.position.set(x + Math.sin(a) * Math.cos(el) * d, y + Math.sin(el) * d, z + Math.cos(a) * Math.cos(el) * d);
+  refCam.lookAt(x, y, z); refCam.updateMatrixWorld();
+  const L = dollLights, la = a - 0.9;
+  L.hemi.intensity = DOLL_VIEW.sky; L.sun.intensity = DOLL_VIEW.sun;
+  L.sun.position.set(x + Math.sin(la) * 4, y + 5, z + Math.cos(la) * 4); L.sun.target.position.set(x, y, z);
+  L.sun.updateMatrixWorld(); L.sun.target.updateMatrixWorld();
+  scene.updateMatrixWorld();
+  const was = renderer.getRenderTarget(), auto = renderer.shadowMap.autoUpdate;
+  renderer.shadowMap.autoUpdate = false; renderer.lightsOverride = L;
+  renderer.setRenderTarget(refTarget); renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.passName = 'icon reference';
+  for (const [ly, f] of layers) { refCam.layers.set(ly); renderer.drawFilter = m => keep(m) && (!f || f(m)); renderer.render(scene, refCam); }
+  renderer.drawFilter = null; renderer.flush();
+  renderer.lightsOverride = null; renderer.shadowMap.autoUpdate = auto;
+  renderer.setClearColor('#0b0912', 1); renderer.setRenderTarget(was);
+  // (copied out at once, while the canvas still holds this frame; a test harness with no real canvas reads the
+  // texture back itself through window.__refGrab)
+  const out = document.createElement('canvas'); out.width = w; out.height = h;
+  if (window.__refGrab) return window.__refGrab(refTarget.context).then(u => new Promise(res => { const im = new Image(); im.onload = () => { out.getContext('2d').drawImage(im, 0, 0); res(out); }; im.src = u; }));
+  out.getContext('2d').drawImage(refCv, 0, 0);
+  return out;
+}
+const pngOf = cv => new Promise(res => cv.toBlob(b => b.arrayBuffer().then(a => res(new Uint8Array(a))), 'image/png'));
+// a zip of stored (uncompressed) files: [{ name, data: Uint8Array }]
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = d => { let c = 0xffffffff; for (let i = 0; i < d.length; i++) c = CRC_T[(c ^ d[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function zipStore(files) {
+  const parts = [], cen = [], enc = new TextEncoder();
+  let off = 0;
+  for (const f of files) {
+    const nm = enc.encode(f.name), crc = crc32(f.data), n = f.data.length;
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint32(14, crc, true); lh.setUint32(18, n, true); lh.setUint32(22, n, true); lh.setUint16(26, nm.length, true);
+    parts.push(new Uint8Array(lh.buffer), nm, f.data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint32(16, crc, true); ch.setUint32(20, n, true); ch.setUint32(24, n, true);
+    ch.setUint16(28, nm.length, true); ch.setUint32(42, off, true);
+    cen.push(new Uint8Array(ch.buffer), nm);
+    off += 30 + nm.length + n;
+  }
+  const size = cen.reduce((a, b) => a + b.length, 0), end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, size, true); end.setUint32(16, off, true);
+  return new Blob([...parts, ...cen, new Uint8Array(end.buffer)], { type: 'application/zip' });
+}
+// the nearest flat, clear 6 × 6 block of plot ground within 40 tiles (no town)
+function refSpot() {
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z);
+  for (let rad = 0; rad < 40; rad++) for (let dz = -rad; dz <= rad; dz++) for (let dx = -rad; dx <= rad; dx++) {
+    if (Math.max(Math.abs(dx), Math.abs(dz)) !== rad) continue;
+    const c = c0 + dx, r = r0 + dz, L = LV[T(c, r)], pl = PLOT[T(c, r)];
+    let ok = L > 0 && pl > 0;
+    for (let a = -1; a <= 6 && ok; a++) for (let b = -1; b <= 6 && ok; b++) { const i = T(c + b, r + a); if (LV[i] !== L || SH[i] || OB[i] || BI[i] === TOWN || WT[i] || PLOT[i] !== pl || FL[i] || WN[i] || WW[i] || stairAt.has(i)) ok = false; }
+    if (ok) return [c, r];
+  }
+  return null;
+}
+let refBusy = false;
+async function iconRefShots() {
+  if (refBusy || !started) return;
+  if (mode !== 'play' || H.helm || H.seat || !H.alive) { toast('Take the shots on foot, out of build mode.'); return; }
+  const spot = refSpot();
+  if (!spot) { toast('No open, flat plot ground near here: walk out of town into the wilds and try again.'); return; }
+  refBusy = true;
+  const [c0, r0] = spot, c = c0 + 3, r = r0 + 3, pl = plots[PLOT[T(c, r)]], wasClaimed = pl.claimed;
+  const save = { x: H.x, z: H.z, face: H.face, gear: { ...GEAR }, mode, kind: buildKind, cost: {} };
+  const files = [], P = ICON_REF.px, log = [];
+  const isHero = m => { for (let o = m; o; o = o.parent) if (o === heroRoot || o === heroShadow) return true; return false; };
+  try {
+    pl.claimed = true;
+    H.x = c + 0.5; H.z = r + 2.5; H.y = surfaceY(H.x, H.z); H.story = 0; H.stair = null;
+    for (const [k] of ICON_REF.pieces) { save.cost[k] = COST[k]; COST[k] = {}; }
+    for (const k of ['wall', 'stonewall']) { save.cost[k] = COST[k]; COST[k] = {}; }
+    const glass = WINDOW_GLASS.glassPane; delete WINDOW_GLASS.glassPane; save.glass = glass;
+    mode = 'build';
+    const put = (kind, wall) => {
+      setBuildKind(kind);
+      forcedPick = { x: c + 0.5, y: LV[T(c, r)] * STEP, z: wall ? r + 0.03 : r + 0.5, wall: null };
+      updateGhost(); const ok = ghostOk, why = ghostSpot && ghostSpot.why; placePiece(); forcedPick = null; showGhosts([]);
+      return ok ? '' : why || 'not placed';
+    };
+    const y0 = LV[T(c, r)] * STEP;
+    for (const [k, name, how, pre] of ICON_REF.pieces) {
+      const wall = how === 'wall', stairs = k.includes('stairs');
+      const why = (pre ? put(pre, true) : '') || put(k, wall);
+      if (why) { log.push(`${k}: not built (${why})`); }
+      else {
+        // (a wall stands on the tile's north side; a stair runs two tiles)
+        const cv = await refShot(c + 0.5, y0 + (wall ? 0.9 : stairs ? 0.9 : 0.45), wall ? r : stairs ? r + 0.5 : r + 0.5, wall ? 3.4 : stairs ? 4.2 : 2.2, P, P,
+          [[0, worldOpaque], [0, worldClear]], m => !isHero(m));
+        files.push({ name: `buildables/${k}.png`, data: await pngOf(cv) });
+        log.push(`buildables/${k}.png  ${name}  (icon id: ${k})`);
+      }
+      // take it down again (a window: its wall too)
+      for (let n = 0; n < (pre ? 2 : 1); n++) {
+        setBuildKind('remove'); forcedPick = { x: c + 0.5, y: y0, z: wall ? r + 0.03 : r + 0.5, wall: null }; placePiece(); forcedPick = null;
+      }
+      flushDirty();
+    }
+    mode = save.mode; setBuildKind(save.kind); showGhosts([]);
+    // the armor: the hero alone, bare-handed, each set on, from the front and the back
+    H.x = save.x; H.z = save.z; H.y = surfaceY(H.x, H.z);
+    GEAR.weapon = null;
+    heroRoot.position.set(H.x, H.y, H.z);
+    for (const s of ICON_REF.sets) {
+      const ids = s === 'leather' ? ['leatherArmor', 'leatherPants', 'leatherBoots', 'leatherHelmet'] : ['Armor', 'Pants', 'Boots', 'Helmet'].map(n => s + n);
+      [GEAR.chest, GEAR.legs, GEAR.boots, GEAR.head] = ids;
+      dressHero();
+      for (const [view, f] of [['front', Math.PI / 4 - 0.6], ['back', Math.PI / 4 + Math.PI - 0.6]]) {
+        H.face = f; heroRoot.rotation.y = f; animateHero(0); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = f;
+        const cv = await refShot(H.x, H.y + 0.95, H.z, 2.3, Math.round(P * 0.8), P, [[1, null]], isHero);
+        files.push({ name: `armor/${s}_${view}.png`, data: await pngOf(cv) });
+      }
+      log.push(`armor/${s}_front.png, armor/${s}_back.png  ${ids.map(id => ITEMS[id].name + ' (' + id + ')').join(', ')}`);
+    }
+  } finally {
+    for (const k in save.cost) COST[k] = save.cost[k];
+    if (save.glass) WINDOW_GLASS.glassPane = save.glass;
+    pl.claimed = wasClaimed; paintPlot(pl);
+    mode = save.mode; forcedPick = null; showGhosts([]);
+    H.x = save.x; H.z = save.z; H.y = surfaceY(H.x, H.z); H.face = save.face;
+    Object.assign(GEAR, save.gear); gearChanged();
+    refBusy = false;
+  }
+  const readme = `Emberwild icon reference shots (game v${GAME_VERSION})
+
+Reference renders for painting the missing 256px icons. Each one is drawn alone at the game's camera
+angle (30 degrees down, 45 degrees round, orthographic) under the character view's studio lights, on a
+transparent background. Name each painted master after its icon id.
+
+${log.join('\n')}
+
+Armor: the hero wears the whole set (chest, legs, boots, head) with no weapon, seen from the front and
+the back. One icon is wanted per piece: <set>Armor (chest), <set>Pants (legs, "Leggings" in game),
+<set>Boots, <set>Helmet; leather's ids are leatherArmor, leatherPants, leatherBoots, leatherHelmet.
+`;
+  files.push({ name: 'README.txt', data: new TextEncoder().encode(readme) });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(zipStore(files)); a.download = 'emberwild-icon-reference.zip';
+  document.body.appendChild(a); a.click(); a.remove();
+  toast(`Icon reference: ${files.length - 1} pictures saved as emberwild-icon-reference.zip.`, 'good');
+}
 const TUNING = [
   ['World', [
     [WORLD, 'tileHeight', 'Tile height per level (2 the default, as tall as a wall; 1 the old height, 0.5 half; ramps 3 tiles long above 1.25). Letting go rebuilds this world from scratch', 0.5, 2, 0.25, rebuildWorld],
@@ -27167,6 +27330,9 @@ const TUNING = [
     [FX_TUNE, 'splash', 'A splash 2 tiles ahead', 'action', () => fxTry('splash', 2, 0, true)],
     [FX_TUNE, 'bleed', 'A bleed 1.5 tiles ahead', 'action', () => fxTry('bleed', 1.5, 0, true)],
     [FX_TUNE, 'clear', 'Clear every effect', 'action', () => { fxRun.stopAll(); fxParts.clear(); }],
+  ]],
+  ['Icon reference', [
+    [ICON_REF, 'take', 'Take shots: the buildables and armor sets with no painted icon, one at a time in studio light, saved as a zip', 'action', () => iconRefShots()],
   ]],
   ['Fountain water', [
     [FOUNT_FX, 'on', 'Fountain splashes and mist in the GPU effects (0: the old spray)', 0, 1, 1, () => buildSpray()],
@@ -27947,7 +28113,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 636, crashSeen = new Map();
+const GAME_VERSION = 637, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -28363,6 +28529,7 @@ window.GAME = {
   inv: open => toggleInv(open),
   pack: () => PACK.map((id, i) => id && [id, PACK_N[i]]),
   addItem: (id, n) => addItem(id, n),
+  iconRef: () => iconRefShots(),
   trash: c => trashCell(c),
   refineAll: () => refineAll(), stashAll: () => stashAll(), homePlot: () => homePlot(), haveCount: id => haveCount(id),
   queueKeys: () => [...buildQueue.keys()],

@@ -286,6 +286,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v636:** (Jordan: more towns) A world aims for 11 towns (TOWN_COUNT, was 7), at least 120 tiles apart (TOWN_APART, was 170), up to 4 of them medium (was 3), with more tries to place them.
 
+**v637:** (Jordan: reference pictures for the art agent painting the missing icons) T > Icon reference > Take shots builds each buildable with no painted icon (stairs, windows, fences, gates, iron door, crate, iron chest) one at a time on open plot ground near you, for free, draws it alone at the game's 30° view under the character view's studio lights, takes it down again, then draws the hero in each armor set from the front and the back, and downloads emberwild-icon-reference.zip (PNGs + README). The world, gear and costs are put back as they were.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
