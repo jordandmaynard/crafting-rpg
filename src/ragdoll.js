@@ -13,26 +13,27 @@
 //
 // Everything is in world units; the caller describes the body (shape, below) already scaled to the person.
 
+// (v622: Jordan's tuning from T > Ragdolls)
 export const RAGDOLL = {
   gravity: 11,        // tiles per second² (crafting-and-conquest's 22 voxels, its villagers about twice as tall)
-  bounce: 0.22,       // how much of the speed into the ground bounces back
-  friction: 0.5,       // (crafting-and-conquest's 0.11 slid them down Emberwild's ramps, which are smooth slopes, not voxel steps)
+  bounce: 0.33,       // how much of the speed into the ground bounces back
+  friction: 0.36,      // (crafting-and-conquest's 0.11 slid them down Emberwild's ramps, which are smooth slopes, not voxel steps)
   // Per weapon: tiles per second the killing blow knocks the body away from the attacker and up, and radians per
   // second it tips the body over by (the fists' and anything else's are `fist`).
-  swordKick: 2.4, swordLift: 1.1, swordSpin: 5.7,
-  bowKick: 1.5, bowLift: 0.75, bowSpin: 4,
-  spearKick: 3.5, spearLift: 0.9, spearSpin: 4.5,
-  axeKick: 3, axeLift: 1.5, axeSpin: 9,
-  hammerKick: 4, hammerLift: 3, hammerSpin: 8,
+  swordKick: 3, swordLift: 2.7, swordSpin: 5.7,
+  bowKick: 3.3, bowLift: 1.2, bowSpin: 9.7,
+  spearKick: 2.8, spearLift: 3.6, spearSpin: 5.1,
+  axeKick: 5.9, axeLift: 4.4, axeSpin: 7.7,
+  hammerKick: 7.3, hammerLift: 4.6, hammerSpin: 8,
   fistKick: 1.8, fistLift: 0.9, fistSpin: 4,
   limbSpring: 1.6,    // how much the limbs pull back towards hanging straight (a little muscle left)
   limbDamping: 1.7,
   bendSpring: 3,      // and the knees and elbows towards a little bend
   bendDamping: 2.5,
-  headPop: 0.18,      // the chance the head comes off
+  headPop: 0.08,      // the chance the head comes off
   popSpeed: 3.9,      // tiles per second it flies up at
   scatter: 1.7,       // tiles per second a dropped weapon is flung about at
-  itemFriction: 0.6,  // and how it grips the ground
+  itemFriction: 0.44, // and how it grips the ground
 };
 
 const SUBSTEPS = 4;
