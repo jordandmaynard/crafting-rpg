@@ -3094,7 +3094,11 @@ function townTrades(t, n) {
     h.trade = ROLE_TRADE[h.role];
     const id = PROP_WORK[h.role], ctx = { wood: PROP_WOOD[t.tier] || 'pine', n: n * 31 + 7 };
     if (h.role === 'tavern' && propBar(h, t.tier > 1 ? 'barCounterLong' : 'barCounter', ctx)) continue;
-    if (h.role === 'bank' && propBar(h, 'tellerCounter', ctx, 'vaultDoor', null)) continue;   // (the vault behind the banker)
+    if (h.role === 'bank') {
+      // (the vault behind the banker if it fits, else the counter on its own and the vault on a wall with the props)
+      if ([2, 1].some(k => propBar(h, 'tellerCounter', ctx, 'vaultDoor', null, k))) continue;
+      if (propCounter(h, 'tellerCounter', ctx)) { h.vaultLater = true; continue; }
+    }
     const q = propTryList(h, 0, id, propCands(h, 0, id, ctx), ctx);
     if (q) h.work = q.tiles[Math.floor(q.tiles.length / 2)];
   }
@@ -3124,7 +3128,7 @@ function townBeds(t, n) {
   const want = [2, 2, 3][t.tier] || 2;
   for (const h of t.houses) {
     h.beds = [];
-    if (h.cathedral) continue;
+    if (h.cathedral || h.role === 'bank') continue;   // (2026-11-03, Jordan: no beds in a bank)
     // (v454, Jordan) in a two-story house the beds go upstairs, the work below; any that don't fit come down
     if (h.up) townBedsUp(h, want, n);
     const [ic, ir] = h.inside || h.tiles[0];
@@ -3498,7 +3502,7 @@ function townProps(t, n) {
     if (h.cathedral) return;
     const kind = h.role || (h.clergy ? 'clergy' : h.trade ? 'trade' : 'home');
     const kit = PROP_KITS[kind] && PROP_KITS[kind][t.tier];
-    furnish(h, kit || PROP_KITS.home[t.tier], { wood, n: n * 31 + j });
+    furnish(h, h.vaultLater ? [{ id: 'vaultDoor' }, ...kit] : kit || PROP_KITS.home[t.tier], { wood, n: n * 31 + j });
     if (h.role === 'tavern' || h.role === 'bank') tavernFront(t, n, h, { wood, n: n * 31 + j });
   });
 }
@@ -3506,7 +3510,9 @@ function townProps(t, n) {
 // clear), the counter across in front of that facing the room, and bar stools before the counter; tried along each
 // wall till the house stays walkable (the row behind the counter reached round one of its ends)
 // (2026-11-03) the bank's the same: the vault door on the wall, the banker before it, the teller counter (no seats)
-function propBar(h, cid, ctx, rid = 'barrelRack', seat = 'barStool') {
+// (Jordan: the counter stands free, not against a wall, room behind it) free: floor kept clear before it, at the end
+// of the banker's row (the way in behind, never furnished shut) and beyond that many of its ends (2, 1, or 0)
+function propBar(h, cid, ctx, rid = 'barrelRack', seat = 'barStool', free = null) {
   const C0 = PROPS[cid], cw = C0.tiles[0];
   h.clear = h.clear || new Set();
   for (const cd of propCands(h, 0, rid, ctx).slice(0, 40)) {
@@ -3519,7 +3525,18 @@ function propBar(h, cid, ctx, rid = 'barrelRack', seat = 'barStool') {
       if (!row.every(i => houseFree(h, i) && bedClear(h, 0, i))) continue;
       const foot = propFoot(h, 0, C0, c0 + DC[g] * o + DC[f] * 2, r0 + DR[g] * o + DR[f] * 2, f, false);
       if (!foot) continue;
-      for (const i of row) h.clear.add(i);
+      const at = (a, b) => T(c0 + DC[g] * a + DC[f] * b, r0 + DR[g] * a + DR[f] * b), ins = new Set(h.tiles.map(([c, r]) => T(c, r)));
+      const ends = [];
+      if (free != null) {
+        // (floor beyond both ends of the counter and before it; a way in at one end of the row behind, or both)
+        const fl = i => ins.has(i) && houseFree(h, i) && bedClear(h, 0, i);
+        const front = [...Array(cw).keys()].map(a => at(o + a, 3)), open = [at(o - 1, 2), at(o + cw, 2)].filter(fl).length;
+        if (!front.every(fl) || open < free) continue;
+        for (const i of [at(Math.min(0, o) - 1, 1), at(Math.max(2, o + cw), 1)]) if (fl(i)) ends.push(i);
+        if (!ends.length) continue;
+        ends.push(...front);
+      }
+      for (const i of [...row, ...ends]) h.clear.add(i);
       const bar = propPut(h, 0, cid, foot, f, 0, ctx);
       if (propReach(h, 0)) {
         // the innkeeper stands behind the counter, before the rack, facing the room
@@ -3534,9 +3551,38 @@ function propBar(h, cid, ctx, rid = 'barrelRack', seat = 'barStool') {
         return true;
       }
       propTake(bar);
-      for (const i of row) h.clear.delete(i);
+      for (const i of [...row, ...ends]) h.clear.delete(i);
     }
     propTake(rack);
+  }
+  return false;
+}
+// (2026-11-03, Jordan: the teller counter stands free with room behind for the banker) where the vault can't go
+// behind it: the counter anywhere on the floor, a free row behind it (the banker's, a way into it at one end at
+// least) and before it, the vault then on a wall by the kit; the farthest from the door first
+function propCounter(h, cid, ctx) {
+  const C0 = PROPS[cid], cw = C0.tiles[0], ins = new Set(h.tiles.map(([c, r]) => T(c, r))), [ic, ir] = h.inside || h.tiles[0];
+  const fl = i => ins.has(i) && houseFree(h, i) && bedClear(h, 0, i) && !h.clear?.has(i);
+  const cands = [];
+  for (const [c, r] of h.tiles) for (let f = 0; f < 4; f++) {
+    const g = (f + 3) & 3, at = (a, b) => T(c + DC[g] * a + DC[f] * b, r + DR[g] * a + DR[f] * b);
+    const back = [...Array(cw).keys()].map(a => at(a, -1)), front = [...Array(cw).keys()].map(a => at(a, 1));
+    if (![...back, ...front].every(fl)) continue;
+    const ends = [at(-1, -1), at(cw, -1)].filter(fl);
+    if (!ends.length) continue;
+    cands.push({ c, r, f, back, front, ends, score: Math.hypot(c - ic, r - ir) + hs(c, r, 580 + f) * 0.3 });
+  }
+  cands.sort((a, b) => b.score - a.score);
+  h.clear = h.clear || new Set();
+  for (const cd of cands.slice(0, 40)) {
+    const foot = propFoot(h, 0, C0, cd.c, cd.r, cd.f, false);
+    if (!foot) continue;
+    const keep = [...cd.back, ...cd.front, ...cd.ends];
+    for (const i of keep) h.clear.add(i);
+    const q = propPut(h, 0, cid, foot, cd.f, 0, ctx);
+    if (propReach(h, 0)) { const m = Math.floor(cw / 2); h.work = q.tiles[m]; h.workFrom = cd.back[m]; return true; }
+    propTake(q);
+    for (const i of keep) h.clear.delete(i);
   }
   return false;
 }
@@ -14420,7 +14466,7 @@ function groundStep(c, r, d, foe) {
   if (nc < 0 || nr < 0 || nc >= N || nr >= N) return false;
   const i = T(c, r), n = T(nc, nr);
   if (foe && stairAt.has(n)) return false;   // (nothing wild climbs your stairs)
-  if (!terrainOpen(i, n, d) || (OBJ[OB[n]].tile && !(moverHero && seatAt(0, n)))) return false;   // (v538: you walk over seats)
+  if (!terrainOpen(i, n, d) || (OBJ[OB[n]].tile && !(moverHero && heroPass(0, n)))) return false;   // (v538: you walk over seats; 2026-11-03 and flat wall pieces)
   if (foe && BI[n] === TOWN && BI[i] !== TOWN) return false;
   // nothing wild walks into lava (you can, if you must)
   const w = wallOn(c, r, d);
@@ -14439,7 +14485,7 @@ function enterOpen(c, r, d, k, b) {
   const below = k ? stairAt.get((k - 1) * SNN + b) : null;
   if (below) return b === below.t1 && d === ((below.d + 2) & 3) && wallOpen(c, r, d, k);
   if (!k) return groundStep(c, r, d, false);
-  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && (!PROP_AT.has(k * SNN + b) || !!seatAt(k, b)) && wallOpen(c, r, d, k);
+  return UP[k].FL.has(b) && !BEDS.has(k * SNN + b) && (!PROP_AT.has(k * SNN + b) || !!heroPass(k, b)) && wallOpen(c, r, d, k);
 }
 function heroStep(c, r, d) {
   const nc = c + DC[d], nr = r + DR[d];
@@ -19828,6 +19874,8 @@ const SEAT_IDS = new Set(['bench', 'chair', 'stool', 'barStool', 'streetBench'])
 const SEAT_LIFT = { barStool: BAR_SEAT - SEAT };
 const SIT = { ease: 0.25, drop: 0.02, thigh: 1.45, knee: 1.45, arms: 0.5 };
 function seatAt(k, i) { const q = PROP_AT.get(k * SNN + i); return q && SEAT_IDS.has(q.id) ? q : null; }
+// (2026-11-03, Jordan: walk up to the bank's vault) props you walk over: the seats, and thin ones flat on a wall (PROPS thin)
+function heroPass(k, i) { const q = PROP_AT.get(k * SNN + i); return !!q && (SEAT_IDS.has(q.id) || !!PROPS[q.id]?.thin); }
 // the seat you're standing on: { q, c, r, k }
 function seatHere() {
   if (H.stair || H.boat || H.flip || H.dash >= 0) return null;
@@ -21354,7 +21402,8 @@ function folkPeople(t) {
   const extras = [...(FOLK_EXTRAS[t.tier] || FOLK_EXTRAS[0])];
   t.houses.forEach((h, hi0) => {
     if (doorFront(h) < 0 || h.clergy) return;   // (v467: the clergy's house is the clergy's alone)
-    const n = Math.max(lo + Math.floor(folkSeed(t.n, hi0, 7) / 4294967296 * (hi - lo + 1)), h.trade && !h.cathedral && extras.length ? 2 : 1);
+    // (a bank, which has no beds, keeps only its banker)
+    const n = h.role === 'bank' ? 1 : Math.max(lo + Math.floor(folkSeed(t.n, hi0, 7) / 4294967296 * (hi - lo + 1)), h.trade && !h.cathedral && extras.length ? 2 : 1);
     for (let k = 0; k < n; k++) {
       // (a workshop's first is its trade, the cathedral's all clergy)
       const extra = k === 1 && extras.length ? extras.shift() : null;
@@ -25831,7 +25880,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 574, crashSeen = new Map();
+const GAME_VERSION = 575, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

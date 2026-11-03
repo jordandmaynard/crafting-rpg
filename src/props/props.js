@@ -150,7 +150,8 @@ function bedding(top, W, L, blanket) {
 const heater = (w, h0, h1) => { const c = [[-w, h0], [-w, 0], [-w * 0.9, h1 * 0.36], [-w * 0.6, h1 * 0.7], [-w * 0.3, h1 * 0.91], [0, h1]]; return [...c, ...c.slice(0, -1).reverse().map(([x, y]) => [-x, y])]; };
 
 // ---------- the props ----------
-// group: where it's listed; tiles [w, d]; wall: backs onto a wall; hang: hangs from the ceiling (no floor tile);
+// group: where it's listed; tiles [w, d]; wall: backs onto a wall; thin: flat on its wall, walked over (the game);
+// hang: hangs from the ceiling (no floor tile);
 // use and goes: from the doc; roll(r) -> the seeded look (null: none); build(L, C) draws it (C: the wood's colours);
 // describe(L) -> rows [label, value, colour]
 export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern', 'Bank', 'Outdoor'];
@@ -694,7 +695,7 @@ export const PROPS = {
     describe: L => [['Board', L.board[1], L.board[0]], ['Keg painted in', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
     build(L, C) { tavernSign(L, C); } },
   // ---------- (2026-11-03, Jordan) the bank's set: one story of stone, a flat stone roof ----------
-  vaultDoor: { name: 'Vault door', group: 'Bank', tiles: [2, 1], wall: true, use: 'Show; the player\'s safe storage later', goes: 'Bank, behind the teller counter',
+  vaultDoor: { name: 'Vault door', group: 'Bank', tiles: [2, 1], wall: true, thin: true, use: 'Show; the player\'s safe storage later', goes: 'Bank, behind the teller counter',
     roll: r => ({ steel: pick(r, VAULT_STEEL), stone: pick(r, VAULT_STONE), dial: r() < 0.6 }),
     describe: L => [['Door', L.steel[1], L.steel[0]], ['Surround', L.stone[1], L.stone[0]], ['Lock', L.dial ? 'A wheel and a brass dial' : 'A wheel']],
     build(L, C) { vaultDoor(L, C); } },
