@@ -8332,6 +8332,25 @@ const G = {
   frust7: new GFX.CylinderGeometry(0.26, 0.5, 1, 7),
   frust4: new GFX.CylinderGeometry(0.2, 0.5, 1, 4),
 };
+// (v660) the top of a log cut on a slant: an eight-sided cylinder (G.cyl8's unit size) whose top falls from 0.5 at
+// z -0.5 to -0.5 at z +0.5, so it slopes down toward +z; logCutTop is that sloped face alone, a little inset and
+// lifted, for the paler sawn wood. Both laid both ways round, as snowSkirt is.
+G.logCut = (() => {
+  const pos = [], g = new GFX.BufferGeometry(), v = j => { const t = j / 8 * Math.PI * 2; return [0.5 * Math.sin(t), 0.5 * Math.cos(t)]; };
+  for (let j = 0; j < 8; j++) {
+    const [x0, z0] = v(j), [x1, z1] = v(j + 1), b0 = [x0, -0.5, z0], b1 = [x1, -0.5, z1], t0 = [x0, -z0, z0], t1 = [x1, -z1, z1];
+    pos.push(...b0, ...b1, ...t1, ...b0, ...t1, ...t0, ...b0, ...t1, ...b1, ...b0, ...t0, ...t1);
+  }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+})();
+G.logCutTop = (() => {
+  const pos = [], g = new GFX.BufferGeometry(), v = j => { const t = j / 8 * Math.PI * 2, x = 0.44 * Math.sin(t), z = 0.44 * Math.cos(t); return [x, -z + 0.04, z]; };
+  const m = [0, 0.04, 0];
+  for (let j = 0; j < 8; j++) { const a = v(j), b = v(j + 1); pos.push(...m, ...a, ...b, ...m, ...b, ...a); }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+})();
 // each primitive's triangles, unrolled once, so dropping thousands of them into a chunk stays cheap
 // the snow lying on a frost pine's boughs: a band round the wide foot of a six-sided cone (G.cone6's own unit
 // shape, its corners and the middles of its sides), thicker on some sides than others, with a lip hanging just
@@ -13829,6 +13848,7 @@ function wallSurf(k) {
   if (k.r > k.b * 1.2) return Math.max(k.r, k.g) >= 0.5 ? SURF_PLASTER : SURF_WOOD;
   return SURF_STONE;
 }
+const LOG_CUT_SLOPE = 0.9;   // (v660: how steeply a log wall's tops are sawn, rise over run; the roof is ROOF_SLOPE 0.62)
 function wallPieceRaw(c, r, w, type, cut) {
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1);
   const y = Math.max(LV[i], LV[j]) * STEP + PDY;
@@ -13941,10 +13961,19 @@ function wallPieceRaw(c, r, w, type, cut) {
   if (type === 3) {
     // (v621, Jordan: no more uneven sharpened tops: every log is sawn off level, just under the roof's eaves)
     const W = lookAt(i, j)?.W;   // (v643: a town's log houses in the wood of its country)
+    // (v660, Jordan: the level tops poked up through the thatch's fringe) where the wall has an inside and an outside,
+    // each log is sawn off on a slant falling to the outside, steeper than the roof, its high side under the eaves
+    const out = cut ? 0 : windowOutside(c, r, w), CAP = 0.2 * LOG_CUT_SLOPE;
     for (let n = 0; n < 5; n++) {
-      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.04, col = shade(CC(W ? (n % 2 ? W.wood : W.light) : n % 2 ? '#6a4a2c' : '#7a5634'), (0.88 + kk * 0.2) * (W && n % 2 === 0 ? 0.88 : 1));
+      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - (out ? 0.05 + CAP : 0.04), col = shade(CC(W ? (n % 2 ? W.wood : W.light) : n % 2 ? '#6a4a2c' : '#7a5634'), (0.88 + kk * 0.2) * (W && n % 2 === 0 ? 0.88 : 1));
       let p = at(0.1 + n * 0.2, y + h / 2); part(G.cyl8, col, p[0], p[1], p[2], { sx: 0.2, sy: h, sz: 0.2 });
       // the sawn end of a log shows paler
+      if (out) {
+        const ryc = ry + (out < 0 ? Math.PI : 0), sawn = shade(CC(W ? W.light : '#b08656'), (0.9 + kk * 0.15) * (W ? 1.25 : 1));
+        p = at(0.1 + n * 0.2, y + h + CAP / 2); part(G.logCut, col, p[0], p[1], p[2], { sx: 0.2, sy: CAP, sz: 0.2, ry: ryc });
+        part(G.logCutTop, sawn, p[0], p[1], p[2], { sx: 0.2, sy: CAP, sz: 0.2, ry: ryc });
+        continue;
+      }
       p = at(0.1 + n * 0.2, y + h); part(G.cyl8, cut ? '#c89a62' : shade(CC(W ? W.light : '#b08656'), (0.9 + kk * 0.15) * (W ? 1.25 : 1)), p[0], p[1], p[2], { sx: 0.17, sy: 0.02, sz: 0.17 });
     }
     for (const yy of cut ? [0.3] : [0.3, WALL_H - 0.45]) { const p = at(0.5, y + yy); part(G.box, W ? W.dark : '#4a3020', p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.26, ry }); }
@@ -14972,6 +15001,15 @@ function drawStairRaw(st) {
   // a board along the whole flight, climbing with it
   const tilt = (across, y, h, th, col) => part(G.box, col, bx + dx + px * across, y, bz + dz + pz * across, dx ? { sx: len, sy: h, sz: th, rz: dx > 0 ? a : -a } : { sx: th, sy: h, sz: len, rx: dz > 0 ? -a : a });
   const n = 8, run = 2 / n, rise = WALL_H / n, k0 = c * 9 + r * 5;
+  // (v658, Jordan) a stair against a wall runs a little into it, which is fine, but its handrail or parapet on that
+  // side would stick out through the wall: left off on whichever side has a wall (or fence, door, window) on its story
+  // along either of its two tiles. (The ghost, with no tiles, keeps both.)
+  const walled = sg => {
+    if (st.t0 === undefined) return false;
+    const q = [0, 1, 2, 3].find(q => DC[q] === px * sg && DR[q] === pz * sg);
+    return [[c, r], [c + dx, r + dz]].some(([cc, rr]) => (st.k ? upWallOn(cc, rr, q, st.k) : wallOn(cc, rr, q)) > 0);
+  };
+  const keepL = !walled(-1), keepR = !walled(1), keep = side => side < 0 ? keepL : keepR;
   if (kind === 'stonestairs') {
     const sand = DESERT_TILES.has(st.t0);   // (v649: a desert house's, in sandstone)
     for (let s = 0; s < n; s++) {
@@ -14979,7 +15017,7 @@ function drawStairRaw(st) {
       P((s + 0.5) * run, 0, y0 + h / 2, run, 0.9, h, col);
       P((s + 0.5) * run + 0.01, 0, y0 + h + 0.015, run + 0.02, 0.92, 0.03, shade(col, 1.08));
     }
-    for (const side of [-0.48, 0.48]) tilt(side, y0 + WALL_H / 2 + 0.16, 0.36, 0.1, sand ? '#a07c52' : '#6e6a76');
+    for (const side of [-0.48, 0.48]) if (keep(side)) tilt(side, y0 + WALL_H / 2 + 0.16, 0.36, 0.1, sand ? '#a07c52' : '#6e6a76');
   } else {
     for (let s = 0; s < n; s++) {
       const col = shade(CC(s % 2 ? '#8a6a44' : '#7a5c3a'), 0.92 + hs(k0 + s, r, 90) * 0.14);
@@ -14987,6 +15025,7 @@ function drawStairRaw(st) {
       P(s * run + 0.02, 0, y0 + s * rise + rise / 2, 0.03, 0.8, rise, '#4a3422');
     }
     for (const side of [-0.45, 0.45]) {
+      if (!keep(side)) continue;
       tilt(side, y0 + WALL_H / 2 - 0.1, 0.26, 0.07, '#5a3e26');
       tilt(side, y0 + WALL_H / 2 + 0.82, 0.06, 0.06, '#6a4a2c');
       P(0.06, side, y0 + 0.46, 0.07, 0.07, 0.92, '#5a3e26');
@@ -24315,7 +24354,8 @@ function folkPeople(t) {
       }
       if (!d) d = folkKit.design(folkSeed(t.n, hi0, k, 999));
       // (v656, Jordan) a town walled in sandstone dresses for the desert (turbans, headscarves, long tunics, kaftans,
-      // sashes: desertDress), all but the watch and the clergy
+      // sashes: desertDress); (v659) the watch in long tabards and turban-wound helms, the cathedral's clergy as the
+      // mosque's (High Cleric, Clerics, Chanters), and everyone with a desert name
       if (townLook(t).stone === 'sand') d = desertDress(d);
       // (v449, Jordan) anyone known as "of" a place is of this town
       if (d.name.last.startsWith('of ')) { const of = 'of ' + titleCase(t.name); d.name.full = d.name.full.slice(0, -d.name.last.length) + of; d.name.last = of; }
@@ -24698,6 +24738,10 @@ const FOLK_SAY = {
   bishop: ["Peace be with you, child.", "The cathedral's doors are always open."],
   priest: ["Light a candle before you go.", "May the road be kind to you."],
   choir: ["We're practising for the feast.", "Shh, the bishop's listening."],
+  // (v659, Jordan) a sandstone town's mosque
+  highCleric: ["The sun's grace on you, traveller.", "The prayer hall stands open to all who come in peace."],
+  cleric: ["Rest in the shade of the dome a while.", "May the dunes lie gentle under your feet."],
+  chanter: ["We sing the hours from the tower.", "Hush now, the High Cleric is near."],
   jeweller: ["Only the finest stones, I assure you.", "Auralith, now there's a gem worth having."],
   merchant: ["Everything has a price, friend.", "Trade's been slow with the roads so wild."],
   banker: ["Your coin is safe with me.", "Interest? Reasonable, I promise."],
