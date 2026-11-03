@@ -6181,6 +6181,7 @@ function buildCobbles() {
 function finishTowns() {
   buildCobbles();
   buildFountains();
+  buildBaskets();
   buildBoats();
   buildDockProxies();
   for (const t of towns) {
@@ -13231,18 +13232,11 @@ function planter(c, r) {
 // (v654, Jordan) a desert town's street planter: a beaten copper pot, its hammered facets catching the light one by
 // one, a rolled rim, dark soil, and a ficus in it: a braided trunk and a round head of glossy leaves
 const COPPER_POT = { copper: '#b8693a', rim: '#d88a50', dark: '#7e4428', trunk: '#7a6650', leaf: '#2f5e2c' };
+// (v665, Jordan: woven baskets in place of the copper pots) the basket itself is in buildBaskets, its own mesh in the
+// thatch's straw map wrapped round it; here only its soil and the ficus
 function copperPlanter(c, r, x, y, z) {
   const P = COPPER_POT;
-  part(G.cyl8, P.dark, x, y + 0.04, z, { sx: 0.3, sy: 0.08, sz: 0.3 });   // (its foot)
-  part(G.cyl16, P.copper, x, y + 0.14, z, { sx: 0.44, sy: 0.12, sz: 0.44 });
-  // (the belly: hammered facets round it, in two courses, each its own shade)
-  for (let row = 0; row < 2; row++) for (let k = 0; k < 10; k++) {
-    const t = (k + row * 0.5) / 10 * Math.PI * 2, rr = row ? 0.26 : 0.27, yy = y + 0.27 + row * 0.15;
-    part(G.box, shade(CC(P.copper), 0.8 + hs(c * 7 + k, r * 3 + row, 660) * 0.42), x + Math.sin(t) * rr, yy, z + Math.cos(t) * rr, { sx: 0.17, sy: 0.15, sz: 0.06, ry: t, rx: row ? 0.22 : -0.12 });
-  }
-  part(G.cyl16, shade(CC(P.copper), 0.7), x, y + 0.34, z, { sx: 0.5, sy: 0.3, sz: 0.5 });   // (behind the facets)
-  part(G.cyl16, P.rim, x, y + 0.5, z, { sx: 0.5, sy: 0.05, sz: 0.5 });                     // (the rolled rim)
-  part(G.cyl16, '#3a2618', x, y + 0.51, z, { sx: 0.42, sy: 0.02, sz: 0.42 });              // (the soil)
+  part(G.cyl16, '#3a2618', x, y + 0.49, z, { sx: 0.47, sy: 0.02, sz: 0.47 });              // (the soil)
   // the ficus: three stems braided up (leaning in turn), then its head of leaves in clumps
   for (let k = 0; k < 3; k++) {
     const t = k / 3 * Math.PI * 2;
@@ -13255,6 +13249,73 @@ function copperPlanter(c, r, x, y, z) {
     part(G.ico, shade(CC(P.leaf), 0.85 + hs(c + k, r, 663) * 0.35), x + Math.sin(t) * rr, hy + up, z + Math.cos(t) * rr, { sx: 0.2, sy: 0.16, sz: 0.2, ry: t });
   }
   part(G.ico, shade(CC(P.leaf), 1.15), x, hy + 0.18, z, { sx: 0.26, sy: 0.16, sz: 0.26 });
+}
+// A desert town's flower basket (v665): a bellied round basket with a rolled rim, one mesh for the whole world
+// (buildBaskets, from finishTowns), drawn in basketMat: the thatch's straw height map (THATCH_U.tSlate) wrapped round
+// it so the straw runs round the basket in coils stacked up its side, BASKET.wraps repeats round so it meets itself.
+const BASKET = { col: '#b48c56', rim: '#9a7444', bump: 1.6, span: 0.9, wraps: 3, shade: 1, seg: 24,
+  // (the profile, foot to rim and down inside it: [height, radius])
+  prof: [[0, 0.17], [0.04, 0.205], [0.12, 0.24], [0.26, 0.262], [0.4, 0.258], [0.47, 0.25], [0.5, 0.272], [0.535, 0.27], [0.555, 0.25], [0.54, 0.228], [0.5, 0.224]] };
+const BASKET_U = { s: { value: { x: BASKET.bump, y: BASKET.span, z: BASKET.wraps, w: BASKET.shade } } };
+const basketMat = new GFX.ShaderMaterial({ uniforms: BASKET_U, vertexColors: true, side: GFX.DoubleSide, lit: true, attributes: { bN: 'vec3f', bUV: 'vec2f' },
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) n: vec3f, @location(3) uv: vec2f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, v.bN, v.bUV);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let N0 = normalize(i.n);
+  // (uv.x: round the basket, 0 to 1; uv.y: up its side in tiles. The straw runs down the map's y, so y goes round)
+  let tx = textureSample(tSlate, tSlateS, vec2f(i.uv.y / U.s.y, i.uv.x * U.s.z));
+  let upA = vec3f(0.0, 1.0, 0.0);
+  let around = normalize(cross(upA, N0) + vec3f(1e-4, 0.0, 0.0));
+  let up = normalize(cross(N0, around));
+  let m = (tx.xy * 2.0 - 1.0) * U.s.x;
+  let N = normalize(N0 * (tx.z * 2.0 - 1.0) + up * m.x + around * m.y);
+  let k = mix(1.0 - 0.45 * U.s.w, 1.0, tx.a);
+  let c = shadeLitN(i.color * k, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+const basketMeshes = [];
+function buildBaskets() {
+  for (const m of basketMeshes) { scene.remove(m); m.geometry.dispose(); }
+  basketMeshes.length = 0;
+  BASKET_U.tSlate = THATCH_U.tSlate;
+  const pos = [], col = [], nrm = [], uv = [], B = BASKET, pf = B.prof, n = B.seg;
+  // (each ring's normal: square to the profile there, outward on the outside and turning in over the rim)
+  const pn = pf.map((p, j) => {
+    const a = pf[Math.max(0, j - 1)], b = pf[Math.min(pf.length - 1, j + 1)], dy = b[0] - a[0], dr = b[1] - a[1], l = Math.hypot(dy, dr) || 1;
+    return [dy / l, -dr / l];   // ([radial, up])
+  });
+  for (const t of towns) {
+    if (townLook(t).stone !== 'sand' || !t.planterAt) continue;
+    for (const i of t.planterAt.keys()) {
+      if (OB[i] !== O.PLANTER) continue;
+      const c = i % N, r = Math.floor(i / N), x = c + 0.5, z = r + 0.5, y = LV[i] * STEP, a0 = hs(c, r, 667) * Math.PI * 2;
+      const k0 = shade(CC(B.col), 0.92 + hs(c, r, 668) * 0.14), kr = shade(CC(B.rim), 0.92 + hs(c, r, 669) * 0.14);
+      for (let j = 0; j + 1 < pf.length; j++) for (let q = 0; q < n; q++) {
+        const V = (jj, qq) => {
+          const t2 = a0 + qq / n * Math.PI * 2, sn = Math.sin(t2), cs = Math.cos(t2), [h, rr] = pf[jj], [nr, ny] = pn[jj], k = jj >= 5 ? kr : k0;
+          pos.push(x + sn * rr, y + h, z + cs * rr); col.push(k.r, k.g, k.b); nrm.push(sn * nr, ny, cs * nr);
+          // (up the side by the profile's length, so the coils keep their size over the rim)
+          let L = 0; for (let m = 1; m <= jj; m++) L += Math.hypot(pf[m][0] - pf[m - 1][0], pf[m][1] - pf[m - 1][1]);
+          uv.push(qq / n, L);
+        };
+        for (const [jj, qq] of [[j, q], [j, q + 1], [j + 1, q + 1], [j, q], [j + 1, q + 1], [j + 1, q]]) V(jj, qq);
+      }
+    }
+  }
+  if (!pos.length) return;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new GFX.Float32BufferAttribute(col, 3));
+  g.setAttribute('bN', new GFX.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('bUV', new GFX.Float32BufferAttribute(uv, 2));
+  const m = new GFX.Mesh(g, basketMat);
+  m.castShadow = true; m.receiveShadow = true; m.matrixAutoUpdate = false;
+  scene.add(m); basketMeshes.push(m);
 }
 function lamp(x, z) {
   const li = T(Math.floor(x), Math.floor(z));
@@ -29346,7 +29407,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 664, crashSeen = new Map();
+const GAME_VERSION = 665, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
