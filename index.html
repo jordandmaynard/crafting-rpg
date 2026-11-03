@@ -2426,6 +2426,41 @@ function markShoals() {
   }
   beachStats.shoals = rows[0].length; beachStats.shoals2 = rows[1].length;
   computeRim();
+  markShelf();
+}
+// The shelf (Jordan, v678): past the shoals the sea or lake bed no longer drops off a cliff but slopes on down, SHELF_SLOPE
+// a tile, from the second shoal row's foot until it meets the bed as it was (so the deep sea is as deep as ever), making
+// the floor near a beach one broad, shallow valley with no hard line in it. SHELF holds each tile corner's distance from
+// the nearest shoal (a chamfer distance over the corners), SHELFT the sea and lake tiles whose bed follows it.
+const SHELF_SLOPE = 0.3, SHELF = new Float32Array((N + 1) * (N + 1)), SHELFT = new Uint8Array(N * N);
+function shelfD(x, z) {
+  const c = Math.min(N - 1, Math.floor(x)), r = Math.min(N - 1, Math.floor(z)), u = x - c, v = z - r, W = N + 1, o = r * W + c;
+  return (SHELF[o] * (1 - u) + SHELF[o + 1] * u) * (1 - v) + (SHELF[o + W] * (1 - u) + SHELF[o + W + 1] * u) * v;
+}
+function markShelf() {
+  const W = N + 1, D = SHELF, S2 = Math.SQRT2;
+  D.fill(1e4); SHELFT.fill(0);
+  for (let i = 0; i < N * N; i++) if (SHOAL[i]) { const c = i % N, r = (i - c) / N, o = r * W + c; D[o] = D[o + 1] = D[o + W] = D[o + W + 1] = 0; }
+  for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
+    const o = r * W + c; let d = D[o];
+    if (c > 0) d = Math.min(d, D[o - 1] + 1);
+    if (r > 0) { d = Math.min(d, D[o - W] + 1); if (c > 0) d = Math.min(d, D[o - W - 1] + S2); if (c < W - 1) d = Math.min(d, D[o - W + 1] + S2); }
+    D[o] = d;
+  }
+  for (let r = W - 1; r >= 0; r--) for (let c = W - 1; c >= 0; c--) {
+    const o = r * W + c; let d = D[o];
+    if (c < W - 1) d = Math.min(d, D[o + 1] + 1);
+    if (r < W - 1) { d = Math.min(d, D[o + W] + 1); if (c < W - 1) d = Math.min(d, D[o + W + 1] + S2); if (c > 0) d = Math.min(d, D[o + W - 1] + S2); }
+    D[o] = d;
+  }
+  let n = 0;
+  for (let i = 0; i < N * N; i++) {
+    if ((LV[i] && !BR[i]) || !WL[i] || LAVA[i] || CY[i] || (WT[i] && WT[i] !== 2)) continue;
+    const c = i % N, r = (i - c) / N;
+    if (shelfD(c + 0.5, r + 0.5) * SHELF_SLOPE > WL[i] * STEP - GL[i] * STEP + 1) continue;   // (out where the shelf is under the old bed anyway)
+    SHELFT[i] = 1; n++;
+  }
+  beachStats.shelf = n;
 }
 
 // Cut the world into regions and name them (see REGION_MIN above). Each region also gets the spots its name can
@@ -8781,7 +8816,11 @@ function groundColor(c, r, i, j) {
 const tileSurf = (c, r, u, v) => {
   const i = T(c, r), l = LIFT[SH[i]];
   if (SHOAL[i]) { const m = SHOAL[i] & 255; return LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5)); }
-  if (!LV[i] || BR[i]) return GL[i] * STEP;   // a lake or river bed, the sea floor, a canyon's floor
+  if (!LV[i] || BR[i]) {   // a lake or river bed, the sea floor, a canyon's floor
+    // (the shelf off the shoals: the bed sloping on down from them until it meets the bed as it was: see markShelf)
+    if (SHELFT[i]) return Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v));
+    return GL[i] * STEP;
+  }
   if (WT[i] === 1) return LV[i] * STEP - BOG_BED;   // a swamp pool's bed (its banks are its neighbours' edges)
   if (BEACH[i]) return LV[i] * STEP - beachDrop(i) * (1 - beachH(BEACH[i], u, v));   // a beach, sloping into the water
   return (LV[i] + (l[0] * (1 - u) + l[1] * u) * (1 - v) + (l[3] * (1 - u) + l[2] * u) * v) * STEP;
@@ -30239,7 +30278,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 677, crashSeen = new Map();
+const GAME_VERSION = 678, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
