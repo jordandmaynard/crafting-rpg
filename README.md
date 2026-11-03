@@ -265,6 +265,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v622:** (Jordan) Ragdoll tuning as default: bounce 0.33, friction 0.36, item friction 0.44, head pops off 8% of the time, and each weapon's kick, lift and spin (sword 3/2.7/5.7, axe 5.9/4.4/7.7, hammer 7.3/4.6/8, spear 2.8/3.6/5.1, bow 3.3/1.2/9.7).
 
+**v623:** (Jordan) Thatch roofs tuning as defaults: bump 1.80, row 0.19, span 1.52, shade 1.09.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
