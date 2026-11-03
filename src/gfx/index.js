@@ -14,5 +14,6 @@ export { Caustics } from './caustics.js';
 export { Ripples } from './ripples.js';
 export { Trample } from './trample.js';
 export { Drift } from './drift.js';
+export { FxParticles, FxRunner, FX, RAMP_N } from './particles.js';
 export { GpuProfiler } from './profiler.js';
 export { SpikeRecorder, SPIKE_TUNING } from './spikes.js';

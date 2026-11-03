@@ -869,6 +869,14 @@ class Renderer {
         texBind.push({ n, b: b++, sampler: true });
       }
     }
+    // (storage: { name: { buffer (a GPUBuffer), type (its WGSL type, e.g. 'array<FxP>') } }, read-only buffers the
+    // shader reads, the particles' (particles.js); the code declares any struct they hold)
+    const stoBind = [];
+    for (const n in mat.storage || {}) {
+      entries.push({ binding: b, visibility: S.VERTEX | S.FRAGMENT, buffer: { type: 'read-only-storage' } });
+      decl.push(`@group(2) @binding(${b}) var<storage, read> ${n}: ${mat.storage[n].type};`);
+      stoBind.push({ n, b: b++ });
+    }
     const vin = ['  @location(0) position: vec3f,'];
     if (mat.vertexColors) vin.push('  @location(1) color: vec3f,');
     let loc = 2;
@@ -876,7 +884,7 @@ class Renderer {
     const head = decl.join('\n') + `\nstruct VIn {\n${vin.join('\n')}\n}\n`;
     const code = PRELUDE + head + mat.code;
     const bgl = this.device.createBindGroupLayout({ entries });
-    info = { code, head, kinds, slots, texBind, bgl, layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrame, this.bglObj, bgl] }),
+    info = { code, head, kinds, slots, texBind, stoBind, bgl, layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrame, this.bglObj, bgl] }),
       buf: names.length ? this.device.createBuffer({ size: Math.max(16, slots * 16), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : null,
       data: new Float32Array(Math.max(4, slots * 4)), frame: -1, bg: null, bgKey: '' };
     this._mats.set(mat, info);
@@ -905,6 +913,7 @@ class Renderer {
       const entries = [];
       if (info.buf) entries.push({ binding: 0, resource: { buffer: info.buf } });
       info.texBind.forEach((tb, k) => entries.push({ binding: tb.b, resource: res[k] }));
+      for (const sb of info.stoBind) entries.push({ binding: sb.b, resource: { buffer: mat.storage[sb.n].buffer } });
       info.bg = this.device.createBindGroup({ layout: info.bgl, entries });
     }
     return info.bg;
