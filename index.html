@@ -4302,7 +4302,8 @@ function raiseTownHouses(t, n) {
     // (v555, Jordan: a tavern is always two stories of timber, rooms over the bar) one that can't be, here, goes elsewhere
     if (role === 'tavern' && (!plan || plan.low.size < 20)) continue;   // (and roomy: the bar, tables and the hearth)
     if (role === 'bank' && (!plan || plan.low.size < 24)) continue;   // (the vault, the counter and a hall before it)
-    if (role === 'guard' && (!plan || plan.low.size < 20) && guardTries++ < 60) continue;   // (the cell, the racks and the mess table)
+    // (2026-11-03, Jordan: stone on both floors under a flat stone roof, so a full upper story: no terrace, no balcony)
+    if (role === 'guard' && (!plan || plan.low.size < 20 || plan.terrace) && guardTries++ < 60) continue;   // (the cell, the racks and the mess table)
     if (!plan) { two = false; style = style.replace('2', '1'); plan = townPlan(w, dep, o0, false, c0 * 7 + r0 * 13 + d); }
     // (2026-11-03, Jordan: an archery and training yard beside the guard house) a clear stretch of yard along one of
     // its walls, not the door's: a place without one goes on to the next (for a while; then it does without)
@@ -4352,6 +4353,7 @@ function raiseTownHouses(t, n) {
       const bank = role === 'bank', byDoor = bank && e === back && Math.abs(c - doorAt[0]) + Math.abs(r - doorAt[1]) === 1;
       (ew ? WW : WN)[T(ec, er)] = isDoor ? (bank ? 11 : 2) : !byDoor && window(set, c, r, e) ? (stone ? 14 : 13) : (stone ? 4 : 1);
       if (bank) BANK_WALLS.add(edgeKey(ec, er, ew));
+      if (role === 'guard') GUARD_WALLS[0].add(edgeKey(ec, er, ew));
       if (bank && isDoor) BANK_DOORS.add(edgeKey(ec, er, ew));
       piece(ec, er);
       if (isDoor) door = [ec, er, ew];
@@ -4363,7 +4365,7 @@ function raiseTownHouses(t, n) {
       const out = [];
       for (const [c, r] of tiles) for (let e = 0; e < 4; e++) {
         const i = T(c, r), j = T(c + DC[e], r + DR[e]);
-        if (upSet.has(i) && !upSet.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), window(upSet, c, r, e) ? 13 : 1); piece(ec, er); if (set.has(j)) out.push([ec, er, ew, c, r]); }
+        if (upSet.has(i) && !upSet.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), role === 'guard' ? (window(upSet, c, r, e) ? 14 : 4) : window(upSet, c, r, e) ? 13 : 1); if (role === 'guard') GUARD_WALLS[1].add(edgeKey(ec, er, ew)); piece(ec, er); if (set.has(j)) out.push([ec, er, ew, c, r]); }
         else if (!upSet.has(i) && !set.has(j)) { const [ec, er, ew] = edgeOf(c, r, e); (ew ? U.WW : U.WN).set(T(ec, er), 5); piece(ec, er); }
       }
       if (out.length) {
@@ -4373,7 +4375,7 @@ function raiseTownHouses(t, n) {
       }
     }
     // a balcony over the street (large towns, a full upper story): three planks out in front, railed, a door out to it
-    if (two && big && !setBack && !plan.terrace && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
+    if (two && big && !setBack && !plan.terrace && role !== 'guard' && w >= 5 && hs(c0, r0, 340 + d) < 0.6) {
       const bal = [-1, 0, 1].map(a => at(a, 0)), free = bal.every(([c, r]) => !U.FL.has(T(c, r)) && !BALCONY.has(T(c, r))) && [-1, 0, 1].every(a => upp.has(K(a, 1)));
       if (free) {
         for (const [c, r] of bal) { const i = T(c, r); U.FL.set(i, 1); BALCONY.add(i); piece(c, r); }
@@ -4539,6 +4541,8 @@ function chapelSteeple(ca, at, ridge, stone, lead, darkC, bandC) {
 const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Map();
 // (2026-11-03) the banks' ground-floor walls (edge keys: pale dressed stone, bars on their windows) and doors (the grand entrance)
 const BANK_WALLS = new Set(), BANK_DOORS = new Set();
+// (2026-11-03, Jordan: the guard house in dark stone, both floors) its walls' edgeKeys, by story
+const GUARD_WALLS = [new Set(), new Set()];
 // (2026-11-03, Jordan) the guard house's training yard: a stretch of yard L tiles along one of its walls (not the
 // door's) and D (4, or 3) out from it, every tile of it ok; the roomiest of its three sides. Kept from the houses
 // built after it and from the trees and bushes (GUARD_YARD), and furnished by townYards (guardYard).
@@ -13273,7 +13277,9 @@ function redrawPieces() { for (const ch of chunks.values()) setPieces(ch); }
 // (2026-11-03, Jordan: the bank in pale dressed stone, its windows barred) a stone wall's colours by where it is
 const STONE_PLAIN = { block: '#8a8694', core: '#4a4652', crenel: '#7e7a88', cap: '#7c7886', bars: false };
 const STONE_BANK = { block: '#c4baa6', core: '#7a7264', crenel: '#b6ac98', cap: '#b2a894', bars: true };
-const stoneOf = (c, r, w) => !PDY && BANK_WALLS.has(edgeKey(c, r, w)) ? STONE_BANK : STONE_PLAIN;
+// (2026-11-03, Jordan: the guard house the bank's opposite, in dark stone on both its floors)
+const STONE_GUARD = { block: '#5a5664', core: '#2a2630', crenel: '#524e5c', cap: '#4c4854', bars: false };
+const stoneOf = (c, r, w, k = Math.round(PDY / WALL_H)) => { const e = edgeKey(c, r, w); return !k && BANK_WALLS.has(e) ? STONE_BANK : GUARD_WALLS[k]?.has(e) ? STONE_GUARD : STONE_PLAIN; };
 // iron bars over a stone window, on its outside: uprights cut to the arch and two cross bars
 function windowBars(c, r, w, y, at, ry) {
   const s = windowOutside(c, r, w) || 1, W = STONE_WIN.W, R2 = 4 * W * W, o = 0.2;
@@ -13987,7 +13993,7 @@ function flatStoneRoof(rm, open, fy, k) {
       const [ec, er, w] = edgeOf(c, r, d), i = T(ec, er), j = w ? T(ec - 1, er) : T(ec, er - 1), ry = w ? Math.PI / 2 : 0;
       const y1 = Math.max(LV[i], LV[j]) * STEP + k * WALL_H + WALL_H - 0.12, capTop = fy + 0.01, stone = v === 4 || v === 14;
       const P = (a, yy, o) => part(G.box, o.col, w ? ec : ec + a, yy, w ? er + a : er, { sx: o.sx, sy: o.sy, sz: o.sz, ry });
-      const St = k ? STONE_PLAIN : stoneOf(ec, er, w);
+      const St = stoneOf(ec, er, w, k);
       if (capTop > y1) P(0.5, (y1 + capTop) / 2, { col: St.cap, sx: 1.31, sy: capTop - y1, sz: 0.31 });
       const kk = 0.92 + hs(ec, er, 50 + w) * 0.14, m0 = stone ? y1 + 0.2 : capTop, m1 = capTop + FLAT_CRENEL;
       if (m1 > m0) for (const a of [0.2, 0.8]) P(a, (m0 + m1) / 2, { col: shade(CC(St.crenel), kk), sx: 0.3, sy: m1 - m0, sz: 0.34 });

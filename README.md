@@ -238,6 +238,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v608:** Fix: v607 didn't load (GlowBuf was used before its class was defined).
 
+**v609:** (Jordan: the guard house all stone with a flat roof, in darker stone, the bank's opposite) The guard house's upper story is now walled in stone (and stone windows) too, so its roof is the flat stone roof. Its site must give a full upper story (no terrace), and it never gets a balcony. Both floors' walls, caps and crenels are in a dark stone (STONE_GUARD, GUARD_WALLS by story; stoneOf takes the story now). The crossed-sword shields stay by its door.
+
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
 **v597:** (Jordan: set the bank apart outside: barred windows, a grand entrance with the mausoleum's doors, wall lanterns, pale dressed stone) The bank's walls are pale dressed stone (blocks, mortar, crenels and the flat roof's caps; stoneOf, BANK_WALLS) and its windows have iron bars on the outside (windowBars). Its doorway is the mausoleum's marble surround with a pair of bronze half doors that open together, between fluted marble pilasters, under an entablature and a stepped pediment with a gilded coin (bankEntrance). The walls beside the door are always plain. A wall lantern hangs on each pilaster and is lit as a town lamp (bankLanterns).
