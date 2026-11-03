@@ -5150,7 +5150,10 @@ function fenceTowns() {
     // (v628, Jordan: never block a way out with walls) a large town's main streets go out under archways: where each
     // street leaves the town, its three tiles' edges stay open, and any of the town's own ragged ground past that line
     // in the three-wide way out counts as outside (corridor), so the wall turns out along it instead of across it
-    const open = new Set(), corridor = new Set(), arches = [];
+    // (v629, Jordan: walls and posts never block an archway) and any tile of the three-wide way in, up to the arch's
+    // line, that isn't town ground (a side lane ending short of the main street) counts as inside (fill), so no wall
+    // runs across it under the arch
+    const open = new Set(), corridor = new Set(), fill = new Set(), arches = [];
     if (big) for (let d = 0; d < 4; d++) {
       let e = 0;
       while (e < t.R + 3 && TN[T(t.c + DC[d] * (e + 1), t.r + DR[d] * (e + 1))] === own) e++;
@@ -5158,15 +5161,16 @@ function fenceTowns() {
       const mid = T(cc(0, 0), rr(0, 0)), out = T(cc(1, 0), rr(1, 0));
       if (!(TSTREET[mid] || PATH[mid]) || !LV[out] || WT[out] || LAVA[out] || !terrainOpen(mid, out, d)) continue;
       for (let j = 1; j < 5; j++) for (let w = -1; w <= 1; w++) if (TN[T(cc(j, w), rr(j, w))] === own) corridor.add(T(cc(j, w), rr(j, w)));
+      for (let j = -4; j <= 0; j++) for (let w = -1; w <= 1; w++) { const x = T(cc(j, w), rr(j, w)); if (TN[x] !== own && LV[x] && !WT[x] && !LAVA[x]) fill.add(x); }
       for (let w = -1; w <= 1; w++) { const [a, b, ww] = edgeOf(cc(0, w), rr(0, w), d); open.add(edgeKey(a, b, ww)); }
       arches.push([cc(0, 0), rr(0, 0), d]);
     }
     for (let r = t.r - t.R - 2; r <= t.r + t.R + 2; r++) for (let c = t.c - t.R - 2; c <= t.c + t.R + 2; c++) {
       const i = T(c, r);
-      if (BI[i] !== TOWN || TN[i] !== own || corridor.has(i)) continue;
+      if (!((BI[i] === TOWN && TN[i] === own) || fill.has(i)) || corridor.has(i)) continue;
       for (let d = 0; d < 4; d++) {
         const n = i + DI[d];
-        if ((BI[n] === TOWN && !corridor.has(n)) || WT[n]) continue;
+        if ((BI[n] === TOWN && !corridor.has(n)) || fill.has(n) || WT[n]) continue;
         if (!terrainOpen(i, n, d) && !(big && LV[n] && !LAVA[n] && !CY[n] && !SH[n])) continue;   // (a large town's wall runs along its cliff tops too, never by a ramp)
         if (DOCK_WAY[i] && DOCK_WAY[n]) continue;   // (open where a dock's road comes in)
         const [ec, er, w] = edgeOf(c, r, d), arr = w ? WW : WN, e = T(ec, er);
@@ -27856,7 +27860,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 629, crashSeen = new Map();
+const GAME_VERSION = 630, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
