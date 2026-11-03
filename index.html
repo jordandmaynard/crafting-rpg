@@ -5163,6 +5163,43 @@ const BEDS = new Map();        // (v452) both tiles of every town bed -> { c, r 
 // wooden fence, a medium town a low dry-stone wall, and a large town a full stone wall (15, townWallPiece), along
 // its cliff tops too, with a 1 x 3 archway (ARCHES, townArch) where each of its main streets goes out, and a small
 // stone guard hut, 2 x 2 where it fits or else 1 x 1, against the wall either side of it (t.huts).
+// (v643, Jordan: towns vary with what's round them) A town's stone (TOWN_STONE: its large wall, posts and archways, a
+// medium town's dry-stone wall) is sandstone where a big desert lies near, dark ash and obsidian where the Blasted
+// Wastes do, else grey; its wood (TOWN_WOOD, the prop woods: a hamlet's fence and gate, its log houses) by the trees
+// of the biggest wooded country near it: pine in the snow, oak in the forest and meadows, dark oak in the deep
+// forest, swamp and graves. townLook(t) picks both once (t.look), from the land 6 to 46 tiles out from its edge.
+const TOWN_STONE = {
+  grey: { block: '#a09a8c', core: '#5e5a52', cap: '#b2ac9e', arch: '#aaa496', vous: '#b8b2a2', key: '#cbc5b4', field: '#8e8a80', fieldTop: '#9a968c', moss: '#6e7a5a' },
+  sand: { block: '#c8a070', core: '#7a5c3c', cap: '#dcb886', arch: '#cfa874', vous: '#d8b282', key: '#e6c69a', field: '#c09468', fieldTop: '#d0a878', moss: '#a08a5a' },
+  ash: { block: '#46403c', core: '#1e1a18', cap: '#5e5650', arch: '#4c4440', vous: '#5a524c', key: '#8a847a', field: '#403a36', fieldTop: '#5a544c', moss: '#8a847a' },
+};
+const TOWN_WOOD = {
+  pine: { wood: '#9a7048', dark: '#5e4028', light: '#b88a5a' },
+  oak: { wood: '#6a4a30', dark: '#43301f', light: '#8a6440' },
+  darkOak: { wood: '#4a3424', dark: '#2a1c12', light: '#6a4a30' },
+};
+const TOWN_LOOK = { near: 6, far: 46, desert: 0.18, wastes: 0.12 };   // (desert/wastes: the share of the land round it that makes it so)
+function townLook(t) {
+  if (t.look) return t.look;
+  const n = new Float32Array(9);
+  let land = 0;
+  for (let dr = -t.R - TOWN_LOOK.far; dr <= t.R + TOWN_LOOK.far; dr += 2) for (let dc = -t.R - TOWN_LOOK.far; dc <= t.R + TOWN_LOOK.far; dc += 2) {
+    const d = Math.hypot(dc, dr) - t.R, c = t.c + dc, r = t.r + dr;
+    if (d < TOWN_LOOK.near || d > TOWN_LOOK.far || c < 0 || r < 0 || c >= N || r >= N) continue;
+    const i = T(c, r);
+    if (!LV[i] || BI[i] === TOWN) continue;
+    land++; n[BI[i]]++;
+  }
+  const des = land ? n[DESERT] / land : 0, ash = land ? n[WASTES] / land : 0;
+  const stone = ash >= TOWN_LOOK.wastes && ash >= des ? 'ash' : des >= TOWN_LOOK.desert ? 'sand' : 'grey';
+  const woods = { pine: n[SNOW], oak: n[FOREST] + n[MEADOW], darkOak: n[DEEP] + n[SWAMP] + n[GRAVE] };
+  let wood = 'oak';
+  for (const k of ['pine', 'darkOak']) if (woods[k] > woods[wood]) wood = k;
+  t.look = { stone, wood, S: TOWN_STONE[stone], W: TOWN_WOOD[wood] };
+  return t.look;
+}
+// the look of the town whose ground is on either side of an edge (tiles i, j), or null outside every town
+function lookAt(i, j) { const k = TN[i] || TN[j]; return k && towns[k - 1] ? townLook(towns[k - 1]) : null; }
 const ARCHES = new Map();      // tile of an archway's middle edge -> { c, r, w, o, y, key }
 let TOWN_POSTS = false;      // (any large town walled: buildPieces looks for wall posts)
 const ARCH_END = new Set();    // the corner points (T(x, z)) an archway's piers stand on: the wall puts no post there
@@ -5172,7 +5209,7 @@ function fenceTowns() {
     const own = k + 1, big = t.tier === 2;
     if (big) TOWN_POSTS = true;
     const kind = big ? KIND_VAL.townwall : t.tier === 1 ? KIND_VAL.stonefence : KIND_VAL.fence, ends = [];
-    t.gates = []; t.arches = []; t.huts = [];
+    t.gates = []; t.arches = []; t.huts = []; townLook(t);
     // (v628, Jordan: never block a way out with walls) a large town's main streets go out under archways: where each
     // street leaves the town, its three tiles' edges stay open, and any of the town's own ragged ground past that line
     // in the three-wide way out counts as outside (corridor), so the wall turns out along it instead of across it
@@ -13221,7 +13258,8 @@ function townWallPosts(x, z) {
   } finally { emitSurf = save; SURF = 0; }
 }
 function townPostRaw(x, z, y, cut) {
-  const TW = TOWN_WALL, s = TW.post, ph = cut ? CUT_H : TW.top + 0.3, k = 0.92 + hs(x, z, 157) * 0.14;
+  const S = (lookAt(T(x, z), T(x - 1, z - 1)) || lookAt(T(x - 1, z), T(x, z - 1)))?.S || TOWN_STONE.grey, TW = { ...TOWN_WALL, block: S.block, core: S.core, cap: S.cap };
+  const s = TW.post, ph = cut ? CUT_H : TW.top + 0.3, k = 0.92 + hs(x, z, 157) * 0.14;
   const bx = (dx, dz, yy, sx, sy, sz, col) => part(G.box, col, x + dx, yy, z + dz, { sx, sy, sz });
   bx(0, 0, y + 0.13, s + 0.08, 0.26, s + 0.08, shade(CC(TW.core), 1.2));
   bx(0, 0, y + ph / 2, s - 0.06, ph, s - 0.06, TW.core);
@@ -13238,7 +13276,8 @@ function townPostRaw(x, z, y, cut) {
   }
 }
 function townWallPiece(c, r, w, y, at, ry, cut) {
-  const TW = TOWN_WALL, th = TW.thick, top = cut ? CUT_H : TW.top, k = 0.92 + hs(c, r, 50 + w) * 0.14;
+  const S = lookAt(T(c, r), w ? T(c - 1, r) : T(c, r - 1))?.S || TOWN_STONE.grey, TW = { ...TOWN_WALL, block: S.block, core: S.core, cap: S.cap };
+  const th = TW.thick, top = cut ? CUT_H : TW.top, k = 0.92 + hs(c, r, 50 + w) * 0.14;
   const o = BI[T(c, r)] === TOWN ? -1 : 1;   // (which way is out, across the wall)
   const P = (a, b, yy) => w ? [c + b, yy, r + a] : [c + a, yy, r + b];
   const bx = (a, b, yy, sx, sy, sz, col) => { const p = P(a, b, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
@@ -13275,7 +13314,8 @@ function townArchPiece(ar) {
   } finally { emitSurf = save; SURF = 0; }
 }
 function townArchRaw(ar, cut) {
-  const { c, r, w, o, y } = ar, A = TOWN_ARCH, hf = A.half, ry = w ? -Math.PI / 2 : 0;
+  const S = lookAt(T(ar.tc, ar.tr), T(ar.tc, ar.tr))?.S || TOWN_STONE.grey, TOWN_WALL = { core: S.core, cap: S.cap };
+  const { c, r, w, o, y } = ar, A = { ...TOWN_ARCH, stone: S.arch, vous: S.vous, key: S.key }, hf = A.half, ry = w ? -Math.PI / 2 : 0;
   const x0 = w ? c : c + 0.5, z0 = w ? r + 0.5 : r, bc = A.depth / 2 - A.back;
   const P = (a, b, yy) => w ? [x0 + b * o, yy, z0 + a] : [x0 + a, yy, z0 + b * o];
   const bx = (a, b, yy, sx, sy, sz, col, rz = 0) => { const p = P(a, b, yy); part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry, rz }); };
@@ -13366,31 +13406,34 @@ function wallPieceRaw(c, r, w, type, cut) {
   }
   if (type === 5) {
     // a post-and-rail fence: posts at the ends and the middle, two rails
+    const W = lookAt(i, j)?.W;   // (v643: a town's fence in the wood of its country)
     for (const a of [0, 0.5, 1]) {
       const hh = FENCE_H + (a === 0.5 ? -0.08 : 0.04), p = at(a, y + hh / 2);
-      part(G.box, shade(CC('#6a4a2c'), k), p[0], p[1], p[2], { sx: 0.11, sy: hh, sz: 0.11, ry });
+      part(G.box, shade(CC(W ? W.wood : '#6a4a2c'), k), p[0], p[1], p[2], { sx: 0.11, sy: hh, sz: 0.11, ry });
     }
-    for (const yy of [0.32, FENCE_H - 0.16]) { const p = at(0.5, y + yy); part(G.box, shade(CC('#8a6440'), k), p[0], p[1], p[2], { sx: 1, sy: 0.07, sz: 0.05, ry }); }
+    for (const yy of [0.32, FENCE_H - 0.16]) { const p = at(0.5, y + yy); part(G.box, shade(CC(W ? W.light : '#8a6440'), k), p[0], p[1], p[2], { sx: 1, sy: 0.07, sz: 0.05, ry }); }
     return;
   }
   if (type === 6) {
-    // a dry-stone wall: rough fieldstones in two courses, flat stones laid across the top
+    // a dry-stone wall: rough fieldstones in two courses, flat stones laid across the top (v643: a town's in its stone)
+    const S = lookAt(i, j)?.S || TOWN_STONE.grey;
     for (let row = 0; row < 2; row++) for (let n = 0; n < (row ? 4 : 3); n++) {
       const kk = hs(c * 3 + n, r * 5 + row, 56 + w), a = row ? n / 3 : (n + 0.5) / 3, moss = kk > 0.8;
       const p = at(a, y + (row ? 0.45 : 0.17));
-      part(G.dodec, shade(CC(moss ? '#6e7a5a' : '#8e8a80'), 0.78 + kk * 0.32), p[0], p[1], p[2], { sx: 0.36 + kk * 0.08, sy: row ? 0.28 : 0.36, sz: 0.4 - kk * 0.06, ry: ry + kk * 0.6 });
+      part(G.dodec, shade(CC(moss ? S.moss : S.field), 0.78 + kk * 0.32), p[0], p[1], p[2], { sx: 0.36 + kk * 0.08, sy: row ? 0.28 : 0.36, sz: 0.4 - kk * 0.06, ry: ry + kk * 0.6 });
     }
     for (let n = 0; n < 3; n++) {
       const kk = hs(c * 5 + n, r * 3, 58 + w), p = at((n + 0.5) / 3, y + 0.64);
-      part(G.box, shade(CC('#9a968c'), 0.8 + kk * 0.3), p[0], p[1], p[2], { sx: 0.34, sy: 0.1, sz: 0.42, ry, rz: (kk - 0.5) * 0.2 });
+      part(G.box, shade(CC(S.fieldTop), 0.8 + kk * 0.3), p[0], p[1], p[2], { sx: 0.34, sy: 0.1, sz: 0.42, ry, rz: (kk - 0.5) * 0.2 });
     }
     return;
   }
   if (type === 7) {
     // a gate's posts; the gate itself swings on its own mesh
+    const W = lookAt(i, j)?.W;
     for (const a of [0, 1]) {
-      let p = at(a, y + (FENCE_H + 0.16) / 2); part(G.box, shade(CC('#5a3c24'), k), p[0], p[1], p[2], { sx: 0.15, sy: FENCE_H + 0.16, sz: 0.15, ry });
-      p = at(a, y + FENCE_H + 0.2); part(G.box, '#3e2a1a', p[0], p[1], p[2], { sx: 0.19, sy: 0.07, sz: 0.19, ry });
+      let p = at(a, y + (FENCE_H + 0.16) / 2); part(G.box, shade(CC(W ? W.wood : '#5a3c24'), k * (W ? 0.88 : 1)), p[0], p[1], p[2], { sx: 0.15, sy: FENCE_H + 0.16, sz: 0.15, ry });
+      p = at(a, y + FENCE_H + 0.2); part(G.box, W ? W.dark : '#3e2a1a', p[0], p[1], p[2], { sx: 0.19, sy: 0.07, sz: 0.19, ry });
     }
     return;
   }
@@ -13419,13 +13462,14 @@ function wallPieceRaw(c, r, w, type, cut) {
   }
   if (type === 3) {
     // (v621, Jordan: no more uneven sharpened tops: every log is sawn off level, just under the roof's eaves)
+    const W = lookAt(i, j)?.W;   // (v643: a town's log houses in the wood of its country)
     for (let n = 0; n < 5; n++) {
-      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.04, col = shade(CC(n % 2 ? '#6a4a2c' : '#7a5634'), 0.88 + kk * 0.2);
+      const kk = hs(c * 7 + n, r, 52 + w), h = cut ? CUT_H : WALL_H - 0.04, col = shade(CC(W ? (n % 2 ? W.wood : W.light) : n % 2 ? '#6a4a2c' : '#7a5634'), (0.88 + kk * 0.2) * (W && n % 2 === 0 ? 0.88 : 1));
       let p = at(0.1 + n * 0.2, y + h / 2); part(G.cyl8, col, p[0], p[1], p[2], { sx: 0.2, sy: h, sz: 0.2 });
       // the sawn end of a log shows paler
-      p = at(0.1 + n * 0.2, y + h); part(G.cyl8, cut ? '#c89a62' : shade(CC('#b08656'), 0.9 + kk * 0.15), p[0], p[1], p[2], { sx: 0.17, sy: 0.02, sz: 0.17 });
+      p = at(0.1 + n * 0.2, y + h); part(G.cyl8, cut ? '#c89a62' : shade(CC(W ? W.light : '#b08656'), (0.9 + kk * 0.15) * (W ? 1.25 : 1)), p[0], p[1], p[2], { sx: 0.17, sy: 0.02, sz: 0.17 });
     }
-    for (const yy of cut ? [0.3] : [0.3, WALL_H - 0.45]) { const p = at(0.5, y + yy); part(G.box, '#4a3020', p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.26, ry }); }
+    for (const yy of cut ? [0.3] : [0.3, WALL_H - 0.45]) { const p = at(0.5, y + yy); part(G.box, W ? W.dark : '#4a3020', p[0], p[1], p[2], { sx: 1.02, sy: 0.08, sz: 0.26, ry }); }
     return;
   }
   if (type === 15) { townWallPiece(c, r, w, y, at, ry, cut); return; }
@@ -14103,6 +14147,7 @@ function stairGhost(kind) {
 const doors = new Map();   // edge key -> { pivot, open, t, side }
 // (the wooden and iron doors fill their frame from the floor up to the beam across its top)
 const DOOR_H = WALL_H - 0.12;
+const gateMats = {};
 const doorWood = flatMat({ color: '#6a4428' }), doorIron = flatMat({ color: '#2a2630', roughness: 0.5, metalness: 0.5 });
 const gatePicket = new GFX.BoxGeometry(0.13, FENCE_H - 0.16, 0.05), gateRail = new GFX.BoxGeometry(0.84, 0.07, 0.04), gateBrace = new GFX.BoxGeometry(0.84, 0.06, 0.035);
 // the iron pieces: railings and gate bars in IRON_RAIL, the iron door's plate a shade lighter, with darker bands and studs
@@ -14155,9 +14200,10 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
     const ring = new GFX.Mesh(new GFX.BoxGeometry(0.1, 0.1, 0.13), railMat); ring.position.set(0.7, 0.38, 0); ring.rotation.z = Math.PI / 4; leaf.add(ring);
   } else if (gate) {
     // a picket gate: boards on two rails, braced corner to corner
-    for (let k = 0; k < 5; k++) { const b = new GFX.Mesh(gatePicket, doorWood); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
-    for (const yy of [0.22, FENCE_H - 0.22]) { const b = new GFX.Mesh(gateRail, doorWood); b.position.set(0.42, yy, 0.045); leaf.add(b); }
-    const brace = new GFX.Mesh(gateBrace, doorWood); brace.position.set(0.42, FENCE_H / 2, 0.05); brace.rotation.z = Math.atan2(FENCE_H - 0.44, 0.8); leaf.add(brace);
+    const gw = lookAt(i, j)?.wood, gm = gw ? (gateMats[gw] ||= flatMat({ color: TOWN_WOOD[gw].wood })) : doorWood;   // (v643: a town's in its wood)
+    for (let k = 0; k < 5; k++) { const b = new GFX.Mesh(gatePicket, gm); b.position.set(0.09 + k * 0.165, 0.06 + (FENCE_H - 0.16) / 2, 0); leaf.add(b); }
+    for (const yy of [0.22, FENCE_H - 0.22]) { const b = new GFX.Mesh(gateRail, gm); b.position.set(0.42, yy, 0.045); leaf.add(b); }
+    const brace = new GFX.Mesh(gateBrace, gm); brace.position.set(0.42, FENCE_H / 2, 0.05); brace.rotation.z = Math.atan2(FENCE_H - 0.44, 0.8); leaf.add(brace);
   } else {
     const plank = new GFX.Mesh(new GFX.BoxGeometry(0.84, DOOR_H, 0.08), doorWood);
     plank.position.set(0.42, DOOR_H / 2, 0); leaf.add(plank);
@@ -28157,7 +28203,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 642, crashSeen = new Map();
+const GAME_VERSION = 643, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -28446,7 +28492,7 @@ window.GAME = {
   townWalls: () => towns.map(t => {
     const kinds = {};
     for (let r = t.r - t.R - 3; r <= t.r + t.R + 3; r++) for (let c = t.c - t.R - 3; c <= t.c + t.R + 3; c++) for (const v of [WN[T(c, r)], WW[T(c, r)]]) if (v === 5 || v === 6 || v === 7 || v === 15) kinds[WALL_KIND[v]] = (kinds[WALL_KIND[v]] || 0) + 1;
-    return { name: t.name, tier: t.tier, kinds, arches: (t.arches || []).length, huts: (t.huts || []).map(h => h.tiles.length), gates: (t.gates || []).length };
+    return { name: t.name, tier: t.tier, stone: t.look?.stone, wood: t.look?.wood, kinds, arches: (t.arches || []).length, huts: (t.huts || []).map(h => h.tiles.length), gates: (t.gates || []).length };
   }),
   townFences: () => towns.map(t => ({ name: t.name, gates: (t.gates || []).length, open: (t.gates || []).filter(g => openDoors.has(edgeKey(...g))).length })),
   wildFences: () => wildFence.size,
