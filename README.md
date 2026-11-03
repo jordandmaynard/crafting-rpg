@@ -343,6 +343,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v673:** (Jordan's tuning) Lit haze: sun 1.75 (was 1.9), forward 0.26 (0.19), sky 0.35 (1), lamps 1.4 (1), lift 0.55 (0.34), clear 0.5 (1). Eye adaptation's darkest stays 1 (Jordan: tuned for bright, only brightens in the dark).
 
+**v674:** (Jordan: a river mill) A new point of interest on rivers near meadows: a mill, two stories on a 4 x 4 footing, stone below and logs above under a thatched roof. It stands where a river at least two tiles wide runs straight past the bank for three tiles (one mill to a river, 70 tiles apart, named for the river). Along those three tiles of its river wall the bank is cut away (MCUT: pointH leaves the mill's tiles out along that side), a coursed stone face running straight down into the river with a pier at each end. A water wheel turns there against the wall, its bottom carried along with the current (FX/FZ), its axle running in through the wall from a post-and-beam bearing out in the river. Its paddles drip, with the grotto waterfall's shader (millFallMat), from when they come up out of the water until they pass level. Inside, against the wheel's wall, is a grinder anyone can use (a real station, st.poi, which can't be moved or taken down), with a wooden stair up to the loft and sacks of flour in a corner. T > River mills (wheel speed, drips). Hook GAME.mills().
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

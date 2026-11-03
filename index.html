@@ -1218,6 +1218,9 @@ const WT = new Uint8Array(N * N);   // 1 = shallow bog water over the ground, 2 
 const TN = new Uint8Array(N * N);   // town number + 1
 const FL = new Uint8Array(N * N);   // built floor
 const FARM = new Uint8Array(N * N); // 1 a farm's ground: its house, yard and fields (see placeFarms)
+// (v674) a river mill's bank, cut straight down: bit 1 << d set on a mill tile whose side d (toward the river) has its
+// bank cut away, so pointH leaves that tile out along that side and the river's bed runs right in under the wall
+const MCUT = new Uint8Array(N * N);
 const FIELD = new Uint8Array(N * N); // a wheat field on tilled earth: 1 its rows running east-west, 2 north-south
 const GROT = new Uint8Array(N * N);  // a fairy grotto: 1 its pool, 2 the mossy rock over it (see placeGrottos)
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
@@ -2289,6 +2292,7 @@ async function generate(progress) {
   placeMausoleums();
   placeWillows();
   placeCabins();
+  placeMills();   // (v674: not counted in poiRegs, like the docks: they go by the rivers)
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP && OB[i] !== O.FOUNTAIN) OB[i] = 0; }
   towns.forEach(townYards);   // (2026-11-03: the towns' outdoor props, once everything else in them is down)
@@ -2491,7 +2495,8 @@ function namePOIs() {
     }
     const R = regions[g], base = !R ? 'WILD' : R.root || R.adj || BIOMES[R.biome].name.toUpperCase().replace(/^THE /, '');
     // (a dock: for its town, or else for the water it stands in)
-    const f = word === 'DOCK' && !p.town ? features[FEAT[p.water]] : null;
+    // (v674: a mill, for the river it stands on)
+    const f = (word === 'DOCK' && !p.town) || word === 'MILL' ? features[FEAT[p.water]] : null;
     p.name = (word === 'DOCK' && p.town ? p.town.name : f && (f.root || f.adj) || base) + ' ' + word; p.found = false; p.reg = g;
     poiAll.push({ p, kind: word, ink });
     if (!same.has(p.name)) same.set(p.name, []);
@@ -6241,6 +6246,126 @@ function placeCabins() {
     }
   }
 }
+// River mills (v674, Jordan): on rivers near a meadow, wherever the river runs straight past a bank for MILL.cut tiles.
+// A mill is two stories on a 4 x 4 footing: stone below, logs above under a thatched roof (the thatch comes of the log
+// walls: logBuilding). Along its river side the bank is cut away for MILL.cut tiles (MCUT: the ground there drops
+// straight down a stone face to the river's bed) and a water wheel turns in the river against that wall, its bottom
+// carried along by the current; its paddles drip as they come up out of the water, until they pass level. Inside, on
+// the wheel's wall, stands a grinder anyone can use (a station of the mill's, st.poi). In local terms a runs along the
+// river, b inland from its edge: the grinder takes a 0-1, b 0-1; the stair rises along a = 3 toward the river (its foot
+// on b 2, its top on b 1, the landing over b 0); the door is in the back wall at a = 1.
+const mills = [];
+const MILL = { W: 4, D: 4, cut: 3, apart: 70, meadow: 0.3, R: 1.05, width: 0.46, paddles: 12, out: 0.5, sink: 0.36, speed: 0.55,
+  drip: 0.9, dripSpeed: 1.6, dripColor: '#e6f2fa', see: 70 };
+// a mill's tile at (a, b), and a point (A, B) of it in the world: A along the river from its a = 0 end, B inland from the edge
+const millTile = (m, a, b) => [m.c0 + DC[m.pa] * a + DC[m.bk] * b, m.r0 + DR[m.pa] * a + DR[m.bk] * b];
+const millP = (m, A, B) => [m.ox + DC[m.pa] * A + DC[m.bk] * B, m.oz + DR[m.pa] * A + DR[m.bk] * B];
+function placeMills() {
+  mills.length = 0;
+  const { W, D, cut: CUT } = MILL;
+  const keep = new Set([O.VENT, O.VENTX, O.SHRINE, O.LAMP, O.HEARTH, O.GROTTO, O.GROTTOX, O.STATUE, O.STATUEX, O.WILLOW]);
+  const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && BI[i] !== TOWN && !FARM[i] && !FIELD[i] && !GROT[i]
+    && !WN[i] && !WW[i] && !DOCK[i] && !DOCK_WAY[i] && !BEACH[i] && !OBJ[OB[i]].tile && !keep.has(OB[i]);
+  const isRiver = i => WT[i] === 3 && !LV[i] && !BR[i] && !LAVA[i] && !DOCK[i] && !CY[i] && NEAR[i] >= 0;
+  const wet = i => !LV[i] && WT[i] >= 2 && !LAVA[i] && !BR[i] && !CY[i];
+  const runOf = p => river.runs.findIndex(u => p >= u.k0 && p < u.k1);
+  // every bank tile with a river beside it, in a seeded order
+  const cands = [];
+  for (let r = 14; r < N - 14; r++) for (let c = 14; c < N - 14; c++) {
+    const i = r * N + c;
+    if (!LV[i] || WT[i] || TN[i] || FARM[i]) continue;
+    for (let d = 0; d < 4; d++) if (WT[i + DI[d]] === 3 && NEAR[i + DI[d]] >= 0) cands.push([hs(c, r, 674 + d), i, d]);
+  }
+  cands.sort((x, y) => x[0] - y[0]);
+  const used = new Set(), others = [...farms, ...cabins, ...grottos, ...statues, ...mausoleums, ...willows, ...waystones, ...docks].map(poiTile);
+  const fit = (c0, r0, d, mi) => {
+    const pa = mi ? (d + 3) & 3 : (d + 1) & 3, bk = (d + 2) & 3, L = LV[T(c0, r0)];
+    const at = (a, b) => T(c0 + DC[pa] * a + DC[bk] * b, r0 + DR[pa] * a + DR[bk] * b);
+    // the mill and a tile round it on one level of open ground, but for its river side
+    for (let b = -1; b <= D; b++) for (let a = -1; a <= W; a++) {
+      const i = at(a, b);
+      if (b >= 0) { if (LV[i] !== L || !open(i)) return null; continue; }
+      if (a >= 0 && a < CUT) { if (!isRiver(i) || !wet(at(a, -2))) return null; continue; }   // (two tiles of river out from the cut, room for the wheel)
+      // (beyond the cut, along its river side: more water, or ground no higher than it)
+      if (!wet(i) && !(LV[i] && LV[i] <= L && !TN[i] && !SH[i])) return null;
+    }
+    // the river along the cut: one surface, no higher than the bank, running straight along it, all the one way
+    const j0 = at(0, -1);
+    let sg = 0;
+    for (let a = 0; a < CUT; a++) {
+      const j = at(a, -1), dot = (FX[j] * DC[pa] + FZ[j] * DR[pa]) / 127;
+      if (WL[j] !== WL[j0] || WL[j] > L || Math.abs(dot) < 0.8) return null;
+      const s = Math.sign(dot);
+      if (sg && s !== sg) return null;
+      sg = s;
+    }
+    // near a meadow: enough of the land round it is meadow
+    const mc = Math.round(c0 + (DC[pa] + DC[bk]) * 1.5), mr = Math.round(r0 + (DR[pa] + DR[bk]) * 1.5);
+    let land = 0, mead = 0;
+    for (let dr = -8; dr <= 8; dr++) for (let dc = -8; dc <= 8; dc++) { const i = T(mc + dc, mr + dr); if (LV[i]) { land++; if (BI[i] === MEADOW) mead++; } }
+    if (!land || mead < land * MILL.meadow) return null;
+    return { d, mi, pa, bk, c0, r0, L, flow: sg, wl: WL[j0], at };
+  };
+  const piece = (c, r) => buildCount[Math.floor(r / CH) * NC + Math.floor(c / CH)]++;
+  for (const [, i0, d] of cands) {
+    const c0 = i0 % N, r0 = (i0 - c0) / N, run = runOf(NEAR[i0 + DI[d]]);
+    if (run < 0 || used.has(run) || Math.hypot(c0 - spawnT.c, r0 - spawnT.r) < 40) continue;
+    if (mills.some(q => Math.hypot(q.c - c0, q.r - r0) < MILL.apart) || others.some(([c, r]) => Math.hypot(c - c0, r - r0) < 24)) continue;
+    if (towns.some(t => Math.hypot(t.c - c0, t.r - r0) < t.R + 14)) continue;
+    const m = fit(c0, r0, d, hs(c0, r0, 679) < 0.5) || fit(c0, r0, d, hs(c0, r0, 679) >= 0.5);
+    if (!m) continue;
+    used.add(run);
+    const { pa, bk, at } = m;
+    m.ox = c0 + (DC[pa] < 0 || DC[bk] < 0 ? 1 : 0); m.oz = r0 + (DR[pa] < 0 || DR[bk] < 0 ? 1 : 0);
+    m.tiles = []; m.door = null;
+    // its ground and a tile round it cleared, and the miller's (FARM 4); the river by the wheel cleared too
+    for (let b = -2; b <= D; b++) for (let a = -1; a <= W; a++) {
+      const i = at(a, b);
+      if (b >= -1 && LV[i]) { OB[i] = 0; FARM[i] = 4; }
+      else if (!LV[i] && !OBJ[OB[i]].tile) OB[i] = 0;
+    }
+    const set = new Set();
+    for (let b = 0; b < D; b++) for (let a = 0; a < W; a++) { const [c, r] = millTile(m, a, b), i = T(c, r); FL[i] = 2; piece(c, r); set.add(i); m.tiles.push([c, r]); }
+    // the stair, up along a = 3 toward the river: its foot on b 2, its top on b 1, landing on the floor over b 0
+    const [sc, sr] = millTile(m, 3, 2), t0 = T(sc, sr), t1 = T(...millTile(m, 3, 1));
+    const st = { c: sc, r: sr, d, k: 0, kind: 'woodstairs', t0, t1, land: T(...millTile(m, 3, 0)), y0: storyY(0, t0), key: t0 };
+    stairs.set(t0, st); stairAt.set(t0, st); stairAt.set(t1, st);
+    m.stair = st;
+    // the upper floor over all of it but the stairwell
+    const U = UP[1];
+    for (const [c, r] of m.tiles) { const i = T(c, r); if (i !== t0 && i !== t1) U.FL.set(i, 1); }
+    // stone walls below (a door at the back, a window in the end wall and one over the wheel), logs above
+    const doorT = T(...millTile(m, 1, D - 1)), winAt = new Map([[T(...millTile(m, 0, 1)), (pa + 2) & 3], [T(...millTile(m, 2, 0)), d]]);
+    for (const [c, r] of m.tiles) for (let e = 0; e < 4; e++) {
+      if (set.has(T(c + DC[e], r + DR[e]))) continue;
+      const i = T(c, r), [ec, er, ew] = edgeOf(c, r, e), door = i === doorT && e === bk;
+      (ew ? WW : WN)[T(ec, er)] = door ? KIND_VAL.door : winAt.get(i) === e ? KIND_VAL.stonewindow : KIND_VAL.stonewall;
+      (ew ? U.WW : U.WN).set(T(ec, er), KIND_VAL.logwall);
+      piece(ec, er);
+      if (door) m.door = [ec, er, ew];
+    }
+    // the bank cut away along the wheel's stretch of the river wall
+    for (let a = 0; a < CUT; a++) MCUT[at(a, 0)] |= 1 << d;
+    // the grinder: 2 x 2 against the wheel's wall, facing into the mill (its station is made with the scene: finishMills)
+    const gt = [millTile(m, 0, 0), millTile(m, 1, 0), millTile(m, 0, 1), millTile(m, 1, 1)];
+    m.grind = [Math.min(...gt.map(t => t[0])), Math.min(...gt.map(t => t[1]))];
+    for (const [c, r] of gt) OB[T(c, r)] = O.STATIONX;
+    OB[T(...m.grind)] = O.GRINDER;
+    m.grindRy = Math.atan2(DC[d], DR[d]);
+    // sacks of flour heaped in the back corner by the end wall: in the way
+    m.sacks = [[0.26, 3.72, 0.3], [0.62, 3.76, -0.2], [0.3, 3.36, 0.9]].map(([A, B, ry]) => {
+      const [x, z] = millP(m, A, B), i = T(Math.floor(x), Math.floor(z)), q = { x, z, y: m.L * STEP + 0.06, R: 0.19, kind: 'block', m, ry };
+      if (!pillars.has(i)) pillars.set(i, []);
+      pillars.get(i).push(q);
+      return q;
+    });
+    const [hc, hr] = millTile(m, 1, 1);
+    m.c = hc; m.r = hr; [m.x, m.z] = millP(m, 2, 2);
+    m.home = T(hc, hr); m.water = at(1, -1);
+    delete m.at;
+    mills.push(m);
+  }
+}
 // once the scene exists, the town houses and farmhouses get their doors and roofs, and the town gates stand open
 // Cobblestones (v408) on a large town's streets, lanes and plaza: one flat mesh a town just over the ground, its
 // stones a normal map (like the obelisks' carving) from a tileable Voronoi height field two tiles across, the
@@ -6352,6 +6477,7 @@ function finishTowns() {
     makeDoor(...m.door);
     makeRoom(m.house, '#eef3f8', b => roofMesh(b, { snow: true, extra: base => cabinPorchRoof(m, base) }));
   }
+  finishMills();
   for (const m of mausoleums) {
     // the pair of doors: the first hung at its low end, the second at its high end, so they meet in the middle
     const [e1, e2] = m.doors.sort((p, q) => p[2] ? p[1] - q[1] : p[0] - q[0]);
@@ -8659,7 +8785,10 @@ function pointH(x2, z2) {
   let h = -1e9;
   for (let r = ra; r <= rb; r++) for (let c = ca; c <= cb; c++) {
     if (c < 0 || r < 0 || c >= N || r >= N) continue;
-    const y = tileSurf(c, r, x2 / 2 - c, z2 / 2 - r);
+    const u = x2 / 2 - c, v = z2 / 2 - r, m = MCUT[r * N + c];
+    // (a mill's cut bank: its tile has no say along the cut side, so no slope spills from it into the river: v674)
+    if (m && ((m & 1 && v === 0) || (m & 2 && u === 1) || (m & 4 && v === 1) || (m & 8 && u === 0))) continue;
+    const y = tileSurf(c, r, u, v);
     if (y > h) h = y;
   }
   return h;
@@ -11072,6 +11201,142 @@ function buildGrottoFalls() {
     m.renderOrder = 11; m.layers.set(3); m.matrixAutoUpdate = false; m.castShadow = false;
     scene.add(m);
     g.mesh = m;
+  }
+}
+
+// ---------- River mills: the wheel, its drips and the cut bank (v674, T > River mills) ----------
+// the drips off the wheel's paddles: the grotto's waterfall shader with clear water's colours, no glow
+const MILL_FALL_U = Object.assign({}, FALL_U, { amount: { value: MILL.drip }, speed: { value: MILL.dripSpeed }, color: { value: new GFX.Color(MILL.dripColor) },
+  glowK: { value: 0 }, glowCol: { value: new GFX.Color('#000000') } });
+const millFallMat = makeFallMat(MILL_FALL_U);
+millFallMat.keepAlpha = true;
+// once the scene exists: each mill's doors, rooms (the thatch comes of the log walls above), its grinder, wheel and bank
+function finishMills() {
+  for (const m of mills) {
+    if (m.door) makeDoor(...m.door);
+    makeRoom(m.tiles, '#8a6a44');
+    makeRoom(m.tiles, '#8a6a44', null, 1);
+    placeStation({ c: m.grind[0], r: m.grind[1], kind: 'grinder', ry: m.grindRy });
+    m.grinder = stations.get(T(...m.grind));
+    m.grinder.poi = m;
+    buildMill(m);
+  }
+}
+// a box in a mill's own frame: A0-A1 along the river, B0-B1 inland, y0-y1 up
+function millBox(m, A0, A1, B0, B1, y0, y1, col, o = {}) {
+  const [x, z] = millP(m, (A0 + A1) / 2, (B0 + B1) / 2), alongX = DC[m.pa] !== 0;
+  part(G.box, col, x, (y0 + y1) / 2, z, Object.assign(alongX ? { sx: A1 - A0, sy: y1 - y0, sz: B1 - B0 } : { sx: B1 - B0, sy: y1 - y0, sz: A1 - A0 }, o));
+}
+function buildMill(m) {
+  const { R, width: Wd, paddles: K, out, cut } = MILL, hw = Wd / 2;
+  const cuts = [];
+  for (let a = 0; a < cut; a++) cuts.push(T(...millTile(m, a, -1)));
+  const surf = m.wl * STEP - 0.1, bed = Math.min(...cuts.map(j => GL[j])) * STEP, top = m.L * STEP;
+  const sink = Math.max(0.12, Math.min(MILL.sink, surf - bed - 0.1)), [cx, cz] = millP(m, cut / 2, -out), cy = surf + R - sink;
+  m.wheelC = [cx, cy, cz]; m.surf = surf; m.theta = hs(m.c0, m.r0, 675) * 6.2832;
+  // the wheel turns about an axle across the river's way: its own x along the river (aV), its z (lz) out from the wall
+  const aV = [DC[m.pa], DR[m.pa]], ry = Math.atan2(-aV[1], aV[0]), lz = [Math.sin(ry), Math.cos(ry)];
+  const zs = Math.sign(lz[0] * DC[m.bk] + lz[1] * DR[m.bk]) || 1;   // (which way along its z the wall is)
+  m.aV = aV; m.lz = lz;
+  const save = OUT, wb = new Buf(), sb = new Buf();
+  OUT = wb;
+  try {
+    const wood = '#6a4a30', dark = '#4a3322', wet = '#3e2c1e', iron = '#3c3a40', Rr = R * 0.9;
+    // two rims of short planks, each on eight spokes
+    for (const z of [-hw, hw]) {
+      for (let j = 0; j < 24; j++) {
+        const a0 = (j - 0.08) / 24 * 6.2832, a1 = (j + 1.08) / 24 * 6.2832;
+        seg(G.box, j & 1 ? wood : dark, [Math.cos(a0) * Rr, Math.sin(a0) * Rr, z], [Math.cos(a1) * Rr, Math.sin(a1) * Rr, z], 0.04);
+      }
+      for (let j = 0; j < 8; j++) { const a = (j + 0.5) / 8 * 6.2832 + (z > 0 ? 0 : 0.2); seg(G.box, wood, [Math.cos(a) * 0.1, Math.sin(a) * 0.1, z], [Math.cos(a) * Rr, Math.sin(a) * Rr, z], 0.028); }
+    }
+    // the paddles: boards right across between the rims, standing out from them
+    for (let j = 0; j < K; j++) {
+      const a = j / K * 6.2832, rm = R * 0.81;
+      part(G.box, j & 1 ? wet : dark, Math.cos(a) * rm, Math.sin(a) * rm, 0, { rz: a, sx: R * 0.38, sy: 0.035, sz: Wd + 0.06 });
+    }
+    // the hub, and the axle: from the bearing out in the river in through the wall
+    part(G.cyl8, iron, 0, 0, 0, { rx: Math.PI / 2, sx: 0.24, sy: Wd + 0.12, sz: 0.24 });
+    seg(G.cyl8, '#5a4a3a', [0, 0, -zs * (hw + 0.22)], [0, 0, zs * (out - 0.02)], 0.06);
+  } finally { OUT = save; }
+  OUT = sb;
+  try {
+    const stone = CC(STONE_PLAIN.block), core = CC(STONE_PLAIN.core), timber = CC('#4a3424'), y0 = bed - 0.1;
+    // the cut bank's face: coursed stone from under the bed up to the ground, flush with the wall over it, a capping
+    // course along its top and a pier down into the river at each end
+    millBox(m, 0, cut, -0.12, 0.02, y0, top - 0.01, core);
+    const rows = Math.max(1, Math.round((top - y0) / 0.3)), rh = (top - y0) / rows;
+    for (let row = 0; row < rows; row++) {
+      const ya = y0 + row * rh, off = row & 1 ? 0.25 : 0;
+      for (let A = -off; A < cut - 1e-3; A += 0.5) {
+        const a0 = Math.max(0, A) + 0.015, a1 = Math.min(cut, A + 0.5) - 0.015;
+        if (a1 - a0 > 0.05) millBox(m, a0, a1, -0.2, -0.08, ya + 0.015, ya + rh - 0.015, shade(stone, 0.78 + hs(row + m.c0, Math.round(A * 4) + m.r0, 676) * 0.3));
+      }
+    }
+    millBox(m, -0.05, cut + 0.05, -0.23, 0.04, top - 0.06, top + 0.03, shade(stone, 1.05));
+    for (const A of [0, cut]) millBox(m, A - 0.2, A + 0.2, -0.6, 0.02, y0, top + 0.03, shade(stone, 0.9));
+    // the far bearing: a pair of posts standing in the river, a beam across them under the axle's end
+    const Bt = -(out + hw + 0.2);
+    for (const s of [-1, 1]) millBox(m, cut / 2 + s * 0.3 - 0.06, cut / 2 + s * 0.3 + 0.06, Bt - 0.06, Bt + 0.06, bed - 0.05, cy + 0.14, timber);
+    millBox(m, cut / 2 - 0.42, cut / 2 + 0.42, Bt - 0.07, Bt + 0.07, cy - 0.2, cy - 0.06, shade(timber, 1.2));
+    // the sacks of flour in the corner
+    for (const q of m.sacks) {
+      part(G.box, '#c8b88e', q.x, q.y + 0.19, q.z, { sx: 0.3, sy: 0.38, sz: 0.26, ry: q.ry });
+      part(G.box, '#a8946a', q.x, q.y + 0.41, q.z, { sx: 0.14, sy: 0.08, sz: 0.12, ry: q.ry });
+    }
+  } finally { OUT = save; }
+  const spin = wb.mesh(groundMat), g = new GFX.Group();
+  g.position.set(cx, cy, cz); g.rotation.y = ry; g.add(spin); scene.add(g);
+  m.wheel = g; m.spin = spin;
+  const sm = sb.mesh(groundMat);
+  if (sm) { sm.matrixAutoUpdate = false; scene.add(sm); }
+  m.stat = sm;
+  // the drips: a ribbon a paddle, moved each frame (millDrips)
+  const geo = new GFX.BufferGeometry(), nV = K * 6;
+  geo.setAttribute('position', new GFX.BufferAttribute(new Float32Array(nV * 3), 3));
+  geo.setAttribute('fUV', new GFX.BufferAttribute(new Float32Array(nV * 3), 3));
+  geo.boundingSphere = { x: cx, y: cy, z: cz, r: R + 2 };
+  const dm = new GFX.Mesh(geo, millFallMat);
+  dm.renderOrder = 11; dm.layers.set(3); dm.matrixAutoUpdate = false; dm.castShadow = false;
+  scene.add(dm);
+  m.drips = dm;
+  millDrips(m);
+}
+// each paddle drips from its outer edge, straight down to the river, from when it comes up out of the water until it
+// has passed level (k: how strongly, eased in and out)
+function millDrips(m) {
+  const { R, paddles: K, width } = MILL, [cx, cy, cz] = m.wheelC, a = m.aV, lz = m.lz, hw = width / 2 - 0.03;
+  const pa = m.drips.geometry.attributes.position, qa = m.drips.geometry.attributes.fUV, P = pa.array, Q = qa.array;
+  const emerge = Math.asin(clamp((m.surf - cy) / R, -1, 1)), turn = m.flow * MILL.speed;
+  let n = 0;
+  for (let j = 0; j < K; j++) {
+    const phi = j / K * 6.2832 + m.theta;
+    // (its angle from level on the side it rises on: -π/2 at the bottom, 0 level)
+    let rho = turn >= 0 ? phi : Math.PI - phi;
+    rho = ((rho + Math.PI) % 6.2832 + 6.2832) % 6.2832 - Math.PI;
+    const k = smooth(emerge, emerge + 0.12, rho) * (1 - smooth(-0.1, 0.1, rho)) * (turn ? 1 : 0);
+    const tx = cx + a[0] * R * Math.cos(phi), tz = cz + a[1] * R * Math.cos(phi), ty = cy + R * Math.sin(phi), drop = ty - m.surf;
+    const live = k > 0.01 && drop > 0.02;
+    for (const [s, foot] of [[-1, 0], [1, 0], [1, 1], [-1, 0], [1, 1], [-1, 1]]) {
+      const o = n * 3;
+      P[o] = tx + (live ? lz[0] * s * hw : 0); P[o + 1] = live && foot ? m.surf : ty; P[o + 2] = tz + (live ? lz[1] * s * hw : 0);
+      Q[o] = s > 0 ? 1 : 0; Q[o + 1] = foot ? drop : 0; Q[o + 2] = live ? k : 0;
+      n++;
+    }
+  }
+  pa.needsUpdate = true; qa.needsUpdate = true;
+}
+// each frame: the wheels near you turn with the current and drip
+function updateMills(dt) {
+  MILL_FALL_U.amount.value = MILL.drip; MILL_FALL_U.speed.value = MILL.dripSpeed; MILL_FALL_U.color.value.set(MILL.dripColor);
+  for (const m of mills) {
+    if (!m.wheel) continue;
+    const [cx, , cz] = m.wheelC, near = Math.hypot(cx - H.x, cz - H.z) < MILL.see;
+    m.wheel.visible = m.drips.visible = near;
+    if (!near) continue;
+    m.theta = (m.theta + m.flow * MILL.speed * dt) % 6.2832;
+    m.spin.rotation.z = m.theta;
+    millDrips(m);
   }
 }
 
@@ -23456,6 +23721,7 @@ function removeUp(k) {
   if (!target && U.FL.has(i)) target = { kind: FLOOR_KIND[U.FL.get(i)], c, r };
   if (!target) { sfx.nope(); return; }
   if (BI[i] === TOWN || ('w' in target && BI[T(target.c, target.r)] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
+  if (FARM[i] || ('w' in target && FARM[T(target.c, target.r)])) { sfx.nope(); toast(farmWhy(FARM[i] || FARM[T(target.c, target.r)])); return; }   // (v674: a mill's upper story)
   const mx = 'w' in target ? (target.w ? target.c : target.c + 0.5) : c + 0.5, mz = 'w' in target ? (target.w ? target.r + 0.5 : target.r) : r + 0.5;
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   if (isFloor(target.kind) && stairAt.has(k * SNN + i)) { sfx.nope(); toast('Stairs stand on this floor: take them down first.'); return; }
@@ -24103,6 +24369,7 @@ function movePick() {
   updateGhost();
   const s = ghostSpot;
   if (!s || !s.st) { sfx.nope(); toast('Drag a station, crafting table, crate or chest to move it.'); return; }
+  if (s.st.poi) { sfx.nope(); toast(farmWhy(4)); return; }   // (v674: the mill's grinder stays put)
   const [x, z] = stMid(s.st);
   if (Math.hypot(x - H.x, z - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to pick that up.'); return; }
   moving = s.st; sfx.remove();
@@ -24224,6 +24491,8 @@ function updateStations(dt) {
     else stationProgress();
   }
 }
+// whose a point of interest's piece is, when you try to take it down (FARM's value)
+const farmWhy = v => v === 4 ? 'That mill belongs to the miller.' : v === 3 ? 'That cabin is someone else\'s.' : v === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.';
 function removePiece() {
   if (buildStory) { removeUp(buildStory); return; }
   let target = null;
@@ -24243,6 +24512,7 @@ function removePiece() {
     if (!target && stairAt.has(i)) {
       const st = stairAt.get(i);
       if (BI[i] === TOWN) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
+      if (FARM[i]) { sfx.nope(); toast(farmWhy(FARM[i])); return; }   // (v674: a mill's stair)
       if (Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
       if (H.stair === st) { sfx.nope(); toast('Step off the stairs first.'); return; }
       removeStair(st); pay(st.kind, -1); flushDirty(); sfx.remove();
@@ -24255,7 +24525,7 @@ function removePiece() {
   const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
   if (BI[T(target.c, target.r)] === TOWN || (across >= 0 && BI[across] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
   const farmV = FARM[T(target.c, target.r)] || (across >= 0 ? FARM[across] : 0);
-  if (farmV) { sfx.nope(); toast(farmV === 3 ? 'That cabin is someone else\'s.' : farmV === 2 ? 'That belongs to the dead.' : 'That belongs to the farmer.'); return; }
+  if (farmV) { sfx.nope(); toast(farmWhy(farmV)); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
   const big = isStation(target.kind) ? stFoot(target.kind) / 2 : 0.5, mx = flatPiece ? target.c + big : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + big : target.w ? target.r + 0.5 : target.r;
@@ -27617,7 +27887,8 @@ $('bigmap').addEventListener('pointerleave', () => { if (bigHover) { bigHover = 
 // the points of interest the Markers bookmark shows: [list, mark, colour]
 // (and the word each is named with, after its region: v397)
 const POI_MARKS = () => [[waystones, 'diamond', '#8de8dc', 'WAYSTONE'], [farms, 'square', '#b6dc5a', 'FARM'], [cabins, 'house', '#b9824e', 'CABIN'], [grottos, 'diamond', '#d59cff', 'GROTTO'],
-  [statues, 'tri', '#e2b36e', 'OBELISK'], [mausoleums, 'house', '#f1eee4', 'MAUSOLEUM'], [willows, 'circle', '#86c86e', 'WILLOW'], [docks, 'rect', '#a8703e', 'DOCK']];
+  [statues, 'tri', '#e2b36e', 'OBELISK'], [mausoleums, 'house', '#f1eee4', 'MAUSOLEUM'], [willows, 'circle', '#86c86e', 'WILLOW'], [docks, 'rect', '#a8703e', 'DOCK'],
+  [mills, 'house', '#d2a86a', 'MILL']];
 const TILE_M = 1.6;   // metres a tile, for the scale (the hero stands about 1.1 tiles tall)
 function drawBigMap() {
   const big = $('bigmap'), k = Math.max(1, Math.min(3, uiScale() * (devicePixelRatio || 1)));
@@ -28898,6 +29169,12 @@ const TUNING = [
     [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
     [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
+  ['River mills', [
+    [MILL, 'speed', 'Water wheel: how fast it turns (radians a second)', 0, 3, 0.01],
+    [MILL, 'drip', 'Paddles\' drips: how much they show (0 off)', 0, 2, 0.05],
+    [MILL, 'dripSpeed', 'Drips: speed', 0.1, 4, 0.05],
+    [MILL, 'dripColor', 'Drips: colour', 'color'],
+  ]],
   ['Lantern glass', [
     [LANTERN_GLASS, 'color', 'Street lamps\' and wall lanterns\' glass: colour', 'color'],
     [LANTERN_GLASS, 'day', 'Their glass: brightness by day (×)', 0, 10, 0.05],
@@ -29602,6 +29879,7 @@ function frameBody(now) {
   remakeOres(dt);
   updateHearths(dt);
   updateStations(dt);
+  updateMills(dt);
   runBuildQueue(dt);
   ventSmoke(dt);
   prof.lap('clouds, water, hearths, smoke');
@@ -29635,7 +29913,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 673, crashSeen = new Map();
+const GAME_VERSION = 674, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -29748,6 +30026,9 @@ window.GAME = {
     return { lv, bi, sh, ob, water: Object.assign({ lake, river, canyon, bridge }, waterStats) };
   },
   begin,
+  // (v674) the river mills: where, which way the river runs past them (flow +1/-1 along a), the wheel and the grinder
+  mills: () => mills.map(m => ({ c: m.c, r: m.r, d: m.d, flow: m.flow, L: m.L, wl: m.wl, name: m.name, wheel: m.wheelC, cut: m.tiles.filter(([c, r]) => MCUT[T(c, r)]).length,
+    grinder: !!m.grinder && stations.get(T(...m.grind)) === m.grinder, stair: !!stairAt.get(m.stair.t0), tiles: m.tiles.length })),
   stations: () => [...stations.values()].map(st => ({ c: st.c, r: st.r, kind: st.kind, ry: st.ry, inp: st.inp.map((id, i) => id && id + ':' + st.inN[i]), out: st.out.map((id, i) => id && id + ':' + st.outN[i]), box: st.box.map((id, i) => id && id + ':' + st.boxN[i]), busy: st.busy, t: st.t })),
   stationPut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.inp[slot] = id; st.inN[slot] = n; },
   stationOut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.out[slot] = id; st.outN[slot] = n; },
