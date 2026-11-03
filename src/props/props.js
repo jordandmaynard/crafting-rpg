@@ -149,7 +149,7 @@ const heater = (w, h0, h1) => { const c = [[-w, h0], [-w, 0], [-w * 0.9, h1 * 0.
 // group: where it's listed; tiles [w, d]; wall: backs onto a wall; hang: hangs from the ceiling (no floor tile);
 // use and goes: from the doc; roll(r) -> the seeded look (null: none); build(L, C) draws it (C: the wood's colours);
 // describe(L) -> rows [label, value, colour]
-export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern'];
+export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern', 'Outdoor'];
 export const PROPS = {
   bed: { name: 'Bed', group: 'Beds', tiles: [1, 2], wall: true, use: 'Sit, sleep', goes: 'Every house; inn rooms', inGame: true,
     roll: r => ({ blanket: pick(r, BLANKETS) }),
@@ -689,6 +689,63 @@ export const PROPS = {
       scroll: r() < 0.7, chains: r() < 0.4 }),
     describe: L => [['Board', L.board[1], L.board[0]], ['Keg painted in', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
     build(L, C) { tavernSign(L, C); } },
+  // ---------- (2026-11-03, Jordan) the outdoor set: streets, the plaza and the yards ----------
+  well: { name: 'Well', group: 'Outdoor', tiles: [1, 1], use: 'Show; folk fetch water', goes: 'A hamlet\'s crossroads, a medium town\'s plaza', inGame: true,
+    roll: r => ({ roof: wpick(r, WELL_ROOFS), stone: pick(r, FIELDSTONE), bucket: r() < 0.7, crank: r() < 0.5 ? -1 : 1, seed: Math.floor(r() * 1e6) }),
+    describe: L => [['Roof', L.roof[1], L.roof[2]], ['Stone', L.stone[1], L.stone[0]], ['Bucket', L.bucket ? 'Hanging, and one on the rim' : 'Hanging'], ['Crank', L.crank < 0 ? 'Left' : 'Right']],
+    build(L, C) { well(L, C); } },
+  streetBench: { name: 'Street bench', group: 'Outdoor', tiles: [2, 1], use: 'Sit (two)', goes: 'The plaza, by the fountain, along the streets',
+    roll: r => ({ ends: wpick(r, [['wood', 'Wooden ends', 3], ['stone', 'Stone ends', 2], ['iron', 'Iron ends', 1]]), stone: pick(r, FIELDSTONE) }),
+    describe: L => [['Ends', L.ends[1]], ...(L.ends[0] === 'stone' ? [['Stone', L.stone[1], L.stone[0]]] : [])],
+    build(L, C) { streetBench(L, C); } },
+  marketStall: { name: 'Market stall', group: 'Outdoor', tiles: [2, 1], use: 'Show; a trader by day', goes: 'The plaza\'s edge (medium and large towns)',
+    roll: r => { const a = pick(r, DYES); let b = pick(r, AWNING); for (let k = 0; k < 6 && b[0] === a[0]; k++) b = pick(r, AWNING); return { a, b, goods: wpick(r, STALL_GOODS), crate: r() < 0.7, sack: r() < 0.6, seed: Math.floor(r() * 1e6) }; },
+    describe: L => [['Awning', `${L.a[1]} and ${L.b[1].toLowerCase()}`, L.a[0]], ['Selling', L.goods[1], L.goods[2]]],
+    build(L, C) { marketStall(L, C); } },
+  produce: { name: 'Produce crates', group: 'Outdoor', tiles: [1, 1], use: 'Show', goes: 'Beside the market stalls, shop fronts',
+    roll: r => ({ low: wpick(r, STALL_GOODS.filter(g => g[0] !== 'cloth' && g[0] !== 'pots')), high: wpick(r, STALL_GOODS.filter(g => g[0] !== 'cloth' && g[0] !== 'pots')), two: r() < 0.6, basket: r() < 0.7, turn: (r() - 0.5) * 0.3, seed: Math.floor(r() * 1e6) }),
+    describe: L => [['Crates', L.two ? `${L.low[1]}, ${L.high[1].toLowerCase()} on top` : L.low[1]], ['Basket', L.basket ? 'Yes' : 'No']],
+    build(L, C) { produce(L, C); } },
+  noticeBoard: { name: 'Notice board', group: 'Outdoor', tiles: [1, 1], use: 'Show; the crier reads it (later: quests)', goes: 'By the plaza, the guard house',
+    roll: r => { const n = 4 + Math.floor(r() * 4), papers = []; for (let k = 0; k < n; k++) papers.push({ x: r(), y: r(), w: 0.13 + r() * 0.07, h: 0.15 + r() * 0.1, rz: (r() - 0.5) * 0.2, tint: pick(r, PAPERS), pin: r() < 0.6, lines: 2 + Math.floor(r() * 3) }); return { papers, roof: r() < 0.75 }; },
+    describe: L => [['Notices', String(L.papers.length)], ['Roof', L.roof ? 'Yes' : 'No']],
+    build(L, C) { noticeBoard(L, C); } },
+  signpost: { name: 'Signpost', group: 'Outdoor', tiles: [1, 1], use: 'Show (the ways out of town)', goes: 'At every way out of a town',
+    roll: r => { const n = 2 + Math.floor(r() * 2), a0 = Math.floor(r() * 4), arms = []; for (let k = 0; k < n; k++) arms.push({ a: ((a0 + k * (n > 2 ? 1 : 2)) & 3) * Math.PI / 2 + (r() - 0.5) * 0.5, words: 2 + Math.floor(r() * 3) }); return { arms }; },
+    describe: L => [['Arms', String(L.arms.length)]],
+    build(L, C) { signpost(L, C); } },
+  horseTrough: { name: 'Horse trough', group: 'Outdoor', tiles: [2, 1], use: 'Show', goes: 'Near the ways out of town, the carter\'s',
+    roll: r => ({ stone: r() < 0.4, rock: pick(r, FIELDSTONE), pump: r() < 0.5 }),
+    describe: L => [['Made of', L.stone ? L.rock[1] : 'Planks'], ['Pump', L.pump ? 'Yes' : 'No']],
+    build(L, C) { horseTrough(L, C); } },
+  hayBales: { name: 'Hay bales', group: 'Outdoor', tiles: [1, 1], use: 'Show', goes: 'Yards and farms (hamlets, medium towns)',
+    roll: r => ({ n: 1 + Math.floor(r() * 3), turn: (r() - 0.5) * 0.4, fresh: r() < 0.5 }),
+    describe: L => [['Bales', String(L.n)], ['Hay', L.fresh ? 'This year\'s' : 'Last year\'s']],
+    build(L, C) { hayBales(L, C); } },
+  rainBarrel: { name: 'Rain barrel', group: 'Outdoor', tiles: [1, 1], wall: true, use: 'Show', goes: 'House corners, every town',
+    roll: r => ({ dipper: r() < 0.6, chute: r() < 0.7 }),
+    describe: L => [['Chute', L.chute ? 'From the eaves' : 'None'], ['Dipper', L.dipper ? 'Yes' : 'No']],
+    build(L, C) { rainBarrel(L, C); } },
+  woodpile: { name: 'Woodpile', group: 'Outdoor', tiles: [2, 1], wall: true, use: 'Show', goes: 'Against house walls (fewer in large towns)',
+    roll: r => ({ rows: 4 + Math.floor(r() * 2), block: r() < 0.6, roof: r() < 0.6, seed: Math.floor(r() * 1e6) }),
+    describe: L => [['Rows of logs', String(L.rows)], ['Chopping block', L.block ? 'Yes, an axe in it' : 'No'], ['Roof', L.roof ? 'A plank lean-to' : 'None']],
+    build(L, C) { woodpile(L, C); } },
+  washLine: { name: 'Wash line', group: 'Outdoor', tiles: [3, 1], use: 'Show', goes: 'Between houses (hamlets, medium towns)',
+    roll: r => { const items = []; let x = -1.12; while (x < 1.0) { const k = wpick(r, WASH), w = k[1] + r() * 0.1; if (x + w > 1.14) break; items.push({ k: k[0], x: x + w / 2, w, h: k[2] + r() * 0.12, c: pick(r, k[0] === 'sheet' ? SHEETS : DYES)[0] }); x += w + 0.06 + r() * 0.1; } return { items }; },
+    describe: L => [['Hung out', L.items.map(i => i.k).join(', ')]],
+    build(L, C) { washLine(L, C); } },
+  handcart: { name: 'Handcart', group: 'Outdoor', tiles: [2, 1], use: 'Show', goes: 'By the market, the carter\'s, the ways out',
+    roll: r => ({ load: wpick(r, [['sacks', 'Sacks', 3], ['barrels', 'Barrels', 2], ['hay', 'Hay', 2], ['crates', 'Crates', 2], ['empty', 'Nothing', 1]]), seed: Math.floor(r() * 1e6) }),
+    describe: L => [['Load', L.load[1]]],
+    build(L, C) { handcart(L, C); } },
+  flagpole: { name: 'Flagpole', group: 'Outdoor', tiles: [1, 1], use: 'Show: the town\'s banner', goes: 'The plaza (medium and large towns)',
+    roll: r => { const field = pick(r, DYES.filter(d => d[0] !== '#d8ccb0')); let mark = pick(r, BANNER_MARKS); for (let k = 0; k < 6 && mark[0] === field[0]; k++) mark = pick(r, BANNER_MARKS); return { field, mark, sign: pick(r, ['diamond', 'cross', 'sun', 'chevron']), tail: r() < 0.6 }; },
+    describe: L => [['Banner', L.field[1], L.field[0]], ['Device', `A ${L.sign} in ${L.mark[1].toLowerCase()}`, L.mark[0]], ['Foot', L.tail ? 'Swallowtail' : 'Square']],
+    build(L, C) { flagpole(L, C); } },
+  birdBath: { name: 'Bird bath', group: 'Outdoor', tiles: [1, 1], use: 'Show', goes: 'Courtyards and gardens (medium and large towns)',
+    roll: r => ({ stone: pick(r, FIELDSTONE), bird: r() < 0.6, birdC: pick(r, BIRDS), at: r() * Math.PI * 2 }),
+    describe: L => [['Stone', L.stone[1], L.stone[0]], ['Bird', L.bird ? L.birdC[1] : 'None']],
+    build(L, C) { birdBath(L, C); } },
 };
 // a plain long table: boards along the top, legs at each end and every tile between, an apron and a stretcher
 function table(W, D, tiles, C) {
@@ -842,6 +899,444 @@ function rug(W, D, L) {
     for (let k = 0; k < n; k++) part(G.box, k % 2 ? B : A, 0, y, -D / 2 + 0.2 + (k + 0.5) * (D - 0.4) / n, { sx: 0.26, sy: 0.004, sz: 0.26, ry: Math.PI / 4 });
   }
   for (const s of [-1, 1]) for (let k = 0; k < 14; k++) part(G.box, '#e0d4b8', -W / 2 + 0.06 + k * (W - 0.12) / 13, 0.005, s * (D / 2 + 0.04), { sx: 0.025, sy: 0.006, sz: 0.08 });
+}
+
+// ---------- the outdoor set (2026-11-03, Jordan) ----------
+const ROPE = '#c4ad7c', WATER = '#2e4a64';
+const WELL_ROOFS = [['shingle', 'Oak shingles', '#6e5034', 3], ['slate', 'Slate', '#4e5664', 2], ['thatch', 'Thatch', '#a88c50', 2], ['tile', 'Red clay tiles', '#9a4a36', 2]];
+const FIELDSTONE = [['#8a8494', 'Grey fieldstone'], ['#a08e74', 'Sandstone'], ['#7c7a72', 'Granite'], ['#9a9284', 'Limestone']];
+const AWNING = [['#e8e0cc', 'White'], ['#d8ccb0', 'Undyed'], ['#c8a048', 'Gold'], ['#2a2624', 'Black']];
+const STALL_GOODS = [['apples', 'Apples', '#b83a2a', 2], ['cabbages', 'Cabbages', '#7aa04a', 2], ['bread', 'Bread', '#b07a3a', 2], ['cloth', 'Bolts of cloth', '#6a4a8a', 1],
+  ['pots', 'Pots and jugs', '#a86a3a', 1], ['fish', 'Fish', '#9aa8b0', 1], ['herbs', 'Herbs', '#4a7a3a', 1], ['turnips', 'Turnips', '#d8c8d0', 1], ['pears', 'Pears', '#b8b040', 1]];
+const PAPERS = ['#e8e0c8', '#ddd2b0', '#f0ead8', '#d8c8a0', '#e0d4bc'];
+const WASH = [['sheet', 0.5, 0.55, 2], ['shirt', 0.34, 0.32, 3], ['apron', 0.26, 0.36, 2], ['stockings', 0.14, 0.3, 2], ['cloth', 0.24, 0.22, 2]];
+const SHEETS = [['#e8e2d2', 'Linen'], ['#d8ccb0', 'Undyed'], ['#c8d0d8', 'Blued linen']];
+const BANNER_MARKS = [['#e8d8a0', 'Pale gold'], ['#e8e2d2', 'White'], ['#c8a048', 'Gold'], ['#2a2624', 'Black'], ['#8a2f2f', 'Red']];
+const BIRDS = [['#7a5a3a', 'A sparrow'], ['#5a6a7a', 'A blue tit'], ['#3a3430', 'A blackbird'], ['#8a5a3a', 'A robin']];
+// a steady jitter for a prop's own pieces (the same every build of one look)
+const jit = (k, s = 0) => { const x = Math.sin((k + 1) * 12.9898 + s * 0.0123) * 43758.5453; return x - Math.floor(x); };
+// a slab W across (x) laid from (z0, y0) to (z1, y1), t thick, its middle at x
+function slab(color, x, W, z0, y0, z1, y1, t) {
+  part(G.box, color, x, (y0 + y1) / 2, (z0 + z1) / 2, { sx: W, sy: t, sz: Math.hypot(z1 - z0, y1 - y0), rx: -Math.atan2(y1 - y0, z1 - z0) });
+}
+// a roof slope from its ridge (zr, yr) down to its eave (ze, ye), W across, on a dark underlay: n courses of pieces
+// (shingles, slates, tiles; one piece the width for thatch), each course a little steeper than the slope so its foot
+// stands proud of the next one's head (never in one plane), every other course turned half a piece
+function roofSlope(W, zr, yr, ze, ye, n, color, t, { pieces = 0, s = 0, vary = 0.14 } = {}) {
+  const dz = ze - zr, dy = ye - yr, L = Math.hypot(dz, dy);
+  let nz = -dy / L, ny = dz / L;
+  if (ny < 0) { nz = -nz; ny = -ny; }   // (the slope's outward normal, upward)
+  slab(shade(color, 0.5), 0, W - 0.03, zr - nz * 0.01, yr - ny * 0.01, ze - nz * 0.01, ye - ny * 0.01, 0.01);
+  const pw = W / Math.max(1, pieces);
+  for (let k = 0; k < n; k++) {
+    const a = Math.max(0, (k - 0.35) / n), b = (k + 1) / n, lift = t * 0.9, o = t / 2;
+    const z0 = zr + dz * a + nz * o, y0 = yr + dy * a + ny * o, z1 = zr + dz * b + nz * (o + lift), y1 = yr + dy * b + ny * (o + lift);
+    const xs = [], e = W / 2 - (k % 2) * 0.007;   // (every other course a shade narrower: their ends never share a plane)
+    if (!pieces) xs.push([-e, e]);
+    else if (k % 2) { xs.push([-e, -W / 2 + pw / 2]); for (let j = 0; j < pieces - 1; j++) xs.push([-W / 2 + pw / 2 + j * pw, -W / 2 + pw / 2 + (j + 1) * pw]); xs.push([W / 2 - pw / 2, e]); }
+    else for (let j = 0; j < pieces; j++) xs.push([-W / 2 + j * pw, -W / 2 + (j + 1) * pw]);
+    xs.forEach(([x0, x1], j) => slab(shade(color, 1 - vary / 2 + jit(k * 31 + j, s) * vary), (x0 + x1) / 2, x1 - x0 - (pieces ? 0.012 : 0), z0, y0, z1, y1, t));
+  }
+}
+// a round wall of stones in courses, each course turned half a stone on the last: R its outer radius, th thick
+function stoneRing(R, th, y0, H, courses, n, stone, s = 0) {
+  const ch = H / courses, rm = R - th / 2;
+  for (let c = 0; c < courses; c++) for (let k = 0; k < n; k++) {
+    const a = (k + (c % 2) * 0.5) / n * Math.PI * 2, w = 2 * Math.PI * rm / n - 0.02;
+    part(G.box, shade(stone, 0.82 + jit(c * n + k, s) * 0.3), Math.sin(a) * rm, y0 + (c + 0.5) * ch, Math.cos(a) * rm, { sx: w, sy: ch - 0.016, sz: th - jit(c * n + k + 50, s) * 0.025, ry: a });
+  }
+}
+// a ring of n boxes round the y axis at radius rr (a rim, a coping): each w deep, h tall, its middle at y
+function ring(rr, y, n, w, h, color, s = -1) {
+  for (let k = 0; k < n; k++) {
+    const a = (k + 0.5) / n * Math.PI * 2;
+    part(G.box, s < 0 ? color : shade(color, 0.9 + jit(k, s) * 0.2), Math.sin(a) * rr, y, Math.cos(a) * rr, { sx: 2 * Math.PI * rr / n + 0.004, sy: h, sz: w, ry: a });
+  }
+}
+// a wooden bucket standing at (x, y, z), its bail up
+function bucket(x, y, z, C, full) {
+  barrel([x, y, z], [x, y + 0.13, z], 0.062, 0.07, shade(C.light, 1.05), { hoops: [0.22, 0.8], n: 2, head: false });
+  if (full) part(G.cyl8, WATER, x, y + 0.134, z, { sx: 0.1, sy: 0.004, sz: 0.1 });
+  seg(G.box, IRON, [x - 0.064, y + 0.12, z], [x, y + 0.19, z], 0.005);
+  seg(G.box, IRON, [x, y + 0.19, z], [x + 0.064, y + 0.12, z], 0.005);
+}
+// the well (Jordan: plain beside the fountain): a round wall of fieldstone in three courses on a ring of flagstones, a
+// coping, dark water down the shaft, two posts with knee braces carrying a gabled roof (shingles, slate, thatch or
+// tiles), a windlass between them with its rope coiled on and a crank, a bucket hung over the water, maybe one on the rim
+function well(L, C) {
+  const st = CC(L.stone[0]), R = 0.4, th = 0.13, H = 0.5, s = L.seed || 0, rf = CC(L.roof[2]), kind = L.roof[0];
+  for (let k = 0; k < 10; k++) { const a = (k + 0.3) / 10 * Math.PI * 2; part(G.box, shade(st, 0.66 + jit(k, s + 3) * 0.16), Math.sin(a) * 0.46, 0.015, Math.cos(a) * 0.46, { sx: 0.27, sy: 0.03, sz: 0.15, ry: a }); }
+  stoneRing(R, th, 0.02, H - 0.02, 3, 11, st, s);
+  ring(R - th - 0.012, 0.3 + (H - 0.3) / 2, 14, 0.005, H - 0.3, shade(st, 0.36));   // (the shaft, dark behind the stones)
+  part(G.cyl12, WATER, 0, 0.3, 0, { sx: (R - th - 0.02) * 2, sy: 0.01, sz: (R - th - 0.02) * 2 });
+  ring(R - th / 2 - 0.005, H + 0.03, 12, th + 0.05, 0.06, shade(st, 1.12), s + 9);   // (the coping)
+  // the posts on stone pads, tie beams across their tops, knee braces, rafters to a ridge beam
+  const px = 0.47, top = 1.44, ridge = 1.86;
+  for (const sx of [-1, 1]) {
+    const x = sx * px;
+    part(G.box, shade(st, 0.8), x, 0.03, 0, { sx: 0.15, sy: 0.06, sz: 0.15 });
+    part(G.box, C.dark, x, top / 2, 0, { sx: 0.09, sy: top, sz: 0.09 });
+    part(G.box, C.dark, x, top - 0.03, 0, { sx: 0.08, sy: 0.08, sz: 1.16 });
+    for (const sz of [-1, 1]) {
+      seg(G.box, C.wood, [x, top - 0.32, 0], [x, top - 0.05, sz * 0.27], 0.02);
+      seg(G.box, C.wood, [x, top + 0.01, sz * 0.56], [x, ridge, 0], 0.03);
+    }
+  }
+  part(G.box, C.dark, 0, ridge, 0, { sx: 1.2, sy: 0.07, sz: 0.07 });
+  // the roof
+  const yr = 1.9, ze = 0.62, ye = 1.4, W = 1.26;
+  const spec = { shingle: [6, 0.03, { pieces: 8, s }], slate: [7, 0.022, { pieces: 9, s, vary: 0.22 }], tile: [6, 0.04, { pieces: 7, s, vary: 0.18 }], thatch: [3, 0.07, { s, vary: 0.1 }] }[kind] || [6, 0.03, { pieces: 8, s }];
+  for (const sz of [-1, 1]) roofSlope(W, 0, yr, sz * ze, ye, spec[0], rf, spec[1], spec[2]);
+  if (kind === 'thatch') seg(G.cyl8, shade(rf, 0.8), [-W / 2 - 0.02, yr + 0.04, 0], [W / 2 + 0.02, yr + 0.04, 0], 0.085);
+  else if (kind === 'tile') seg(G.cyl8, shade(rf, 0.9), [-W / 2 - 0.02, yr + 0.04, 0], [W / 2 + 0.02, yr + 0.04, 0], 0.05);
+  else part(G.box, shade(rf, 0.8), 0, yr + 0.045, 0, { sx: W + 0.04, sy: 0.05, sz: 0.14 });
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) seg(G.box, C.dark, [sx * (W / 2 + 0.03), yr + 0.03, 0], [sx * (W / 2 + 0.03), ye - 0.02, sz * (ze + 0.02)], 0.02);
+  // the windlass: a drum between the posts, the rope wound on it, the axle's ends and the crank
+  const wy = 0.98;
+  seg(G.cyl12, C.light, [-0.42, wy, 0], [0.42, wy, 0], 0.06);
+  seg(G.cyl12, ROPE, [-0.17, wy, 0], [0.17, wy, 0], 0.072);
+  for (const x of [-0.12, -0.04, 0.04, 0.12]) seg(G.cyl12, shade(CC(ROPE), 0.75), [x - 0.006, wy, 0], [x + 0.006, wy, 0], 0.077);
+  for (const sx of [-1, 1]) seg(G.cyl6, IRON, [sx * 0.42, wy, 0], [sx * 0.56, wy, 0], 0.025);
+  const cx = L.crank * 0.56;
+  seg(G.box, IRON, [cx, wy, 0], [cx, wy - 0.18, 0.06], 0.016);
+  seg(G.cyl6, C.dark, [cx, wy - 0.18, 0.06], [cx + L.crank * 0.11, wy - 0.18, 0.06], 0.018);
+  // the bucket hung over the water by its rope, another on the rim
+  seg(G.cyl6, ROPE, [0.06, wy - 0.06, 0.05], [0.06, 0.79, 0.05], 0.008);
+  bucket(0.06, 0.6, 0.05, C, false);
+  if (L.bucket) { const a = 2.3; bucket(Math.sin(a) * 0.35, H + 0.06, Math.cos(a) * 0.35, C, true); }
+}
+// a bench for the street: three seat slats, two back slats leaning back, ends of wood, stone or iron, a middle leg
+function streetBench(L, C) {
+  const y = SEAT, W = 1.74, kind = L.ends[0], st = CC(L.stone[0]), iron = kind === 'iron';
+  for (let k = 0; k < 3; k++) part(G.box, k % 2 ? C.light : C.wood, 0, y - 0.02, -0.12 + k * 0.125, { sx: W, sy: 0.04, sz: 0.11 });
+  for (const yy of [y + 0.15, y + 0.3]) part(G.box, C.wood, 0, yy, -0.188 - (yy - y) * 0.18, { sx: W, sy: 0.1, sz: 0.035, rx: -0.18 });
+  const leg = iron ? IRON : C.dark;
+  for (const x of [-0.72, 0, 0.72]) {
+    const end = x !== 0;
+    seg(G.box, leg, [x, 0, -0.16], [x, end ? y + 0.4 : y + 0.36, -0.27], end ? 0.03 : 0.025);   // (the back leg, up the back)
+    part(G.box, leg, x, y - 0.065, 0, { sx: 0.06, sy: 0.05, sz: 0.44 });
+    if (!end) { part(G.box, leg, x, (y - 0.09) / 2, 0.12, { sx: 0.05, sy: y - 0.09, sz: 0.05 }); continue; }
+    if (kind === 'stone') part(G.box, shade(st, 0.95 + x * 0.05), x, (y - 0.09) / 2, 0.03, { sx: 0.17, sy: y - 0.09, sz: 0.42 });
+    else part(G.box, leg, x, (y - 0.09) / 2, 0.15, { sx: 0.07, sy: y - 0.09, sz: 0.07 });
+    // the arm: a rest over the end on a post from the front
+    part(G.box, leg, x, y + 0.08, 0.15, { sx: 0.045, sy: 0.16, sz: 0.045 });
+    part(G.box, iron ? IRON : C.light, x, y + 0.18, -0.03, { sx: 0.07, sy: 0.035, sz: 0.42 });
+    if (iron) { part(G.oct, IRON, x, 0.02, 0.17, { sx: 0.06, sy: 0.04, sz: 0.08 }); part(G.oct, IRON, x, y + 0.18, 0.2, { sx: 0.05, sy: 0.06, sz: 0.06 }); }
+  }
+}
+// goods heaped in a basket's mouth at (x, y, z), d across
+function heap(x, y, z, d, kind, color, r) {
+  const c = CC(color), h = d / 2;
+  if (kind === 'cabbages') {
+    for (const [a, b, yy] of [[-0.3, -0.25, 0], [0.32, -0.15, 0], [-0.05, 0.3, 0], [0, 0, 0.06]]) {
+      part(G.oct, shade(c, 0.85 + r() * 0.25), x + a * h, y + 0.05 + yy, z + b * h, { sx: 0.13, sy: 0.11, sz: 0.13, ry: r() * 3 });
+      part(G.oct, shade(c, 1.25), x + a * h, y + 0.07 + yy, z + b * h, { sx: 0.08, sy: 0.08, sz: 0.08, ry: r() * 3 });
+    }
+  } else if (kind === 'bread') {
+    for (let k = 0; k < 3; k++) seg(G.cyl8, shade(c, 0.9 + r() * 0.2), [x - 0.08, y + 0.04, z + (k - 1) * h * 0.55], [x + 0.08, y + 0.04 + (k === 1 ? 0.03 : 0), z + (k - 1) * h * 0.55], 0.042);
+    part(G.oct, shade(c, 1.1), x + 0.02, y + 0.09, z, { sx: 0.12, sy: 0.07, sz: 0.12 });
+  } else if (kind === 'fish') {
+    for (let k = 0; k < 4; k++) {
+      const zz = z + (k - 1.5) * h * 0.42, xx = x + (k % 2 ? 0.02 : -0.02);
+      part(G.oct, shade(c, 0.9 + r() * 0.2), xx, y + 0.025 + (k % 2) * 0.012, zz, { sx: 0.2, sy: 0.04, sz: 0.06 });
+      part(G.box, shade(c, 0.75), xx + 0.11, y + 0.025 + (k % 2) * 0.012, zz, { sx: 0.04, sy: 0.012, sz: 0.06 });
+    }
+  } else if (kind === 'herbs') {
+    for (let k = 0; k < 4; k++) {
+      const zz = z + (k - 1.5) * h * 0.4;
+      seg(G.cyl6, shade(c, 0.85 + r() * 0.3), [x - 0.1, y + 0.03 + (k % 2) * 0.02, zz], [x + 0.08, y + 0.03 + (k % 2) * 0.02, zz + 0.02], 0.03);
+      part(G.box, ROPE, x + 0.04, y + 0.03 + (k % 2) * 0.02, zz + 0.01, { sx: 0.015, sy: 0.065, sz: 0.065 });
+    }
+  } else {
+    // round fruit and roots: a ring and one or two on top
+    const big = kind === 'turnips' ? 0.085 : 0.072, tall = kind === 'pears' ? 1.3 : 1;
+    const spots = [[0, 0, 1], [0.55, 0, 0], [-0.55, 0, 0], [0, 0.55, 0], [0, -0.55, 0], [0.4, 0.4, 0], [-0.4, -0.4, 0], [0.25, -0.1, 2], [-0.2, 0.15, 2]];
+    for (const [a, b, lay] of spots) {
+      const yy = y + big * 0.5 + (lay === 1 ? 0.02 : lay === 2 ? big * 0.8 : 0);
+      part(G.oct, shade(c, 0.85 + r() * 0.3), x + a * h, yy, z + b * h, { sx: big, sy: big * tall, sz: big, ry: r() * 3 });
+      if (kind === 'turnips') part(G.oct, '#7a3a6a', x + a * h, yy + big * 0.3, z + b * h, { sx: big * 0.7, sy: big * 0.35, sz: big * 0.7 });
+    }
+  }
+}
+// a shallow basket at (x, y, z) d across, heaped
+function basket(x, y, z, d, kind, color, r) {
+  part(G.cyl12, '#8a6a3a', x, y + 0.05, z, { sx: d, sy: 0.1, sz: d });
+  part(G.cyl12, '#6a4a2a', x, y + 0.1, z, { sx: d + 0.025, sy: 0.025, sz: d + 0.025 });
+  heap(x, y + 0.1125, z, d - 0.06, kind, color, r);
+}
+// an open slatted crate w x h x d standing at (x, y, z), filled to the top with the goods
+function slatCrate(x, y, z, w, h, d, C, kind, color, r) {
+  part(G.box, C.dark, x, y + 0.015, z, { sx: w - 0.02, sy: 0.03, sz: d - 0.02 });
+  for (const yy of [0.25, 0.72]) {
+    for (const s of [-1, 1]) {
+      part(G.box, shade(C.light, 0.95), x, y + h * yy, z + s * (d / 2 - 0.01), { sx: w - 0.02, sy: h * 0.38, sz: 0.02 });
+      part(G.box, shade(C.light, 0.88), x + s * (w / 2 - 0.01), y + h * yy, z, { sx: 0.02, sy: h * 0.38, sz: d - 0.06 });
+    }
+  }
+  for (const sa of [-1, 1]) for (const sb of [-1, 1]) part(G.box, C.dark, x + sa * (w / 2 - 0.015), y + h / 2, z + sb * (d / 2 - 0.015), { sx: 0.05, sy: h, sz: 0.05 });
+  part(G.box, shade(C.dark, 0.7), x, y + h - 0.05, z, { sx: w - 0.06, sy: 0.02, sz: d - 0.06 });
+  if (kind) heap(x, y + h - 0.04, z, Math.min(w, d) - 0.06, kind, color, r);
+}
+// the market stall: a counter boarded at the front, four posts (taller at the back), a striped awning sloping out over
+// the front with pennant flaps along its edge, the wares on the counter, a crate and a sack stowed behind
+function marketStall(L, C) {
+  const W = 1.86, A = CC(L.a[0]), B = CC(L.b[0]), r = mulberry32(L.seed || 1), kind = L.goods[0], gc = L.goods[2];
+  part(G.box, C.wood, 0, 0.27, 0.38, { sx: W - 0.04, sy: 0.42, sz: 0.04 });
+  const nb = 9;
+  for (let k = 0; k < nb; k++) part(G.box, shade(C.light, 0.84 + 0.18 * jit(k, 5)), -W / 2 + 0.04 + (k + 0.5) * (W - 0.08) / nb, 0.27, 0.406, { sx: (W - 0.08) / nb - 0.012, sy: 0.38, sz: 0.012 });
+  for (const s of [-1, 1]) part(G.box, C.dark, s * (W / 2 - 0.02), 0.27, 0.175, { sx: 0.04, sy: 0.42, sz: 0.43 });
+  part(G.box, C.dark, 0, 0.04, 0.18, { sx: W - 0.1, sy: 0.08, sz: 0.42 });
+  part(G.box, C.light, 0, 0.5, 0.17, { sx: W + 0.04, sy: 0.04, sz: 0.5 });
+  // posts and the awning's frame
+  for (const s of [-1, 1]) {
+    part(G.box, C.dark, s * 0.9, 0.69, 0.45, { sx: 0.07, sy: 1.38, sz: 0.07 });
+    part(G.box, C.dark, s * 0.9, 0.8, -0.44, { sx: 0.07, sy: 1.6, sz: 0.07 });
+    part(G.box, C.dark, s * 0.9, 1.0, 0.0, { sx: 0.04, sy: 0.04, sz: 0.86 });
+  }
+  part(G.box, C.dark, 0, 1.36, 0.45, { sx: W + 0.06, sy: 0.05, sz: 0.05 });
+  part(G.box, C.dark, 0, 1.585, -0.44, { sx: W + 0.06, sy: 0.05, sz: 0.05 });
+  // the awning: stripes from the back down over the front, flaps hanging off its edge
+  const n = 8, sw = (W + 0.1) / n, zb = -0.52, yb = 1.635, zf = 0.66, yf = 1.39;
+  for (let k = 0; k < n; k++) {
+    const x = -(W + 0.1) / 2 + (k + 0.5) * sw, c = k % 2 ? B : A;
+    slab(c, x, sw, zb, yb, zf, yf, 0.018);
+    plate([[-sw / 2, 0], [0, -0.14], [sw / 2, 0]], 0, -0.04, zf - 0.005, zf + 0.007, c, x, yf - 0.005);
+  }
+  // the wares
+  if (kind === 'cloth') {
+    for (let k = 0; k < 5; k++) { const d = DYES[Math.floor(r() * DYES.length)][0]; seg(G.cyl12, d, [-0.75 + k * 0.36, 0.57, 0.02], [-0.75 + k * 0.36, 0.57, 0.36], 0.05); }
+    for (let k = 0; k < 2; k++) seg(G.cyl12, DYES[Math.floor(r() * DYES.length)][0], [-0.56 + k * 0.72, 0.66, 0.03], [-0.56 + k * 0.72, 0.66, 0.33], 0.045);
+  } else if (kind === 'pots') {
+    for (let k = 0; k < 6; k++) {
+      const g = CC(GLAZES[Math.floor(r() * GLAZES.length)][0]), hh = 0.1 + r() * 0.08, x = -0.72 + k * 0.29, z = 0.12 + (k % 2) * 0.14;
+      part(G.cyl8, g, x, 0.52 + hh / 2, z, { sx: 0.13, sy: hh, sz: 0.13 });
+      part(G.cyl8, shade(g, 0.8), x, 0.52 + hh + 0.015, z, { sx: 0.08, sy: 0.03, sz: 0.08 });
+    }
+  } else for (const x of [-0.58, 0, 0.58]) basket(x, 0.52, 0.18, 0.42, kind, gc, r);
+  if (L.crate) slatCrate(-0.45, 0, -0.22, 0.42, 0.3, 0.36, C, kind === 'cloth' || kind === 'pots' ? 'apples' : kind, kind === 'cloth' || kind === 'pots' ? '#b83a2a' : gc, r);
+  if (L.sack) { part(G.box, '#b8a47a', 0.45, 0.16, -0.24, { sx: 0.3, sy: 0.32, sz: 0.26, ry: 0.3 }); part(G.box, '#a8946a', 0.45, 0.35, -0.24, { sx: 0.14, sy: 0.07, sz: 0.12, ry: 0.3 }); }
+}
+// crates of produce, one on another, and a basket beside
+function produce(L, C) {
+  const r = mulberry32(L.seed || 1);
+  slatCrate(-0.1, 0, -0.08, 0.5, 0.3, 0.42, C, L.two ? null : L.low[0], L.low[2], r);
+  if (L.two) slatCrate(-0.08 + L.turn * 0.2, 0.3, -0.06, 0.46, 0.26, 0.38, C, L.high[0], L.high[2], r);
+  if (L.basket) basket(0.28, 0, 0.27, 0.28, L.low[0], L.low[2], r);
+}
+// the notice board: a board in a frame on two posts, a little roof over it, notices pinned on in layers
+function noticeBoard(L, C) {
+  for (const s of [-1, 1]) part(G.box, C.dark, s * 0.4, L.roof ? 0.78 : 0.7, -0.06, { sx: 0.07, sy: L.roof ? 1.56 : 1.4, sz: 0.07 });
+  part(G.box, C.wood, 0, 1.04, 0, { sx: 0.86, sy: 0.62, sz: 0.05 });
+  for (const s of [-1, 1]) {
+    part(G.box, C.dark, 0, 1.04 + s * 0.33, 0.04, { sx: 0.92, sy: 0.05, sz: 0.05 });
+    part(G.box, C.dark, s * 0.435, 1.04, 0.04, { sx: 0.05, sy: 0.71, sz: 0.05 });
+  }
+  if (L.roof) for (const s of [-1, 1]) slab(C.dark, 0, 1.06, -0.03, 1.6, -0.03 + s * 0.27, 1.47, 0.03);
+  L.papers.forEach((p, k) => {
+    const w = p.w, h = p.h, px = -0.38 + w / 2 + p.x * (0.76 - w), py = 0.76 + h / 2 + p.y * (0.56 - h), z = 0.027 + k * 0.005, cs = Math.cos(p.rz), sn = Math.sin(p.rz);
+    part(G.box, p.tint, px, py, z + 0.001, { sx: w, sy: h, sz: 0.002, rz: p.rz });
+    for (let j = 0; j < p.lines; j++) {
+      const lx = (j === 0 ? 0 : -0.01) * w, ly = h * (0.3 - j * 0.16), lw = w * (j === 0 ? 0.5 : 0.75);
+      part(G.box, '#5a5248', px + cs * lx - sn * ly, py + sn * lx + cs * ly, z + 0.003, { sx: lw, sy: 0.012, sz: 0.002, rz: p.rz });
+    }
+    if (p.pin) part(G.oct, '#9a2a24', px - sn * h * 0.42, py + cs * h * 0.42, z + 0.007, { sx: 0.02, sy: 0.02, sz: 0.012 });
+  });
+}
+// the signpost: a post with a cap, stones round its foot, two or three pointing arms with dark lettering
+function signpost(L, C) {
+  part(G.box, C.dark, 0, 0.875, 0, { sx: 0.08, sy: 1.75, sz: 0.08 });
+  part(G.cone4, C.dark, 0, 1.8, 0, { sx: 0.12, sy: 0.1, sz: 0.12, ry: Math.PI / 4 });
+  for (let k = 0; k < 4; k++) { const a = k * 1.7 + 0.3; part(G.oct, shade(CC(STONE), 0.8 + jit(k, 7) * 0.3), Math.cos(a) * 0.1, 0.03, Math.sin(a) * 0.1, { sx: 0.12, sy: 0.07, sz: 0.1, ry: a }); }
+  L.arms.forEach((arm, k) => {
+    const y = 1.58 - k * 0.2, ry = arm.a, cs = Math.cos(ry), sn = Math.sin(ry), at = (lx, lz) => [cs * lx + sn * lz, -sn * lx + cs * lz];
+    const [bx, bz] = at(0.31, 0), [tx, tz] = at(0.56, 0), B = shade(C.light, 0.95 + k * 0.05);
+    part(G.box, B, bx, y, bz, { sx: 0.5, sy: 0.12, sz: 0.03, ry });
+    part(G.box, B, tx, y, tz, { sx: 0.085, sy: 0.085, sz: 0.03, rz: Math.PI / 4, ry });
+    for (const side of [-1, 1]) {
+      let u = 0.12;
+      for (let j = 0; j < arm.words && u < 0.52; j++) {
+        const w = 0.05 + jit(k * 9 + j, 3) * 0.05, [lx, lz] = at(u + w / 2, side * 0.019);
+        part(G.box, '#2a2420', lx, y, lz, { sx: w, sy: 0.035, sz: 0.004, ry });
+        u += w + 0.03;
+      }
+    }
+  });
+}
+// a horse trough: planks on two trestles banded in iron, or hewn stone; water in it, maybe a pump at one end
+function horseTrough(L, C) {
+  const W = 1.7, D = 0.46;
+  if (L.stone) {
+    const st = CC(L.rock[0]);
+    part(G.box, shade(st, 0.85), 0, 0.05, 0, { sx: W, sy: 0.1, sz: D });
+    for (const s of [-1, 1]) {
+      part(G.box, shade(st, 0.95 + s * 0.04), 0, 0.27, s * (D / 2 - 0.045), { sx: W, sy: 0.34, sz: 0.09 });
+      part(G.box, shade(st, 1.0 - s * 0.03), s * (W / 2 - 0.045), 0.27, 0, { sx: 0.09, sy: 0.34, sz: D - 0.18 });
+    }
+    part(G.box, WATER, 0, 0.35, 0, { sx: W - 0.18, sy: 0.01, sz: D - 0.18 });
+  } else {
+    for (const x of [-0.6, 0.6]) {
+      for (const s of [-1, 1]) seg(G.box, C.dark, [x, 0, s * 0.22], [x, 0.18, s * 0.13], 0.03);
+      part(G.box, C.dark, x, 0.17, 0, { sx: 0.06, sy: 0.06, sz: 0.44 });
+    }
+    part(G.box, C.wood, 0, 0.22, 0, { sx: W, sy: 0.04, sz: D });
+    for (const s of [-1, 1]) {
+      for (const y of [0.285, 0.375]) part(G.box, y > 0.3 ? C.light : C.wood, 0, y, s * (D / 2 - 0.0175), { sx: W, sy: 0.09, sz: 0.035 });
+      part(G.box, C.dark, s * (W / 2 - 0.015), 0.33, 0, { sx: 0.05, sy: 0.22, sz: D - 0.07 });
+      part(G.box, IRON, s * 0.42, 0.33, 0, { sx: 0.03, sy: 0.24, sz: D + 0.02 });
+    }
+    part(G.box, WATER, 0, 0.37, 0, { sx: W - 0.1, sy: 0.01, sz: D - 0.08 });
+  }
+  if (L.pump) {
+    const x = W / 2 + 0.08, z = -0.12;
+    part(G.box, C.dark, x, 0.45, z, { sx: 0.12, sy: 0.9, sz: 0.12 });
+    part(G.box, C.dark, x, 0.93, z, { sx: 0.16, sy: 0.06, sz: 0.16 });
+    part(G.box, IRON, x - 0.12, 0.66, z, { sx: 0.16, sy: 0.05, sz: 0.05 });
+    part(G.box, IRON, x - 0.19, 0.62, z, { sx: 0.03, sy: 0.06, sz: 0.04 });
+    seg(G.box, IRON, [x, 0.88, z], [x, 1.02, z + 0.24], 0.012);
+  }
+}
+// hay bales: one, two side by side, or two with one across them, each tied with two bands of twine
+function hayBale(x, y, z, ry, fresh) {
+  const c = CC(fresh ? '#cfb064' : '#b4a074'), cs = Math.cos(ry), sn = Math.sin(ry);
+  part(G.box, c, x, y, z, { sx: 0.6, sy: 0.32, sz: 0.36, ry });
+  for (const lx of [-0.16, 0.16]) part(G.box, '#7a5a2a', x + cs * lx, y, z - sn * lx, { sx: 0.03, sy: 0.33, sz: 0.37, ry });
+  for (const lx of [-0.3, 0.3]) part(G.box, shade(c, 1.12), x + cs * lx * 1.005, y, z - sn * lx * 1.005, { sx: 0.006, sy: 0.3, sz: 0.34, ry });
+}
+function hayBales(L) {
+  const t = L.turn;
+  if (L.n === 1) hayBale(0, 0.16, 0, t, L.fresh);
+  else {
+    hayBale(0, 0.16, -0.19, t * 0.3, L.fresh); hayBale(0, 0.16, 0.19, -t * 0.3, L.fresh);
+    if (L.n === 3) hayBale(0, 0.48, 0, Math.PI / 2 + t, L.fresh);
+  }
+}
+// a rain barrel against the wall on a low stand: open, full nearly to the brim, a chute down from the eaves into it
+function rainBarrel(L, C) {
+  const zb = backZ(1), zc = zb + 0.27, top = 0.72;
+  for (const dz of [-0.12, 0.12]) part(G.box, C.dark, 0, 0.05, zc + dz, { sx: 0.5, sy: 0.1, sz: 0.08 });
+  barrel([0, 0.1, zc], [0, top, zc], 0.2, 0.23, C.light, { head: false });
+  part(G.cyl12, WATER, 0, top + 0.006, zc, { sx: 0.36, sy: 0.004, sz: 0.36 });
+  ring(0.188, top + 0.02, 12, 0.024, 0.03, shade(C.light, 0.9), 4);
+  if (L.chute) {
+    seg(G.box, C.dark, [0.04, 1.9, zb + 0.05], [0.04, 0.84, zc - 0.02], 0.035);
+    part(G.box, IRON, 0.04, 1.6, zb + 0.03, { sx: 0.12, sy: 0.03, sz: 0.06 });
+  }
+  if (L.dipper) { seg(G.cyl6, C.light, [0.06, top - 0.04, zc + 0.02], [0.22, top + 0.16, zc + 0.16], 0.012); part(G.cyl8, C.dark, 0.23, top + 0.17, zc + 0.17, { sx: 0.03, sy: 0.03, sz: 0.03 }); }
+}
+// a woodpile against the wall: split logs in rows between two pairs of posts on two rails, their ends out, a plank roof
+// over it, maybe a chopping block in front with an axe in it
+function woodpile(L, C) {
+  const zb = backZ(1), D = 0.42, zc = zb + D / 2 + 0.02, r = mulberry32(L.seed || 1), rows = L.rows, top = 0.07 + rows * 0.125 + 0.05;
+  for (const s of [-1, 1]) for (const z of [zb + 0.04, zc + D / 2 - 0.03]) part(G.box, C.dark, s * 0.86, top / 2, z, { sx: 0.07, sy: top, sz: 0.07 });
+  for (const dz of [-0.14, 0.14]) part(G.box, C.dark, 0, 0.025, zc + dz, { sx: 1.7, sy: 0.05, sz: 0.05 });
+  for (let k = 0; k < rows; k++) {
+    const odd = k % 2, n = odd ? 6 : 7;
+    for (let j = 0; j < n; j++) {
+      const x = (odd ? -0.6 : -0.72) + j * 0.24 + (r() - 0.5) * 0.03, y = 0.115 + k * 0.125, rr = 0.058 + r() * 0.01, z1 = zc + D / 2 + (r() - 0.5) * 0.04;
+      seg(G.cyl6, shade(CC('#5a4232'), 0.85 + r() * 0.3), [x, y, zc - D / 2], [x, y, z1], rr);
+      seg(G.cyl6, shade(CC('#c8a070'), 0.85 + r() * 0.25), [x, y, z1 - 0.002], [x, y, z1 + 0.006], rr - 0.014);
+    }
+  }
+  if (L.roof) roofSlope(1.9, zb + 0.02, top + 0.14, zc + D / 2 + 0.12, top + 0.02, 2, C.wood, 0.03, { pieces: 6, s: 3 });
+  if (L.block) {
+    part(G.cyl8, C.dark, 0.5, 0.14, 0.3, { sx: 0.3, sy: 0.28, sz: 0.3 });
+    part(G.cyl8, shade(CC('#c8a070'), 0.9), 0.5, 0.282, 0.3, { sx: 0.26, sy: 0.004, sz: 0.26 });
+    seg(G.cyl6, C.light, [0.5, 0.3, 0.3], [0.6, 0.62, 0.42], 0.016);
+    part(G.box, IRON, 0.5, 0.3, 0.3, { sx: 0.04, sy: 0.1, sz: 0.14, ry: 0.7 });
+  }
+}
+// a wash line strung between two posts with crossbars, sagging, the washing pegged out along it
+function washLine(L, C) {
+  const X = 1.36, Y = 1.5, sag = 0.1, yAt = x => Y - sag * (1 - (x / X) ** 2);
+  for (const s of [-1, 1]) {
+    part(G.box, C.dark, s * X, 0.8, 0, { sx: 0.07, sy: 1.6, sz: 0.07 });
+    part(G.box, C.dark, s * X, 1.55, 0, { sx: 0.06, sy: 0.06, sz: 0.36 });
+    part(G.oct, shade(CC(STONE), 0.85), s * X, 0.03, 0, { sx: 0.16, sy: 0.06, sz: 0.14 });
+  }
+  for (let k = 0; k < 10; k++) { const a = -X + k * X / 5, b = a + X / 5; seg(G.cyl6, ROPE, [a, yAt(a), 0], [b, yAt(b), 0], 0.006); }
+  for (const it of L.items) {
+    const c = CC(it.c), w = it.w, h = it.h, x = it.x, top = yAt(x) - 0.012, rz = Math.atan(2 * sag * x / (X * X));
+    if (it.k === 'shirt') {
+      part(G.box, c, x, top - h / 2, 0, { sx: w * 0.62, sy: h, sz: 0.012, rz });
+      for (const s of [-1, 1]) part(G.box, c, x + s * w * 0.36, top - 0.07, 0, { sx: w * 0.3, sy: 0.08, sz: 0.012, rz: rz - s * 0.5 });
+    } else if (it.k === 'stockings') {
+      for (const s of [-1, 1]) part(G.box, c, x + s * w * 0.25, top - h / 2, 0, { sx: w * 0.36, sy: h, sz: 0.012, rz });
+    } else if (it.k === 'apron') {
+      part(G.box, c, x, top - h * 0.38, 0, { sx: w, sy: h * 0.76, sz: 0.012, rz });
+      for (const s of [-1, 1]) part(G.box, shade(c, 0.85), x + s * w * 0.42, top - h * 0.82, 0.006, { sx: 0.025, sy: h * 0.3, sz: 0.012, rz });
+    } else part(G.box, c, x, top - h / 2, 0, { sx: w, sy: h, sz: 0.012, rz });
+    for (const s of [-1, 1]) part(G.box, '#6a5a44', x + s * w * (it.k === 'stockings' ? 0.25 : 0.34), top + 0.005, 0, { sx: 0.018, sy: 0.05, sz: 0.024 });
+  }
+}
+// a two-wheeled handcart: a plank bed with sides and stakes over an axle, the shafts down to a rest, its load
+function handcart(L, C) {
+  const R = 0.3, cx = 0.15, r = mulberry32(L.seed || 1);
+  for (const z of [-0.4, 0.4]) {
+    for (let k = 0; k < 12; k++) {
+      const a = (k + 0.5) / 12 * Math.PI * 2;
+      part(G.box, C.dark, cx + Math.sin(a) * (R - 0.025), R + Math.cos(a) * (R - 0.025), z, { sx: 2 * Math.PI * (R - 0.025) / 12 + 0.006, sy: 0.045, sz: 0.045, rz: -a });
+    }
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; seg(G.box, C.wood, [cx, R, z], [cx + Math.sin(a) * (R - 0.04), R + Math.cos(a) * (R - 0.04), z], 0.012); }
+    seg(G.cyl8, C.dark, [cx, R, z - 0.05], [cx, R, z + 0.05], 0.05);
+  }
+  seg(G.cyl6, IRON, [cx, R, -0.43], [cx, R, 0.43], 0.02);
+  for (const z of [-0.2, 0.2]) part(G.box, C.dark, 0.05, R + 0.01, z, { sx: 1.4, sy: 0.05, sz: 0.05 });
+  part(G.box, C.wood, 0.05, R + 0.06, 0, { sx: 1.3, sy: 0.05, sz: 0.66 });
+  const yb = R + 0.085;
+  for (const s of [-1, 1]) {
+    part(G.box, C.wood, 0.05, yb + 0.1, s * 0.31, { sx: 1.3, sy: 0.2, sz: 0.035 });
+    part(G.box, C.light, 0.05 + s * 0.62, yb + 0.1, 0, { sx: 0.035, sy: 0.2, sz: 0.58 });
+    for (const t of [-1, 1]) part(G.box, C.dark, 0.05 + t * 0.63, yb + 0.12, s * 0.31, { sx: 0.05, sy: 0.26, sz: 0.05 });
+    seg(G.box, C.dark, [-0.6, yb - 0.02, s * 0.26], [-0.98, 0.3, s * 0.22], 0.022);
+    seg(G.box, C.dark, [-0.86, 0.33, s * 0.23], [-0.86, 0, s * 0.25], 0.018);
+  }
+  const k = L.load[0];
+  if (k === 'sacks') for (let j = 0; j < 4; j++) { const x = -0.38 + j * 0.27, z = (r() - 0.5) * 0.2; part(G.box, '#b8a47a', x, yb + 0.12, z, { sx: 0.24, sy: 0.24, sz: 0.4, ry: (r() - 0.5) * 0.4 }); part(G.box, '#a8946a', x, yb + 0.26, z, { sx: 0.1, sy: 0.06, sz: 0.12 }); }
+  else if (k === 'barrels') for (const x of [-0.3, 0.32]) barrel([x, yb, 0], [x, yb + 0.38, 0], 0.15, 0.17, shade(C.light, 0.95 + r() * 0.1), {});
+  else if (k === 'hay') { part(G.box, '#cfb064', 0.05, yb + 0.16, 0, { sx: 1.16, sy: 0.32, sz: 0.56 }); for (const x of [-0.25, 0.35]) part(G.box, '#7a5a2a', x, yb + 0.16, 0, { sx: 0.03, sy: 0.33, sz: 0.57 }); }
+  else if (k === 'crates') { slatCrate(-0.3, yb, 0, 0.44, 0.3, 0.5, C, 'apples', '#b83a2a', r); slatCrate(0.34, yb, 0, 0.44, 0.3, 0.5, C, 'cabbages', '#7aa04a', r); }
+}
+// a flagpole on a stepped stone foot, a gilt finial, a banner hung from an arm: the field, a band across its head and
+// a device, on both faces; its foot square or swallowtailed
+function flagpole(L, C) {
+  part(G.box, shade(CC(STONE), 0.85), 0, 0.06, 0, { sx: 0.56, sy: 0.12, sz: 0.56 });
+  part(G.box, CC(STONE), 0, 0.22, 0, { sx: 0.36, sy: 0.2, sz: 0.36 });
+  part(G.cyl8, IRON, 0, 0.36, 0, { sx: 0.12, sy: 0.08, sz: 0.12 });
+  seg(G.cyl8, C.light, [0, 0.32, 0], [0, 3.5, 0], 0.035);
+  part(G.oct, '#c8a048', 0, 3.57, 0, { sx: 0.1, sy: 0.14, sz: 0.1 });
+  seg(G.cyl6, C.dark, [0, 3.32, 0], [0.6, 3.32, 0], 0.018);
+  part(G.oct, '#c8a048', 0.61, 3.32, 0, { sx: 0.05, sy: 0.05, sz: 0.05 });
+  for (const x of [0.1, 0.31, 0.52]) part(G.box, IRON, x, 3.31, 0, { sx: 0.02, sy: 0.07, sz: 0.045 });
+  const F = CC(L.field[0]), M = CC(L.mark[0]), ox = 0.31, oy = 3.29, hw = 0.25, len = 1.2;
+  plate(L.tail ? [[-hw, 0], [-hw, -len], [0, -len + 0.22], [hw, -len], [hw, 0]] : [[-hw, 0], [-hw, -len], [hw, -len], [hw, 0]], 0, -len / 2, -0.006, 0.006, F, ox, oy);
+  const sign = L.sign, shapes = [[[-hw, -0.08], [-hw, -0.15], [hw, -0.15], [hw, -0.08]]];   // (each counter-clockwise: its faces outward)
+  if (sign === 'diamond') shapes.push([[0, -0.4], [-0.13, -0.56], [0, -0.72], [0.13, -0.56]]);
+  else if (sign === 'cross') shapes.push([[-0.035, -0.38], [-0.035, -0.76], [0.035, -0.76], [0.035, -0.38]], [[-0.15, -0.53], [-0.15, -0.6], [0.15, -0.6], [0.15, -0.53]]);
+  else if (sign === 'sun') { const s = []; for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2, rr = k % 2 ? 0.08 : 0.14; s.push([-Math.sin(a) * rr, -0.56 + Math.cos(a) * rr]); } shapes.push(s); }
+  else shapes.push([[-0.2, -0.66], [0, -0.48], [0, -0.38], [-0.2, -0.56]], [[0, -0.48], [0.2, -0.66], [0.2, -0.56], [0, -0.38]]);
+  for (const s of shapes) {
+    const cx = s.reduce((a, p) => a + p[0], 0) / s.length, cy = s.reduce((a, p) => a + p[1], 0) / s.length;
+    plate(s, cx, cy, 0.006, 0.01, M, ox, oy);
+    plate(s, cx, cy, -0.01, -0.006, M, ox, oy);
+  }
+}
+// a bird bath: a stone basin on a pedestal, water in it, maybe a bird on its rim
+function birdBath(L) {
+  const st = CC(L.stone[0]);
+  part(G.box, shade(st, 0.85), 0, 0.04, 0, { sx: 0.34, sy: 0.08, sz: 0.34 });
+  part(G.cyl8, st, 0, 0.27, 0, { sx: 0.16, sy: 0.38, sz: 0.16 });
+  part(G.cyl8, shade(st, 1.05), 0, 0.47, 0, { sx: 0.24, sy: 0.06, sz: 0.24 });
+  part(G.cyl12, shade(st, 0.95), 0, 0.54, 0, { sx: 0.6, sy: 0.08, sz: 0.6 });
+  ring(0.27, 0.605, 14, 0.05, 0.05, shade(st, 1.08), 6);
+  part(G.cyl12, WATER, 0, 0.595, 0, { sx: 0.5, sy: 0.01, sz: 0.5 });
+  if (L.bird) {
+    const a = L.at, bx = Math.sin(a) * 0.27, bz = Math.cos(a) * 0.27, ry = a + Math.PI / 2, fx = Math.sin(ry), fz = Math.cos(ry), B = CC(L.birdC[0]);
+    part(G.oct, B, bx, 0.67, bz, { sx: 0.07, sy: 0.07, sz: 0.12, ry });
+    part(G.oct, shade(B, 1.1), bx + fx * 0.06, 0.71, bz + fz * 0.06, { sx: 0.05, sy: 0.05, sz: 0.05 });
+    seg(G.cone4, '#c8a040', [bx + fx * 0.08, 0.71, bz + fz * 0.08], [bx + fx * 0.115, 0.705, bz + fz * 0.115], 0.01);
+    part(G.box, shade(B, 0.8), bx - fx * 0.08, 0.68, bz - fz * 0.08, { sx: 0.03, sy: 0.01, sz: 0.07, ry });
+    if (L.birdC[1] === 'A robin') part(G.oct, '#d0602a', bx + fx * 0.04, 0.65, bz + fz * 0.04, { sx: 0.05, sy: 0.04, sz: 0.04, ry });
+  }
 }
 
 // ---------- the API ----------

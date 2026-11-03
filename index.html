@@ -1295,10 +1295,10 @@ function makeRegionName(w, rand, used, fallback) {
   return fallback;
 }
 const towns = [];
-const TOWN_R = 10;   // a hamlet's radius
+const TOWN_R = 12;   // a hamlet's radius (10 till 2026-11-03: Jordan, every town a little bigger so its yards hold props)
 // Town sizes (v407): 0 hamlet (the old town: a cross of streets, four houses), 1 medium, 2 large (at the heart of every
 // continent). R its radius; plaza its half width; ring a square street that far out (0 none); houses how many to try for
-const TOWN_TIER = [{ R: TOWN_R, plaza: 2, ring: 0, houses: 4 }, { R: 15, plaza: 2, ring: 0, houses: 8 }, { R: 21, plaza: 3, ring: 10, houses: 16 }];
+const TOWN_TIER = [{ R: TOWN_R, plaza: 2, ring: 0, houses: 4 }, { R: 18, plaza: 2, ring: 0, houses: 8 }, { R: 25, plaza: 3, ring: 12, houses: 16 }];   // (medium 15, large 21 ring 10 till 2026-11-03)
 const TOWN_MEDIUM = 3;   // medium towns a world, at most
 const TSTREET = new Uint8Array(N * N);   // a medium or large town's streets (1), plaza (2) and avenue side lanes (3), laid out in placeTowns
 const DEEP_IN = 10;   // tiles of ordinary forest, give or take, ringing a deep forest
@@ -2068,6 +2068,7 @@ async function generate(progress) {
   placeCabins();
   // clear the ground right around the spawn (the plaza's lamps stay)
   for (let r = -3; r <= 3; r++) for (let c = -3; c <= 3; c++) { const i = T(spawnT.c + c, spawnT.r + 2 + r); if (!OBJ[OB[i]].tile && OB[i] !== O.LAMP && OB[i] !== O.FOUNTAIN) OB[i] = 0; }
+  towns.forEach(townYards);   // (2026-11-03: the towns' outdoor props, once everything else in them is down)
   spawn.x = spawnT.c + 0.5; spawn.z = spawnT.r + 2.5;
   deepenSea();
   labelLands();
@@ -3571,6 +3572,185 @@ function tavernFront(t, n, h, ctx) {
     propPut(h, 0, 'kegStack', [[k.c, k.r]], k.d, 0, ctx); put++;
   }
 }
+// ---------- Outdoor props (2026-11-03, Jordan) ----------
+// The outdoor set of src/props/props.js set out in every town once its houses, lamps, flower boxes, trees and fences
+// are down (townYards, after the scenery): market stalls along the plaza's edge with crates of produce beside them,
+// benches by the plaza and along the streets, a notice board and flagpoles near the plaza, a signpost at every way
+// out, horse troughs out toward the edge, handcarts by the streets, bird baths in quiet yards, and round the houses
+// rain barrels at their corners, woodpiles and hay against their walls, wash lines in the yards between. How many of
+// each goes by the town's size (OUT_KITS: [fewest, most] in a town, or a share of the houses). Each stands on yard
+// tiles (stalls on the plaza's edge), never on a street or a road, by a door's step or a gate, under a balcony, and
+// never touching another (but produce by its stall); it's kept only if every tile of the town you could walk to
+// before it went down can still be walked to.
+const OUT_KITS = [
+  { stall: [0, 0], bench: [1, 2], notice: [1, 1], flag: [0, 0], trough: [1, 1], cart: [0, 1], bath: [0, 0], wash: [2, 2], barrel: 0.7, woodpile: 0.6, hay: 0.45 },
+  { stall: [2, 3], bench: [2, 4], notice: [1, 1], flag: [1, 1], trough: [1, 2], cart: [1, 1], bath: [1, 1], wash: [2, 3], barrel: 0.6, woodpile: 0.45, hay: 0.3 },
+  { stall: [4, 6], bench: [6, 8], notice: [2, 2], flag: [2, 4], trough: [2, 2], cart: [1, 2], bath: [2, 3], wash: [1, 2], barrel: 0.5, woodpile: 0.15, hay: 0.08 },
+];
+function townYards(t, n) {
+  const own = n + 1, K = OUT_KITS[t.tier], L0 = LV[T(t.c, t.r)], R = t.R, TT = TOWN_TIER[t.tier], P = t.tier ? TT.plaza : 2, lane = t.tier === 2 ? 1 : 0;
+  const ctx = { wood: PROP_WOOD[t.tier] || 'pine', n: n * 31 + 29 }, yard = t.yard = { tiles: [], props: [], yard: true, town: n };
+  const y0 = L0 * STEP - 0.06;   // (propPut lifts a prop onto a house's floor: out here it stands on the ground)
+  const count = (k, salt) => k[0] + Math.floor(hs(t.c, t.r, 700 + salt) * (k[1] - k[0] + 1));
+  const street = (c, r) => { const i = T(c, r); return TN[i] === own && (!!TSTREET[i] || !!PATH[i] || (!t.tier && townCell(c, r) !== 'yard')); };
+  const taken = i => { const b = OB[i]; return !!b && (OBJ[b].tile || OBJ[b].solid >= 0.1 || b === O.LAMP || b === O.PLANTER || b === O.FOUNTAIN); };
+  const walk = i => TN[i] === own && LV[i] === L0 && !WT[i] && !FL[i] && !BR[i] && !pillars.has(i) && !taken(i);
+  // what you can walk to now, from the plaza (or the hamlet's crossroads) beside its well or fountain
+  const c0 = t.c - R - 2, r0 = t.r - R - 2, Wd = 2 * R + 5, s0 = T(t.c, t.r + P);
+  const flood = () => {
+    const seen = new Uint8Array(Wd * Wd), q = [s0];
+    seen[(t.r + P - r0) * Wd + t.c - c0] = 1;
+    while (q.length) {
+      const i = q.pop(), c = i % N, r = Math.floor(i / N);
+      for (let d = 0; d < 4; d++) {
+        const cc = c + DC[d], rr = r + DR[d];
+        if (cc < c0 || rr < r0 || cc >= c0 + Wd || rr >= r0 + Wd) continue;
+        const l = (rr - r0) * Wd + cc - c0, j = T(cc, rr);
+        if (seen[l] || !walk(j) || wallOn(c, r, d)) continue;
+        seen[l] = 1; q.push(j);
+      }
+    }
+    return seen;
+  };
+  if (!walk(s0)) return;
+  const base = flood();
+  const stillOk = () => {
+    const s = flood();
+    for (let l = 0; l < base.length; l++) if (base[l] && !s[l] && walk(T(c0 + l % Wd, r0 + Math.floor(l / Wd)))) return false;
+    return true;
+  };
+  // kept clear: every door's step and the tiles round it, every gate's tiles and round them
+  const near = new Set(), mark = (c, r) => { for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) near.add(T(c + a, r + b)); };
+  for (const h of t.houses) { const f = doorFront(h); if (f >= 0) mark(f % N, Math.floor(f / N)); }
+  for (const [ec, er, ew] of t.gates || []) { mark(ec, er); mark(ew ? ec - 1 : ec, ew ? er : er - 1); }
+  const free = (c, r, plaza) => {
+    const i = T(c, r);
+    return TN[i] === own && LV[i] === L0 && !taken(i) && !FL[i] && !WT[i] && !BR[i] && !SH[i] && !LAVA[i] && !pillars.has(i) && !stairAt.has(i) && !PROP_AT.has(i) &&
+      !near.has(i) && !DOCK_WAY[i] && !DOCK_NEAR[i] && !UP[1].FL.has(i) && (plaza ? TSTREET[i] === 2 : !street(c, r));
+  };
+  const foot = (c, r, w, d, f) => { const g = (f + 3) & 3, out = []; for (let b = 0; b < d; b++) for (let a = 0; a < w; a++) out.push([c + DC[g] * a + DC[f] * b, r + DR[g] * a + DR[f] * b]); return out; };
+  const placed = [];
+  const apart = (tiles, g, ids, skip) => placed.every(q => q === skip || (ids && !ids.includes(q.id)) || q.tiles.every(qt => tiles.every(([c, r]) => Math.max(Math.abs(qt % N - c), Math.abs(Math.floor(qt / N) - r)) >= g)));
+  const put = (id, tiles, f, { wallV = 0, plaza = false, look, by } = {}) => {
+    if (!tiles.every(([c, r]) => free(c, r, plaza)) || !apart(tiles, 2, null, by)) return null;
+    const q = propPut(yard, 0, id, tiles, f, wallV, ctx, look ? { y0, look } : { y0 });
+    if (!stillOk()) { propTake(q); return null; }
+    placed.push(q);
+    return q;
+  };
+  const all = [];
+  for (let r = t.r - R; r <= t.r + R; r++) for (let c = t.c - R; c <= t.c + R; c++) if (TN[T(c, r)] === own) all.push([c, r]);
+  const dist = (c, r) => Math.hypot(c - t.c, r - t.r);
+  // a run of w yard tiles along a street, the street in front of every one of them (front toward it)
+  const byStreet = (w, salt, score = () => 0) => {
+    const out = [];
+    for (const [c, r] of all) for (let e = 0; e < 4; e++) {
+      const tiles = foot(c, r, w, 1, e);
+      if (tiles.every(([a, b]) => street(a + DC[e], b + DR[e]) && !street(a, b))) out.push({ tiles, f: e, s: score(c, r) + hs(c, r, salt + e) });
+    }
+    return out.sort((a, b) => a.s - b.s);
+  };
+  const fill = (id, list, want, gap, opts = {}) => {
+    let got = 0;
+    for (const s of list) {
+      if (got >= want) break;
+      if (gap && !apart(s.tiles, gap, [id])) continue;
+      if (put(id, s.tiles, s.f, { ...opts, ...s.opts })) got++;
+    }
+    return got;
+  };
+  // 1. market stalls on the plaza's edge either side of each street, facing in, a crate of produce beside each
+  if (K.stall[1]) {
+    const spots = [];
+    for (let d = 0; d < 4; d++) {
+      const p = (d + 1) & 3, f = (d + 2) & 3;
+      for (const a0 of [lane + 1, -(lane + 2)]) {
+        const c = t.c + DC[d] * P + DC[p] * a0, r = t.r + DR[d] * P + DR[p] * a0, tiles = [[c, r], [c + DC[p], r + DR[p]]];
+        const end = a0 > 0 ? a0 + 2 : a0 - 1, ec = t.c + DC[d] * P + DC[p] * end, er = t.r + DR[d] * P + DR[p] * end;
+        spots.push({ tiles, f, side: [ec, er], s: hs(c, r, 710) });
+      }
+    }
+    spots.sort((a, b) => a.s - b.s);
+    let got = 0;
+    const want = count(K.stall, 1);
+    for (const s of spots) {
+      if (got >= want) break;
+      const q = put('marketStall', s.tiles, s.f, { plaza: true });
+      if (!q) continue;
+      got++; s.used = true;
+      put('produce', [s.side], s.f, { by: q, plaza: TSTREET[T(...s.side)] === 2 });
+    }
+    // the rest of the plaza's edge: benches, facing in
+    fill('streetBench', spots.filter(s => !s.used), Math.ceil(count(K.bench, 2) / 2), 0, { plaza: true });
+  }
+  // 2. a signpost at each way out: by the street a few tiles in from where it leaves the town
+  for (let d = 0; d < 4; d++) {
+    let k = P + 1;
+    while (k < R + 3 && TN[T(t.c + DC[d] * (k + 1), t.r + DR[d] * (k + 1))] === own) k++;
+    if (!PATH[T(t.c + DC[d] * k, t.r + DR[d] * k)]) continue;
+    const p = (d + 1) & 3, list = [];
+    for (let m = 2; m <= 5; m++) for (const s of [1, -1]) {
+      const c = t.c + DC[d] * (k - m) + DC[p] * s * (lane + 1), r = t.r + DR[d] * (k - m) + DR[p] * s * (lane + 1);
+      list.push({ tiles: [[c, r]], f: s > 0 ? (p + 2) & 3 : p, s: m + hs(c, r, 720) });
+    }
+    fill('signpost', list.sort((a, b) => a.s - b.s), 1, 0);
+  }
+  // 3. by the plaza: notice boards, flagpoles (clear of the houses' eaves), benches, a handcart
+  const plazaNear = (c, r) => dist(c, r) * 0.25;
+  fill('noticeBoard', byStreet(1, 730, plazaNear).filter(s => dist(...s.tiles[0]) <= P + 6), count(K.notice, 3), 6);
+  if (K.flag[1]) {
+    const town = rollProp('flagpole', 1 + Math.floor(hs(t.c, t.r, 740) * 99998));
+    const eaves = ([c, r]) => { for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if (FL[T(c + a, r + b)]) return true; return false; };
+    fill('flagpole', byStreet(1, 741, plazaNear).filter(s => dist(...s.tiles[0]) <= P + 5 && !eaves(s.tiles[0])), count(K.flag, 4), 3, { look: town });
+  }
+  fill('streetBench', byStreet(2, 750, (c, r) => dist(c, r) * 0.08), count(K.bench, 2) - placed.filter(q => q.id === 'streetBench').length, 5);
+  fill('handcart', byStreet(2, 760, (c, r) => Math.abs(dist(c, r) - R * 0.6) * 0.1), count(K.cart, 5), 6);
+  // 4. horse troughs out toward the edge
+  fill('horseTrough', byStreet(2, 770).filter(s => dist(...s.tiles[0]) >= R - 8), count(K.trough, 6), 8);
+  // 5. round each house: a rain barrel at a corner, a woodpile and hay against its walls (not the door's)
+  const outWall = v => v === 1 || v === 3 || v === 4 || v === 12 || v === 13 || v === 14;
+  t.houses.forEach((h, j) => {
+    if (h.cathedral || !h.tiles) return;
+    const set = new Set(h.tiles.map(([c, r]) => T(c, r))), spots = [];
+    let doorSide = -1;
+    if (h.inside && h.door) for (let d = 0; d < 4; d++) { const [ec, er, ew] = edgeOf(h.inside[0], h.inside[1], d); if (ec === h.door[0] && er === h.door[1] && ew === h.door[2]) doorSide = d; }
+    for (const [c, r] of h.tiles) for (let e = 0; e < 4; e++) {
+      const oc = c + DC[e], or = r + DR[e], v = wallOn(c, r, e);
+      if (set.has(T(oc, or)) || !outWall(v)) continue;
+      const p = (e + 1) & 3, corner = !set.has(T(c + DC[p], r + DR[p])) || !set.has(T(c - DC[p], r - DR[p]));
+      spots.push({ c: oc, r: or, e, v, corner, back: e !== doorSide, hc: c, hr: r });
+    }
+    spots.sort((a, b) => hs(a.c, a.r, 780 + a.e) - hs(b.c, b.r, 780 + b.e));
+    const roll = k => hs(h.tiles[0][0], h.tiles[0][1], 790 + k);
+    if (roll(0) < K.barrel) for (const s of spots) if (s.corner && put('rainBarrel', [[s.c, s.r]], s.e, { wallV: s.v })) break;
+    if (roll(1) < K.woodpile) for (const s of spots) {
+      if (!s.back || !PROP_PLAIN_WALL(s.v)) continue;
+      const g = (s.e + 3) & 3, hc2 = s.hc + DC[g], hr2 = s.hr + DR[g];
+      if (!set.has(T(hc2, hr2)) || wallOn(hc2, hr2, s.e) !== s.v) continue;
+      if (put('woodpile', foot(s.c, s.r, 2, 1, s.e), s.e, { wallV: s.v })) break;
+    }
+    if (roll(2) < K.hay) for (const s of spots) if (s.back && PROP_PLAIN_WALL(s.v) && put('hayBales', [[s.c, s.r]], s.e)) break;
+  });
+  // 6. wash lines across the quieter yards, near a house; bird baths in the open middles of yards
+  const quiet = (c, r) => { for (let e = 0; e < 4; e++) if (street(c + DC[e], r + DR[e])) return false; return true; };
+  const byHouse = (c, r) => { let m = 9; for (let a = -3; a <= 3; a++) for (let b = -3; b <= 3; b++) if (FL[T(c + a, r + b)]) m = Math.min(m, Math.max(Math.abs(a), Math.abs(b))); return m; };
+  const lines = [];
+  for (const [c, r] of all) for (const f of [0, 1]) {
+    const tiles = foot(c, r, 3, 1, f);
+    if (tiles.every(([a, b]) => quiet(a, b)) && byHouse(...tiles[1]) <= 2) lines.push({ tiles, f, s: hs(c, r, 800 + f) });
+  }
+  fill('washLine', lines.sort((a, b) => a.s - b.s), count(K.wash, 7), 6);
+  if (K.bath[1]) {
+    const baths = [];
+    for (const [c, r] of all) {
+      if (dist(c, r) < P + 3 || !quiet(c, r)) continue;
+      let open = 0;
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) if ((a || b) && free(c + a, r + b, false)) open++;
+      if (open >= 7) baths.push({ tiles: [[c, r]], f: Math.floor(hs(c, r, 811) * 4), s: hs(c, r, 810) });
+    }
+    fill('birdBath', baths.sort((a, b) => a.s - b.s), count(K.bath, 8), 6);
+  }
+}
 // a farmhouse or a cabin: one room, no beds of the town's
 function furnishLone(tiles, inside, kind, wood, n) {
   const h = { tiles, inside, clear: new Set(), beds: [], up: null };
@@ -3679,17 +3859,22 @@ function raiseTownHouses(t, n) {
         const i = T(c0, r0);
         if (!inTown(c0, r0) || TSTREET[i] || house.has(i) || keep.has(i)) break;
       }
+      // (2026-11-03, Jordan: buildings at least two tiles apart) no other house within two tiles of it, the street
+      // in front counted: one right across a one-tile street is too near, and the house is set back a tile instead
+      let crowd = false;
       for (const [w, dep] of sizes) {
         const o0 = -Math.floor((w - 1 - Math.floor(hs(c0, r0, 320 + d) * 2)) / 2), a1 = o0 + w - 1;
         let ok = true;
-        for (let a = o0 - 1; a <= a1 + 1 && ok; a++) for (let b = 0; b <= dep + 1 && ok; b++) {
-          const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep;
-          if (inside ? !inTown(c, r) || TSTREET[i] || house.has(i) || keep.has(i) : (b > 0 && (!inTown(c, r) || house.has(i)))) ok = false;
+        for (let a = o0 - 2; a <= a1 + 2 && ok; a++) for (let b = -1; b <= dep + 2 && ok; b++) {
+          const [c, r] = at(a, b), i = T(c, r), inside = a >= o0 && a <= a1 && b >= 1 && b <= dep, near = a >= o0 - 1 && a <= a1 + 1 && b <= dep + 1;
+          if (inside) { if (!inTown(c, r) || TSTREET[i] || house.has(i) || keep.has(i)) ok = false; }
+          else if (house.has(i)) { ok = false; if (b < 0) crowd = true; }
+          else if (near && b > 0 && !inTown(c, r)) ok = false;
         }
         if (ok) { fit = { w, dep, o0, a1 }; break; }
       }
       if (fit) { setBack = sb; break; }
-      if (!sb) break;   // (set a house back only when something across the street needs it)
+      if (!sb && !crowd) break;   // (set a house back only when something across the street needs it)
     }
     if (!fit) continue;
     if (setBack) TSTREET[T(c0, r0)] = 1;   // (the street tile out to its door)
@@ -6018,6 +6203,7 @@ function placeScenery(c, r) {
   }
   switch (b) {
     case TOWN: {
+      if (OB[i] === O.PROP) return;   // (a tavern's kegs out by its wall)
       const t = towns[TN[i] - 1], dx = c - t.c, dz = r - t.r, cell = townCell(c, r);
       if (dx === 0 && dz === 0) { OB[i] = t.tier === 2 ? O.FOUNTAIN : O.WELL; return; }
       const ring = TOWN_TIER[t.tier].ring, lp = TOWN_TIER[t.tier].plaza + 1, P = lp - 1, adx = Math.abs(dx), adz = Math.abs(dz);
@@ -11409,13 +11595,11 @@ function ironChest(x, z, c, r) {
   part(G.box, '#1a1620', kx, y + Hb - 0.06, kz, { sx: 0.03, sy: 0.06, sz: 0.035, ry });
   for (const sa of [-1, 1]) { const [hx, hz] = at(sa * (W / 2 + 0.03), 0); part(G.box, light, hx, y + Hb * 0.62, hz, { sx: 0.04, sy: 0.05, sz: 0.24, ry }); }
 }
+// (2026-11-03, Jordan: the well was plain beside the fountain) the outdoor set's well (src/props/props.js): fieldstone
+// in courses, a windlass and buckets under a gabled roof, its look rolled from where it stands, in the town's wood
 function well(x, z) {
-  const y = groundAt(x, z);
-  part(G.cyl8, '#8a8494', x, y + 0.2, z, { sx: 0.84, sy: 0.4, sz: 0.84 });
-  part(G.cyl8, '#3a5a8a', x, y + 0.38, z, { sx: 0.68, sy: 0.02, sz: 0.68 });
-  for (const s of [-1, 1]) part(G.box, '#4a3020', x + s * 0.36, y + 0.6, z, { sx: 0.07, sy: 0.8, sz: 0.07 });
-  part(G.cone4, '#a8483a', x, y + 1.08, z, { sx: 1.0, sy: 0.32, sz: 0.7, ry: Math.PI / 4 });
-  part(G.cyl8, '#8ad0f0', x, y + 0.44, z, { sx: 0.12, sy: 0.1, sz: 0.12, into: 'glow' });
+  const c = Math.floor(x), r = Math.floor(z), i = T(c, r), t = towns[TN[i] - 1], seed = 1 + Math.floor(hs(c, r, 611) * 99998), wood = PROP_WOOD[t ? t.tier : 0] || 'pine';
+  drawProp({ id: 'well', look: rollProp('well', seed), wood, key: `well:${seed}:${wood}`, x: c + 0.5, y: LV[i] * STEP, z: r + 0.5, ry: hs(c, r, 612) < 0.5 ? 0 : Math.PI / 2 }, true);
 }
 // a large town's fountain (v408): a round stone basin three tiles across on a low step, water in it, and a pillar in
 // the middle holding a bowl that spills over, a finial on top
@@ -19293,7 +19477,7 @@ function useAction() {
 // ----- sitting (v538, Jordan) -----
 // Benches, chairs and stools can be walked over; F on one sits you down (on a bench, facing a table beside it if
 // there's one), your weapon put away and attacks, rolls and abilities off as at a boat's wheel; F again stands you up.
-const SEAT_IDS = new Set(['bench', 'chair', 'stool', 'barStool']);
+const SEAT_IDS = new Set(['bench', 'chair', 'stool', 'barStool', 'streetBench']);
 // (v557, Jordan) how much higher than the low seats you sit on one: a bar stool's seat is BAR_SEAT
 const SEAT_LIFT = { barStool: BAR_SEAT - SEAT };
 const SIT = { ease: 0.25, drop: 0.02, thigh: 1.45, knee: 1.45, arms: 0.5 };
@@ -25235,7 +25419,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 563, crashSeen = new Map();
+const GAME_VERSION = 564, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -25276,7 +25460,12 @@ window.GAME = {
   props: () => {
     const walk = h => { const R = propRooms(h); return { down: propReach(h, 0), up: R.up ? propReach(h, 1) : null }; };
     const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), grid: walk(h).down ? undefined : (() => { const cs = h.tiles.map(p => p[0]), rs = h.tiles.map(p => p[1]), ins = h.inside ? T(...h.inside) : -1, set = new Set(h.tiles.map(([c, r]) => T(c, r))); const L = []; for (let r = Math.min(...rs) - 1; r <= Math.max(...rs) + 1; r++) { let line = ''; for (let c = Math.min(...cs) - 1; c <= Math.max(...cs) + 1; c++) { const i = T(c, r); line += !set.has(i) ? (WN[i] || WW[i] ? '#' : ' ') : i === ins ? 'D' : stairAt.has(i) ? 'S' : BEDS.has(i) ? 'B' : PROP_AT.has(i) ? PROP_AT.get(i).id[0] : OB[i] ? 'o' : h.clear?.has(i) ? ',' : '.'; } L.push(line); } return L.join('/'); })(), beds: (h.beds || []).length, work: h.work != null, ...walk(h) });
-    return { towns: towns.map(t => ({ tier: t.tier, houses: t.houses.filter(h => !h.cathedral).map(one) })),
+    // (2026-11-03) the outdoor props by kind, the nearest two buildings come (Chebyshev, tiles between), and a map
+    const yardOf = t => (t.yard?.props || []).reduce((o, q) => (o[q.id] = (o[q.id] || 0) + 1, o), {});
+    const gapOf = t => { let m = 99; const hs2 = t.houses.map(h => h.tiles); for (let x = 0; x < hs2.length; x++) for (let y = x + 1; y < hs2.length; y++) for (const [a, b] of hs2[x]) for (const [c, d] of hs2[y]) m = Math.min(m, Math.max(Math.abs(a - c), Math.abs(b - d)) - 1); return m; };
+    const mapOf = t => { const L = []; for (let r = t.r - t.R - 1; r <= t.r + t.R + 1; r++) { let line = ''; for (let c = t.c - t.R - 1; c <= t.c + t.R + 1; c++) { const i = T(c, r), q = PROP_AT.get(i); line += TN[i] !== t.n0 + 1 ? ' ' : FL[i] ? '#' : q ? ({ marketStall: 'M', produce: 'p', streetBench: 'b', noticeBoard: 'N', signpost: 'S', horseTrough: 'T', hayBales: 'h', rainBarrel: 'r', woodpile: 'w', washLine: 'L', handcart: 'C', flagpole: 'F', birdBath: 'o', kegStack: 'k' }[q.id] || (q.house?.yard ? '?' : q.id[0].toUpperCase())) : OB[i] === O.WELL ? 'W' : OB[i] === O.FOUNTAIN ? 'Q' : OB[i] === O.LAMP ? 'l' : OB[i] === O.PLANTER ? 'f' : OB[i] && OBJ[OB[i]].solid ? 't' : TSTREET[i] || PATH[i] ? '-' : '.'; } L.push(line); } return L; };
+    towns.forEach((t, n) => t.n0 = n);
+    return { towns: towns.map(t => ({ tier: t.tier, R: t.R, gap: gapOf(t), yard: yardOf(t), map: mapOf(t), houses: t.houses.filter(h => !h.cathedral).map(one) })),
       farms: farms.map(f => f.room ? one(f.room) : null), cabins: cabins.map(m => m.room ? one(m.room) : null), total: [...PROP_DRAW.values()].reduce((s, l) => s + l.length, 0) };
   },
   // (tests) townsfolk: towns awake, people, places and routes; folkTown(n) wakes town n's people at once
