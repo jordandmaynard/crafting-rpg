@@ -3291,14 +3291,16 @@ function townTrades(t, n) {
 // town size, FOLK_PER_HOUSE's most), each with a blanket of its own colour, so that everyone has one to sleep in.
 const BLANKETS = ['#8a2f2f', '#2f4f8a', '#3f6a3a', '#7a5a2a', '#6a3a6a', '#2f6a6a', '#9a6a3a', '#5a5a7a', '#8a7a4a', '#4a3a5a', '#a04a3a', '#3a5a3a'];
 function townBeds(t, n) {
-  const want = [2, 2, 3][t.tier] || 2;
+  const want0 = [2, 2, 3][t.tier] || 2;
   for (const h of t.houses) {
+    // (2026-11-03, Jordan: the guard house's barracks upstairs) four bunks up there, none below unless none fit
+    const want = h.role === 'guard' ? 4 : want0;
     h.beds = [];
     if (h.cathedral || h.role === 'bank') continue;   // (2026-11-03, Jordan: no beds in a bank)
     // (v454, Jordan) in a two-story house the beds go upstairs, the work below; any that don't fit come down
     if (h.up) townBedsUp(h, want, n);
     const [ic, ir] = h.inside || h.tiles[0];
-    for (let b = h.beds.length; b < want; b++) {
+    for (let b = h.beds.length; b < (h.role === 'guard' && h.beds.length ? 0 : want); b++) {
       let best = null, bd = -1;
       for (const [c, r] of h.tiles) for (let d = 0; d < 4; d++) {
         // head at (c, r) against the wall behind it, foot a tile on toward d
@@ -3420,9 +3422,12 @@ const PROP_KITS = {
     [{ id: 'coinTable' }, { id: 'strongbox', n: 2 }, { id: 'desk' }, { id: 'chair', n: 1 }, { id: 'bench' }, { id: 'bookcase' }, { id: 'candleStand', n: 2 }, { id: 'chandelier' },
       { id: 'runner' }, { id: 'rug' }, { id: 'strongbox' }, { hang: 'tapestry' }, { hang: 'shield' }, { hang: 'wallMap' }],
   ],
+  // (2026-11-03, Jordan: two stories of stone; the captain's desk goes in first as the work prop, the holding cell in
+  // a corner, racks and armor stands by the walls, the mess table, the barracks' bunks upstairs: townBeds)
   guard: [null, null,
-    [{ id: 'longTable', seats: 'bench' }, { id: 'hearth' }, { id: 'chair', n: 1 }, { id: 'barrel', n: 2 }, { id: 'crate', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'shelf' }, { id: 'crate', up: true },
-      { hang: 'wallMap' }, { hang: 'shield', n: 3 }, { hang: 'shield', up: true }],
+    [{ id: 'holdingCell', corner: true }, { id: 'weaponRack' }, { id: 'armorStand', n: 2 }, { id: 'longTable', seats: 'bench' }, { id: 'hearth' }, { id: 'chair', n: 1 },
+      { id: 'barrel' }, { id: 'crate', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'weaponRack', up: true }, { id: 'armorStand', up: true }, { id: 'crate', up: true },
+      { hang: 'wallMap' }, { hang: 'shield', n: 2 }, { hang: 'shield', up: true, n: 2 }],
   ],
   clergy: [null,
     [{ id: 'longTable', seats: 'bench' }, { id: 'bookcase', n: 2 }, { id: 'candleStand' }, { id: 'hearth' }, { id: 'chest', at: 'bed' }],
@@ -3438,7 +3443,7 @@ const BANK_HALL = [{ id: 'bench', n: 2 }, { id: 'candleStand', n: 2 }, { id: 'ch
 // (each building's work prop, for a trade kept in a building of its own)
 const PROP_WORK = { tavern: 'barrelRack', bank: 'desk', guard: 'desk' };
 // (v558, Jordan: kegs as well as the barrel rack in a tavern) floor props that stand against a wall, out of the way
-const PROP_BY_WALL = new Set(['keg', 'barrel']);
+const PROP_BY_WALL = new Set(['keg', 'barrel', 'armorStand']);
 // the buildings a town keeps, by town size, by their place in the order the houses go up (after the tannery and smithy)
 const PROP_ROLES = [[], [null, null, 'tavern'], [null, null, 'tavern', 'bank', 'guard']];
 const ROLE_TRADE = { tavern: 'innkeeper', bank: 'banker', guard: 'guard' };
@@ -3644,6 +3649,26 @@ function propHang(h, k, id, ctx) {
   for (const [tc, tr] of cd.foot) { const [a, b, e] = edgeOf(tc, tr, (cd.f + 2) & 3); used.add(dKey(a, b, e, k)); }
   return propPut(h, k, id, cd.foot, cd.f, cd.wallV, ctx, { cut: dKey(ec, er, ew, k) + 1 });
 }
+// (2026-11-03) a wall prop that wants a corner (the holding cell): those with a wall at a side first, and its look
+// told which sides have one (wl: its -x side, wr: its +x), so it draws no bars there; never with a door at a side
+function propCorner(h, k, id, ctx) {
+  const P = PROPS[id], [w, d] = P.tiles, sideOf = (tc, tr, s) => upWallOn(tc, tr, s, k);
+  const out = [];
+  for (const cd of propCands(h, k, id, ctx)) {
+    const g = (cd.f + 3) & 3, L = [], Rt = [];
+    for (let b = 0; b < d; b++) { L.push(sideOf(...cd.foot[b * w], (g + 2) & 3)); Rt.push(sideOf(...cd.foot[b * w + w - 1], g)); }
+    if ([...L, ...Rt].some(v => v && (isDoorVal(v) || isFenceVal(v)))) continue;
+    const wl = L.every(Boolean), wr = Rt.every(Boolean);
+    out.push({ ...cd, wl, wr, score: cd.score + (wl || wr ? 100 : 0) });
+  }
+  out.sort((a, b) => b.score - a.score);
+  for (const cd of out.slice(0, 40)) {
+    const q = propPut(h, k, id, cd.foot, cd.f, cd.wallV, ctx, { look: { wl: cd.wl, wr: cd.wr } });
+    if (propReach(h, k)) return q;
+    propTake(q);
+  }
+  return null;
+}
 // furnish a building from its kit: ctx { wood, n (a number for its hashes) }
 function furnish(h, kit, ctx) {
   if (!kit) return;
@@ -3651,6 +3676,7 @@ function furnish(h, kit, ctx) {
     const k = it.up && propRooms(h).up ? 1 : 0;
     for (let m = 0; m < (it.n && !it.seats ? it.n : 1); m++) {
       if (it.hang) { propHang(h, k, it.hang, ctx); continue; }
+      if (it.corner) { propCorner(h, k, it.id, ctx); continue; }
       if (it.at === 'bed') {
         for (const b of h.beds || []) {
           const bk = b.k || 0, c = (b.j % N) + DC[b.d], r = Math.floor(b.j / N) + DR[b.d];
@@ -3961,6 +3987,41 @@ function townYards(t, n) {
     }
     return got;
   };
+  // 0. (2026-11-03, Jordan) the guard house's training yard on the stretch kept beside it (h.drill), v along the
+  // yard's depth out from the house's wall, u along it: archery butts at its far end (u L-1) facing back down it, a
+  // watch-fire brazier there by the wall, a rack of wooden weapons at its start on the outer edge facing in, training
+  // dummies between, lanes left open to shoot down; nothing else goes there after
+  //   D 4:  R R . . A      D 3:  R R . . A
+  //         . X . X .            . . . . A
+  //         . . . . A            . X . X Z
+  //         . . . . Z            (the house's wall)
+  for (const h of t.houses) if (h.drill) guardYard(h.drill);
+  function guardYard(Y) {
+    const flip = hs(Y.c0, Y.r0, 870) < 0.5, ud = flip ? (Y.ud + 2) & 3 : Y.ud, vd = Y.vd, toHouse = (vd + 2) & 3;
+    const at = (u, v) => { const uu = flip ? Y.L - 1 - u : u; return [Y.c0 + DC[Y.ud] * uu + DC[vd] * v, Y.r0 + DR[Y.ud] * uu + DR[vd] * v]; };
+    const one = (id, tiles, f, opts = {}) => {
+      if (!tiles.every(([c, r]) => free(c, r, false))) return null;
+      const q = propPut(yard, 0, id, tiles, f, opts.wallV || 0, ctx, opts.look ? { y0, look: opts.look } : { y0 });
+      if (!stillOk()) { propTake(q); return null; }
+      placed.push(q);
+      return q;
+    };
+    // (each tried at its place, then the next along u toward the yard's middle)
+    const tryAt = (id, us, v, f, opts) => { for (const u of us) { const q = one(id, [at(u, v)], f, opts); if (q) return q; } return null; };
+    const far = [Y.L - 1, Y.L - 2];
+    for (const v of Y.D > 3 ? [3, 1] : [2, 1]) tryAt('archeryButt', far, v, (ud + 2) & 3);
+    const fire = tryAt('brazier', far, 0, vd);
+    if (fire) t.lamps.push([fire.x, fire.z, 1, null, 0.95]);
+    // the rack: two tiles on the outer edge facing the house (tiles[0] its back left), free-standing
+    const g = (toHouse + 3) & 3;
+    for (let u = 0; u + 3 < Y.L; u++) {
+      let A = at(u, Y.D - 1), B = at(u + 1, Y.D - 1);
+      if (B[0] !== A[0] + DC[g] || B[1] !== A[1] + DR[g]) [A, B] = [B, A];
+      if (one('weaponRack', [A, B], toHouse, { look: { practice: true } })) break;
+    }
+    for (let u = 1; u <= Y.L - 3; u += 2) tryAt('trainingDummy', [u], Y.D > 3 ? 2 : 0, toHouse);
+    for (const i of Y.set) near.add(i);
+  }
   // 1. market stalls on the plaza's edge either side of each street, facing in, a crate of produce beside each
   if (K.stall[1]) {
     const spots = [];
@@ -4181,6 +4242,7 @@ function raiseTownHouses(t, n) {
     const [xc, xr] = across(...cath.inside, (cath.cathedral.d + 2) & 3), x = T(xc, xr);
     if (!TSTREET[x]) keep.add(x);
   }
+  let guardTries = 0;
   for (const [s0, q0, d] of cands) {
     if (t.houses.length >= TT.houses) break;
     const p = (d + 1) & 3, back = (d + 2) & 3;
@@ -4214,8 +4276,6 @@ function raiseTownHouses(t, n) {
       if (!sb && !crowd) break;   // (set a house back only when something across the street needs it)
     }
     if (!fit) continue;
-    if (setBack) TSTREET[T(c0, r0)] = 1;   // (the street tile out to its door)
-    else { const [xc, xr] = at(0, -1), x = T(xc, xr); if (!TSTREET[x]) keep.add(x); }
     const { w, dep, o0, a1 } = fit, roll = hs(c0, r0, 330 + d);
     let style = TOWN_STYLE[t.tier].find(([, v]) => roll < v)[0];
     // (2026-11-02, Jordan) the town's own buildings, in the order the houses go up: a tavern (two stories, rooms
@@ -4223,6 +4283,7 @@ function raiseTownHouses(t, n) {
     const role = PROP_ROLES[t.tier]?.[t.houses.length] || null;
     if (role === 'tavern') style = 'timber2';
     else if (role === 'bank') style = 'stone1';   // (2026-11-03, Jordan: the bank is one story, all stone, its roof flat stone)
+    else if (role === 'guard') style = 'stone2';   // (2026-11-03, Jordan: two stories of stone, the barracks upstairs)
     else if (role) style = style.endsWith('2') ? 'stone2' : 'stone1';
     let two = style.endsWith('2');
     const stone = style.startsWith('stone');
@@ -4230,7 +4291,18 @@ function raiseTownHouses(t, n) {
     // (v555, Jordan: a tavern is always two stories of timber, rooms over the bar) one that can't be, here, goes elsewhere
     if (role === 'tavern' && (!plan || plan.low.size < 20)) continue;   // (and roomy: the bar, tables and the hearth)
     if (role === 'bank' && (!plan || plan.low.size < 24)) continue;   // (the vault, the counter and a hall before it)
+    if (role === 'guard' && (!plan || plan.low.size < 20) && guardTries++ < 60) continue;   // (the cell, the racks and the mess table)
     if (!plan) { two = false; style = style.replace('2', '1'); plan = townPlan(w, dep, o0, false, c0 * 7 + r0 * 13 + d); }
+    // (2026-11-03, Jordan: an archery and training yard beside the guard house) a clear stretch of yard along one of
+    // its walls, not the door's: a place without one goes on to the next (for a while; then it does without)
+    let drill = null;
+    if (role === 'guard') {
+      drill = guardYardFind(t, plan.low, o0, at, d, p, i => inTown(i % N, Math.floor(i / N)) && !TSTREET[i] && !PATH[i] && !house.has(i) && !keep.has(i));
+      if (!drill && guardTries++ < 60) continue;
+    }
+    // (only now, the house going up here: v601, a tavern, bank or guard house tried here and moved on left these)
+    if (setBack) TSTREET[T(c0, r0)] = 1;   // (the street tile out to its door)
+    else { const [xc, xr] = at(0, -1), x = T(xc, xr); if (!TSTREET[x]) keep.add(x); }
     const { low, upp, stair } = plan, K = (a, b) => (a - o0) + b * 64, cellOf = k => [(k & 63) + o0, k >> 6];
     const tiles = [], set = new Set(), a2b = new Map();
     for (const k of low) { const [a, b] = cellOf(k), [c, r] = at(a, b), i = T(c, r); tiles.push([c, r]); set.add(i); house.add(i); a2b.set(i, [a, b]); }
@@ -4303,6 +4375,7 @@ function raiseTownHouses(t, n) {
       }
     }
     t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up, role });
+    if (drill) { t.houses[t.houses.length - 1].drill = drill; for (const i of drill.set) { keep.add(i); GUARD_YARD.add(i); } }
   }
   if (cath) t.houses.push(cath);   // (last, so the tannery and smithy stay the first two houses; a medium town's chapel likewise)
   townLamps(t, own);
@@ -4455,6 +4528,27 @@ function chapelSteeple(ca, at, ridge, stone, lead, darkC, bandC) {
 const cathedrals = [], cathAt = new Map(), cathTile = new Map(), CATH_OPEN = new Set(), ROSE_WALLS = new Map();
 // (2026-11-03) the banks' ground-floor walls (edge keys: pale dressed stone, bars on their windows) and doors (the grand entrance)
 const BANK_WALLS = new Set(), BANK_DOORS = new Set();
+// (2026-11-03, Jordan) the guard house's training yard: a stretch of yard L tiles along one of its walls (not the
+// door's) and D (4, or 3) out from it, every tile of it ok; the roomiest of its three sides. Kept from the houses
+// built after it and from the trees and bushes (GUARD_YARD), and furnished by townYards (guardYard).
+// { c0, r0 (u 0, v 0: the tile by the wall at the run's start), ud (along the wall), vd (out from it), L, D, set }
+const GUARD_YARD = new Set();
+function guardYardFind(t, low, o0, at, d, p, ok) {
+  const L0 = LV[T(t.c, t.r)], best = [], cells = [...low].map(k => [(k & 63) + o0, k >> 6]);
+  // each side's outermost row or column of the house, and the longest run of it (its tiles in a row)
+  const run = list => { list.sort((x, y) => x - y); let b0 = list[0], bl = 1, s0 = list[0], n = 1; for (let k = 1; k < list.length; k++) { if (list[k] === list[k - 1] + 1) n++; else { s0 = list[k]; n = 1; } if (n > bl) { bl = n; b0 = s0; } } return [b0, bl]; };
+  const bm = Math.max(...cells.map(c => c[1])), am = Math.max(...cells.map(c => c[0])), an = Math.min(...cells.map(c => c[0]));
+  const [ra, la] = run(cells.filter(c => c[1] === bm).map(c => c[0])), [rb, lb] = run(cells.filter(c => c[0] === am).map(c => c[1])), [rc, lc] = run(cells.filter(c => c[0] === an).map(c => c[1]));
+  for (const [o, ud, vd, L] of [[at(ra, bm + 1), p, d, la], [at(am + 1, rb), d, p, lb], [at(an - 1, rc), d, (p + 2) & 3, lc]]) {
+    if (L < 4) continue;
+    for (const D of [4, 3]) {
+      const set = new Set();
+      for (let u = 0; u < L; u++) for (let v = 0; v < D; v++) { const i = T(o[0] + DC[ud] * u + DC[vd] * v, o[1] + DR[ud] * u + DR[vd] * v); if (ok(i) && LV[i] === L0) set.add(i); }
+      if (set.size === L * D) { best.push({ c0: o[0], r0: o[1], ud, vd, L, D, set, s: L * D + hs(o[0], o[1], 860 + vd) }); break; }
+    }
+  }
+  return best.sort((a, b) => b.s - a.s)[0] || null;
+}
 const chapels = [];   // (v493: medium towns' chapels, drawn and lit as a cathedral is, cathAt keyed by their door tile too)   // (ROSE_WALLS: wall key -> the rose it's cut for)
 // (v433) the rose window: its centre this far up its story's wall, the hole through the wall round it
 // (v434) out: where the glass stands across the wall (the inside face, so the hole's own lip takes none of its light);
@@ -4880,7 +4974,7 @@ function townLamps(t, own) {
   const R = t.R, cand = [];
   for (let r = t.r - R; r <= t.r + R; r++) for (let c = t.c - R; c <= t.c + R; c++) {
     const i = T(c, r);
-    if (TN[i] !== own || TSTREET[i] || FL[i] || PATH[i] || Math.max(Math.abs(c - t.c), Math.abs(r - t.r)) <= 1) continue;
+    if (TN[i] !== own || TSTREET[i] || FL[i] || PATH[i] || GUARD_YARD.has(i) || Math.max(Math.abs(c - t.c), Math.abs(r - t.r)) <= 1) continue;   // (not in the guard house's yard)
     let by = false;
     for (let e = 0; e < 4; e++) { const j = T(c + DC[e], r + DR[e]); if (TSTREET[j] && TN[j] === own) by = true; }
     if (by) cand.push([c, r, hs(c, r, 360)]);
@@ -5525,7 +5619,6 @@ function buildCobbles() {
 function finishTowns() {
   buildCobbles();
   buildFountains();
-  buildHalos();
   buildBoats();
   buildDockProxies();
   for (const t of towns) {
@@ -5541,6 +5634,7 @@ function finishTowns() {
     }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
   }
+  buildHalos();   // (after the bank's lanterns are in t.lamps)
   buildGrottoFalls();
   buildObelisks();
   buildWillows();
@@ -6572,7 +6666,7 @@ function placeScenery(c, r) {
         if (t.planterAt?.has(i)) { OB[i] = O.PLANTER; return; }
       }
       if ((Math.abs(dx) === lp && Math.abs(dz) === lp) || (ring && Math.abs(dx) === ring + 1 && Math.abs(dz) === ring + 1) || t.lampAt?.has(i)) { OB[i] = O.LAMP; t.lamps.push([c + 0.5, r + 0.5]); return; }
-      if (cell !== 'yard' || PATH[i]) return;
+      if (cell !== 'yard' || PATH[i] || GUARD_YARD.has(i)) return;   // (the guard house's training yard kept clear)
       const d = Math.hypot(dx, dz);
       // keep the step outside each door clear
       for (let e = 0; e < 4; e++) if (wallOn(c, r, e) === 2 || wallOn(c, r, e) === 11) return;
@@ -22146,7 +22240,7 @@ function lampLight(l, p, k, night) {
   }
   l.color.set('#ffb060'); l.distance = 4.5;
   // a hearth's fire burns low in its pit, brighter and with more flicker than a lamp
-  l.position.set(p[0], heightAt(p[0], p[1]) + (p[2] ? 0.7 : p[4] ?? 1.2), p[1]);
+  l.position.set(p[0], heightAt(p[0], p[1]) + (p[4] ?? (p[2] ? 0.7 : 1.2)), p[1]);
   l.intensity = p[2] ? (0.7 + night * 1.5) * (0.85 + Math.sin(time * 13 + k) * 0.08 + Math.sin(time * 31) * 0.05) : (0.4 + night * 1.2) * (0.9 + Math.sin(time * 9 + p[0] * 1.3 + p[1] * 0.7) * 0.06);
 }
 // A soft glow round every town lamp's lantern (v411), lit or not, so the lamps far off (that have no light of their
@@ -26924,11 +27018,11 @@ window.GAME = {
   // foot and every free tile; landing to every upstairs door), and the farms' and cabins' rooms
   props: () => {
     const walk = h => { const R = propRooms(h); return { down: propReach(h, 0), up: R.up ? propReach(h, 1) : null }; };
-    const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), grid: walk(h).down ? undefined : (() => { const cs = h.tiles.map(p => p[0]), rs = h.tiles.map(p => p[1]), ins = h.inside ? T(...h.inside) : -1, set = new Set(h.tiles.map(([c, r]) => T(c, r))); const L = []; for (let r = Math.min(...rs) - 1; r <= Math.max(...rs) + 1; r++) { let line = ''; for (let c = Math.min(...cs) - 1; c <= Math.max(...cs) + 1; c++) { const i = T(c, r); line += !set.has(i) ? (WN[i] || WW[i] ? '#' : ' ') : i === ins ? 'D' : stairAt.has(i) ? 'S' : BEDS.has(i) ? 'B' : PROP_AT.has(i) ? PROP_AT.get(i).id[0] : OB[i] ? 'o' : h.clear?.has(i) ? ',' : '.'; } L.push(line); } return L.join('/'); })(), beds: (h.beds || []).length, work: h.work != null, ...walk(h) });
+    const one = h => ({ role: h.role || (h.clergy ? 'clergy' : h.trade || 'home'), style: h.style, n: (h.props || []).length, tiles: h.tiles.length, free: h.tiles.filter(([c, r]) => OB[T(c, r)] === 0).length, ids: (h.props || []).map(q => q.id + (q.k ? '^' : '')).join(' '), grid: walk(h).down ? undefined : (() => { const cs = h.tiles.map(p => p[0]), rs = h.tiles.map(p => p[1]), ins = h.inside ? T(...h.inside) : -1, set = new Set(h.tiles.map(([c, r]) => T(c, r))); const L = []; for (let r = Math.min(...rs) - 1; r <= Math.max(...rs) + 1; r++) { let line = ''; for (let c = Math.min(...cs) - 1; c <= Math.max(...cs) + 1; c++) { const i = T(c, r); line += !set.has(i) ? (WN[i] || WW[i] ? '#' : ' ') : i === ins ? 'D' : stairAt.has(i) ? 'S' : BEDS.has(i) ? 'B' : PROP_AT.has(i) ? PROP_AT.get(i).id[0] : OB[i] ? 'o' : h.clear?.has(i) ? ',' : '.'; } L.push(line); } return L.join('/'); })(), beds: (h.beds || []).length, upBeds: (h.beds || []).filter(b => b.k).length, drill: h.drill ? [h.drill.L, h.drill.D] : undefined, work: h.work != null, ...walk(h) });
     // (2026-11-03) the outdoor props by kind, the nearest two buildings come (Chebyshev, tiles between), and a map
     const yardOf = t => (t.yard?.props || []).reduce((o, q) => (o[q.id] = (o[q.id] || 0) + 1, o), {});
     const gapOf = t => { let m = 99; const hs2 = t.houses.map(h => h.tiles); for (let x = 0; x < hs2.length; x++) for (let y = x + 1; y < hs2.length; y++) for (const [a, b] of hs2[x]) for (const [c, d] of hs2[y]) m = Math.min(m, Math.max(Math.abs(a - c), Math.abs(b - d)) - 1); return m; };
-    const mapOf = t => { const L = []; for (let r = t.r - t.R - 1; r <= t.r + t.R + 1; r++) { let line = ''; for (let c = t.c - t.R - 1; c <= t.c + t.R + 1; c++) { const i = T(c, r), q = PROP_AT.get(i); line += TN[i] !== t.n0 + 1 ? ' ' : FL[i] ? '#' : q ? ({ marketStall: 'M', produce: 'p', streetBench: 'b', noticeBoard: 'N', signpost: 'S', horseTrough: 'T', hayBales: 'h', rainBarrel: 'r', woodpile: 'w', washLine: 'L', handcart: 'C', flagpole: 'F', birdBath: 'o', kegStack: 'k' }[q.id] || (q.house?.yard ? '?' : q.id[0].toUpperCase())) : OB[i] === O.WELL ? 'W' : OB[i] === O.FOUNTAIN ? 'Q' : OB[i] === O.LAMP ? 'l' : OB[i] === O.PLANTER ? 'f' : OB[i] && OBJ[OB[i]].solid ? 't' : TSTREET[i] || PATH[i] ? '-' : '.'; } L.push(line); } return L; };
+    const mapOf = t => { const L = []; for (let r = t.r - t.R - 1; r <= t.r + t.R + 1; r++) { let line = ''; for (let c = t.c - t.R - 1; c <= t.c + t.R + 1; c++) { const i = T(c, r), q = PROP_AT.get(i); line += TN[i] !== t.n0 + 1 ? ' ' : FL[i] ? '#' : q ? ({ marketStall: 'M', produce: 'p', streetBench: 'b', noticeBoard: 'N', signpost: 'S', horseTrough: 'T', hayBales: 'h', rainBarrel: 'r', woodpile: 'w', washLine: 'L', handcart: 'C', flagpole: 'F', birdBath: 'o', kegStack: 'k', weaponRack: 'R', brazier: 'Z', archeryButt: 'A', trainingDummy: 'X' }[q.id] || (q.house?.yard ? '?' : q.id[0].toUpperCase())) : OB[i] === O.WELL ? 'W' : OB[i] === O.FOUNTAIN ? 'Q' : OB[i] === O.LAMP ? 'l' : OB[i] === O.PLANTER ? 'f' : OB[i] && OBJ[OB[i]].solid ? 't' : TSTREET[i] || PATH[i] ? '-' : GUARD_YARD.has(i) ? ':' : '.'; } L.push(line); } return L; };
     towns.forEach((t, n) => t.n0 = n);
     return { towns: towns.map(t => ({ tier: t.tier, R: t.R, gap: gapOf(t), yard: yardOf(t), map: mapOf(t), houses: t.houses.filter(h => !h.cathedral).map(one) })),
       farms: farms.map(f => f.room ? one(f.room) : null), cabins: cabins.map(m => m.room ? one(m.room) : null), total: [...PROP_DRAW.values()].reduce((s, l) => s + l.length, 0) };

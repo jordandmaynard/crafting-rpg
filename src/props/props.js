@@ -154,7 +154,7 @@ const heater = (w, h0, h1) => { const c = [[-w, h0], [-w, 0], [-w * 0.9, h1 * 0.
 // hang: hangs from the ceiling (no floor tile);
 // use and goes: from the doc; roll(r) -> the seeded look (null: none); build(L, C) draws it (C: the wood's colours);
 // describe(L) -> rows [label, value, colour]
-export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern', 'Bank', 'Outdoor'];
+export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern', 'Bank', 'Guard', 'Outdoor'];
 export const PROPS = {
   bed: { name: 'Bed', group: 'Beds', tiles: [1, 2], wall: true, use: 'Sit, sleep', goes: 'Every house; inn rooms', inGame: true,
     roll: r => ({ blanket: pick(r, BLANKETS) }),
@@ -728,6 +728,31 @@ export const PROPS = {
       scroll: r() < 0.8, chains: r() < 0.6 }),
     describe: L => [['Board', L.board[1], L.board[0]], ['A pile of gold coins in a border of', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
     build(L, C) { tavernSign(L, C, 'coins'); } },
+  // ---------- (2026-11-03, Jordan) the guard house: two stories of stone, the barracks upstairs, a training yard beside it ----------
+  weaponRack: { name: 'Weapon rack', group: 'Guard', tiles: [2, 1], wall: true, use: 'Show: the watch\'s spears and swords', goes: 'Guard house; its training yard (wooden weapons)',
+    roll: r => ({ spears: 2 + Math.floor(r() * 3), swords: 2 + Math.floor(r() * 2), steel: pick(r, BLADES), grip: pick(r, GRIPS), gone: Math.floor(r() * 5) }),
+    describe: L => [['Spears', String(L.spears)], ['Swords', String(L.swords)], ['Weapons', L.practice ? 'Wooden, for practice' : L.steel[1], L.practice ? null : L.steel[0]], ['Grips', L.grip[1], L.grip[0]]],
+    build(L, C) { weaponRack(L, C); } },
+  armorStand: { name: 'Armor stand', group: 'Guard', tiles: [1, 1], use: 'Show: a watchman\'s kit', goes: 'Guard house',
+    roll: r => ({ kind: wpick(r, ARMOR_KINDS), helm: wpick(r, [['kettle', 'A kettle hat', 2], ['great', 'A great helm', 1.5], ['cap', 'A steel cap', 2], ['none', 'None', 1]]), tabard: r() < 0.5, dye: pick(r, DYES) }),
+    describe: L => [['Armor', L.kind[1], L.kind[2]], ['Helm', L.helm[1]], ['Tabard', L.tabard ? L.dye[1] : 'None', L.tabard ? L.dye[0] : null]],
+    build(L, C) { armorStand(L, C); } },
+  holdingCell: { name: 'Holding cell', group: 'Guard', tiles: [2, 2], wall: true, use: 'Show: iron bars, a cot and a bucket inside', goes: 'Guard house, in a corner',
+    roll: r => ({ door: r() < 0.5 ? -1 : 1, chains: r() < 0.7, straw: Math.floor(r() * 1e6) }),
+    describe: L => [['Bars', `Across the front${L.wl ? '' : ', the left side'}${L.wr ? '' : ', the right side'}`], ['Door', L.door < 0 ? 'Hinged left' : 'Hinged right'], ['Wall', L.chains ? 'Shackles on chains' : 'Bare']],
+    build(L, C) { holdingCell(L, C); } },
+  trainingDummy: { name: 'Training dummy', group: 'Guard', tiles: [1, 1], use: 'Show: a straw man on a post', goes: 'The guard house\'s training yard',
+    roll: r => ({ arms: r() < 0.75, shield: r() < 0.4, sack: pick(r, SACKS), lean: (r() - 0.5) * 0.12, turn: (r() - 0.5) * 0.4 }),
+    describe: L => [['Sacking', L.sack[1], L.sack[0]], ['Arms', L.arms ? 'A crossbar' : 'None'], ['Shield', L.shield ? 'A wooden one, strapped on' : 'None']],
+    build(L, C) { trainingDummy(L, C); } },
+  archeryButt: { name: 'Archery butt', group: 'Guard', tiles: [1, 1], use: 'Show: a straw target on a stand', goes: 'The guard house\'s training yard',
+    roll(r) { const n = Math.floor(r() * 5), arrows = []; for (let k = 0; k < n; k++) { const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.3; arrows.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, tx: (r() - 0.5) * 0.3, ty: (r() - 0.5) * 0.3 }); } return { face: wpick(r, BUTT_FACES), arrows, fletch: pick(r, DYES) }; },
+    describe: L => [['Face', L.face[1]], ['Arrows in it', String(L.arrows.length)]],
+    build(L, C) { archeryButt(L, C); } },
+  brazier: { name: 'Brazier', group: 'Guard', tiles: [1, 1], use: 'Light: the watch fire', goes: 'The guard house\'s training yard, its door',
+    roll: r => ({ logs: r() < 0.6, at: r() * Math.PI * 2 }),
+    describe: L => [['Logs beside it', L.logs ? 'Yes' : 'No']],
+    build(L, C) { brazier(L, C); } },
   // ---------- (2026-11-03, Jordan) the outdoor set: streets, the plaza and the yards ----------
   well: { name: 'Well', group: 'Outdoor', tiles: [1, 1], use: 'Show; folk fetch water', goes: 'A hamlet\'s crossroads, a medium town\'s plaza', inGame: true,
     roll: r => ({ roof: wpick(r, WELL_ROOFS), stone: pick(r, FIELDSTONE), bucket: r() < 0.7, crank: r() < 0.5 ? -1 : 1, seed: Math.floor(r() * 1e6) }),
@@ -1100,6 +1125,221 @@ function rug(W, D, L) {
     for (let k = 0; k < n; k++) part(G.box, k % 2 ? B : A, 0, y, -D / 2 + 0.2 + (k + 0.5) * (D - 0.4) / n, { sx: 0.26, sy: 0.004, sz: 0.26, ry: Math.PI / 4 });
   }
   for (const s of [-1, 1]) for (let k = 0; k < 14; k++) part(G.box, '#e0d4b8', -W / 2 + 0.06 + k * (W - 0.12) / 13, 0.005, s * (D / 2 + 0.04), { sx: 0.025, sy: 0.006, sz: 0.08 });
+}
+
+// ---------- the guard house's set (2026-11-03, Jordan) ----------
+const BLADES = [['#a8acb8', 'Bright steel'], ['#8a8e98', 'Grey steel'], ['#9a9488', 'Old iron']];
+const GRIPS = [['#4a2e1e', 'Brown leather'], ['#2a2420', 'Black leather'], ['#6a2a24', 'Red leather']];
+const ARMOR_KINDS = [['chain', 'A mail shirt', '#8a8e98', 3], ['plate', 'A breastplate and pauldrons', '#b0b4bc', 2], ['leather', 'A leather jack', '#6a4a2e', 2]];
+const SACKS = [['#b8986a', 'Burlap'], ['#a88a5a', 'Old sacking'], ['#c8b088', 'Pale canvas']];
+const BUTT_FACES = [['rings', 'Painted rings', 3], ['bull', 'A black bull\'s-eye', 2], ['straw', 'Bare straw', 1]];
+const STRAW = '#c8a868';
+// the weapon rack: two posts, a plank base with a slotted foot rail, a top rail the shafts lean in, spears on the left
+// half (heads up), swords on the right (points down, hilts up through a slotted rail). L.practice: wooden ones,
+// padded spear heads, for the training yard
+function weaponRack(L, C) {
+  const zb = backZ(1), W = 1.84, H = 1.6, steel = L.practice ? shade(C.light, 1.15) : CC(L.steel[0]), grip = CC(L.grip[0]);
+  for (const s of [-1, 1]) {
+    part(G.box, C.dark, s * (W / 2 - 0.04), H / 2, zb + 0.06, { sx: 0.07, sy: H, sz: 0.07 });
+    part(G.box, C.dark, s * (W / 2 - 0.04), 0.03, zb + 0.15, { sx: 0.09, sy: 0.06, sz: 0.24 });
+  }
+  part(G.box, C.wood, 0, 0.05, zb + 0.16, { sx: W - 0.1, sy: 0.04, sz: 0.24 });
+  part(G.box, C.wood, 0, 0.14, zb + 0.25, { sx: W - 0.1, sy: 0.08, sz: 0.04 });   // (the foot rail the butts stand behind)
+  part(G.box, C.wood, 0, 1.3, zb + 0.06, { sx: W - 0.1, sy: 0.06, sz: 0.04 });
+  part(G.box, C.wood, W / 4, 0.92, zb + 0.18, { sx: W / 2 - 0.12, sy: 0.04, sz: 0.06 });   // (the sword rail)
+  part(G.box, C.dark, W / 4, 0.92, zb + 0.12, { sx: 0.04, sy: 0.04, sz: 0.08 });
+  part(G.box, C.dark, W / 2 - 0.06, 0.92, zb + 0.12, { sx: 0.04, sy: 0.04, sz: 0.09 });
+  // the spears: shafts from the base up past the top rail, leaning back onto it
+  for (let k = 0; k < L.spears; k++) {
+    const x = -W / 2 + 0.2 + k * ((W / 2 - 0.3) / Math.max(1, L.spears - 1)), top = 1.84;
+    if (k === L.gone && L.spears > 2) continue;   // (one out on the watch)
+    seg(G.cyl6, C.light, [x, 0.08, zb + 0.2], [x, top, zb + 0.11], 0.016);
+    if (L.practice) { part(G.oct, shade(CC('#d8ccb0'), 0.9), x, top + 0.04, zb + 0.11, { sx: 0.09, sy: 0.11, sz: 0.09 }); continue; }
+    part(G.cyl6, IRON, x, top + 0.01, zb + 0.11, { sx: 0.04, sy: 0.06, sz: 0.04 });
+    part(G.oct, steel, x, top + 0.12, zb + 0.11, { sx: 0.06, sy: 0.2, sz: 0.022 });
+  }
+  // the swords: point down on the base, the blade through the rail, guard, grip and pommel above it
+  for (let k = 0; k < L.swords; k++) {
+    const x = 0.16 + k * ((W / 2 - 0.36) / Math.max(1, L.swords - 1)), z = zb + 0.18;
+    part(G.box, steel, x, 0.53, z, { sx: 0.05, sy: 0.86, sz: 0.012 });
+    part(G.box, shade(steel, 0.8), x, 0.53, z, { sx: 0.012, sy: 0.84, sz: 0.02 });   // (the fuller's ridge)
+    part(G.box, L.practice ? C.dark : IRON_LT, x, 1.0, z, { sx: 0.2, sy: 0.03, sz: 0.035 });
+    part(G.cyl6, L.practice ? C.dark : grip, x, 1.1, z, { sx: 0.035, sy: 0.17, sz: 0.035 });
+    part(G.oct, L.practice ? C.dark : BRASS, x, 1.2, z, { s: 0.055 });
+  }
+}
+// the armor stand: a cross of feet, a post, a shoulder bar; mail, a breastplate or a leather jack on it, a tabard
+// over the front maybe, and a helm on the post's top
+function armorStand(L, C) {
+  const kind = L.kind[0], A = CC(L.kind[2]), y0 = 0.68, y1 = 1.2;
+  for (const a of [0, Math.PI / 2]) part(G.box, C.dark, 0, 0.035, 0, { sx: 0.6, sy: 0.07, sz: 0.08, ry: a + 0.4 });
+  part(G.cyl8, C.dark, 0, 0.62, 0, { sx: 0.06, sy: 1.18, sz: 0.06 });
+  part(G.box, C.dark, 0, y1 + 0.02, -0.02, { sx: 0.5, sy: 0.05, sz: 0.06 });
+  // the body: a tapering stack, chest to waist
+  const rows = kind === 'chain' ? 6 : 3;
+  for (let k = 0; k < rows; k++) {
+    const t0 = k / rows, w = 0.3 + 0.08 * t0, h = (y1 - y0) / rows;
+    part(G.box, shade(A, kind === 'chain' ? (k % 2 ? 0.88 : 1) : 1 - k * 0.04), 0, y0 + (k + 0.5) * h, 0, { sx: w, sy: h, sz: 0.2 + 0.03 * t0 });
+  }
+  if (kind === 'chain') {
+    part(G.box, shade(A, 0.8), 0, y0 - 0.1, 0, { sx: 0.38, sy: 0.2, sz: 0.22 });   // (the skirt)
+    for (const s of [-1, 1]) part(G.box, shade(A, 0.92), s * 0.24, y1 - 0.12, 0, { sx: 0.1, sy: 0.22, sz: 0.18 });
+  } else if (kind === 'plate') {
+    seg(G.box, shade(A, 1.15), [0, y0 + 0.06, 0.12], [0, y1 - 0.04, 0.14], 0.02);   // (the ridge down the breastplate)
+    for (const s of [-1, 1]) {
+      part(G.oct, shade(A, 1.05), s * 0.22, y1 - 0.02, 0, { sx: 0.2, sy: 0.14, sz: 0.24 });
+      part(G.box, shade(A, 0.85), s * 0.27, y1 - 0.13, 0, { sx: 0.1, sy: 0.08, sz: 0.2 });
+    }
+    for (let k = 0; k < 2; k++) part(G.box, shade(A, 0.9 - k * 0.06), 0, y0 - 0.04 - k * 0.07, 0.005 * k, { sx: 0.36 + k * 0.02, sy: 0.07, sz: 0.22 + k * 0.01 });
+  } else {
+    for (const y of [y0 + 0.1, y0 + 0.3]) part(G.box, shade(A, 0.7), 0, y, 0, { sx: 0.4, sy: 0.03, sz: 0.24 });   // (straps)
+    for (const s of [-1, 1]) part(G.box, shade(A, 1.1), s * 0.21, y1 - 0.06, 0, { sx: 0.1, sy: 0.12, sz: 0.2 });
+    part(G.box, shade(A, 0.9), 0, y0 - 0.08, 0, { sx: 0.38, sy: 0.16, sz: 0.22 });
+  }
+  if (L.tabard) {
+    const D = CC(L.dye[0]);
+    part(G.box, D, 0, y0 + 0.2, 0.125, { sx: 0.24, sy: 0.62, sz: 0.012 });
+    part(G.box, D, 0, y0 + 0.2, -0.125, { sx: 0.24, sy: 0.62, sz: 0.012 });
+    part(G.box, shade(D, 0.75), 0, y0 + 0.36, 0.136, { sx: 0.1, sy: 0.1, sz: 0.008, rz: Math.PI / 4 });
+  }
+  // the helm on the post's top
+  const hy = y1 + 0.18, h = L.helm[0], S = CC(BLADES[1][0]);
+  part(G.cyl8, C.dark, 0, y1 + 0.08, 0, { sx: 0.05, sy: 0.12, sz: 0.05 });
+  if (h === 'kettle') {
+    part(G.cyl12, S, 0, hy + 0.04, 0, { sx: 0.22, sy: 0.12, sz: 0.24 });
+    part(G.oct, S, 0, hy + 0.11, 0, { sx: 0.22, sy: 0.08, sz: 0.24 });
+    part(G.cyl12, shade(S, 0.9), 0, hy - 0.02, 0, { sx: 0.38, sy: 0.02, sz: 0.4 });
+  } else if (h === 'great') {
+    part(G.cyl8, S, 0, hy + 0.05, 0, { sx: 0.22, sy: 0.24, sz: 0.24, ry: Math.PI / 8 });
+    part(G.box, '#1a1a1e', 0, hy + 0.08, 0.112, { sx: 0.16, sy: 0.02, sz: 0.01 });
+    part(G.box, shade(S, 1.1), 0, hy + 0.02, 0.114, { sx: 0.02, sy: 0.1, sz: 0.012 });
+  } else if (h === 'cap') {
+    part(G.oct, S, 0, hy + 0.05, 0, { sx: 0.22, sy: 0.2, sz: 0.24 });
+    part(G.box, shade(S, 0.9), 0, hy - 0.01, 0.1, { sx: 0.03, sy: 0.12, sz: 0.02 });
+  }
+}
+// the holding cell: iron bars across its front edge and either open side (L.wl, L.wr: a wall stands at that side,
+// set by the game), a door of bars in the front with its lock; a cot along the back wall with a straw pallet,
+// a bucket, straw on the floor, shackles on chains maybe
+function holdingCell(L, C) {
+  const zb = backZ(2), zf = 0.9, xs = 0.9, top = 1.92, bar = 0.016;
+  const bars = (a, b) => { const n = Math.max(2, Math.round(Math.abs(b - a) / 0.15)); for (let k = 1; k < n; k++) part(G.cyl6, IRON, a + (b - a) * k / n, top / 2, zf, { sx: bar * 2, sy: top, sz: bar * 2 }); };
+  // the front: corner posts, rails top, bottom and middle, bars between, the door's frame and lock
+  const xl = L.wl ? -1 + WALL_IN + 0.04 : -xs, xr = L.wr ? 1 - WALL_IN - 0.04 : xs;
+  for (const x of [xl, xr]) part(G.box, IRON, x, top / 2, zf, { sx: 0.06, sy: top, sz: 0.06 });
+  for (const y of [0.05, 1.0, top - 0.03]) part(G.box, IRON_LT, (xl + xr) / 2, y, zf, { sx: xr - xl, sy: 0.04, sz: 0.028 });
+  bars(xl, xr);
+  const dx = L.door < 0 ? xl + 0.42 : xr - 0.42;
+  for (const x of [dx - 0.36, dx + 0.36]) part(G.box, IRON, x, top / 2 - 0.04, zf + 0.022, { sx: 0.04, sy: top - 0.12, sz: 0.012 });
+  for (const y of [0.16, top - 0.12]) part(G.box, IRON, dx, y, zf + 0.022, { sx: 0.76, sy: 0.04, sz: 0.012 });
+  const hx = L.door < 0 ? dx - 0.36 : dx + 0.36, lx = L.door < 0 ? dx + 0.33 : dx - 0.33;
+  for (const y of [0.4, 1.5]) part(G.cyl6, IRON_LT, hx, y, zf + 0.02, { sx: 0.05, sy: 0.12, sz: 0.05 });
+  part(G.box, IRON_LT, lx, 1.0, zf + 0.05, { sx: 0.12, sy: 0.16, sz: 0.06 });
+  part(G.box, '#1a1a1e', lx, 0.98, zf + 0.082, { sx: 0.02, sy: 0.05, sz: 0.004 });
+  // the open sides: posts at the back, rails and bars from the back wall to the front
+  for (const [s, wall] of [[-1, L.wl], [1, L.wr]]) {
+    if (wall) continue;
+    const x = s * xs;
+    part(G.box, IRON, x, top / 2, zb + 0.03, { sx: 0.06, sy: top, sz: 0.06 });
+    for (const y of [0.05, 1.0, top - 0.03]) part(G.box, IRON_LT, x, y, (zb + zf) / 2, { sx: 0.036, sy: 0.04, sz: zf - zb - 0.06 });
+    const n = Math.max(2, Math.round((zf - zb) / 0.15));
+    for (let k = 1; k < n; k++) part(G.cyl6, IRON, x, top / 2, zb + (zf - zb) * k / n, { sx: bar * 2, sy: top, sz: bar * 2 });
+  }
+  // inside: the cot on its legs along the back, a pallet and a rolled blanket, the bucket, straw
+  const cx = L.door < 0 ? 0.3 : -0.3, cz = zb + 0.32, cw = 1.2, cd = 0.5, ct = 0.3;
+  part(G.box, C.wood, cx, ct, cz, { sx: cw, sy: 0.04, sz: cd });
+  for (const a of [-1, 1]) for (const b of [-1, 1]) part(G.box, C.dark, cx + a * (cw / 2 - 0.05), (ct - 0.02) / 2, cz + b * (cd / 2 - 0.05), { sx: 0.05, sy: ct - 0.02, sz: 0.05 });
+  part(G.box, CC(STRAW), cx, ct + 0.045, cz, { sx: cw - 0.08, sy: 0.05, sz: cd - 0.06 });
+  seg(G.cyl8, CC('#6a5a4a'), [cx + cw / 2 - 0.2, ct + 0.12, cz - 0.18], [cx + cw / 2 - 0.2, ct + 0.12, cz + 0.18], 0.05);
+  bucket(-cx * 1.9, 0, zb + 0.95, C, false);
+  const r = mulberry32(L.straw | 0);
+  for (let k = 0; k < 10; k++) part(G.box, shade(CC(STRAW), 0.75 + r() * 0.3), -0.8 + r() * 1.6, 0.006 + k * 0.0016, zb + 0.6 + r() * 0.9, { sx: 0.12 + r() * 0.12, sy: 0.005, sz: 0.012, ry: r() * Math.PI });
+  if (L.chains) for (const x of [-cx - 0.2, -cx + 0.2]) {
+    part(G.box, IRON, x, 1.3, zb + 0.02, { sx: 0.06, sy: 0.06, sz: 0.03 });
+    for (let k = 0; k < 4; k++) part(G.box, IRON_LT, x, 1.24 - k * 0.07, zb + 0.05, { sx: 0.02, sy: 0.06, sz: k % 2 ? 0.02 : 0.035 });
+    part(G.cyl12, IRON, x, 0.93, zb + 0.06, { sx: 0.1, sy: 0.03, sz: 0.1, rx: Math.PI / 2 });
+  }
+}
+// the training dummy: a post on a cross of feet, a straw-stuffed sack for a body bound with rope, a sack head, maybe
+// a crossbar for arms with straw bundles at its ends and a wooden shield strapped to one
+function trainingDummy(L, C) {
+  const S = CC(L.sack[0]), rope = CC(ROPE), lean = L.lean, ry = L.turn;
+  for (const a of [0, Math.PI / 2]) part(G.box, C.dark, 0, 0.04, 0, { sx: 0.62, sy: 0.08, sz: 0.1, ry: a + ry });
+  for (let k = 0; k < 4; k++) { const a = ry + k * Math.PI / 2 + Math.PI / 4; seg(G.box, C.dark, [Math.sin(a) * 0.04, 0.3, Math.cos(a) * 0.04], [Math.sin(a) * 0.24, 0.06, Math.cos(a) * 0.24], 0.02); }
+  const top = [lean * 1.4, 1.62, 0];
+  seg(G.box, C.dark, [0, 0.02, 0], top, 0.045);
+  const at = y => [lean * y, y, 0];
+  // the body
+  const b0 = at(0.78), b1 = at(1.3);
+  seg(G.cyl12, S, b0, b1, 0.19);
+  seg(G.cyl12, shade(S, 0.9), at(0.72), at(0.78), 0.15);
+  for (const y of [0.86, 1.06, 1.24]) seg(G.cyl12, rope, at(y - 0.015), at(y + 0.015), 0.2);
+  // straw sticking out of the neck and the waist
+  for (let k = 0; k < 6; k++) { const a = k * 1.05 + ry; seg(G.box, CC(STRAW), at(1.31), [lean * 1.33 + Math.sin(a) * 0.12, 1.36, Math.cos(a) * 0.12], 0.008); }
+  // the head
+  const hy = 1.46;
+  part(G.oct, S, lean * hy, hy, 0, { sx: 0.24, sy: 0.26, sz: 0.24, ry: ry + 0.3 });
+  seg(G.cyl8, rope, at(1.335), at(1.355), 0.06);
+  if (L.arms) {
+    const ay = 1.2, ax = 0.5;
+    seg(G.cyl6, C.light, [lean * ay - ax, ay, 0.0], [lean * ay + ax, ay, 0.0], 0.03);
+    for (const s of [-1, 1]) {
+      seg(G.cyl8, CC(STRAW), [lean * ay + s * (ax - 0.16), ay, 0], [lean * ay + s * (ax + 0.04), ay, 0], 0.06);
+      seg(G.cyl8, rope, [lean * ay + s * (ax - 0.1), ay, 0], [lean * ay + s * (ax - 0.08), ay, 0], 0.066);
+    }
+    if (L.shield) plate(heater(0.16, 0.2, -0.22), 0, 0, 0.08, 0.12, C.light, lean * ay - ax + 0.12, ay - 0.08, C.dark);
+  }
+}
+// the archery butt: a round straw boss on an easel of two front legs and a back prop, leaning back, its painted face
+// to +z in rings (or a bull's-eye, or bare straw), arrows stuck in it
+function archeryButt(L, C) {
+  const tilt = 0.22, ax = [0, Math.sin(tilt), Math.cos(tilt)], cy = 0.86, cz = 0.0, R = 0.42, th = 0.18;
+  const P = (u, v, w) => [u, cy + v * Math.cos(tilt) + w * ax[1], cz - v * Math.sin(tilt) + w * ax[2]];   // (u across, v up the face, w out of it)
+  for (const s of [-1, 1]) seg(G.box, C.dark, [s * 0.42, 0, 0.14], [s * 0.3, 1.32, -0.12], 0.028);
+  seg(G.box, C.dark, [0, 0, -0.55], [0, 1.2, -0.16], 0.026);
+  part(G.box, C.wood, 0, cy - R - 0.02, 0.0, { sx: 0.84, sy: 0.05, sz: 0.1 });
+  // the boss: straw bound in coils, its rim rope
+  part(G.cyl12, CC(STRAW), ...P(0, 0, 0), { sx: R * 2, sy: th, sz: R * 2, rx: Math.PI / 2 - tilt });
+  for (const w of [-th / 2 + 0.03, th / 2 - 0.03]) part(G.cyl12, CC(ROPE), ...P(0, 0, w), { sx: R * 2 + 0.03, sy: 0.02, sz: R * 2 + 0.03, rx: Math.PI / 2 - tilt });
+  const face = L.face[0], f0 = th / 2;
+  const disc = (rr, k, col) => part(G.cyl12, col, ...P(0, 0, f0 + 0.003 + k * 0.0045), { sx: rr * 2, sy: 0.004, sz: rr * 2, rx: Math.PI / 2 - tilt });
+  if (face === 'rings') [[0.38, '#e8e2d2'], [0.3, '#2a2624'], [0.22, '#2f4f8a'], [0.14, '#a03a2a'], [0.07, '#d8b04a']].forEach(([rr, col], k) => disc(rr, k, CC(col)));
+  else if (face === 'bull') { disc(0.38, 0, CC('#e8e2d2')); disc(0.12, 1, CC('#2a2624')); }
+  // the arrows: shafts out of the face toward the archers, fletched at their ends
+  const fl = CC(L.fletch[0]), fw = face === 'straw' ? 0 : face === 'rings' ? 5 : 2;
+  for (const a of L.arrows) {
+    const p0 = P(a.x, a.y, f0 + fw * 0.0045 - 0.04), d = [ax[0] + a.tx, ax[1] + a.ty, ax[2]], n = Math.hypot(...d), len = 0.5;
+    const p1 = [p0[0] + d[0] / n * len, p0[1] + d[1] / n * len, p0[2] + d[2] / n * len];
+    seg(G.cyl6, CC('#c8a878'), p0, p1, 0.008);
+    const back = t => [p1[0] - d[0] / n * t, p1[1] - d[1] / n * t, p1[2] - d[2] / n * t];
+    seg(G.box, fl, back(0.11), back(0.012), 0.022);
+  }
+}
+// the brazier: an iron bowl on three legs, coals in it and a fire over them (in the glow buffer), maybe a few
+// logs laid by
+function brazier(L, C) {
+  for (let k = 0; k < 3; k++) {
+    const a = k * Math.PI * 2 / 3 + 0.3;
+    seg(G.cyl6, IRON, [Math.cos(a) * 0.3, 0, Math.sin(a) * 0.3], [Math.cos(a) * 0.18, 0.66, Math.sin(a) * 0.18], 0.022);
+    part(G.box, IRON, Math.cos(a) * 0.31, 0.015, Math.sin(a) * 0.31, { sx: 0.07, sy: 0.03, sz: 0.07, ry: -a });
+  }
+  part(G.cyl12, IRON, 0, 0.64, 0, { sx: 0.4, sy: 0.05, sz: 0.4 });
+  ring(0.23, 0.71, 12, 0.03, 0.1, IRON);
+  ring(0.29, 0.82, 14, 0.03, 0.12, IRON_LT);
+  ring(0.31, 0.89, 14, 0.05, 0.025, IRON);
+  // the coals and the fire
+  const r = mulberry32(7);
+  for (let k = 0; k < 9; k++) { const a = k * 0.7, d = 0.06 + (k % 3) * 0.07; part(G.oct, k % 3 ? '#3a2a24' : '#2a2020', Math.cos(a) * d, 0.72 + r() * 0.04, Math.sin(a) * d, { sx: 0.11, sy: 0.07, sz: 0.11, ry: r() * 3 }); }
+  for (let k = 0; k < 6; k++) { const a = k * 1.1 + 0.4, d = 0.1 + (k % 2) * 0.06; part(G.oct, '#ff7a30', Math.cos(a) * d, 0.78, Math.sin(a) * d, { sx: 0.08, sy: 0.04, sz: 0.08, into: 'glow' }); }
+  for (const [x, z, h, w] of [[0, 0, 0.42, 0.22], [0.1, 0.06, 0.3, 0.14], [-0.1, -0.05, 0.32, 0.15], [0.04, -0.12, 0.24, 0.12], [-0.07, 0.11, 0.26, 0.12]]) {
+    part(G.oct, FLAME, x, 0.8 + h / 2, z, { sx: w, sy: h, sz: w, into: 'glow' });
+    part(G.oct, FLAME_HOT, x, 0.79 + h * 0.35, z, { sx: w * 0.5, sy: h * 0.5, sz: w * 0.5, into: 'glow' });
+  }
+  // (two side by side and one on them, toward a corner of the tile clear of the legs)
+  if (L.logs) for (const [k, rr, y] of [[0, 0.4, 0.05], [1, 0.505, 0.05], [2, 0.4525, 0.137]]) {
+    const a = [Math.PI / 4, Math.PI * 1.25, Math.PI * 1.75][Math.floor(L.at / (Math.PI * 2) * 3) % 3], x = Math.cos(a) * rr, z = Math.sin(a) * rr, h = 0.17 - k * 0.012;
+    seg(G.cyl6, shade(C.light, 0.85 + k * 0.08), [x - Math.sin(a) * h, y, z + Math.cos(a) * h], [x + Math.sin(a) * h, y, z - Math.cos(a) * h], 0.05);
+  }
 }
 
 // ---------- the outdoor set (2026-11-03, Jordan) ----------
