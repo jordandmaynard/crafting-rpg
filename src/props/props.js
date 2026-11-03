@@ -30,6 +30,10 @@ const DYES = [['#8a2f2f', 'Madder red'], ['#2f4f8a', 'Woad blue'], ['#3f6a3a', '
 const PAINTS = [['plain', 'Bare wood', null, 4], ['red', 'Madder red', '#7a2e26', 1], ['blue', 'Woad blue', '#34506e', 1], ['green', 'Moss green', '#3e5a36', 1], ['ochre', 'Ochre', '#8a6a2e', 1]];
 const GLAZES = [['#e8e0cc', 'White tin glaze'], ['#c89a62', 'Honey glaze'], ['#5a7a5a', 'Green glaze'], ['#4a6a8a', 'Blue and white'], ['#8a5a3a', 'Brown slipware']];
 const BOOKS = ['#6a2a24', '#2a3a5a', '#3a4a2a', '#5a3a1e', '#7a5a2a', '#2a2420', '#4a2a3a', '#8a6a4a', '#3a2a1e', '#5a1e1e', '#24343a'];
+const GOLD = '#d8b04a', GOLD_DK = '#a07a28', BRASS = '#b8903a';
+const VAULT_STEEL = [['#6a6e78', 'Grey steel'], ['#5a5048', 'Blackened iron'], ['#7a7266', 'Pale iron']];
+const VAULT_STONE = [['#8a8496', 'Grey granite'], ['#b0a898', 'Sandstone'], ['#c8c4bc', 'White marble']];
+const BAIZE = [['#2e5a3a', 'Green baize'], ['#6a2a2a', 'Red baize'], ['#2a3a5a', 'Blue baize']];
 const IRON = '#2e2e34', IRON_LT = '#5a5a64', STONE = '#8a8276', CANDLE = '#ece4cc', FLAME = '#ffc860', FLAME_HOT = '#fff0b0', BONE = '#d8ceb0';
 
 // ---------- the mesh kit (the game's own part/seg, as src/boats/brig.js copies it) ----------
@@ -149,7 +153,7 @@ const heater = (w, h0, h1) => { const c = [[-w, h0], [-w, 0], [-w * 0.9, h1 * 0.
 // group: where it's listed; tiles [w, d]; wall: backs onto a wall; hang: hangs from the ceiling (no floor tile);
 // use and goes: from the doc; roll(r) -> the seeded look (null: none); build(L, C) draws it (C: the wood's colours);
 // describe(L) -> rows [label, value, colour]
-export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern', 'Outdoor'];
+export const PROP_GROUPS = ['Beds', 'Seating', 'Tables', 'Storage', 'Kitchen', 'Floor and walls', 'Lights', 'Tavern', 'Bank', 'Outdoor'];
 export const PROPS = {
   bed: { name: 'Bed', group: 'Beds', tiles: [1, 2], wall: true, use: 'Sit, sleep', goes: 'Every house; inn rooms', inGame: true,
     roll: r => ({ blanket: pick(r, BLANKETS) }),
@@ -689,6 +693,28 @@ export const PROPS = {
       scroll: r() < 0.7, chains: r() < 0.4 }),
     describe: L => [['Board', L.board[1], L.board[0]], ['Keg painted in', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
     build(L, C) { tavernSign(L, C); } },
+  // ---------- (2026-11-03, Jordan) the bank's set: one story of stone, a flat stone roof ----------
+  vaultDoor: { name: 'Vault door', group: 'Bank', tiles: [2, 1], wall: true, use: 'Show; the player\'s safe storage later', goes: 'Bank, behind the teller counter',
+    roll: r => ({ steel: pick(r, VAULT_STEEL), stone: pick(r, VAULT_STONE), dial: r() < 0.6 }),
+    describe: L => [['Door', L.steel[1], L.steel[0]], ['Surround', L.stone[1], L.stone[0]], ['Lock', L.dial ? 'A wheel and a brass dial' : 'A wheel']],
+    build(L, C) { vaultDoor(L, C); } },
+  tellerCounter: { name: 'Teller counter', group: 'Bank', tiles: [3, 1], use: 'Work: the banker serves from behind its grille', goes: 'Bank',
+    roll: r => ({ stone: pick(r, VAULT_STONE), bays: r() < 0.5 ? 2 : 3, cover: pick(r, BOOKS), stacks: 2 + Math.floor(r() * 4), bell: r() < 0.6, seed: Math.floor(r() * 1e6) }),
+    describe: L => [['Front', L.stone[1], L.stone[0]], ['Windows', `${L.bays} in an iron grille`], ['On the top', `A ledger, ${L.stacks} stacks of coin${L.bell ? ', a bell' : ''}`]],
+    build(L, C) { tellerCounter(L, C); } },
+  coinTable: { name: 'Coin table', group: 'Bank', tiles: [1, 1], use: 'Show', goes: 'Bank',
+    roll: r => ({ baize: pick(r, BAIZE), tip: (r() - 0.5) * 0.3, stacks: 2 + Math.floor(r() * 4), seed: Math.floor(r() * 1e6) }),
+    describe: L => [['Cloth', L.baize[1], L.baize[0]], ['On it', `Brass scales, ${L.stacks} stacks of coin`]],
+    build(L, C) { coinTable(L, C); } },
+  strongbox: { name: 'Strongbox', group: 'Bank', tiles: [1, 1], wall: true, use: 'Show', goes: 'Bank, along its walls',
+    roll: r => ({ paint: wpick(r, PAINTS), big: r() < 0.5, sack: r() < 0.5 }),
+    describe: L => [['Wood', L.paint[1], L.paint[2]], ['Size', L.big ? 'Large' : 'Small'], ['Beside it', L.sack ? 'A sack of coin' : 'Nothing']],
+    build(L, C) { strongbox(L, C); } },
+  bankSign: { name: 'Bank sign', group: 'Bank', tiles: [1, 1], wall: true, hang: true, outside: true, use: 'Show (outside, by the door)', goes: 'Bank front',
+    roll: r => ({ board: pick(r, [['#a07848', 'Weathered oak'], ['#8a6440', 'Old oak'], ['#3a3a44', 'Black lacquer']]), paint: pick(r, [['#2a1c12', 'Black'], ['#5a2a1a', 'Ox-blood'], ['#2a3a24', 'Dark green'], ['#24344a', 'Navy']]),
+      scroll: r() < 0.8, chains: r() < 0.6 }),
+    describe: L => [['Board', L.board[1], L.board[0]], ['A pile of gold coins in a border of', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
+    build(L, C) { tavernSign(L, C, 'coins'); } },
   // ---------- (2026-11-03, Jordan) the outdoor set: streets, the plaza and the yards ----------
   well: { name: 'Well', group: 'Outdoor', tiles: [1, 1], use: 'Show; folk fetch water', goes: 'A hamlet\'s crossroads, a medium town\'s plaza', inGame: true,
     roll: r => ({ roof: wpick(r, WELL_ROOFS), stone: pick(r, FIELDSTONE), bucket: r() < 0.7, crank: r() < 0.5 ? -1 : 1, seed: Math.floor(r() * 1e6) }),
@@ -828,7 +854,7 @@ function plateX(pts, cz, cy, x0, x1, color, oz = 0, oy = 0) {
 // the tavern sign: an iron bracket out from the wall (its plate on the wall's outer face at -z, the arm along +z), a
 // board hung from it across the wall, a keg painted on both faces in a painted border. L.up: hung over the door on
 // the story above (lower on its wall), else on the wall beside the door, high
-function tavernSign(L, C) {
+function tavernSign(L, C, emblem = 'keg') {
   const z0 = backZ(1), Ya = L.up ? 0.9 : 1.9, arm = 0.86, B = CC(L.board[0]), K = CC(L.paint[0]);
   // the wall plate, the arm and its brace
   part(G.box, IRON, 0, Ya - 0.18, z0 + 0.015, { sx: 0.09, sy: 0.5, sz: 0.03 });
@@ -863,12 +889,158 @@ function tavernSign(L, C) {
     // the painted border
     for (const [dz, dy, lz, ly] of [[0, bh / 2 - 0.04, bw - 0.08, 0.018], [0, -bh / 2 + 0.04, bw - 0.08, 0.018], [bw / 2 - 0.04, 0, 0.018, bh - 0.08], [-bw / 2 + 0.04, 0, 0.018, bh - 0.08]])
       part(G.box, K, (x + x1) / 2, by + dy, bz + dz, { sx: Math.abs(x1 - x), sy: ly, sz: lz });
+    if (emblem === 'coins') { signCoins(s, x, x1, x2, by, bz); continue; }
     // the keg on its side: a bellied outline, darker hoops and stave lines over it, the tap at one end
     plateX([[-0.17, -0.085], [-0.09, -0.115], [0.09, -0.115], [0.17, -0.085], [0.17, 0.085], [0.09, 0.115], [-0.09, 0.115], [-0.17, 0.085]], 0, 0, s < 0 ? x1 : x, s < 0 ? x : x1, K, bz, by - 0.01);
     for (const hz of [-0.12, -0.05, 0.05, 0.12]) part(G.box, IRON, (x1 + x2) / 2 - s * 0.001, by - 0.01, bz + hz, { sx: Math.abs(x2 - x1) + 0.002, sy: Math.abs(hz) > 0.1 ? 0.19 : 0.225, sz: 0.018 });
     for (const sy of [-0.04, 0.04]) part(G.box, shade(B, 0.8), x1, by - 0.01 + sy, bz, { sx: 0.004, sy: 0.008, sz: 0.3 });   // (2 mm proud: the hoops 4)
     part(G.box, '#b8903a', (x + x2) / 2, by - 0.04, bz - 0.19, { sx: Math.abs(x2 - x), sy: 0.03, sz: 0.05 });
     part(G.box, '#b8903a', (x + x2) / 2, by - 0.07, bz - 0.205, { sx: Math.abs(x2 - x), sy: 0.05, sz: 0.02 });
+  }
+}
+// (2026-11-03, Jordan: a bank sign like the tavern's, a pile of coins on it) on face s of the board (x the board's
+// face, x1 and x2 a layer and two proud): round coins heaped four, three, two, one, each row a layer prouder than the
+// one under it (6 mm) so they overlap without sharing a plane, each a gold disc with a darker rim and a mark stamped in it
+function signCoins(s, x, x1, x2, by, bz) {
+  const n = 14, R = 0.046, circ = r => Array.from({ length: n }, (_, k) => [Math.cos(k / n * Math.PI * 2) * r, Math.sin(k / n * Math.PI * 2) * r]);
+  const rows = [4, 3, 2, 1], dy = 0.068, y0 = by - 0.12;
+  rows.forEach((m, k) => {
+    const a = x + s * 0.007 * (k + 1), b = a + s * 0.002, c = b + s * 0.002;   // (3 mm between one row's face and the next row's back)
+    for (let j = 0; j < m; j++) {
+      const z = bz + (j - (m - 1) / 2) * (2 * R + 0.006), y = y0 + k * dy;
+      plateX(circ(R), 0, 0, s < 0 ? b : a, s < 0 ? a : b, GOLD_DK, z, y);
+      plateX(circ(R * 0.78), 0, 0, s < 0 ? c : b, s < 0 ? b : c, GOLD, z, y);
+      part(G.box, GOLD_DK, c + s * 0.0015, y, z, { sx: 0.002, sy: 0.034, sz: 0.008 });
+    }
+  });
+  // two coins fallen flat before the heap, seen edge on
+  for (const dz of [-0.215, 0.215]) part(G.box, GOLD, (x + x2) / 2, y0 - 0.05, bz + dz, { sx: Math.abs(x2 - x), sy: 0.012, sz: 0.09 });
+}
+// a stack of n coins at (x, y, z), its top a little off true
+function coinStack(x, y, z, n, r = 0.026) {
+  for (let k = 0; k < n; k++) part(G.cyl12, k % 2 ? GOLD : shade(CC(GOLD), 0.9), x + ((k * 7) % 3 - 1) * 0.002, y + 0.006 + k * 0.012, z + ((k * 5) % 3 - 1) * 0.002, { sx: r * 2, sy: 0.011, sz: r * 2 });
+}
+// the vault door: a round steel door 1.36 across, its middle 0.92 up, in a ring of dark iron, framed in ashlar
+// blocks (jambs, a plinth, a lintel with a keystone) against the wall; bolts round its face, a raised inner ring,
+// two great hinges on its left, a brass wheel of three spokes in the middle and maybe a dial
+function vaultDoor(L, C) {
+  const z0 = backZ(1), cy = 0.92, St = CC(L.steel[0]), Sn = CC(L.stone[0]), N = 24;
+  const disc = (r) => Array.from({ length: N }, (_, k) => [Math.cos(k / N * Math.PI * 2) * r, Math.sin(k / N * Math.PI * 2) * r]);
+  // the surround: each block its own shade
+  const blk = (x, y, w, h, k) => part(G.box, shade(Sn, 0.9 + 0.14 * ((k * 7) % 5) / 4), x, y, z0 + 0.06, { sx: w, sy: h, sz: 0.12 });
+  blk(0, 0.06, 1.86, 0.12, 0);
+  for (const s of [-1, 1]) for (let k = 0; k < 4; k++) blk(s * 0.82, 0.12 + 0.2 + k * 0.4, k % 2 ? 0.22 : 0.26, 0.392, k + (s > 0 ? 4 : 0));
+  blk(0, 1.8, 1.86, 0.16, 9);
+  part(G.box, shade(Sn, 1.1), 0, 1.8, z0 + 0.13, { sx: 0.24, sy: 0.2, sz: 0.03 });
+  // the iron ring it sits in, the door, the inner ring
+  part(G.box, '#26262c', 0, cy, z0 + 0.015, { sx: 1.42, sy: 1.42, sz: 0.03 });
+  plate(disc(0.71), 0, 0, z0 + 0.03, z0 + 0.1, shade(CC(IRON), 0.9), 0, cy);
+  plate(disc(0.66), 0, 0, z0 + 0.1, z0 + 0.2, St, 0, cy, shade(St, 0.8));
+  plate(disc(0.44), 0, 0, z0 + 0.2, z0 + 0.215, shade(St, 1.12), 0, cy);
+  plate(disc(0.36), 0, 0, z0 + 0.215, z0 + 0.22, shade(St, 0.92), 0, cy);
+  for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; part(G.oct, shade(St, 0.7), Math.cos(a) * 0.56, cy + Math.sin(a) * 0.56, z0 + 0.21, { sx: 0.04, sy: 0.04, sz: 0.03 }); }
+  // the hinges, out over the ring onto the jamb
+  for (const y of [cy - 0.38, cy + 0.38]) {
+    part(G.box, shade(CC(IRON), 1.2), -0.6, y, z0 + 0.23, { sx: 0.34, sy: 0.12, sz: 0.06 });
+    seg(G.cyl8, IRON, [-0.76, y - 0.1, z0 + 0.23], [-0.76, y + 0.1, z0 + 0.23], 0.04);
+  }
+  // the wheel: a hub, three spokes, a rim of segments, knobs on the rim
+  const zw = z0 + 0.28, Rw = 0.27, nb = 12;
+  seg(G.cyl8, BRASS, [0, cy, z0 + 0.22], [0, cy, zw + 0.02], 0.05);
+  for (let k = 0; k < 3; k++) { const a = k / 3 * Math.PI * 2 + 0.3; seg(G.cyl6, BRASS, [0, cy, zw], [Math.cos(a) * Rw, cy + Math.sin(a) * Rw, zw], 0.014); part(G.oct, BRASS, Math.cos(a) * (Rw + 0.04), cy + Math.sin(a) * (Rw + 0.04), zw, { s: 0.05 }); }
+  for (let k = 0; k < nb; k++) { const a0 = k / nb * Math.PI * 2, a1 = (k + 1) / nb * Math.PI * 2; seg(G.cyl6, BRASS, [Math.cos(a0) * Rw, cy + Math.sin(a0) * Rw, zw], [Math.cos(a1) * Rw, cy + Math.sin(a1) * Rw, zw], 0.016); }
+  if (L.dial) { seg(G.cyl12, BRASS, [0.47, cy + 0.12, z0 + 0.2], [0.47, cy + 0.12, z0 + 0.24], 0.06); part(G.box, IRON, 0.47, cy + 0.15, z0 + 0.245, { sx: 0.01, sy: 0.05, sz: 0.008 }); }
+}
+// the teller counter: a stone front in panels between a plinth and a moulding, a dark wood top, and on it an iron
+// grille of bars between posts, a window in each bay (open below an arch, a brass tray through it); behind, open,
+// a shelf; on the top the ledger, coin stacks and maybe a bell
+function tellerCounter(L, C) {
+  const W = 2.9, zc = 0.08, D = 0.5, H = BAR_TOP - 0.05, f = zc + D / 2, Sn = CC(L.stone[0]), r = mulberry32(L.seed || 1);
+  for (const s of [-1, 1]) part(G.box, shade(Sn, 0.85), s * (W / 2 - 0.04), H / 2, zc, { sx: 0.08, sy: H, sz: D });
+  part(G.box, Sn, 0, H / 2, f - 0.04, { sx: W - 0.16, sy: H, sz: 0.06 });
+  part(G.box, C.dark, 0, 0.3, zc - 0.03, { sx: W - 0.16, sy: 0.03, sz: D - 0.12 });
+  part(G.box, shade(Sn, 0.8), 0, 0.05, f + 0.005, { sx: W + 0.02, sy: 0.1, sz: 0.03 });
+  part(G.box, shade(Sn, 1.08), 0, H - 0.03, f + 0.008, { sx: W + 0.03, sy: 0.06, sz: 0.036 });
+  const np = 4;
+  for (let k = 0; k < np; k++) {
+    const w = (W - 0.2) / np, x = -W / 2 + 0.1 + (k + 0.5) * w;
+    part(G.box, shade(Sn, 1.06), x, H / 2 + 0.02, f + 0.005, { sx: w - 0.08, sy: H - 0.26, sz: 0.012 });
+    part(G.box, shade(Sn, 0.94), x, H / 2 + 0.02, f + 0.013, { sx: w - 0.18, sy: H - 0.36, sz: 0.008 });
+  }
+  part(G.box, C.dark, 0, BAR_TOP - 0.025, zc + 0.02, { sx: W + 0.06, sy: 0.05, sz: D + 0.1 });
+  // the grille: posts at the ends and between bays, rails top and above the windows, bars between
+  const gz = zc + 0.1, gy0 = BAR_TOP, gy1 = 1.55, nb = L.bays, bw = W / nb, wy = gy0 + 0.36;
+  for (let k = 0; k <= nb; k++) part(G.box, IRON, -W / 2 + 0.03 + k * (W - 0.06) / nb, (gy0 + gy1) / 2, gz, { sx: 0.05, sy: gy1 - gy0, sz: 0.05 });
+  part(G.box, IRON, 0, gy1, gz, { sx: W, sy: 0.05, sz: 0.06 });
+  for (let k = 0; k < nb; k++) {
+    const x0 = -W / 2 + k * bw, xm = x0 + bw / 2, hw = 0.2;
+    // the arch over the window, the bars down to it and down to the top either side
+    let p = null;
+    for (let j = 0; j <= 8; j++) { const a = Math.PI * j / 8, q = [xm - Math.cos(a) * hw, wy + Math.sin(a) * 0.12, gz]; if (p) seg(G.box, IRON, p, q, 0.012); p = q; }
+    for (let x = x0 + 0.09; x < x0 + bw - 0.06; x += 0.075) {
+      const dx = Math.abs(x - xm), top = gy1;
+      if (dx >= hw && dx < hw + 0.035) continue;   // (none against the window's posts)
+      if (dx < hw) { const yb = wy + Math.sqrt(Math.max(0, 1 - (dx / hw) ** 2)) * 0.12; if (top - yb > 0.02) seg(G.cyl6, IRON, [x, yb, gz], [x, top, gz], 0.008); }
+      else seg(G.cyl6, IRON, [x, gy0, gz], [x, top, gz], 0.008);
+    }
+    for (const s of [-1, 1]) part(G.box, IRON, xm + s * hw, (gy0 + wy) / 2, gz, { sx: 0.03, sy: wy - gy0, sz: 0.04 });
+    // the tray through the window
+    part(G.box, BRASS, xm, gy0 + 0.012, gz, { sx: 0.3, sy: 0.02, sz: 0.24 });
+    part(G.box, shade(CC(BRASS), 1.15), xm, gy0 + 0.024, gz, { sx: 0.26, sy: 0.006, sz: 0.2 });
+  }
+  // behind the grille: the ledger, coin stacks, the bell
+  part(G.box, L.cover, -W / 2 + bw / 2 + 0.05, gy0 + 0.012, zc - 0.12, { sx: 0.4, sy: 0.02, sz: 0.28, ry: 0.15 });
+  part(G.box, '#ece4cc', -W / 2 + bw / 2 + 0.05, gy0 + 0.026, zc - 0.12, { sx: 0.36, sy: 0.008, sz: 0.24, ry: 0.15 });
+  for (let k = 0; k < L.stacks; k++) coinStack(-W / 2 + bw + 0.1 + k * 0.16 + r() * 0.04, gy0, zc - 0.1 - r() * 0.08, 3 + Math.floor(r() * 6));
+  if (L.bell) { part(G.cyl12, BRASS, W / 2 - 0.3, gy0 + 0.006, zc - 0.1, { sx: 0.1, sy: 0.012, sz: 0.1 }); part(G.oct, shade(CC(BRASS), 1.1), W / 2 - 0.3, gy0 + 0.05, zc - 0.1, { sx: 0.08, sy: 0.07, sz: 0.08 }); }
+  // the shelf behind: two ledgers lying and a strongbox
+  part(G.box, BOOKS[1], -0.6, 0.33, zc - 0.05, { sx: 0.32, sy: 0.05, sz: 0.24 });
+  part(G.box, BOOKS[5], -0.6, 0.375, zc - 0.05, { sx: 0.3, sy: 0.04, sz: 0.22 });
+  part(G.box, '#4a3422', 0.5, 0.42, zc - 0.05, { sx: 0.36, sy: 0.2, sz: 0.24 });
+  for (const x of [0.36, 0.64]) part(G.box, IRON, x, 0.42, zc - 0.05, { sx: 0.03, sy: 0.21, sz: 0.25 });
+}
+// the coin table: a small square table with a baize top, brass scales on it (a post, a beam tipped a little, two
+// pans hung on cords), stacks of coin and a coin bag
+function coinTable(L, C) {
+  const W = 0.74, top = TABLE_TOP + 0.3, r = mulberry32(L.seed || 1), B = CC(L.baize[0]);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) part(G.box, C.dark, sx * (W / 2 - 0.05), (top - 0.04) / 2, sz * (W / 2 - 0.05), { sx: 0.06, sy: top - 0.04, sz: 0.06 });
+  for (const s of [-1, 1]) { part(G.box, C.dark, 0, top - 0.1, s * (W / 2 - 0.05), { sx: W - 0.16, sy: 0.08, sz: 0.035 }); part(G.box, C.dark, s * (W / 2 - 0.05), top - 0.1, 0, { sx: 0.035, sy: 0.08, sz: W - 0.16 }); }
+  part(G.box, C.wood, 0, top - 0.025, 0, { sx: W, sy: 0.05, sz: W });
+  part(G.box, B, 0, top + 0.002, 0, { sx: W - 0.08, sy: 0.006, sz: W - 0.08 });
+  // the scales
+  const sx0 = -0.1, sz0 = -0.1, ph = 0.34, arm = 0.17, t = L.tip;
+  part(G.cyl12, BRASS, sx0, top + 0.012, sz0, { sx: 0.12, sy: 0.02, sz: 0.12 });
+  seg(G.cyl6, BRASS, [sx0, top + 0.02, sz0], [sx0, top + ph, sz0], 0.01);
+  part(G.oct, BRASS, sx0, top + ph + 0.02, sz0, { s: 0.035 });
+  const ends = [-1, 1].map(s => [sx0 + s * arm * Math.cos(t), top + ph + s * arm * Math.sin(t), sz0]);
+  seg(G.box, BRASS, ends[0], ends[1], 0.007);
+  for (const e of ends) {
+    const py = top + 0.12 + (e[1] - top - ph);
+    for (const dz of [-0.04, 0.04]) seg(G.cyl6, '#8a7a5a', e, [e[0], py, e[2] + dz], 0.003);
+    part(G.cyl12, BRASS, e[0], py, e[2], { sx: 0.11, sy: 0.012, sz: 0.11 });
+  }
+  coinStack(ends[1][0], top + 0.12 + (ends[1][1] - top - ph), sz0, 2, 0.02);
+  for (let k = 0; k < L.stacks; k++) coinStack(0.04 + (k % 2) * 0.1 + r() * 0.03, top + 0.005, 0.05 + Math.floor(k / 2) * 0.09 + r() * 0.02, 2 + Math.floor(r() * 6));
+  part(G.oct, '#a88a5a', 0.2, top + 0.07, -0.18, { sx: 0.16, sy: 0.14, sz: 0.14 });
+  part(G.cyl6, '#8a6a3a', 0.2, top + 0.14, -0.18, { sx: 0.04, sy: 0.04, sz: 0.04 });
+}
+// a strongbox against the wall: iron-banded wood on low feet, iron corners, a brass lock plate and a padlock, maybe
+// a tied sack of coin beside it
+function strongbox(L, C) {
+  const W = L.big ? 0.7 : 0.54, D = L.big ? 0.46 : 0.38, H = L.big ? 0.42 : 0.34, z = midZ(1, D), body = L.paint[2] || C.wood, y0 = 0.05;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) part(G.box, IRON, sx * (W / 2 - 0.04), y0 / 2, z + sz * (D / 2 - 0.04), { sx: 0.06, sy: y0, sz: 0.06 });
+  part(G.box, body, 0, y0 + H / 2, z, { sx: W, sy: H, sz: D });
+  part(G.box, shade(CC(body), 1.15), 0, y0 + H + 0.025, z, { sx: W + 0.02, sy: 0.05, sz: D + 0.02 });
+  for (const x of [-W / 2 + 0.1, 0, W / 2 - 0.1]) if (x) part(G.box, IRON, x, y0 + (H + 0.05) / 2, z, { sx: 0.035, sy: H + 0.062, sz: D + 0.024 });
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) part(G.box, IRON_LT, sx * (W / 2 - 0.019), y0 + H + 0.025, z + (sz > 0 ? D / 2 - 0.022 : -D / 2 + 0.035), { sx: 0.07, sy: 0.07, sz: 0.07 });
+  part(G.box, BRASS, 0, y0 + H - 0.06, z + D / 2 + 0.008, { sx: 0.12, sy: 0.12, sz: 0.012 });
+  seg(G.cyl6, IRON_LT, [-0.03, y0 + H - 0.1, z + D / 2 + 0.03], [0.03, y0 + H - 0.1, z + D / 2 + 0.03], 0.008);
+  part(G.box, IRON, 0, y0 + H - 0.16, z + D / 2 + 0.03, { sx: 0.08, sy: 0.07, sz: 0.03 });
+  if (L.sack) {
+    const x = W / 2 + 0.06;
+    part(G.oct, '#a88a5a', x, 0.11, z + 0.05, { sx: 0.15, sy: 0.22, sz: 0.16 });
+    part(G.cyl6, '#8a6a3a', x, 0.22, z + 0.05, { sx: 0.05, sy: 0.04, sz: 0.05 });
+    coinStack(x - 0.02, 0, z + 0.19, 2, 0.02);
   }
 }
 // the rugs: a field inside a border, a pattern on the field, fringes on the short ends

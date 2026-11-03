@@ -3093,6 +3093,7 @@ function townTrades(t, n) {
     h.trade = ROLE_TRADE[h.role];
     const id = PROP_WORK[h.role], ctx = { wood: PROP_WOOD[t.tier] || 'pine', n: n * 31 + 7 };
     if (h.role === 'tavern' && propBar(h, t.tier > 1 ? 'barCounterLong' : 'barCounter', ctx)) continue;
+    if (h.role === 'bank' && propBar(h, 'tellerCounter', ctx, 'vaultDoor', null)) continue;   // (the vault behind the banker)
     const q = propTryList(h, 0, id, propCands(h, 0, id, ctx), ctx);
     if (q) h.work = q.tiles[Math.floor(q.tiles.length / 2)];
   }
@@ -3244,8 +3245,9 @@ const PROP_KITS = {
       { id: 'bed', up: true, n: 3 }, { id: 'washstand', up: true, n: 2 }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'antlers' }, { hang: 'shield', n: 2 }, { hang: 'tapestry', up: true }],
   ],
   bank: [null, null,
-    [{ id: 'bookcase', n: 2 }, { id: 'chest', n: 2 }, { id: 'chair', n: 1 }, { id: 'bench' }, { id: 'shelf' }, { id: 'candleStand', n: 2 }, { id: 'chandelier' }, { id: 'runner' }, { id: 'rug' },
-      { id: 'chest', at: 'bed' }, { id: 'wardrobe', up: true }, { id: 'rug', up: true }, { hang: 'tapestry' }, { hang: 'shield' }, { hang: 'wallMap' }],
+    // (2026-11-03, Jordan: one story of stone; its set pieces, the vault door and teller counter, go in first: propBar)
+    [{ id: 'coinTable' }, { id: 'strongbox', n: 2 }, { id: 'desk' }, { id: 'chair', n: 1 }, { id: 'bench' }, { id: 'bookcase' }, { id: 'candleStand', n: 2 }, { id: 'chandelier' },
+      { id: 'runner' }, { id: 'rug' }, { id: 'strongbox' }, { hang: 'tapestry' }, { hang: 'shield' }, { hang: 'wallMap' }],
   ],
   guard: [null, null,
     [{ id: 'longTable', seats: 'bench' }, { id: 'hearth' }, { id: 'chair', n: 1 }, { id: 'barrel', n: 2 }, { id: 'crate', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'shelf' }, { id: 'crate', up: true },
@@ -3496,17 +3498,18 @@ function townProps(t, n) {
     const kind = h.role || (h.clergy ? 'clergy' : h.trade ? 'trade' : 'home');
     const kit = PROP_KITS[kind] && PROP_KITS[kind][t.tier];
     furnish(h, kit || PROP_KITS.home[t.tier], { wood, n: n * 31 + j });
-    if (h.role === 'tavern') tavernFront(t, n, h, { wood, n: n * 31 + j });
+    if (h.role === 'tavern' || h.role === 'bank') tavernFront(t, n, h, { wood, n: n * 31 + j });
   });
 }
 // (v555, Jordan) the tavern's bar: the barrel rack against a wall, a free row before it for the innkeeper (kept
 // clear), the counter across in front of that facing the room, and bar stools before the counter; tried along each
 // wall till the house stays walkable (the row behind the counter reached round one of its ends)
-function propBar(h, cid, ctx) {
+// (2026-11-03) the bank's the same: the vault door on the wall, the banker before it, the teller counter (no seats)
+function propBar(h, cid, ctx, rid = 'barrelRack', seat = 'barStool') {
   const C0 = PROPS[cid], cw = C0.tiles[0];
   h.clear = h.clear || new Set();
-  for (const cd of propCands(h, 0, 'barrelRack', ctx).slice(0, 40)) {
-    const rack = propPut(h, 0, 'barrelRack', cd.foot, cd.f, cd.wallV, ctx);
+  for (const cd of propCands(h, 0, rid, ctx).slice(0, 40)) {
+    const rack = propPut(h, 0, rid, cd.foot, cd.f, cd.wallV, ctx);
     const f = cd.f, g = (f + 3) & 3, [c0, r0] = cd.foot[0];
     for (const o of cw > 2 ? [0, -1] : [0]) {
       // the innkeeper's row (the rack's front and the tiles beside it the counter covers) must be free floor
@@ -3523,9 +3526,9 @@ function propBar(h, cid, ctx) {
         h.work = T(c0 + DC[f] * 2, r0 + DR[f] * 2); h.workFrom = back;
         if (!bar.tiles.includes(h.work)) h.work = bar.tiles[0];
         // stools before the counter
-        for (const [tc, tr] of foot) {
+        if (seat) for (const [tc, tr] of foot) {
           const sc = tc + DC[f], sr = tr + DR[f], sf = propFoot(h, 0, PROPS.barStool, sc, sr, (f + 2) & 3, false);
-          if (sf) propTryList(h, 0, 'barStool', [{ foot: sf, f: (f + 2) & 3, wallV: 0 }], ctx);
+          if (sf) propTryList(h, 0, seat, [{ foot: sf, f: (f + 2) & 3, wallV: 0 }], ctx);
         }
         return true;
       }
@@ -3536,7 +3539,7 @@ function propBar(h, cid, ctx) {
   }
   return false;
 }
-// (v555, Jordan) the tavern's front: a hanging sign with a keg on it, on a plain stretch of wall beside the door
+// (v555, Jordan) the tavern's front (and since 2026-11-03 the bank's, its sign a pile of coins, on its stone wall): a hanging sign with a keg on it, on a plain stretch of wall beside the door
 // (high on the ground floor) or over the door (low on the story above), and a stack of kegs or two out beside the house
 function tavernFront(t, n, h, ctx) {
   if (!h.door || !h.inside) return;
@@ -3549,14 +3552,15 @@ function tavernFront(t, n, h, ctx) {
     const nc = ic + DC[p], nr = ir + DR[p];
     const v = set.has(T(nc, nr)) ? wallOn(nc, nr, out) : 0;
     // (on a window's wall it goes on the post at that stretch's far end, a tile from the door, clear of the glass)
-    if (v === 1 || v === 13) spots.push({ c: nc, r: nr, k: 0, slide: v === 13 ? 0.47 * (p === ((out + 3) & 3) ? 1 : -1) : 0 });
+    if (v === 1 || v === 13 || v === 4 || v === 14) spots.push({ c: nc, r: nr, k: 0, v, slide: v === 13 || v === 14 ? 0.47 * (p === ((out + 3) & 3) ? 1 : -1) : 0 });
   }
-  if (upWallOn(ic, ir, out, 1) === 1) spots.push({ c: ic, r: ir, k: 1, slide: 0 });
+  if (upWallOn(ic, ir, out, 1) === 1) spots.push({ c: ic, r: ir, k: 1, v: 1, slide: 0 });
   if (spots.length) {
     const s = spots[Math.floor(hs(ic, ir, 553) * spots.length)], oc = s.c + DC[out], or = s.r + DR[out], [ec, er, ew] = edgeOf(s.c, s.r, out);
-    propPut(h, s.k, 'tavernSign', [[oc, or]], out, 1, ctx, { cut: dKey(ec, er, ew, s.k) + 1, y0: storyY(s.k, ins), look: { up: !!s.k }, slide: s.slide });
+    propPut(h, s.k, h.role === 'bank' ? 'bankSign' : 'tavernSign', [[oc, or]], out, s.v, ctx, { cut: dKey(ec, er, ew, s.k) + 1, y0: storyY(s.k, ins), look: { up: !!s.k }, slide: s.slide });
     buildCount[Math.floor(or / CH) * NC + Math.floor(oc / CH)]++;   // (drawn with the pieces of the chunk it hangs over)
   }
+  if (h.role !== 'tavern') return;
   // the kegs: on yard tiles beside the house's outside walls, near the door, never on a street or the door's step
   const own = n + 1, step = T(ic + DC[out], ir + DR[out]), near = [];
   const taken = o => { const b = OB[o]; return !!b && (OBJ[b].tile || OBJ[b].solid >= 0.1 || b === O.LAMP || b === O.PLANTER || b === O.FOUNTAIN); };   // (flowers and grass give way)
@@ -3914,12 +3918,14 @@ function raiseTownHouses(t, n) {
     // over it) in a medium or large town, a bank and a guard house in a large one, both of stone
     const role = PROP_ROLES[t.tier]?.[t.houses.length] || null;
     if (role === 'tavern') style = 'timber2';
+    else if (role === 'bank') style = 'stone1';   // (2026-11-03, Jordan: the bank is one story, all stone, its roof flat stone)
     else if (role) style = style.endsWith('2') ? 'stone2' : 'stone1';
     let two = style.endsWith('2');
     const stone = style.startsWith('stone');
     let plan = townPlan(w, dep, o0, two, c0 * 7 + r0 * 13 + d);
     // (v555, Jordan: a tavern is always two stories of timber, rooms over the bar) one that can't be, here, goes elsewhere
     if (role === 'tavern' && (!plan || plan.low.size < 20)) continue;   // (and roomy: the bar, tables and the hearth)
+    if (role === 'bank' && (!plan || plan.low.size < 24)) continue;   // (the vault, the counter and a hall before it)
     if (!plan) { two = false; style = style.replace('2', '1'); plan = townPlan(w, dep, o0, false, c0 * 7 + r0 * 13 + d); }
     const { low, upp, stair } = plan, K = (a, b) => (a - o0) + b * 64, cellOf = k => [(k & 63) + o0, k >> 6];
     const tiles = [], set = new Set(), a2b = new Map();
@@ -25823,7 +25829,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 572, crashSeen = new Map();
+const GAME_VERSION = 573, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
