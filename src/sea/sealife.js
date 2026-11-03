@@ -133,21 +133,71 @@ export function gullWings(ph, A, arch, droop) {
   const fk = Math.max(0, Math.min(1, A / 0.62));
   return [(1 - fk) * arch + fk * 0.1 + A * Math.sin(ph), A * 0.75 * Math.sin(ph - 0.7) - (1 - fk) * droop];
 }
-// a dolphin in mat: style 1 (v685, the default) the delivered skinned dolphin (src/sea/dolphin.js, 3.6 tiles long),
-// style 0 the first one (pieces with a hinged tail, 2.3 long). { g, style, tail | dolphin }
-export function dolphinModel(mat, style = 1) {
-  if (style >= 1) { const d = makeDolphin(GFX, { material: mat }); return { g: d.g, style: 1, dolphin: d }; }
+// (v686, Jordan) the skinned dolphin's own material: lit by a normal per corner (dolphinNormals: each face's own, or
+// smoothed over the faces round each vertex), and cut off below the water in the water's mirror pass (post.w)
+export function makeDolphinMat() {
+  return new GFX.ShaderMaterial({ uniforms: { k: { value: 1 } }, vertexColors: true, side: GFX.DoubleSide, attributes: { nrm: 'vec3f' }, lit: true,
+    code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) n: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  let n = (O.model * vec4f(v.nrm, 0.0)).xyz;
+  return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz, n);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  if (F.post.w > 0.5 && i.world.y < F.post.z) { discard; }
+  var N = normalize(i.n);
+  let toward = select(-i.eye, -F.camDir.xyz, F.camPos.w > 0.5);
+  if (dot(N, toward) < 0.0) { N = -N; }
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+  });
+}
+// a dolphin: style 1 (v685, the default) the delivered skinned dolphin (src/sea/dolphin.js, 3.6 tiles long) in
+// skinMat (makeDolphinMat), style 0 the first one (pieces with a hinged tail, 2.3 long) in mat. { g, style, tail | dolphin }
+export function dolphinModel(mat, style = 1, skinMat = null) {
+  if (style >= 1) {
+    const d = makeDolphin(GFX, { material: skinMat || mat });
+    d.nrm = new GFX.BufferAttribute(new Float32Array(d.position.array.length), 3);
+    d.mesh.geometry.setAttribute('nrm', d.nrm);
+    return { g: d.g, style: 1, dolphin: d };
+  }
   const S = seaLifeShapes(), g = new GFX.Group(), tail = new GFX.Group();
   g.add(new GFX.Mesh(S.dFront, mat));
   tail.position.set(0, 0, DOLPHIN_TAIL); tail.add(new GFX.Mesh(S.dTail, mat)); g.add(tail);
   return { g, style: 0, tail };
 }
-// its swimming stroke at `cycles` through it (1 a beat), amp its strength (1 swimming, less in the air)
-export function poseDolphinModel(m, cycles, amp = 1) {
+let SMOOTH_ACC = null;
+// the skinned dolphin's normals from its posed vertices pos (indexed by tris), into out (one per drawn corner):
+// faceted, each face's own; smooth, the faces round each vertex added up by their areas
+function dolphinNormals(pos, tris, out, smooth) {
+  const nt = tris.length / 3;
+  if (smooth && (!SMOOTH_ACC || SMOOTH_ACC.length < pos.length)) SMOOTH_ACC = new Float32Array(pos.length);
+  const acc = SMOOTH_ACC;
+  if (smooth) acc.fill(0, 0, pos.length);
+  for (let f = 0; f < nt; f++) {
+    const a = tris[f * 3] * 3, b = tris[f * 3 + 1] * 3, c = tris[f * 3 + 2] * 3;
+    const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+    const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    if (smooth) { for (const k of [a, b, c]) { acc[k] += nx; acc[k + 1] += ny; acc[k + 2] += nz; } continue; }
+    const l = Math.hypot(nx, ny, nz) || 1;
+    for (let k = 0; k < 3; k++) { const o = (f * 3 + k) * 3; out[o] = nx / l; out[o + 1] = ny / l; out[o + 2] = nz / l; }
+  }
+  if (smooth) for (let i = 0; i < tris.length; i++) {
+    const k = tris[i] * 3, l = Math.hypot(acc[k], acc[k + 1], acc[k + 2]) || 1;
+    out[i * 3] = acc[k] / l; out[i * 3 + 1] = acc[k + 1] / l; out[i * 3 + 2] = acc[k + 2] / l;
+  }
+}
+// its swimming stroke at `cycles` through it (1 a beat), amp its strength (1 swimming, less in the air); smooth: the
+// skinned one's normals smoothed (else faceted)
+export function poseDolphinModel(m, cycles, amp = 1, smooth = false) {
   if (m.dolphin) {
     const d = m.dolphin, pos = poseDolphinSkin(d.skin, cycles, amp, 1), ids = d.skin.shape.triangles, out = d.position.array;
     for (let i = 0; i < ids.length; i++) { const j = ids[i] * 3; out[i * 3] = pos[j]; out[i * 3 + 1] = pos[j + 1]; out[i * 3 + 2] = pos[j + 2]; }
     d.position.needsUpdate = true;
+    if (d.nrm) { dolphinNormals(pos, ids, d.nrm.array, smooth); d.nrm.needsUpdate = true; }
   } else m.tail.rotation.x = Math.sin(cycles * Math.PI * 2) * 0.32 * amp;
 }
 // done with it: the skinned one's own buffer freed

@@ -131,6 +131,8 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     <div class="row seaOnly"><button data-sea="dolphin">Dolphin</button><button data-sea="dolphin0" title="The first dolphin, before the skinned one">First dolphin</button><button data-sea="gull">Gull</button></div>
     <h2 class="seaOnly">Move</h2>
     <div class="row seaOnly"><button data-smove="0" id="smove0"></button><button data-smove="1" id="smove1"></button></div>
+    <h2 class="seaOnly">Shading</h2>
+    <div class="row seaOnly"><button data-shade="0">Faceted</button><button data-shade="1" title="The skinned dolphin's normals smoothed">Smooth</button></div>
     <h2 class="boatOnly">Sails</h2>
     <div class="row boatOnly"><button data-sails="1" class="on">Set</button><button data-sails="0.5">Reefed</button><button data-sails="0">Furled</button></div>
     <h2 class="boatOnly">Anchor</h2>
@@ -175,7 +177,7 @@ addEventListener('unhandledrejection', e => showErr(String(e.reason && e.reason.
 import * as GFX from './src/gfx/index.js';
 import { makeFolkKit, design as folkDesign, desertDress, DESERT_JOBS, describe, ANIMS, JOBS, TIERS, POOLS, jobTitle } from './src/folk/townsfolk.js';
 import { PROPS, PROP_IDS, PROP_GROUPS, WOODS, seeded, rollProp, describeProp, buildProp, propStage } from './src/props/props.js';
-import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, GULL_COLORS, DOLPHIN_COLORS } from './src/sea/sealife.js';
+import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, makeDolphinMat, GULL_COLORS, DOLPHIN_COLORS } from './src/sea/sealife.js';
 import { BRIG_SHAPE, rollLivery, describeLivery, liveryName, buildBrig, brigModel, makeSailMat, hangChain } from './src/boats/brig.js';
 
 const $ = id => document.getElementById(id);
@@ -300,6 +302,8 @@ function rebuildBoats() {
 }
 // (v24) sea life: the game's dolphin or gull (both, side by side, in the lineup), moving as picked: a dolphin
 // swimming or leaping, a gull flapping or gliding with its wings arched (the game's GULLS.arch and droop)
+const SEA_SKIN = makeDolphinMat();   // (v26: the skinned dolphin's own normals, faceted or smooth)
+S.smooth = !!store.get('smooth', false);
 const SEA_MAT = new GFX.MeshStandardMaterial({ flatShading: true, roughness: 1, metalness: 0, vertexColors: true, side: GFX.DoubleSide });
 const SEA_INFO = {
   // (v25) the skinned dolphin from Jordan's delivery (one shell, six bones), and the first one for comparison
@@ -312,7 +316,7 @@ function rebuildSea() {
   for (const f of folks) if (f.sea && f.sea !== 'gull') dropDolphinModel(f);
   const kinds = S.mode === 'one' ? [S.sea] : ['dolphin', 'dolphin0', 'gull'];
   folks = kinds.map((k, i) => {
-    const m = k === 'gull' ? gullModel(SEA_MAT) : dolphinModel(SEA_MAT, k === 'dolphin' ? 1 : 0);
+    const m = k === 'gull' ? gullModel(SEA_MAT) : dolphinModel(SEA_MAT, k === 'dolphin' ? 1 : 0, SEA_SKIN);
     m.sea = k; m.g.rotation.order = 'YXZ';
     m.g.position.x = kinds.length > 1 ? [-2.6, 0.6, 2.8][i] : 0;
     scene.add(m.g);
@@ -320,6 +324,7 @@ function rebuildSea() {
   });
   const I = SEA_INFO[S.sea];
   document.querySelectorAll('[data-sea]').forEach(x => x.classList.toggle('on', x.dataset.sea === S.sea));
+  document.querySelectorAll('[data-shade]').forEach(x => x.classList.toggle('on', (x.dataset.shade === '1') === S.smooth));
   I.moves.forEach((n, i) => { $('smove' + i).textContent = n; $('smove' + i).classList.toggle('on', S.smove === i); });
   $('names').innerHTML = S.mode === 'one' ? '' : kinds.map(k => `<button data-sk="${k}">${SEA_INFO[k].name}</button>`).join('');
   $('whoName').textContent = I.name;
@@ -343,9 +348,10 @@ function poseSea(m, t) {
     if (u < J) { const v0 = 0.5 * g * J; y += v0 * u - 0.5 * g * u * u; pitch = -Math.atan2(v0 - g * u, 7); air = true; }
   }
   m.g.position.y = y; m.g.rotation.x = pitch;
-  poseDolphinModel(m, t * 1.6, air ? 0.4 : 1);
+  poseDolphinModel(m, t * 1.6, air ? 0.4 : 1, S.smooth);
 }
 document.querySelectorAll('[data-sea]').forEach(b => b.onclick = () => { S.sea = b.dataset.sea; S.smove = 0; store.set('sea', S.sea); rebuild(); });
+document.querySelectorAll('[data-shade]').forEach(b => b.onclick = () => { S.smooth = b.dataset.shade === '1'; store.set('smooth', S.smooth); rebuild(); });
 document.querySelectorAll('[data-smove]').forEach(b => b.onclick = () => { S.smove = +b.dataset.smove; rebuild(); });
 // (v20) a prop on its tiles (and the wall behind it), or every prop of its group side by side, all in this seed's
 // looks and the picked wood; a townsperson beside it for scale if asked

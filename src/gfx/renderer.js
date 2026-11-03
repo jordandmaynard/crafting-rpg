@@ -473,7 +473,7 @@ class Renderer {
     const hz = !plain && this.haze && this.haze.view() ? this.haze.uniforms() : null;
     for (let i = 0; i < 8; i++) d[go + 12 + i] = hz ? hz[i] : 0;
     d[go + 20] = this.eye && this.eye.on && !plain ? 1 : 0;   // (and no eye: the studio shot is the same by day and night)
-    d[go + 21] = plain ? 0 : this.hdrPeak; d[go + 22] = this.clipBelow ?? 0; d[go + 23] = 0;   // (the character view's canvas is plain sRGB: no HDR)
+    d[go + 21] = plain ? 0 : this.hdrPeak; d[go + 22] = this.clipBelow ?? 0; d[go + 23] = this.clipBelow != null ? 1 : 0;   // (post.w: clipping, for ShaderMaterials that honour it)   // (the character view's canvas is plain sRGB: no HDR)
     const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
     for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
     const ins = plain ? null : this.inside, du = this._frameU || (this._frameU = new Uint32Array(d.buffer, d.byteOffset, d.length));
