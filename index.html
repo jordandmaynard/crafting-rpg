@@ -9085,7 +9085,11 @@ function* groundSteps(cx, cz, ch) {
         }
         const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
         // (v633: + 64 on a beach, + 128 on a shoal: a shoal's sand runs only into the beach's and its own, never the grass)
-        if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
+        // (v679, Jordan: a lake's or the sea's bed, where it isn't a bank, swirls in patches too: alpha 3, its corners' average)
+        if (!lifted && !L && !cy && !LAVA[i] && WL[i]) {
+          gd[go] = Math.min(255, Math.round((k00.r + k10.r + k01.r + k11.r) * 31.875)); gd[go + 1] = Math.min(255, Math.round((k00.g + k10.g + k01.g + k11.g) * 31.875));
+          gd[go + 2] = Math.min(255, Math.round((k00.b + k10.b + k01.b + k11.b) * 31.875)); gd[go + 3] = 3;
+        } else if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
         else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1) + (SHOAL[i] ? 128 : BEACH[i] ? 64 : 0); }
         // split through the odd corner out, so slope corners come out as clean hips and valleys
         const odd = lifted === 1 || lifted === 3;
@@ -10507,6 +10511,8 @@ fn gHB(p: vec2f) -> vec2f {
 // whether quarter b's colour may run into quarter a's (alphas as bytes): the same level, or a ramp's to the level above
 fn gsJoin(a: u32, b: u32) -> bool {
   if (b == 0u) { return false; }
+  // (v679: a water bed's quarter, 3, joins other bed quarters and the shoals', whatever their depth)
+  if (a == 3u || b == 3u) { return (a == 3u && (b == 3u || (b & 128u) != 0u)) || (b == 3u && (a & 128u) != 0u); }
   // (a shoal, 128, joins only a beach, 64, or another shoal)
   if (((a | b) & 128u) != 0u && ((a & 192u) == 0u || (b & 192u) == 0u)) { return false; }
   let la = (a >> 2u) & 15u; let lb = (b >> 2u) & 15u;
@@ -10545,7 +10551,8 @@ fn gsJoin(a: u32, b: u32) -> bool {
     let q0 = clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), lim);
     let t0 = textureLoad(tGround, q0, 0);
     let a0 = u32(round(t0.a * 255.0));
-    if (a0 != 0u && distance(t0.rgb * 2.0, albedo) < 0.03) {
+    // (a water bed's quarter, 3, takes its patches whatever its corners' colours: they shade toward a shoal's sand)
+    if (a0 != 0u && (a0 == 3u || distance(t0.rgb * 2.0, albedo) < 0.03)) {
       let p = i.world.xz * U.gsV.z;
       let w = vec2f(gsNoise(p), gsNoise(p + vec2f(17.3, 5.1))) + 0.5 * vec2f(gsNoise(p * 2.3 + vec2f(31.7, 8.2)), gsNoise(p * 2.3 + vec2f(3.9, 47.5)));
       let qp = i.world.xz * 2.0 + w * U.gsV.y;
@@ -30278,7 +30285,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 678, crashSeen = new Map();
+const GAME_VERSION = 679, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
