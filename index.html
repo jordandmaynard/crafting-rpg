@@ -2426,6 +2426,41 @@ function markShoals() {
   }
   beachStats.shoals = rows[0].length; beachStats.shoals2 = rows[1].length;
   computeRim();
+  markShelf();
+}
+// The shelf (Jordan, v678): past the shoals the sea or lake bed no longer drops off a cliff but slopes on down, SHELF_SLOPE
+// a tile, from the second shoal row's foot until it meets the bed as it was (so the deep sea is as deep as ever), making
+// the floor near a beach one broad, shallow valley with no hard line in it. SHELF holds each tile corner's distance from
+// the nearest shoal (a chamfer distance over the corners), SHELFT the sea and lake tiles whose bed follows it.
+const SHELF_SLOPE = 0.3, SHELF = new Float32Array((N + 1) * (N + 1)), SHELFT = new Uint8Array(N * N);
+function shelfD(x, z) {
+  const c = Math.min(N - 1, Math.floor(x)), r = Math.min(N - 1, Math.floor(z)), u = x - c, v = z - r, W = N + 1, o = r * W + c;
+  return (SHELF[o] * (1 - u) + SHELF[o + 1] * u) * (1 - v) + (SHELF[o + W] * (1 - u) + SHELF[o + W + 1] * u) * v;
+}
+function markShelf() {
+  const W = N + 1, D = SHELF, S2 = Math.SQRT2;
+  D.fill(1e4); SHELFT.fill(0);
+  for (let i = 0; i < N * N; i++) if (SHOAL[i]) { const c = i % N, r = (i - c) / N, o = r * W + c; D[o] = D[o + 1] = D[o + W] = D[o + W + 1] = 0; }
+  for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
+    const o = r * W + c; let d = D[o];
+    if (c > 0) d = Math.min(d, D[o - 1] + 1);
+    if (r > 0) { d = Math.min(d, D[o - W] + 1); if (c > 0) d = Math.min(d, D[o - W - 1] + S2); if (c < W - 1) d = Math.min(d, D[o - W + 1] + S2); }
+    D[o] = d;
+  }
+  for (let r = W - 1; r >= 0; r--) for (let c = W - 1; c >= 0; c--) {
+    const o = r * W + c; let d = D[o];
+    if (c < W - 1) d = Math.min(d, D[o + 1] + 1);
+    if (r < W - 1) { d = Math.min(d, D[o + W] + 1); if (c < W - 1) d = Math.min(d, D[o + W + 1] + S2); if (c > 0) d = Math.min(d, D[o + W - 1] + S2); }
+    D[o] = d;
+  }
+  let n = 0;
+  for (let i = 0; i < N * N; i++) {
+    if ((LV[i] && !BR[i]) || !WL[i] || LAVA[i] || CY[i] || (WT[i] && WT[i] !== 2)) continue;
+    const c = i % N, r = (i - c) / N;
+    if (shelfD(c + 0.5, r + 0.5) * SHELF_SLOPE > WL[i] * STEP - GL[i] * STEP + 1) continue;   // (out where the shelf is under the old bed anyway)
+    SHELFT[i] = 1; n++;
+  }
+  beachStats.shelf = n;
 }
 
 // Cut the world into regions and name them (see REGION_MIN above). Each region also gets the spots its name can
@@ -7706,7 +7741,8 @@ function renderProxies() {
   renderer.setRenderTarget(proxyRT); renderer.clear();
   renderer.passName = 'proxy reflections';
   renderer.clipBelow = h - 0.02;
-  try { renderer.render(scene, reflCam); } finally { renderer.clipBelow = null; }
+  seaLifeMirror(h, true);
+  try { renderer.render(scene, reflCam); } finally { renderer.clipBelow = null; seaLifeMirror(h, false); }
   renderer.setRenderTarget(maskRT); renderer.clear();
   renderer.passName = 'proxy mask';
   cam.layers.set(9); renderer.render(scene, cam);
@@ -8799,7 +8835,11 @@ function groundColor(c, r, i, j) {
 const tileSurf = (c, r, u, v) => {
   const i = T(c, r), l = LIFT[SH[i]];
   if (SHOAL[i]) { const m = SHOAL[i] & 255; return LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5)); }
-  if (!LV[i] || BR[i]) return GL[i] * STEP;   // a lake or river bed, the sea floor, a canyon's floor
+  if (!LV[i] || BR[i]) {   // a lake or river bed, the sea floor, a canyon's floor
+    // (the shelf off the shoals: the bed sloping on down from them until it meets the bed as it was: see markShelf)
+    if (SHELFT[i]) return Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v));
+    return GL[i] * STEP;
+  }
   if (WT[i] === 1) return LV[i] * STEP - BOG_BED;   // a swamp pool's bed (its banks are its neighbours' edges)
   if (BEACH[i]) return LV[i] * STEP - beachDrop(i) * (1 - beachH(BEACH[i], u, v));   // a beach, sloping into the water
   return (LV[i] + (l[0] * (1 - u) + l[1] * u) * (1 - v) + (l[3] * (1 - u) + l[2] * u) * v) * STEP;
@@ -9064,7 +9104,11 @@ function* groundSteps(cx, cz, ch) {
         }
         const go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
         // (v633: + 64 on a beach, + 128 on a shoal: a shoal's sand runs only into the beach's and its own, never the grass)
-        if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
+        // (v679, Jordan: a lake's or the sea's bed, where it isn't a bank, swirls in patches too: alpha 3, its corners' average)
+        if (!lifted && !L && !cy && !LAVA[i] && WL[i]) {
+          gd[go] = Math.min(255, Math.round((k00.r + k10.r + k01.r + k11.r) * 31.875)); gd[go + 1] = Math.min(255, Math.round((k00.g + k10.g + k01.g + k11.g) * 31.875));
+          gd[go + 2] = Math.min(255, Math.round((k00.b + k10.b + k01.b + k11.b) * 31.875)); gd[go + 3] = 3;
+        } else if (lifted || cy || !L || LAVA[i] || WT[i]) gd[go + 3] = 0;
         else { gd[go] = Math.min(255, Math.round(k00.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k00.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k00.b * 127.5)); gd[go + 3] = L * 4 + (s ? 2 : 1) + (SHOAL[i] ? 128 : BEACH[i] ? 64 : 0); }
         // split through the odd corner out, so slope corners come out as clean hips and valleys
         const odd = lifted === 1 || lifted === 3;
@@ -10486,6 +10530,8 @@ fn gHB(p: vec2f) -> vec2f {
 // whether quarter b's colour may run into quarter a's (alphas as bytes): the same level, or a ramp's to the level above
 fn gsJoin(a: u32, b: u32) -> bool {
   if (b == 0u) { return false; }
+  // (v679: a water bed's quarter, 3, joins other bed quarters and the shoals', whatever their depth)
+  if (a == 3u || b == 3u) { return (a == 3u && (b == 3u || (b & 128u) != 0u)) || (b == 3u && (a & 128u) != 0u); }
   // (a shoal, 128, joins only a beach, 64, or another shoal)
   if (((a | b) & 128u) != 0u && ((a & 192u) == 0u || (b & 192u) == 0u)) { return false; }
   let la = (a >> 2u) & 15u; let lb = (b >> 2u) & 15u;
@@ -10524,7 +10570,8 @@ fn gsJoin(a: u32, b: u32) -> bool {
     let q0 = clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), lim);
     let t0 = textureLoad(tGround, q0, 0);
     let a0 = u32(round(t0.a * 255.0));
-    if (a0 != 0u && distance(t0.rgb * 2.0, albedo) < 0.03) {
+    // (a water bed's quarter, 3, takes its patches whatever its corners' colours: they shade toward a shoal's sand)
+    if (a0 != 0u && (a0 == 3u || distance(t0.rgb * 2.0, albedo) < 0.03)) {
       let p = i.world.xz * U.gsV.z;
       let w = vec2f(gsNoise(p), gsNoise(p + vec2f(17.3, 5.1))) + 0.5 * vec2f(gsNoise(p * 2.3 + vec2f(31.7, 8.2)), gsNoise(p * 2.3 + vec2f(3.9, 47.5)));
       let qp = i.world.xz * 2.0 + w * U.gsV.y;
@@ -18083,12 +18130,14 @@ function updateBoats(dt) {
 const GULL_KINDS = new Set(['bay', 'inlet', 'strait', 'shallows']);
 // every: seconds between flights (on average); flock: share that are echelons; most: birds in the biggest one;
 // speed: tiles a second; height: over the water (tiles); flap: wingbeats a second; night: 1 flies by night too
-const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 4.5, size: 1, flap: 3, night: 0, cry: 1 };
+// (v680, Jordan) gliding, its wings are arched as seen from the front: raised from the shoulder (arch, radians) and
+// bent down from the elbow (droop)
+const GULLS = { on: 1, every: 12, flock: 0.45, most: 5, speed: 4.2, height: 10.6, size: 1, flap: 3, night: 0, cry: 1, arch: 0.3, droop: 0.55 };
 // deep: tiles from any coast; wait: seconds at full ahead, steady, before they come; straight: how far off your
 // heading you can drift meanwhile (radians); stay: seconds they pace you (0 no end); fewest/most: pod size; jumps:
 // most leaps each; leap: their height (×); depth: how deep they swim between (tiles); beat: tail beats a second;
 // cooldown: seconds before another pod can come
-const DOLPHINS = { on: 1, deep: 10, wait: 10, straight: 0.3, stay: 90, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 45 };
+const DOLPHINS = { on: 1, deep: 8, wait: 4, straight: 0.3, stay: 30, fewest: 3, most: 6, jumps: 4, leap: 1, depth: 0.55, beat: 1.6, size: 1, cooldown: 20 };
 const SEA_SPAWN = { gulls: 0, dolphins: 0 };   // (T > Sea life buttons)
 const seaLife = { flights: [], gullT: 5, pod: null, runT: 0, runH: 0, runGoal: 10, coolT: 0 };
 let SEA_GEOS = null;
@@ -18106,10 +18155,11 @@ function seaLifeGeos() {
   const W = '#eeeee8', GR = '#a3a9b2', DK = '#25272b', Y = '#e0ac38';
   const gBody = make(() => {
     part(G.ico, W, 0, 0, 0, { sx: 0.17, sy: 0.15, sz: 0.52 });
-    part(G.ico, W, 0, 0.05, 0.25, { s: 0.15 });
-    part(G.cone4, Y, 0, 0.035, 0.37, { rx: Math.PI / 2, sx: 0.045, sy: 0.12, sz: 0.04 });
+    // (v680, Jordan) the head carried level, in line with the body
+    part(G.ico, W, 0, 0.01, 0.27, { s: 0.15 });
+    part(G.cone4, Y, 0, 0, 0.39, { rx: Math.PI / 2, sx: 0.045, sy: 0.12, sz: 0.04 });
     part(G.box, W, 0, 0.01, -0.3, { sx: 0.13, sy: 0.02, sz: 0.16 });
-    part(G.box, DK, 0.055, 0.075, 0.29, { s: 0.022 }); part(G.box, DK, -0.055, 0.075, 0.29, { s: 0.022 });
+    part(G.box, DK, 0.055, 0.035, 0.31, { s: 0.022 }); part(G.box, DK, -0.055, 0.035, 0.31, { s: 0.022 });
   });
   // a wing from its shoulder (x 0) out to its elbow, and from the elbow to its black tip; grey above, white under
   const inner = [[0, 0.1], [0.34, 0.07], [0.34, -0.1], [0, -0.15]], outer = [[0, 0.07], [0.24, 0.05], [0.24, -0.09], [0, -0.1]], tip = [[0.24, 0.05], [0.42, -0.06], [0.24, -0.09]];
@@ -18212,7 +18262,7 @@ function updateGulls(dt) {
       if (bd.swapT <= 0) { bd.flapping = !bd.flapping; bd.swapT = bd.flapping ? 1 + Math.random() * 1.8 : 1.5 + Math.random() * 3; }
       bd.A += ((bd.flapping ? 0.62 : 0) - bd.A) * Math.min(1, dt * 4);
       bd.ph += dt * Math.PI * 2 * Gl.flap * bd.rate * (0.4 + 0.6 * bd.A / 0.62);
-      const sh = 0.1 + bd.A * Math.sin(bd.ph), el = bd.A * 0.75 * Math.sin(bd.ph - 0.7) - 0.06 * (1 - bd.A / 0.62);
+      const fk = clamp(bd.A / 0.62, 0, 1), sh = (1 - fk) * Gl.arch + fk * 0.1 + bd.A * Math.sin(bd.ph), el = bd.A * 0.75 * Math.sin(bd.ph - 0.7) - (1 - fk) * Gl.droop;
       for (const [S0, E0, sd] of bd.wings) { S0.rotation.z = sh * sd; E0.rotation.z = el * sd; }
       if (!fl.cried && Math.hypot(x - H.x, z - H.z) < 10) { fl.cried = true; sfx.gull(); }
     }
@@ -18234,6 +18284,9 @@ function spawnPod(b) {
     g.scale.setScalar(D.size * (0.85 + Math.random() * 0.3));
     const [x, z] = boatWorld(b, su * 1.5, sv - 7);
     g.position.set(x, -50, z);
+    // (v681, Jordan) seen by the water's mirror too (layer 9, as the boats are), cut off where it meets the water
+    // (seaLifeMirror sets it on level water for that pass)
+    g.traverse(o => o.layers.enable(9));
     scene.add(g);
     list.push({ g, tail, su, sv, ph: Math.random() * 6.28, x, z, d: -3.5, hd: b.h, jump: null, jumps: Math.max(0, Math.round(D.jumps * (0.5 + Math.random() * 0.5))),
       nextJump: 4.5 + Math.random() * 6, above: false, beat: Math.random() * 6.28 });
@@ -18288,7 +18341,8 @@ function updateDolphins(dt) {
       if (j.t >= j.J) { f.d = j.d0; f.jump = null; }
     } else { f.d += (want - f.d) * Math.min(1, dt * 2.5); vy = (f.d - od) / dt; }
     const sy = seaSurfY(B.wl, f.x, f.z);
-    f.g.position.set(f.x, sy + f.d, f.z);
+    f.y = sy + f.d;
+    f.g.position.set(f.x, f.y, f.z);
     f.g.rotation.set(-Math.atan2(vy, Math.max(hs, 2)), f.hd, f.jump ? 0.25 * Math.sin(f.jump.t / f.jump.J * Math.PI) * (f.su > 0 ? 1 : -1) : 0, 'YXZ');
     // the tail beating: hard as it swims, easing off in the air
     f.beat += dt * Math.PI * 2 * D.beat * (f.jump ? 0.4 : 1);
@@ -18307,6 +18361,14 @@ function updateDolphins(dt) {
     for (const f of P.list) scene.remove(f.g);
     S.pod = null; S.coolT = D.cooldown; S.runT = 0;
   }
+}
+// (v681) the mirror pass (renderProxies) mirrors and cuts at one flat level h, but the dolphins ride the swell: for
+// that pass each is set as deep under h as it is under the water where it swims, so the cut falls where it breaks
+// the surface (on), and put back after (off)
+function seaLifeMirror(h, on) {
+  const P = seaLife.pod;
+  if (!P) return;
+  for (const f of P.list) if (f.y !== undefined) f.g.position.y = on ? h + f.d : f.y;
 }
 // once a frame (dt 0 while the game holds still)
 function updateSeaLife(dt) {
@@ -29362,6 +29424,8 @@ const TUNING = [
     [GULLS, 'size', 'Gulls: size', 0.3, 3, 0.05],
     [GULLS, 'night', 'Gulls fly by night too (1)', 0, 1, 1],
     [GULLS, 'cry', 'Gulls cry now and then (1)', 0, 1, 1],
+    [GULLS, 'arch', 'Gulls gliding: wings raised from the shoulder (radians)', -0.5, 1, 0.01],
+    [GULLS, 'droop', 'Gulls gliding: wings bent down from the elbow (radians)', -0.5, 1.2, 0.01],
     [SEA_SPAWN, 'gulls', 'Gulls: a flight now', 'action', () => spawnGulls()],
     [DOLPHINS, 'on', 'Dolphins on the deep sea (0 off)', 0, 1, 1],
     [DOLPHINS, 'deep', 'Dolphins: deep water is this many tiles from any coast (or calmer water)', 2, 60, 1],
