@@ -9495,6 +9495,11 @@ groundShapeMat.depthFunc = GFX.LessDepth;
 // phase of its own place, and the flames stretch and shrink a little and flicker. T > Hearth fires.
 const FLAME_WAVE = { bright: 2.4, sway: 0.06, flutter: 0.015, speed: 2.65, stretch: 0.23, flicker: 0.59 };   // (Jordan's values, v617)
 const FLAME_U = Object.fromEntries(Object.keys(FLAME_WAVE).map(k => [k, { value: FLAME_WAVE[k] }]));
+// (v618, Jordan: the lanterns' panes all one brightness, and brighter) a lantern's glass (tagged with a weight of -1 in
+// its GlowBuf: the street lamps', the bank's and the guard house's) is drawn in one colour at one brightness, unlit
+// and the same on every face. T > Lantern glass.
+const LANTERN_GLASS = { color: '#ffd890', bright: 3 };
+FLAME_U.paneCol = { value: new GFX.Color(LANTERN_GLASS.color) }; FLAME_U.pane = { value: LANTERN_GLASS.bright };
 const glowMat = new GFX.ShaderMaterial({ uniforms: FLAME_U, vertexColors: true, attributes: { flame: 'vec4f' },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f }
@@ -9502,6 +9507,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   var w = (O.model * vec4f(v.position, 1.0)).xyz;
   var c = v.color;
   let k = v.flame.w;
+  if (k < 0.0) { c = U.paneCol * U.pane; }
   if (k > 0.0) {
     let t = F.camDir.w * U.speed; let h = max(w.y - v.flame.y, 0.0);
     // (each flame its own phase: where it stands round the fire's foot)
@@ -12334,7 +12340,9 @@ function lamp(x, z) {
   const y = groundAt(x, z);
   part(G.box, '#2c2738', x, y + 0.6, z, { sx: 0.08, sy: 1.2, sz: 0.08 });
   part(G.box, '#2c2738', x, y + 1.24, z, { sx: 0.22, sy: 0.05, sz: 0.22 });
+  const g0 = GLOW.n;
   part(G.box, '#ffcf7a', x, y + 1.13, z, { sx: 0.14, sy: 0.14, sz: 0.14, into: 'glow' });
+  if (GLOW.tag) GLOW.tag(g0, 0, 0, 0, -1);   // (its glass: LANTERN_GLASS)
 }
 const GRASS_C = { [MEADOW]: C('#5e8a3a'), [FOREST]: C('#3a6a2e'), [TOWN]: C('#5e8a3a') };
 function drawObject(o, c, r) {
@@ -12578,6 +12586,8 @@ let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUF
 // (v592) INOBJ, INGLOW: where the furniture inside a roofed room goes (town props, beds, workshop props), a mesh of
 // its own a chunk (ch.inObj, ch.inGlow) that's only drawn while that room can be seen into (interiorShown)
 let INOBJ = null, INGLOW = null;
+const PIECE_GLOW = new GlowBuf();   // (v618: what glows of the building pieces, story 0: the wall lanterns' glass)
+let PIECE_GLOW_ON = false;
 // (v611) while furniture is drawn into an inside mesh, the buffer it would have gone to: for what pokes out (chimneys)
 let PROP_OUTER = null;
 function objBufs(B, clear) {
@@ -13320,7 +13330,7 @@ function bankEntrance(c, r, w, y, at, ry) {
     B(IRON_RAIL, a, ly + 0.17, 0.035, 0.035, (0.25 + lo) / 2, lo - 0.25);
     B(IRON_RAIL, a, ly + 0.1, 0.03, 0.12, lo, 0.03);
     B(IRON_RAIL, a, ly - 0.12, 0.16, 0.03, lo, 0.16);
-    B('#ffd890', a, ly - 0.03, 0.11, 0.15, lo, 0.11);
+    lanternGlass(at, w, s, a, ly - 0.03, 0.11, 0.15, lo, 0.11, ry);
     for (const [da, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) B(IRON_RAIL, a + da * 0.065, ly - 0.03, 0.02, 0.17, lo + dz * 0.065, 0.02);
     B(IRON_RAIL, a, ly + 0.07, 0.19, 0.04, lo, 0.19);
   }
@@ -13334,6 +13344,15 @@ function bankEntrance(c, r, w, y, at, ry) {
 // (2026-11-03, Jordan: a lantern like the bank's on the wall right over the guard house's door) its bracket from the
 // wall's outer face over the door's beam, the lantern hung from it (lit: bankLanterns, GUARD_LANTERN)
 const GUARD_LANTERN = { y: 2.04, out: 0.4 };   // (its foot over the top of a door swung out, DOOR_H 1.88)
+// a wall lantern's glass, into the building pieces' glow buffer (PIECE_GLOW, buildPieces) as LANTERN_GLASS, or plain
+// lit glass if there's none
+function lanternGlass(at, w, s, a, yy, sx, sy, o, sz, ry) {
+  const p = at(a, yy); p[w ? 0 : 2] += s * o;
+  if (!PIECE_GLOW_ON) { part(G.box, '#ffd890', p[0], p[1], p[2], { sx, sy, sz, ry }); return; }
+  const g0 = PIECE_GLOW.n;
+  part(G.box, '#ffd890', p[0], p[1], p[2], { sx, sy, sz, ry, into: 'glow' });
+  PIECE_GLOW.tag(g0, 0, 0, 0, -1);
+}
 function guardLantern(c, r, w, y, at, ry) {
   const s = windowOutside(c, r, w) || 1;
   const B = (col, a, yy, sx, sy, o, sz) => { const p = at(a, yy); p[w ? 0 : 2] += s * o; part(G.box, col, p[0], p[1], p[2], { sx, sy, sz, ry }); };
@@ -13342,7 +13361,7 @@ function guardLantern(c, r, w, y, at, ry) {
   B(IRON_RAIL, a, ly + 0.22, 0.035, 0.035, (0.16 + lo) / 2, lo - 0.16);     // (the arm)
   B(IRON_RAIL, a, ly + 0.14, 0.03, 0.12, lo, 0.03);
   B(IRON_RAIL, a, ly - 0.12, 0.16, 0.03, lo, 0.16);
-  B('#ffd890', a, ly - 0.03, 0.11, 0.15, lo, 0.11);
+  lanternGlass(at, w, s, a, ly - 0.03, 0.11, 0.15, lo, 0.11, ry);
   for (const [da, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) B(IRON_RAIL, a + da * 0.065, ly - 0.03, 0.02, 0.17, lo + dz * 0.065, 0.02);
   B(IRON_RAIL, a, ly + 0.07, 0.19, 0.04, lo, 0.19);
 }
@@ -13511,7 +13530,8 @@ function buildPieces(cx, cz, ch, only = null) {
   ch.build = null; ch.buildGI = null; ch.glass = null;
   if (!buildCount[cz * NC + cx]) return;
   OUT = bufBuild; bufBuild.n = 0; GLASSB = bufGlass; bufGlass.n = 0; bufGIProxy.n = 0; bufBuild.cr.length = 0; bufGlass.cr.length = 0;
-  const giCuts = [];
+  const giCuts = [], glowSv = GLOW;
+  GLOW = PIECE_GLOW; PIECE_GLOW.n = 0; PIECE_GLOW.tags = []; PIECE_GLOW_ON = true;
   try {
   const c0 = cx * CH, r0 = cz * CH;
   if (!only || only.has(0)) {
@@ -13539,6 +13559,8 @@ function buildPieces(cx, cz, ch, only = null) {
     if (pd) for (const q of pd) if (q.hang) drawProp(q, false);
   }
   ch.build = bufBuild.mesh(buildMat);
+  ch.pglow = PIECE_GLOW.mesh(glowMat);   // (v618: the wall lanterns' glass)
+  GLOW = glowSv; PIECE_GLOW_ON = false;
   ch.buildGI = ch.build ? giGeo(bufBuild, giCuts, bufGIProxy) : null;
   ch.glass = glassMesh(bufGlass);
   }
@@ -13579,7 +13601,7 @@ function buildPieces(cx, cz, ch, only = null) {
     if (ch['up' + k]) ch['up' + k].castHidden = true;
     ch['glass' + k] = glassMesh(bufGlass);
   }
-  } finally { GLASSB = null; }
+  } finally { GLASSB = null; GLOW = glowSv; PIECE_GLOW_ON = false; }
 }
 // a chunk's pieces built again, every story's mesh swapped in
 function setPieces(ch, only = null) {
@@ -13587,7 +13609,7 @@ function setPieces(ch, only = null) {
   buildPieces(ch.cx, ch.cz, tmp, only);
   if (!only || only.has(0)) {
     ch.buildGI = tmp.buildGI;
-    swapMesh(ch, 'build', tmp.build); swapMesh(ch, 'glass', tmp.glass || null);
+    swapMesh(ch, 'build', tmp.build); swapMesh(ch, 'glass', tmp.glass || null); swapMesh(ch, 'pglow', tmp.pglow || null);
   }
   for (let k = 1; k <= STORY_MAX; k++) if ((!only || only.has(k)) && (tmp['up' + k] || ch['up' + k] || tmp['glass' + k] || ch['glass' + k] || tmp['inUp' + k] || ch['inUp' + k])) {
     swapMesh(ch, 'inUp' + k, tmp['inUp' + k] || null);   // (shown or not by swapMesh: interiorShown)
@@ -14239,7 +14261,7 @@ function roomsSettled(c, r) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3, ch.inObj, ch.inGlow, ch.inUp1, ch.inUp2, ch.inUp3].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.pglow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3, ch.inObj, ch.inGlow, ch.inUp1, ch.inUp2, ch.inUp3].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -17771,6 +17793,7 @@ function updateFx(dt) {
   fxRun.density = T.density;
   fxParts.wind[0] = SMOKE.wind; fxParts.wind[2] = SMOKE.wind * 0.35;
   for (const k in FLAME_WAVE) FLAME_U[k].value = FLAME_WAVE[k];
+  FLAME_U.paneCol.value.set(LANTERN_GLASS.color); FLAME_U.pane.value = LANTERN_GLASS.bright;
   fxParts.wave[0] = LAVA_FX.ripple; fxParts.wave[1] = Math.max(0.2, LAVA_FX.rippleSize); fxParts.wave[2] = LAVA_U.ripT.value;
   if (dt > 0) fxRun.update(dt);
   if (dt > 0) lavaBubbles(dt);
@@ -18223,7 +18246,7 @@ function updateGrottoFx(dt) {
 // licking up off the logs (turning to smoke as they die), embers drifting up, and smoke rising out of the top of a
 // hearth's chimney stack, all looping while you're within PROP_FIRE.reach tiles; each also lights the room round
 // it with a flickering lamp light (kind 4 in updateLamps). The fires drawn into the props stay under them.
-const PROP_FIRE = { on: 1, reach: 30, flames: 1, size: 1.65, embers: 0.45, smoke: 1, smokeSize: 0.85, light: 1, flicker: 1 };   // (Jordan's values, v617)
+const PROP_FIRE = { on: 1, reach: 30, flames: 2.4, size: 1.1, embers: 0.45, smoke: 1.7, smokeSize: 0.95, light: 1, flicker: 1 };   // (Jordan's values, v618)
 let propFires = [], propFireT = 0, heroBld = null;   // (heroBld: the building you're in, if any)
 const propFireAcc = new Map();
 // every hearth and brazier placed, with its fire's spot in the world (refreshed every couple of seconds)
@@ -26681,6 +26704,10 @@ const TUNING = [
     [GROTTO, 'fallSpeed', 'Waterfall: speed', 0.1, 4, 0.05],
     [GROTTO, 'fallColor', 'Waterfall: colour', 'color'],
   ]],
+  ['Lantern glass', [
+    [LANTERN_GLASS, 'color', 'Street lamps\' and wall lanterns\' glass: colour', 'color'],
+    [LANTERN_GLASS, 'bright', 'Their glass: brightness (×)', 0, 10, 0.05],
+  ]],
   ['Hearth fires', [
     [PROP_FIRE, 'on', 'Town hearths and braziers burn in the GPU effects (0 off)', 0, 1, 1],
     [PROP_FIRE, 'reach', 'Played within this many tiles of you', 6, 60, 1],
@@ -27398,7 +27425,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 617, crashSeen = new Map();
+const GAME_VERSION = 618, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
