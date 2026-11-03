@@ -10128,6 +10128,7 @@ function buildSpray() {
   let seed = 0;
   for (const f of falls) {
     if (Math.abs(f.x - H.x) > SPRAY_R || Math.abs(f.z - H.z) > SPRAY_R) continue;
+    if (f.small && FOUNT_FX.on > 0.5 && FX_TUNE.on > 0.5) continue;   // (v599: fountains splash in the GPU particles)
     for (const [mist, slots] of [[0, SPRAY_SLOTS], [1, SPRAY_SLOTS / 2]]) for (let k = 0; k < slots; k++) {
       const sd = (++seed * 0.6180339887) % 1;
       for (const [cx, cz] of C) { pos.push(f.x, f.y, f.z); dir.push(f.dx, f.dz, f.drop); part.push(k, sd, mist + (f.small ? 2 : 0)); corner.push(cx, cz); }
@@ -17571,6 +17572,7 @@ function updateFx(dt) {
   fxRun.density = T.density;
   fxParts.wind[0] = SMOKE.wind; fxParts.wind[2] = SMOKE.wind * 0.35;
   if (dt > 0) fxRun.update(dt);
+  updateFountainFx(dt);
   fxParts.update(dt);
   const want = T.lights > 0.5 ? fxRun.lights.slice().sort((a, b) => b.k - a.k) : [];
   fxLights.forEach((l, i) => {
@@ -17752,6 +17754,88 @@ function fxChips(x, y, z, kind, n) {
     fxParts.spawn({ style: kind === 'wood' ? GFX.FX.SHARD : GFX.FX.CHUNK, x, y, z, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 2,
       life: 1.1 + Math.random() * 0.5, size0: 0.045, size1: 0.04, grav: 1, drag: 0.3, bounce: 0.3, floor: gy, spin: (Math.random() - 0.5) * 24,
       ramp, tone0: tone, tone1: tone });
+  }
+}
+// ---------- Fountain water effects (T > Fountain water) ----------
+// (2026-11-03, Jordan) the large towns' fountains, in the GPU particles: white water and beads where each stream
+// spills over the bowl's lip, droplets shed along the stream as it arcs down, and where it lands in the basin
+// a splash thrown back up, ripples spreading, and a low mist that drifts off over the basin's rim. A fountain
+// only plays while you're within FOUNT_FX.reach tiles of it, fading out over the last few; with it on, the old
+// spray mesh leaves fountains alone.
+const FOUNT_FX = { on: 1, reach: 34, lip: 1, beads: 1, shed: 1, splash: 1, ripples: 1, mist: 1, mistSize: 1 };
+fxParts.ramp('foam', ['#4a7a96', '#6a9ab4', '#8cb8cc', '#aed2e0', '#c8e4ee', '#dcf0f6', '#eef8fb', '#ffffff']);
+const fountAcc = new Map();   // fractional spawns carried over, by fountain and kind
+// where a fountain's stream k is u (0 at the lip, 1 at the basin) along its arc: [x, y, z] and its velocity there
+function fountStream(x, y0, z, k, u) {
+  const a = k / FOUNT.streams * Math.PI * 2, sx = Math.sin(a), sz = Math.cos(a), H = FOUNT.bowlY + 0.03 - FOUNT.basinY;
+  const rr = FOUNT.lip + FOUNT.out * Math.sqrt(u), y = y0 + FOUNT.bowlY + 0.03 - H * u * u;
+  // (the stream takes about half a second over its drop: its speed along the arc from how the arc is drawn)
+  const dur = 0.42, du = 1 / dur, dr = FOUNT.out * 0.5 / Math.sqrt(Math.max(u, 0.02)) * du, dy = -2 * H * u * du;
+  return { x: x + sx * rr, y, z: z + sz * rr, vx: sx * dr, vy: dy, vz: sz * dr, sx, sz };
+}
+function updateFountainFx(dt) {
+  const F = FOUNT_FX;
+  if (F.on < 0.5 || FX_TUNE.on < 0.5 || dt <= 0) return;
+  const foam = fxParts.ramp('foam'), water = fxParts.ramp('water'), dens = FX_TUNE.density;
+  const P = (o) => fxParts.spawn(o), rnd = (a, b) => a + Math.random() * (b - a);
+  for (const t of towns) {
+    if (t.tier !== 2) continue;
+    const x = t.c + 0.5, z = t.r + 0.5, d = Math.hypot(x - H.x, z - H.z);
+    if (d > F.reach) continue;
+    const near = Math.min(1, (F.reach - d) / 6), y0 = LV[T(t.c, t.r)] * STEP, wy = y0 + FOUNT.basinY, by = y0 + FOUNT.bowlY;
+    let acc = fountAcc.get(t);
+    if (!acc) { acc = {}; fountAcc.set(t, acc); }
+    // how many of a kind to spawn this frame (rate a second for the whole fountain)
+    const due = (key, rate) => { acc[key] = (acc[key] || 0) + rate * dt * dens * near; const n = Math.floor(acc[key]); acc[key] -= n; return n; };
+    const stream = () => Math.floor(Math.random() * FOUNT.streams);
+    // at the lip: white water breaking over the rim, and beads that run off ahead of the stream
+    for (let i = due('lip', 40 * F.lip); i--;) {
+      const s = fountStream(x, y0, z, stream(), rnd(0, 0.08)), side = rnd(-1, 1) * FOUNT.width * 0.6;
+      P({ style: GFX.FX.PUFF, x: s.x + s.sz * side, y: s.y + 0.015, z: s.z - s.sx * side, vx: s.vx * 0.15 + rnd(-0.05, 0.05), vy: rnd(0.02, 0.1), vz: s.vz * 0.15 + rnd(-0.05, 0.05),
+        life: rnd(0.25, 0.45), size0: 0.03, size1: rnd(0.06, 0.09), drag: 3, ramp: foam, tone0: 1, tone1: 0.85, alpha: 0.55 });
+    }
+    for (let i = due('bead', 10 * F.beads); i--;) {
+      const s = fountStream(x, y0, z, stream(), 0.02);
+      P({ style: GFX.FX.DROP, x: s.x, y: s.y + 0.01, z: s.z, vx: s.vx * rnd(1, 1.25) + rnd(-0.08, 0.08), vy: rnd(0, 0.15), vz: s.vz * rnd(1, 1.25) + rnd(-0.08, 0.08),
+        life: 0.6, size0: 0.022, size1: 0.02, grav: 1, floor: wy, stretch: 0.06, ramp: foam, tone0: 0.9, tone1: 0.75, glow: 0.15 });
+    }
+    // a sun glint on the lip now and then
+    for (let i = due('glint', 3 * F.lip); i--;) {
+      const s = fountStream(x, y0, z, stream(), rnd(0, 0.3));
+      P({ style: GFX.FX.GLINT, x: s.x, y: s.y + 0.02, z: s.z, life: rnd(0.25, 0.4), size0: 0.07, size1: 0.03, ramp: foam, tone0: 1, tone1: 1, glow: 1.6 * Math.max(0.15, sunDir[1]) });
+    }
+    // droplets shed off the stream on the way down, flung a little wider
+    for (let i = due('shed', 34 * F.shed); i--;) {
+      const s = fountStream(x, y0, z, stream(), rnd(0.15, 0.85)), j = rnd(-0.25, 0.25);
+      P({ style: GFX.FX.DROP, x: s.x, y: s.y, z: s.z, vx: s.vx * 0.6 + s.sx * rnd(0.1, 0.35) + s.sz * j, vy: s.vy * 0.5, vz: s.vz * 0.6 + s.sz * rnd(0.1, 0.35) - s.sx * j,
+        life: 0.5, size0: 0.018, size1: 0.016, grav: 1, floor: wy, stretch: 0.05, ramp: foam, tone0: 0.85, tone1: 0.7, glow: 0.1 });
+    }
+    // where it lands: a splash thrown back up, white water, ripples, mist
+    for (let i = due('splash', 60 * F.splash); i--;) {
+      const s = fountStream(x, y0, z, stream(), 1), a = Math.random() * 6.283, sp = rnd(0.15, 0.7);
+      P({ style: GFX.FX.DROP, x: s.x, y: wy + 0.01, z: s.z, vx: Math.cos(a) * sp + s.sx * 0.25, vy: rnd(0.7, 1.7), vz: Math.sin(a) * sp + s.sz * 0.25,
+        life: rnd(0.35, 0.6), size0: 0.02, size1: 0.016, grav: 1, floor: wy, stretch: 0.05, ramp: foam, tone0: 0.9, tone1: 0.75, glow: 0.12 });
+    }
+    for (let i = due('foam', 30 * F.splash); i--;) {
+      const s = fountStream(x, y0, z, stream(), 1);
+      P({ style: GFX.FX.PUFF, x: s.x + rnd(-0.05, 0.05), y: wy + 0.02, z: s.z + rnd(-0.05, 0.05), vx: rnd(-0.15, 0.15), vy: rnd(0.05, 0.2), vz: rnd(-0.15, 0.15),
+        life: rnd(0.3, 0.5), size0: 0.04, size1: rnd(0.09, 0.13), drag: 3, ramp: foam, tone0: 1, tone1: 0.85, alpha: 0.6 });
+    }
+    for (let i = due('ripple', 7 * F.ripples); i--;) {
+      const s = fountStream(x, y0, z, stream(), 1);
+      P({ style: GFX.FX.RING, x: s.x, y: wy - 0.025, z: s.z, life: rnd(0.8, 1.1), size0: 0.05, size1: rnd(0.3, 0.42), ramp: foam, tone0: 1, tone1: 0.8, alpha: 0.55, glow: 0.25, cover: 0.35, stretch: 0.22 });
+    }
+    for (let i = due('mist', 14 * F.mist); i--;) {
+      const s = fountStream(x, y0, z, stream(), 1), m = F.mistSize;
+      P({ style: GFX.FX.PUFF, x: s.x + rnd(-0.1, 0.1), y: wy + rnd(0.03, 0.15), z: s.z + rnd(-0.1, 0.1), vx: s.sx * rnd(0.05, 0.25), vy: rnd(0.12, 0.3), vz: s.sz * rnd(0.05, 0.25),
+        life: rnd(1.4, 2.2), size0: 0.1 * m, size1: rnd(0.35, 0.5) * m, drag: 1.2, grav: -0.02, turb: 0.25, ramp: water, tone0: 0.97, tone1: 0.92, alpha: 0.22 });
+    }
+    // and a little mist breaking off the lip as well
+    for (let i = due('lipMist', 4 * F.mist); i--;) {
+      const s = fountStream(x, y0, z, stream(), rnd(0, 0.2)), m = F.mistSize;
+      P({ style: GFX.FX.PUFF, x: s.x, y: s.y, z: s.z, vx: s.sx * rnd(0.05, 0.15), vy: rnd(0.05, 0.15), vz: s.sz * rnd(0.05, 0.15),
+        life: rnd(1, 1.5), size0: 0.06 * m, size1: rnd(0.22, 0.32) * m, drag: 1.2, turb: 0.2, ramp: water, tone0: 0.97, tone1: 0.92, alpha: 0.16 });
+    }
   }
 }
 const GRAV = 9;
@@ -25983,6 +26067,17 @@ const TUNING = [
     [FX_TUNE, 'bleed', 'A bleed 1.5 tiles ahead', 'action', () => fxTry('bleed', 1.5, 0, true)],
     [FX_TUNE, 'clear', 'Clear every effect', 'action', () => { fxRun.stopAll(); fxParts.clear(); }],
   ]],
+  ['Fountain water', [
+    [FOUNT_FX, 'on', 'Fountain splashes and mist in the GPU effects (0: the old spray)', 0, 1, 1, () => buildSpray()],
+    [FOUNT_FX, 'reach', 'Played within this many tiles of you', 8, 60, 1],
+    [FOUNT_FX, 'lip', 'White water breaking over the bowl\'s lip (×)', 0, 3, 0.05],
+    [FOUNT_FX, 'beads', 'Beads running off the lip (×)', 0, 3, 0.05],
+    [FOUNT_FX, 'shed', 'Droplets shed off the streams on the way down (×)', 0, 3, 0.05],
+    [FOUNT_FX, 'splash', 'Splash where the streams land (×)', 0, 3, 0.05],
+    [FOUNT_FX, 'ripples', 'Ripples spreading from where they land (×)', 0, 3, 0.05],
+    [FOUNT_FX, 'mist', 'Mist (×)', 0, 3, 0.05],
+    [FOUNT_FX, 'mistSize', 'Mist puff size (×)', 0.3, 3, 0.05],
+  ]],
   ['Ambient life', [
     [AMBIENT, 'butterflies', 'Meadow butterflies by day (0 off)', 0, 2, 0.05],
     [AMBIENT, 'bfSize', 'Butterflies: size', 0.02, 0.4, 0.01],
@@ -26709,7 +26804,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 598, crashSeen = new Map();
+const GAME_VERSION = 599, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
