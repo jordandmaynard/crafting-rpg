@@ -291,6 +291,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v638:** (Jordan: a fringe round the thatched roofs) Thatched roofs carry on past the walls as a fringe (thatchFringe): THATCH.fringe (0.25) of a tile further down the roof's own slope, so the straw map runs on unbroken, its lower edge cut into ragged points of straw (THATCH.teeth a tile, THATCH.ragged), mitred round outer and inner corners. It's part of the roof's mesh, so it hides with the roof and blocks nothing; it replaces the thatch's dark fascia. T > Thatch roofs: fringe, points, ragged.
 
 **v639:** (Jordan: make up some of the land lost to the continents) The world is 1216 x 1216 tiles (was 1024 x 1024): about 41% more land, room for a few more towns; generation takes about 40% longer and the world's data about 40% more memory.
+**v640:** (Jordan) A lake's dirt beach is 50% steeper (0.27 under its level at the edge, was 0.18), so it reaches into the water; the sea's sand beaches and shoals are unchanged.
 
 **v598:** (Jordan: the thin candelabras should be passable) Candle stands are thin props now, so you walk over their tiles as you do seats and the vault door.
 
