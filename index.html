@@ -7301,6 +7301,7 @@ function quad(a, b, c, d, ca, cb = ca, cc = cb, cd = ca) { tri(a, b, c, ca, cb, 
 const dummy = new GFX.Object3D();
 const G = {
   box: new GFX.BoxGeometry(1, 1, 1),
+  cone3: new GFX.ConeGeometry(0.5, 1, 3),
   cone4: new GFX.ConeGeometry(0.5, 1, 4),
   cone6: new GFX.ConeGeometry(0.5, 1, 6),
   cyl6: new GFX.CylinderGeometry(0.5, 0.5, 1, 6),
@@ -8138,87 +8139,91 @@ fn pushAt(p: vec2f) -> vec2f {
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
-// ---------- Leaves (v566, Jordan: treatments to try on oaks, birches and pines; T > Trees) ----------
+// ---------- Leaves (v566-v567, Jordan: treatments to try on oaks, birches and pines; T > Trees) ----------
 // Their crowns are drawn with leafMat, which can (1) shade each clump smooth, as if round, instead of faceted (smooth,
 // 0 faceted .. 1 smooth); (2) flutter them in the wind like the grass and sails (flutter, how far in tiles; flutterSpeed);
-// (3) cut leaf-shaped negative space out of them so you see through parts (holes, 0 none .. 1 the most), more of it
-// toward each clump's edge as you see it (holeEdge), in leaves of each tree's own shape and size (oakLeaf, birchLeaf,
-// pineLeaf: a leaf's size in tiles; oaks' lobed, birches' small and pointed, pines' fans of needles), and in their
-// shadows too (holeShadow 1). Through a hole you see the inside of the clump, a shade darker (inside).
-const LEAF = { smooth: 1, flutter: 0.025, flutterSpeed: 1, holes: 0.45, holeEdge: 0.6, oakLeaf: 0.16, birchLeaf: 0.1, pineLeaf: 0.14, holeShadow: 1, inside: 0.62 };
+// (3) cut leaf-shaped negative space out of them so you see through parts. (v567) Each leaf is a soft gradient, 1 at its
+// middle, 0.5 at its edge, fading to 0 outside it, and the crown is cut wherever the leaves' gradient falls under the
+// cutoff (0 nothing cut; 0.5 the leaves at their own size; higher, smaller leaves and more space between them), more
+// toward each clump's edge as you see it (cutEdge). Each tree's own leaf at its own size (oakLeaf, birchLeaf, pineLeaf,
+// tiles): oaks' lobed ovals and birches' small pointed leaves laid on the side each clump faces most; pines' fans of
+// needles laid flat on each face of a tier, facing out from the trunk and opening upward. The gaps are in the shadows
+// too (holeShadow 1). Through a gap you see the inside of the clump (inside, its brightness). outline 0: the leaves get
+// no outline strokes (the trunks keep theirs).
+const LEAF = { smooth: 1, flutter: 0.03, flutterSpeed: 0.35, cutoff: 0.5, cutEdge: 0, oakLeaf: 0.21, birchLeaf: 0.105, pineLeaf: 0.31, holeShadow: 1, inside: 1.5, outline: 1 };
 const LEAF_U = {
   windV: PLANT_U.windV,
-  lfA: { value: { x: 1, y: 0.025, z: 1, w: 0.45 } },    // smooth, flutter, flutterSpeed, holes
-  lfB: { value: { x: 0.6, y: 0.16, z: 0.1, w: 0.14 } },  // holeEdge, oak/birch/pine leaf size
-  lfC: { value: { x: 1, y: 0.62, z: 0, w: 0 } },         // holeShadow, inside
+  lfA: { value: { x: 1, y: 0.03, z: 0.35, w: 0.5 } },    // smooth, flutter, flutterSpeed, cutoff
+  lfB: { value: { x: 0, y: 0.21, z: 0.105, w: 0.31 } },  // cutEdge, oak/birch/pine leaf size
+  lfC: { value: { x: 1, y: 1.5, z: 1, w: 0 } },          // holeShadow, inside, outline
 };
 function updateLeafU() {
   const L = LEAF, a = LEAF_U.lfA.value, b = LEAF_U.lfB.value, c = LEAF_U.lfC.value;
-  a.x = L.smooth; a.y = L.flutter; a.z = L.flutterSpeed; a.w = L.holes;
-  b.x = L.holeEdge; b.y = Math.max(0.01, L.oakLeaf); b.z = Math.max(0.01, L.birchLeaf); b.w = Math.max(0.01, L.pineLeaf);
-  c.x = L.holeShadow; c.y = L.inside;
+  a.x = L.smooth; a.y = L.flutter; a.z = L.flutterSpeed; a.w = L.cutoff;
+  b.x = L.cutEdge; b.y = Math.max(0.01, L.oakLeaf); b.z = Math.max(0.01, L.birchLeaf); b.w = Math.max(0.01, L.pineLeaf);
+  c.x = L.holeShadow; c.y = L.inside; c.z = L.outline;
 }
 const LEAF_WGSL = /* wgsl */ `
 fn lfHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
 fn lfHash2(p: vec2f) -> vec2f { return fract(sin(vec2f(dot(p, vec2f(127.1, 311.7)), dot(p, vec2f(269.5, 183.3)))) * 43758.5453); }
-fn lfHash3(p: vec3f) -> f32 { return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453); }
-fn lfNoise(p: vec3f) -> f32 {
-  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
-  let a = mix(mix(lfHash3(i), lfHash3(i + vec3f(1.0, 0.0, 0.0)), u.x), mix(lfHash3(i + vec3f(0.0, 1.0, 0.0)), lfHash3(i + vec3f(1.0, 1.0, 0.0)), u.x), u.y);
-  let b = mix(mix(lfHash3(i + vec3f(0.0, 0.0, 1.0)), lfHash3(i + vec3f(1.0, 0.0, 1.0)), u.x), mix(lfHash3(i + vec3f(0.0, 1.0, 1.0)), lfHash3(i + vec3f(1.0, 1.0, 1.0)), u.x), u.y);
-  return mix(a, b, u.z);
-}
-// one leaf, in its own frame (its length 1 along x, its middle at 0): below 0 inside it
-fn leafShape(q: vec2f, kind: i32) -> f32 {
+// one leaf, in its own frame (its length 1 along x, its middle at 0): how far out from its middle, 1 at its edge
+fn leafR(q: vec2f, kind: i32) -> f32 {
   if (kind == 0) {
     // an oak's: an oval with rounded lobes round its edge
     let a = atan2(q.y, q.x);
-    return length(q * vec2f(1.0, 1.55)) - 0.5 * (0.84 + 0.16 * cos(a * 7.0));
+    return length(q * vec2f(1.0, 1.55)) / (0.5 * (0.84 + 0.16 * cos(a * 7.0)));
   }
   if (kind == 1) {
-    // a birch's: small and pointed, widest nearer its stalk
-    let x = q.x + 0.5;
-    if (x <= 0.0 || x >= 1.0) { return 1.0; }
-    return abs(q.y) - 0.34 * pow(x, 0.7) * (1.0 - x) * 1.6;
+    // a birch's: small, widest by its stalk, narrowing to a point
+    let wy = max(0.27 * (1.0 - 0.6 * (q.x + 0.5)), 0.04);
+    return length(vec2f(q.x / 0.5, q.y / wy));
   }
-  // a pine's: a fan of five needles from a twig at the middle
+  // a pine's: a fan of five needles from a twig at the middle, opening upward
   let r = length(q);
-  if (r > 0.55) { return 1.0; }
   let a = atan2(q.y, q.x);
-  var d = 1.0;
+  var d = 9.0;
   for (var k = 0; k < 5; k++) {
-    let ak = f32(k) * 0.42 - 0.84 + 1.5708;
-    let off = a - ak;
-    if (cos(off) > 0.0) { d = min(d, r * abs(sin(off)) - 0.04); }
+    let off = a - (f32(k) * 0.42 - 0.84 + 1.5708);
+    if (cos(off) > 0.0) { d = min(d, max(r * abs(sin(off)) / 0.04, r / 0.55)); }
   }
   return d;
 }
-// is p (in leaves) on a leaf? one to a cell, jittered, turned and sized at random; any of the nine round it may reach
-fn leafCover(p: vec2f, kind: i32) -> bool {
+// the leaves' gradient at p (in leaves): one to a cell, jittered, turned (a pine's fan only a little, to stay
+// upright) and sized at random; the strongest of the nine round it
+fn leafCover(p: vec2f, kind: i32) -> f32 {
   let id = floor(p);
+  var g = 0.0;
   for (var j = -1; j <= 1; j++) {
     for (var i = -1; i <= 1; i++) {
       let c = id + vec2f(f32(i), f32(j));
       let h = lfHash2(c);
       let ctr = c + 0.5 + (h - 0.5) * 0.6;
-      let ang = h.x * 6.2832 + h.y * 3.0;
+      let ang = select(h.x * 6.2832 + h.y * 3.0, (h.x - 0.5) * 0.7, kind == 2);
       let sz = 0.8 + 0.4 * lfHash(c + vec2f(17.0, 5.0));
       let d = p - ctr; let cs = cos(ang); let sn = sin(ang);
-      if (leafShape(vec2f(d.x * cs + d.y * sn, d.y * cs - d.x * sn) / sz, kind) < 0.0) { return true; }
+      g = max(g, 1.0 - 0.5 * leafR(vec2f(d.x * cs + d.y * sn, d.y * cs - d.x * sn) / sz, kind));
     }
   }
-  return false;
+  return g;
 }
-// is this point of a crown (world w, the clump's smooth normal n) cut away? amount: how much of it may be (0..1+):
-// patches where a soft noise lets it, and there between the leaves, laid on the plane the clump faces most
-fn leafCut(w: vec3f, n: vec3f, kind: i32, amount: f32) -> bool {
-  if (amount <= 0.0 || kind > 2) { return false; }
-  if (lfNoise(w * 1.7 + vec3f(f32(kind) * 13.0)) > amount) { return false; }
+// is this point of a crown cut away? w where it rests, n its clump's smooth normal, nr its face's (unnormalized),
+// cut the cutoff
+fn leafCut(w: vec3f, n: vec3f, nr: vec3f, kind: i32, cut: f32) -> bool {
+  if (cut <= 0.0 || kind > 2) { return false; }
   let s = select(select(U.lfB.w, U.lfB.z, kind == 1), U.lfB.y, kind == 0);
-  let an = abs(n);
   var uv = w.xy;
-  if (an.x >= an.y && an.x >= an.z) { uv = w.zy; } else if (an.y >= an.z) { uv = w.xz; }
-  return !leafCover(uv / s, kind);
+  if (kind == 2) {
+    // a pine tier's face: across it level, and up it
+    let f = nr / max(length(nr), 1e-8);
+    let t = normalize(vec3f(-f.z, 0.0, f.x) + vec3f(1e-6, 0.0, 0.0));
+    var b = cross(f, t);
+    if (b.y < 0.0) { b = -b; }
+    uv = vec2f(dot(w, t), dot(w, b));
+  } else {
+    let an = abs(n);
+    if (an.x >= an.y && an.x >= an.z) { uv = w.zy; } else if (an.y >= an.z) { uv = w.xz; }
+  }
+  return leafCover(uv / s, kind) < cut;
 }
 // the wind: the crown leaning with the gusts that run across the land (as the grass does), and a quicker flutter;
 // a smooth field of where things are, so a tier and the snow on it move together
@@ -8233,7 +8238,7 @@ fn leafSway(w: vec3f) -> vec3f {
 }
 `;
 const leafMat = new GFX.ShaderMaterial({ uniforms: LEAF_U, vertexColors: true, side: GFX.DoubleSide, attributes: { lf: 'vec4f' }, lit: true,
-  // (its shadow sways with it and has the holes too, when holeShadow is on: a fragment stage in the shadow map)
+  // (its shadow sways with it and has the gaps too, when holeShadow is on: a fragment stage in the shadow map)
   shadowFrag: true,
   shadowCode: LEAF_WGSL + /* wgsl */ `
 struct SOut { @builtin(position) pos: vec4f, @location(0) rest: vec3f, @location(1) sn: vec3f, @location(2) @interpolate(flat) kind: f32 }
@@ -8242,9 +8247,10 @@ struct SOut { @builtin(position) pos: vec4f, @location(0) rest: vec3f, @location
   return SOut(F.viewProj * vec4f(leafSway(r), 1.0), r, (O.model * vec4f(v.lf.xyz, 0.0)).xyz, v.lf.w);
 }
 @fragment fn fs(i: SOut) {
+  let nr = cross(dpdx(i.rest), dpdy(i.rest));
   let kind = i32(i.kind + 0.5);
-  if (U.lfC.x > 0.5 && U.lfA.w > 0.0 && kind <= 2 && length(i.sn) > 0.5) {
-    if (leafCut(i.rest, normalize(i.sn), kind, U.lfA.w)) { discard; }
+  if (U.lfC.x > 0.5 && kind <= 2 && length(i.sn) > 0.5) {
+    if (leafCut(i.rest, normalize(i.sn), nr, kind, U.lfA.w)) { discard; }
   }
 }`,
   code: LEAF_WGSL + /* wgsl */ `
@@ -8257,22 +8263,24 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
 }
 @fragment fn fs(i: VOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
   let Nf = flatNormal(i.eye);
+  let nr = cross(dpdx(i.rest), dpdy(i.rest));
   let kind = i32(i.kind + 0.5);
   let sl = length(i.sn);
   var N = Nf;
   if (sl > 0.5) {
     let n = i.sn / sl;
-    // (on the inside of a clump, seen through a hole, its normal turned to face you)
+    // (on the inside of a clump, seen through a gap, its normal turned to face you)
     let Ns = select(-n, n, front);
     N = normalize(mix(Nf, Ns, U.lfA.x));
-    if (U.lfA.w > 0.0 && kind <= 2) {
+    if (kind <= 2) {
       let e = 1.0 - abs(dot(n, normalize(-i.eye)));
-      if (leafCut(i.rest, n, kind, U.lfA.w * mix(1.0, 2.0 * e, U.lfB.x))) { discard; }
+      if (leafCut(i.rest, n, nr, kind, select(0.0, mix(U.lfA.w, 1.0, U.lfB.x * e), U.lfA.w > 0.0))) { discard; }
     }
   }
   let albedo = i.color * select(U.lfC.y, 1.0, front);
   let c = shadeLitN(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, Nf, O.emissive.w > 0.5);
-  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+  // (alpha 0, as the grass writes: no outline strokes on it, when outline is off)
+  return vec4f(applyFog(c, viewDepth(i.world)), select(0.0, 1.0, U.lfC.z > 0.5));
 }`,
 });
 // what presses into the trample map this frame: you (a wide sweep while whirling), and the foes walking near you
@@ -10550,7 +10558,8 @@ const TS = 1.3;
 const TREE_SIZE = { oak: 1.8, birch: 1.8, pine: 1.8, fern: 2.35, swamp: 1.2, grave: 1.1 };
 function pine(x, z, k, snow = false) {
   const P = TREE_SIZE.pine, y = groundAt(x, z), hgt = (1 + k * 0.7) * TS * P, g = shade(CC(snow ? '#2f5048' : '#2f5a34'), 0.85 + k * 0.3);
-  part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
+  // (v567, Jordan) the trunk all the way up to the top tier's tip, a tapering three-sided spike
+  { const top = y + 0.38 * P + hgt * 0.905, foot = y - 0.05; part(G.cone3, '#5a3a22', x, (top + foot) / 2, z, { sx: 0.24 * P, sy: top - foot, sz: 0.24 * P, ry: k * 3 }); }
   for (let i = 0; i < 3; i++) {
     const w = (0.75 - i * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + i * hgt * 0.24 + hgt * 0.2;
     LEAF_KIND = 2;
@@ -25040,13 +25049,14 @@ const TUNING = [
     [LEAF, 'smooth', 'Oak, birch and pine leaves: smooth shading (0 faceted, 1 smooth)', 0, 1, 0.01],
     [LEAF, 'flutter', 'Leaves: flutter in the wind (tiles)', 0, 0.15, 0.005],
     [LEAF, 'flutterSpeed', 'Leaves: flutter speed', 0, 4, 0.05],
-    [LEAF, 'holes', 'Leaves: see-through gaps between leaves (0 none)', 0, 1, 0.01],
-    [LEAF, 'holeEdge', 'Leaves: gaps gathered toward the crowns\' edges (0 even)', 0, 1, 0.01],
+    [LEAF, 'cutoff', 'Leaves: cutoff of the leaves\' soft gradient (0 nothing cut, 0.5 leaves at their size, higher more space between)', 0, 1, 0.01],
+    [LEAF, 'cutEdge', 'Leaves: cutoff raised toward the crowns\' edges (0 even)', 0, 1, 0.01],
     [LEAF, 'oakLeaf', 'Leaves: oak leaf size (tiles)', 0.03, 0.6, 0.005],
     [LEAF, 'birchLeaf', 'Leaves: birch leaf size (tiles)', 0.03, 0.6, 0.005],
     [LEAF, 'pineLeaf', 'Leaves: pine needle fan size (tiles)', 0.03, 0.6, 0.005],
     [LEAF, 'holeShadow', 'Leaves: gaps in their shadows too (0 off, 1 on)', 0, 1, 1],
     [LEAF, 'inside', 'Leaves: the crown\'s inside, seen through a gap (brightness)', 0, 1.5, 0.01],
+    [LEAF, 'outline', 'Leaves: outline strokes (0 off; the trunks keep theirs)', 0, 1, 1],
   ]],
   ['Graveyard spiders', [
     [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],
@@ -25882,7 +25892,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 566, crashSeen = new Map();
+const GAME_VERSION = 567, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
