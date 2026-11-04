@@ -416,6 +416,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v720:** (Jordan) A painted foot locker (moss green, madder red, woad blue or ochre) opens in a window in its own paint. The paint goes over the painting with the color blend, so the painting's light and shade stay and the paint gives the hue. It goes through a mask (ui/locker/locker-wood-mask.webp, made by art/src/foot-locker-wood-mask.py from the kit's source) that covers the wood, wells and blanket and leaves the iron brackets, straps, brass hinges and rivets bare. Bare-wood lockers look as before.
 
+**v721:** (Jordan) Every inventory count (the backpack's 0 / 20 and the crate, foot locker, iron chest and vault counts) gets the window titles' treatment (cream ink, black stroke, letter spacing, drop shadow), at one smaller size: WIN_TITLE.countSize 20, tunable in T > Window titles.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
