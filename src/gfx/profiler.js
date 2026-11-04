@@ -11,6 +11,10 @@ export class GpuProfiler {
     this.device = device;
     this.info = adapterInfo;
     this.mode = ''; // set by the game: what's being drawn (resolution, mosaic, post)
+    // (v775) the panel's sections folded shut, by heading: a click on a heading ([data-fold]) toggles it (fold());
+    // onFold, if set, is told after (the game keeps them)
+    this.folded = new Set();
+    this.onFold = null;
     this.hasTimestamps = device.features.has('timestamp-query');
     this.on = false;
     this.names = [];       // this frame's timed passes, in order
@@ -142,6 +146,11 @@ export class GpuProfiler {
 
   // (v768) a count for each frame (sends to the GPU, canvases drawn, KB uploaded): a row of its own in the "Each
   // frame" table, smoothed like the laps
+  fold(name) {
+    if (this.folded.has(name)) this.folded.delete(name); else this.folded.add(name);
+    this.shown = 0;   // (drawn again on the next frame)
+    if (this.onFold) this.onFold(this.folded);
+  }
   count(name, n) {
     if (!this.on) return;
     this.cnt = this.cnt || new Map();
@@ -169,16 +178,35 @@ export class GpuProfiler {
     this.cpuMs += (performance.now() - frameStart - this.cpuMs) * SMOOTH;
     if (!this.on || now - this.shown < 250) return;
     this.shown = now;
+    // (v775) each section foldable by its heading; a folded one keeps its heading, with its total when it has one
+    const F = this.folded;
+    const headRow = (head, unit, sum, cols) => F.has(head)
+      ? `<tr class="pfold" data-fold="${head}"><th>▸ ${head}</th><th>${sum === undefined ? '' : `<b>${sum.toFixed(2)}</b>`}</th>${cols > 2 ? '<th></th>' : ''}</tr>`
+      : `<tr class="pfold" data-fold="${head}"><th>▾ ${head}</th><th>${unit}</th>${cols > 2 ? '<th></th>' : ''}</tr>`;
     const table = (head, unit, rows, sumLabel, sum) => {
+      if (F.has(head)) return `<table>${headRow(head, unit, sum, 3)}</table>`;
       const max = Math.max(0.001, ...rows.map((r) => r[1]));
-      return `<table><tr><th>${head}</th><th>${unit}</th><th></th></tr>` +
+      return `<table>${headRow(head, unit, sum, 3)}` +
         rows.map(([nm, ms]) => `<tr><td>${nm}</td><td><b>${ms.toFixed(2)}</b></td><td class="ptrack"><span class="pbar" style="width:${(ms / max * 100).toFixed(1)}%"></span></td></tr>`).join('') +
         `<tr class="gsum"><td>${sumLabel}</td><td><b>${sum.toFixed(2)}</b></td><td></td></tr></table>`;
     };
+    const plain = (head, unit, rows, digits, note) => F.has(head) ? `<table>${headRow(head, unit, undefined, 2)}</table>`
+      : `<table>${headRow(head, unit, undefined, 2)}` + rows.map(([nm, v]) => `<tr><td>${nm}</td><td><b>${typeof v === 'number' ? v.toFixed(digits) : v}</b></td></tr>`).join('') + '</table>' +
+        (note ? `<div class="gnote">${note}</div>` : '');
     const rows = this.order.map((nm) => [nm, this.ema.get(nm) || 0]);
     const gpuTotal = rows.reduce((a, r) => a + r[1], 0);
     const i = this.info ?? {};
     const gpuName = [i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(' · ') || 'not reported by the browser';
+    const between = [...(this.out || [])];
+    between.push(['idle (main thread waiting)', Math.max(0, this.frameMs - this.cpuMs - [...(this.out || new Map()).values()].reduce((a, v) => a + v, 0))]);
+    between.push(['GPU done, after last submit', this.doneSeen ? this.doneMs : '…']);
+    // (v775) the counts in groups by what they're of, each its own section: encode parts, recorded draw lists, overdraw
+    const groups = new Map([['Each frame', []], ['Encode, by part (ms)', []], ['Recorded draw lists', []], ['Overdraw', []]]);
+    for (const [nm, n] of this.cnt || []) {
+      const g = nm.startsWith('encode:') ? 'Encode, by part (ms)' : nm.startsWith('overdraw:') ? 'Overdraw' : /recorded/.test(nm) ? 'Recorded draw lists' : 'Each frame';
+      groups.get(g).push([nm.replace(/^(encode|overdraw): /, ''), n]);
+    }
+    const NOTES = { 'Each frame': "Work the pass timers can't see: each send to the GPU and each canvas drawn has its own cost in the browser's GPU process, and uploads cross to the GPU before the passes can run." };
     panel.innerHTML =
       `<div class="ptitle">${(1000 / this.frameMs).toFixed(0)} fps · ${this.frameMs.toFixed(1)} ms/frame</div>` +
       `<div class="gpu-name">GPU: ${gpuName}${i.isFallbackAdapter ? ' (software fallback)' : ''}</div>` +
@@ -187,14 +215,8 @@ export class GpuProfiler {
         ? table('GPU pass', 'GPU ms', rows, 'All passes', gpuTotal)
         : `<div class="gnote">This browser doesn't expose GPU timestamps (timestamp-query), so only frame timing is shown.</div>`) +
       table('CPU (JavaScript)', 'CPU ms', [...this.cpu], 'All CPU', this.cpuMs) +
-      `<table><tr><th>Between frames</th><th>ms</th></tr>` +
-      [...(this.out || [])].map(([nm, ms]) => `<tr><td>${nm}</td><td><b>${ms.toFixed(2)}</b></td></tr>`).join('') +
-      `<tr><td>idle (main thread waiting)</td><td><b>${Math.max(0, this.frameMs - this.cpuMs - [...(this.out || new Map()).values()].reduce((a, v) => a + v, 0)).toFixed(2)}</b></td></tr>` +
-      `<tr><td>GPU done, after last submit</td><td><b>${this.doneSeen ? this.doneMs.toFixed(2) : '…'}</b></td></tr></table>` +
-      `<div class="gnote">GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck.</div>` +
-      (this.cnt && this.cnt.size ? `<table><tr><th>Each frame</th><th>count</th></tr>` +
-        [...this.cnt].map(([nm, n]) => `<tr><td>${nm}</td><td><b>${n.toFixed(1)}</b></td></tr>`).join('') + '</table>' +
-        `<div class="gnote">Work the pass timers can't see: each send to the GPU and each canvas drawn has its own cost in the browser's GPU process, and uploads cross to the GPU before the passes can run.</div>` : '') +
+      plain('Between frames', 'ms', between, 2, 'GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck.') +
+      [...groups].filter(([, r]) => r.length).map(([g, r]) => plain(g, g === 'Encode, by part (ms)' ? 'ms' : 'count', r, g === 'Encode, by part (ms)' ? 2 : 1, NOTES[g])).join('') +
       `<div class="gnote">${extra}` +
       (this.hasTimestamps ? ' Chrome rounds GPU times to 0.1 ms unless chrome://flags "WebGPU Developer Features" is on.' : '') + '</div>';
   }

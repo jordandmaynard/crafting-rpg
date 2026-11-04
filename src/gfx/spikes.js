@@ -147,7 +147,8 @@ export class SpikeRecorder {
   html(clockText) {
     this.changed = false;
     const btn = (act, text) => `<button data-spike="${act}">${text}</button>`;
-    let h = `<div class="spike-head"><b>Spike capture</b> ${btn('toggle', this.on ? 'On' : 'Off')}` +
+    // (v775: the heading folds the section, see the game's showSpikes)
+    let h = `<div class="spike-head"><b class="pfold" data-fold="Spike capture">▾ Spike capture</b> ${btn('toggle', this.on ? 'On' : 'Off')}` +
       (this.holding ? btn('resume', 'Resume game') : '') + (this.spikes.length ? btn('clear', 'Clear') : '') + '</div>';
     if (!this.on && !this.spikes.length) {
       return h + `<div class="gnote">On: frames over ${SPIKE_TUNING.ms} ms of CPU are kept, with every call's time` +
