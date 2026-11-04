@@ -392,6 +392,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v707:** (Jordan: the trees in the desert planters should look more like fiddle leaf figs) The basket planters' tree is now a fiddle leaf fig: a slim pale grey-brown trunk with a slight lean and kink, branching at the top into three or four short limbs plus a leader up the middle, each carrying five or six big violin-waisted leaves (broad round tip, narrow waist) spiralling round it. The leaves are their own shape (G.figLeafA/B/U: the two halves of the upper face folded up from the midrib and shaded apart so the fold reads as the rib, a slight wave along the edges, the leaf arching back to its tip, and a paler underside). Lower leaves are bigger and droop, the ones at the tips are smaller, tipped up and a fresher lime. The basket and soil are unchanged; the tree is about as tall and wide as the old ficus.
 
+**v708:** (Jordan's Lit haze paste) HAZE.forward default 0.26 -> 0.19, so the sun scatters a little more evenly; every other Lit haze value already matched.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
