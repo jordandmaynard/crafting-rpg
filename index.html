@@ -7799,7 +7799,7 @@ const O = {
   BUSH: 20, SNOWBUSH: 21, DRYBUSH: 22, GROTTO: 23, GROTTOX: 24, STATUE: 25, STATUEX: 26, WILLOW: 27,
   SEQUOIA: 7,
   FLOWERS: 30, MUSHROOM: 31, REEDS: 32, LILY: 33, GRASS: 34, BONES: 35, LOG: 36, FERN: 37, PUMICE: 38,
-  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60, WORKPROP: 61, BED: 62, BEDX: 63, PROP: 64,
+  TOMB: 40, HOUSE: 41, WELL: 42, LAMP: 43, SHRINE: 45, PLANTER: 46, FOUNTAIN: 47, HEARTH: 50, TANTABLE: 51, WEAPONTABLE: 52, SAWTABLE: 53, GRINDER: 54, SMELTER: 55, TANRACK: 56, STATIONX: 57, CRATE: 58, CHEST: 59, ALCHEMY: 60, WORKPROP: 61, BED: 62, BEDX: 63, PROP: 64, BARREL: 65,
 };
 const OBJ = [];
 for (let i = 0; i < 256; i++) OBJ[i] = { solid: 0 };
@@ -7864,6 +7864,7 @@ def(O.TANRACK, { built: true, name: 'tanning rack', tile: true });
 def(O.STATIONX, { built: true, name: 'station', tile: true });
 def(O.CRATE, { built: true, name: 'wooden crate', tile: true });
 def(O.CHEST, { built: true, name: 'iron chest', tile: true });
+def(O.BARREL, { built: true, name: 'barrel', tile: true });
 def(O.ALCHEMY, { built: true, name: 'alchemy table', tile: true });
 def(O.WORKPROP, { built: true, name: 'workbench', tile: true });   // (v452: a town workshop's, for show)
 def(O.BED, { built: true, name: 'bed', tile: true });
@@ -7886,8 +7887,8 @@ const STATION_KIND = {
   vault: { name: 'BANK VAULT', refine: {}, store: 20 },
   // (v713, Jordan) the world's foot lockers (the chest at a bed's foot): 15 squares, never built
   locker: { name: 'FOOT LOCKER', refine: {}, store: 15 },
-  // (v724, Jordan) the barrels in buildings: 4 squares (2 x 2), never built
-  barrel: { name: 'BARREL', refine: {}, store: 4 },
+  // (v724, Jordan) the barrels in buildings: 4 squares (2 x 2); (v761, Jordan) built too, of logs alone, on one tile
+  barrel: { o: O.BARREL, name: 'BARREL', refine: {}, store: 4, foot: 1 },
 };
 // how many tiles across a station stands (2 but for the crate)
 const stFoot = k => STATION_KIND[k].foot || 2;
@@ -13916,8 +13917,8 @@ function tanRack(x, z, c, r) {
 // flush against any wall beside it (WALL_HALF: how far each kind of wall reaches in from the tile's edge)
 const CRATE_SIZE = 0.72;
 const WALL_HALF = [0, 0.11, 0.06, 0.13, 0.16, 0.06, 0.21, 0.05, 0.05, 0.05, 0.06, 0.06, 0.16];
-function crateAt(c, r) {
-  const h = CRATE_SIZE / 2, n = WN[T(c, r)], so = WN[T(c, r + 1)], w = WW[T(c, r)], e = WW[T(c + 1, r)];
+function crateAt(c, r, h = CRATE_SIZE / 2) {
+  const n = WN[T(c, r)], so = WN[T(c, r + 1)], w = WW[T(c, r)], e = WW[T(c + 1, r)];
   const x = w && !e ? c + WALL_HALF[w] + h : e && !w ? c + 1 - WALL_HALF[e] - h : c + 0.5;
   const z = n && !so ? r + WALL_HALF[n] + h : so && !n ? r + 1 - WALL_HALF[so] - h : r + 0.5;
   return [x, z];
@@ -13953,6 +13954,13 @@ function crate(c, r) {
   for (const sb of [-1, 1]) { const [px, pz] = at(0, sb * (S / 2 - 0.005)); part(G.box, dark, px, y + H2 / 2, pz, { sx: S * 0.95, sy: 0.06, sz: 0.02, ry, rz: 0.72 }); }
   for (const sa of [-1, 1]) { const [px, pz] = at(sa * (S / 2 - 0.005), 0); part(G.box, dark, px, y + H2 / 2, pz, { sx: S * 0.95, sy: 0.06, sz: 0.02, ry: ry + Math.PI / 2, rz: 0.72 }); }
   for (let k = -1; k <= 1; k++) { const [px, pz] = at(0, k * S * 0.28); part(G.box, k ? wood : '#b88a58', px, y + H2 + 0.005, pz, { sx: S - 0.1, sy: 0.02, sz: S * 0.27, ry }); }
+}
+// (v761, Jordan) a built barrel: the towns' barrel (src/props/props.js, in the hamlets' pine) on its own tile, pushed
+// flush against any wall beside it as a crate is
+const BARREL_R = 0.32;
+function builtBarrel(c, r) {
+  const st = stations.get(T(c, r)), ry = st ? st.ry : 0, [x, z] = crateAt(c, r, BARREL_R), y = surfaceY(c + 0.5, r + 0.5);
+  drawProp({ id: 'barrel', look: null, wood: 'pine', key: 'barrel:built:pine', x, y, z, ry });
 }
 // an iron chest on 2 x 2 tiles: long and low, banded and riveted, with a curved lid, a lock plate and a handle each end
 function ironChest(x, z, c, r) {
@@ -14445,6 +14453,7 @@ function drawObject(o, c, r) {
     case O.PROP: return;   // (drawn from PROP_DRAW: objRows, buildPieces)
     case O.CRATE: return storeBody(c, r, () => crate(c, r));
     case O.CHEST: return storeBody(c, r, () => ironChest(x + 0.5, z + 0.5, c, r));
+    case O.BARREL: return storeBody(c, r, () => builtBarrel(c, r));
     case O.HOUSE: {
       // face the nearest street
       const t = towns[TN[T(c, r)] - 1], dx = c - t.c, dz = r - t.r;
@@ -14706,7 +14715,7 @@ const WALL_H = 2;   // (a level at 2x tile height: a floor on top of walls would
 // (the crafting tables: as the towns', for your own base)
 const COST = { armortable: { planks: 8, leather: 2 }, weapontable: { planks: 8, stoneBlock: 6 }, alchemytable: { planks: 8, copperIngot: 4, glassPane: 4 }, floor: { planks: 2 }, stonefloor: { stoneBlock: 2 }, wall: { planks: 2, stoneBlock: 2 }, door: { planks: 5 }, logwall: { wood: 4 }, stonewall: { stoneBlock: 4 }, hearth: { wood: 2, stone: 4 },
   fence: { wood: 1 }, stonefence: { stoneBlock: 2 }, gate: { planks: 3 }, ironfence: { ironIngot: 2 }, irongate: { ironIngot: 3 }, irondoor: { ironIngot: 6 },
-  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 8 }, chest: { ironIngot: 12 }, woodstairs: { planks: 6 }, stonestairs: { stoneBlock: 6 },
+  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 8 }, barrel: { wood: 6 }, chest: { ironIngot: 12 }, woodstairs: { planks: 6 }, stonestairs: { stoneBlock: 6 },
   woodwindow: { planks: 2, stoneBlock: 2, glassPane: 2 }, stonewindow: { stoneBlock: 4, glassPane: 2 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
@@ -14714,7 +14723,7 @@ const FENCE_H = 0.8;
 const FLOOR_KIND = [null, 'floor', 'stonefloor', 'marblefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
 // the build menu's groups, each opening its own row of kinds
 const BUILD_CATS = { floors: ['floor', 'stonefloor', 'woodstairs', 'stonestairs'], walls: ['wall', 'woodwindow', 'logwall', 'stonewall', 'stonewindow', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'],
-  stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable', 'alchemytable', 'crate', 'chest'] };
+  stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable', 'alchemytable', 'barrel', 'crate', 'chest'] };
 const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
 const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'woodwindow' || k === 'stonewindow' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence' || k === 'ironfence';
 const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate' || k === 'ironfence' || k === 'irongate';
@@ -19494,7 +19503,7 @@ function preloadPaint(k, sizes) {
   paintKept.set(key, im);
 }
 const paintImg = (k, sizes) => (preloadPaint(k, sizes), `<img class="paint" src="icons/paint/${k}-128.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`);
-for (const k of ['dash', 'bag', 'hammer', 'map', 'floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'hearth', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable']) BAR_ICON[k] = paintImg(k, 'max(66px, calc(9.8vh - 14px))');
+for (const k of ['dash', 'bag', 'hammer', 'map', 'floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'hearth', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable', 'barrel']) BAR_ICON[k] = paintImg(k, 'max(66px, calc(9.8vh - 14px))');
 // Every skin image (hover, pressed, selected and disabled states, the map's bookmarks, frames) is fetched and decoded as
 // the game loads, so a state shows at once the first time you hover or press it instead of flashing empty while its file
 // comes in. The names are read from this page's own text (styles and script), so a new skin file is picked up without a
@@ -20936,6 +20945,7 @@ const KIND_SLOT = {
   armortable: { name: 'ARMOR CRAFTING TABLE', short: 'ARMOR TABLE', icon: 'table' }, weapontable: { name: 'WEAPON CRAFTING TABLE', short: 'WEAPON TABLE', icon: 'weapontable' },
   alchemytable: { name: 'ALCHEMY TABLE', short: 'ALCHEMY', icon: 'alchemytable' },
   crate: { name: 'WOODEN CRATE', short: 'CRATE', icon: 'crate' }, chest: { name: 'IRON CHEST', icon: 'chest' },
+  barrel: { name: 'BARREL', icon: 'barrel' },
 };
 KIND_SLOT.stonefence.short = 'FIELDSTONE';
 const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawtable' };
@@ -20976,7 +20986,7 @@ function renderBar() {
   renderTouch();
   // on the controller the group's own button steps through its row
   const catPad = { floors: 'X', walls: 'Y', doors: 'A', stations: 'LB' };
-  if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String(n + 1), pad: catPad[subOpen], name: KIND_SLOT[k].name, short: KIND_SLOT[k].short, icon: KIND_SLOT[k].icon, cost: k }, sub)));
+  if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String((n + 1) % 10), pad: catPad[subOpen], name: KIND_SLOT[k].name, short: KIND_SLOT[k].short, icon: KIND_SLOT[k].icon, cost: k }, sub)));
   sub.hidden = !subOpen;
   $('modeTag').hidden = mode !== 'build';
   $('modeTag').textContent = 'BUILD MODE · ' + STORY_NAME[buildStory] + ' (↑ ↓)';
@@ -22670,8 +22680,8 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyB') setMode(mode === 'build' ? 'play' : 'build');
   if (mode === 'build' && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) { e.preventDefault(); setStory(buildStory + (e.code === 'ArrowUp' ? 1 : -1)); }
   if (e.code === 'Escape' && mode === 'build') { if (subOpen) { subOpen = null; renderBar(); } else setMode('play'); }
-  else if (mode === 'build' && /^Digit[1-9]$/.test(e.code)) {
-    const n = +e.code.slice(5);
+  else if (mode === 'build' && /^Digit[0-9]$/.test(e.code)) {
+    const n = +e.code.slice(5) || 10;   // (v761: 0 the tenth in a row, the stations' tenth since the barrel)
     // with a group's row open, the numbers pick from it; otherwise they open the groups
     if (!ownsPlot()) { if (n === 4) slotAction('hearth'); }
     else if (subOpen) { const k = BUILD_CATS[subOpen][n - 1]; if (k) slotAction(k); }
@@ -25147,7 +25157,7 @@ ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.
 ghostGeo.woodwindow = ghostGeo.wall; ghostGeo.stonewindow = ghostGeo.stonewall;
 ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
 for (const k in STATION_KIND) ghostGeo[k] = new GFX.BoxGeometry(1.9, 0.9, 1.9);
-ghostGeo.crate = new GFX.BoxGeometry(CRATE_SIZE, CRATE_SIZE * 0.8, CRATE_SIZE); ghostGeo.chest = new GFX.BoxGeometry(1.5, 0.75, 0.85);
+ghostGeo.crate = new GFX.BoxGeometry(CRATE_SIZE, CRATE_SIZE * 0.8, CRATE_SIZE); ghostGeo.barrel = new GFX.CylinderGeometry(BARREL_R, BARREL_R, 0.9, 12); ghostGeo.chest = new GFX.BoxGeometry(1.5, 0.75, 0.85);
 // a piece that will be queued (no materials to hand) shows white, as the queued ones themselves do
 const ghostQueue = new GFX.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.35, depthWrite: false });
 const ghosts = [];
@@ -26431,6 +26441,7 @@ function moveGhost(s) {
     try {
       // (a crate or chest without its storeBody, which would replace its own mesh)
       if (st.kind === 'crate') crate(st.c, st.r);
+      else if (st.kind === 'barrel') { const sv = OUT; OUT = ghostBuf; try { builtBarrel(st.c, st.r); } finally { OUT = sv; } }
       else if (st.kind === 'chest') ironChest(x + 0.5, z + 0.5, st.c, st.r);
       else drawObject(o, st.c, st.r);
     } finally { partAll = null; st.ry = ry; }
@@ -32597,7 +32608,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 760, crashSeen = new Map();
+const GAME_VERSION = 761, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
