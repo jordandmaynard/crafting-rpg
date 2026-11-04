@@ -502,6 +502,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v763:** (Jordan: a dip went into a fountain's rim) A dip needs to be BOTTLE_FILL.edge (0.2) in from the water's edge (less in narrow troughs and small baths; lake and river tiles check four points around it), and as it goes down it leans center (0.5) of the way toward the water's middle: a pool's centre, the middle of the fountain basin's and bowl's rings, a trough's line, a water tile's centre. T > Potion bottles' give button adds three empty bottles.
 
+**v764:** (Jordan) The Character folio's live hero only shows the standing pose, whatever the hero is doing in the world (idleDollPose runs animateHero as if at rest, renders, then puts every joint and the eased pose state back; breathing still moves), from a set front three-quarter angle: DOLL_VIEW.idleTurn (0.3 rad) round to the hero's left from straight in front. T > Character view > idle 0 brings back the old view (as they are, from the game camera's way). The view (and the Options look view) is always drawn at the standard zoom's mosaic size (pixelAt(1), T > Pixels standard, 2 now), not the size the world's zoom gives.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

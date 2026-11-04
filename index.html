@@ -19004,7 +19004,11 @@ function fitTitles() {
 }
 applyWinTitle.live = true;
 applyWinTitle();
-const DOLL_VIEW = { fov: 20, dist: 4.15, turn: 0, lift: 1.23, aimY: 0.6, sky: 0.95, sun: 1.5 };
+// (v764, Jordan) idle: 1 shows the hero only standing at rest (whatever they're doing in the world) from a fixed
+// front three-quarter angle, idleTurn radians round to the hero's left from straight in front; 0 is the old view (as
+// they are, from the game camera's way). The view is always drawn at the standard zoom's mosaic size (T > Pixels
+// standard), not the size the world's zoom gives now
+const DOLL_VIEW = { fov: 20, dist: 4.15, turn: 0, lift: 1.23, aimY: 0.6, sky: 0.95, sun: 1.5, idle: 1, idleTurn: 0.3 };
 const dollTarget = renderer.canvasTarget($('dollView'));
 const dollCam = new GFX.PerspectiveCamera(DOLL_VIEW.fov, 200 / 292, 0.1, 40);
 const dollLights = { hemi: new GFX.HemisphereLight('#fff1dc', '#6a5440', DOLL_VIEW.sky), sun: new GFX.DirectionalLight('#fff0dc', DOLL_VIEW.sun), points: [], plain: true };
@@ -19015,10 +19019,35 @@ function renderDoll() {
   if (optsOpen && $('lookView').offsetParent) renderHeroView($('lookView'), lookTarget, H.face, 1);
   const cv = $('dollView');
   if (!invOpen || !cv.offsetParent) return;
-  renderHeroView(cv, dollTarget, yaw + DOLL_VIEW.turn, uiScale());
+  if (!DOLL_VIEW.idle) { renderHeroView(cv, dollTarget, yaw + DOLL_VIEW.turn, uiScale()); return; }
+  const back = idleDollPose();
+  try { renderHeroView(cv, dollTarget, H.face + DOLL_VIEW.idleTurn, uiScale()); } finally { back(); }
+}
+// (v764) the hero put in their standing pose for the character view (animateHero run as if at rest: not walking,
+// attacking, rolling, sitting, at a wheel or drawing a potion; breathing still moves), and a function that puts back
+// every joint and the eased pose state the game's own frame goes on from
+function idleDollPose() {
+  const parts = [];
+  // (heroRoot too: raised onto a seat while sitting)
+  parts.push([heroRoot, heroRoot.position.x, heroRoot.position.y, heroRoot.position.z, heroRoot.quaternion.x, heroRoot.quaternion.y, heroRoot.quaternion.z, heroRoot.quaternion.w, heroRoot.scale.x, heroRoot.scale.y, heroRoot.scale.z, heroRoot.visible]);
+  hero.g.traverse(o => parts.push([o, o.position.x, o.position.y, o.position.z, o.quaternion.x, o.quaternion.y, o.quaternion.z, o.quaternion.w, o.scale.x, o.scale.y, o.scale.z, o.visible]));
+  const keys = ['moving', 'dash', 'flip', 'swing', 'whirl', 'lunge', 'bow', 'spear', 'sitK', 'helm', 'axeWind', 'cdPotion'];
+  const was = keys.map(k => H[k]);
+  const g = { bowUp, bowFollow, spearHeld, spearPlan, hamPlan, axPlan, mode, down: mouse.down, pad: PAD.attack, touch: TOUCH.attack };
+  Object.assign(H, { moving: false, dash: -1, flip: null, swing: -1, whirl: -1, lunge: -1, bow: null, spear: null, sitK: 0, helm: false, axeWind: -1, cdPotion: 0 });
+  mode = 'play'; mouse.down = false; PAD.attack = false; TOUCH.attack = false; bowUp = 0;
+  try { animateHero(10); heroRoot.position.set(H.x, H.y, H.z); heroRoot.visible = true; }   // (a long step, so every eased part settles at rest)
+  catch (err) { /* (left as it was) */ }
+  return () => {
+    keys.forEach((k, i) => { H[k] = was[i]; });
+    ({ bowUp, bowFollow, spearHeld, spearPlan, hamPlan, axPlan, mode } = g);
+    mouse.down = g.down; PAD.attack = g.pad; TOUCH.attack = g.touch;
+    for (const [o, px, py, pz, qx, qy, qz, qw, sx, sy, sz, v] of parts) { o.position.set(px, py, pz); o.quaternion.set(qx, qy, qz, qw); o.scale.set(sx, sy, sz); o.visible = v; }
+    heroRoot.updateMatrixWorld();   // (so anything reading the hand's place before the next frame finds the game's pose)
+  };
 }
 function renderHeroView(cv, target, a, ui) {
-  const k = ui * (devicePixelRatio || 1) / pxScale, w = Math.max(16, Math.round(200 * k)), h = Math.max(24, Math.round(292 * k));
+  const k = ui * (devicePixelRatio || 1) / pixelAt(1), w = Math.max(16, Math.round(200 * k)), h = Math.max(24, Math.round(292 * k));
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
   // seen from the way the game's camera looks (so the hero faces the same way here as on screen), lit the same always
   const V = DOLL_VIEW, cx = H.x, cy = H.y + V.aimY, cz = H.z;
@@ -31357,6 +31386,8 @@ const TUNING = [
     [DOLL_VIEW, 'aimY', 'Aim point above the feet', 0, 1.5, 0.01],
     [DOLL_VIEW, 'sky', 'Sky light', 0, 3, 0.01],
     [DOLL_VIEW, 'sun', 'Key light', 0, 4, 0.01],
+    [DOLL_VIEW, 'idle', 'Standing pose only, from a set angle (1), or as the hero is from the game camera (0)', 0, 1, 1],
+    [DOLL_VIEW, 'idleTurn', "Set angle: round to the hero's left from straight in front (radians)", -3.14, 3.14, 0.01],
   ]],
   ['Quest board marks', [
     [QUEST_MARK, 'size', 'Seal size (px at 1080p)', 16, 128, 1],
@@ -32636,7 +32667,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 763, crashSeen = new Map();
+const GAME_VERSION = 764, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
