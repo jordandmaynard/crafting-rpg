@@ -3757,11 +3757,22 @@ function townTrades(t, n) {
     const id = PROP_WORK[h.role], ctx = { wood: PROP_WOOD[t.tier] || 'pine', n: n * 31 + 7 };
     if (h.role === 'tavern' && propBar(h, t.tier > 1 ? 'barCounterLong' : 'barCounter', ctx)) continue;
     if (h.role === 'bank') {
+      // (v725) the vault door first, on its strongroom's wall (bankVaultRoom)
+      if (h.vaultAt) {
+        const { tiles: vt, f } = h.vaultAt;
+        for (const i of vt) {
+          const foot = propFoot(h, 0, PROPS.vaultDoor, i % N, Math.floor(i / N), f, false);
+          if (!foot || !foot.every(([c, r]) => vt.includes(T(c, r)))) continue;
+          h.vaultQ = propPut(h, 0, 'vaultDoor', foot, f, 4, ctx);
+          if (!propReach(h, 0)) { propTake(h.vaultQ); h.vaultQ = null; }
+          break;
+        }
+      }
       // (the counter across the room, the secure part behind; else the vault behind the banker if it fits, else the
       // counter on its own and the vault on a wall with the props)
       if (bankLine(h, ctx)) continue;
-      if ([2, 1].some(k => propBar(h, 'tellerCounter', ctx, 'vaultDoor', null, k))) continue;
-      if (propCounter(h, 'tellerCounter', ctx)) { h.vaultLater = true; continue; }
+      if (!h.vaultQ && [2, 1].some(k => propBar(h, 'tellerCounter', ctx, 'vaultDoor', null, k))) continue;
+      if (propCounter(h, 'tellerCounter', ctx)) { if (!h.vaultQ) h.vaultLater = true; continue; }
     }
     const q = propTryList(h, 0, id, propCands(h, 0, id, ctx), ctx);
     if (q) h.work = q.tiles[Math.floor(q.tiles.length / 2)];
@@ -4209,7 +4220,7 @@ function townProps(t, n) {
       // (the bank's secure part furnished first, the hall in front kept off it, then the hall, the secure part kept off)
       const front = h.tiles.map(([c, r]) => T(c, r)).filter(i => !h.back.has(i) && !h.clear.has(i)), back = [...h.back].filter(i => !h.clear.has(i));
       for (const i of front) h.clear.add(i);
-      furnish(h, h.vaultIn ? BANK_BACK.slice(1) : BANK_BACK, { wood, n: n * 31 + j });   // (the vault's in already, or tried again)
+      furnish(h, h.vaultIn || h.vaultQ ? BANK_BACK.slice(1) : BANK_BACK, { wood, n: n * 31 + j });   // (the vault's in already, or tried again)
       for (const i of front) h.clear.delete(i);
       for (const i of back) h.clear.add(i);
       furnish(h, BANK_HALL, { wood, n: n * 31 + j });
@@ -4278,7 +4289,7 @@ const BANK_STONE = [['#8a8496', 'Grey granite'], ['#b0a898', 'Sandstone'], ['#c8
 function bankLine(h, ctx) {
   if (!h.inside) return false;
   const all = new Set(h.tiles.map(([c, r]) => T(c, r))), [ic, ir] = h.inside, cands = [];
-  const fl = i => all.has(i) && houseFree(h, i) && bedClear(h, 0, i);
+  const fl = i => all.has(i) && houseFree(h, i) && bedClear(h, 0, i), vset = new Set(h.vaultQ ? h.vaultQ.tiles : []);
   for (let f = 0; f < 4; f++) {
     const g = (f + 3) & 3, S = (c, r) => c * DC[f] + r * DR[f], Ug = (c, r) => c * DC[g] + r * DR[g];
     const ss = h.tiles.map(([c, r]) => S(c, r)), lo = Math.min(...ss), hi = Math.max(...ss);
@@ -4288,7 +4299,7 @@ function bankLine(h, ctx) {
       if (row.length < 3 || Ug(...row[row.length - 1]) - Ug(...row[0]) !== row.length - 1) continue;
       const back = h.tiles.filter(([c, r]) => S(c, r) < s0);
       if (back.length < 4 || back.length > h.tiles.length * 0.45) continue;
-      if (!row.every(([c, r]) => fl(T(c, r))) || !back.every(([c, r]) => fl(T(c, r)))) continue;
+      if (!row.every(([c, r]) => fl(T(c, r))) || !back.every(([c, r]) => fl(T(c, r)) || vset.has(T(c, r)))) continue;   // (v725: the vault's in already)
       // a gate at an end with floor behind it and before it
       for (const e of [0, row.length - 1]) {
         const [gc, gr] = row[e], gb = T(gc - DC[f], gr - DR[f]), gf = T(gc + DC[f], gr + DR[f]);
@@ -4323,7 +4334,8 @@ function bankLine(h, ctx) {
     let vq = null;
     if (ok && main && all.has(from) && propReach(h, 0)) {
       const back = new Set(cd.back.map(([c, r]) => T(c, r)));
-      if (vault) {
+      if (vault && h.vaultQ) vq = h.vaultQ.tiles.every(i => back.has(i)) ? h.vaultQ : null;   // (v725: it's behind the counter)
+      else if (vault) {
         const fr = h.tiles.map(([c, r]) => T(c, r)).filter(i => !back.has(i) && !h.clear.has(i));
         for (const i of fr) h.clear.add(i);
         vq = propTryList(h, 0, 'vaultDoor', propCands(h, 0, 'vaultDoor', ctx), ctx);
@@ -4877,6 +4889,14 @@ function raiseTownHouses(t, n) {
       drill = guardYardFind(t, plan.low, o0, at, d, p, i => inTown(i % N, Math.floor(i / N)) && !TSTREET[i] && !PATH[i] && !house.has(i) && !keep.has(i));
       if (!drill && guardTries++ < 60) continue;
     }
+    // (v725, Jordan: every bank has its vault, and it opens off a sealed strongroom, not an outside wall) a place with
+    // no room for one goes on to the next
+    let vaultRoom = null;
+    if (role === 'bank') {
+      const S = new Set([...plan.low].map(k => T(...at((k & 63) + o0, k >> 6))));
+      vaultRoom = bankVaultRoom(S, T(...at(0, 1)), d, back);
+      if (!vaultRoom) continue;
+    }
     // (only now, the house going up here: v601, a tavern, bank or guard house tried here and moved on left these)
     if (setBack) TSTREET[T(c0, r0)] = 1;   // (the street tile out to its door)
     else { const [xc, xr] = at(0, -1), x = T(xc, xr); if (!TSTREET[x]) keep.add(x); }
@@ -4927,6 +4947,25 @@ function raiseTownHouses(t, n) {
       piece(ec, er);
       if (isDoor) door = [ec, er, ew];
     }
+    // (v725) the bank's strongroom: stone walls between it and the floor round it, no windows in its outside walls,
+    // its two tiles then no part of the house's floor (kept for its roof alone)
+    if (vaultRoom) {
+      const dead = new Set(vaultRoom.dead);
+      for (const i of dead) {
+        const c = i % N, r = (i - c) / N;
+        for (let e = 0; e < 4; e++) {
+          const j = T(c + DC[e], r + DR[e]);
+          if (dead.has(j)) continue;
+          const [ec, er, ew] = edgeOf(c, r, e), A = ew ? WW : WN, at0 = T(ec, er);
+          if (set.has(j)) {
+            A[at0] = 4; BANK_WALLS.add(edgeKey(ec, er, ew));
+            if (desert) DESERT_WALLS[0].add(edgeKey(ec, er, ew));
+            piece(ec, er);
+          } else if (A[at0] === 14) A[at0] = 4;
+        }
+      }
+      for (let x = tiles.length - 1; x >= 0; x--) if (dead.has(T(...tiles[x]))) tiles.splice(x, 1);
+    }
     const up = two ? { doors: [], tiles: upTiles } : null;
     if (two) {
       // the upper story's walls round its own footprint; where it is smaller, the rest of the roof below is a
@@ -4958,10 +4997,38 @@ function raiseTownHouses(t, n) {
       }
     }
     t.houses.push({ tiles, door, inside: at(0, 1), clear, color: ROOF_COLORS[Math.floor(hs(c0 + 7, r0, 95 + d) * ROOF_COLORS.length)], style, up, role, desert });
+    if (vaultRoom) Object.assign(t.houses[t.houses.length - 1], { dead: vaultRoom.dead.map(i => [i % N, Math.floor(i / N)]), vaultAt: { tiles: vaultRoom.vault, f: vaultRoom.f } });
     if (drill) { t.houses[t.houses.length - 1].drill = drill; for (const i of drill.set) { keep.add(i); GUARD_YARD.add(i); } }
   }
   if (cath) t.houses.push(cath);   // (last, so the tannery and smithy stay the first two houses; a medium town's chapel likewise)
   townLamps(t, own);
+}
+// (v725, Jordan: every bank always has its vault, a 2 x 1 sealed space behind it so it doesn't stand on an outside
+// wall) of a bank's floor S (tiles; ins the tile inside its door; d the way from its door to its far wall, back the
+// door's side): two tiles side by side against an outside wall (the far one best, never the door's), sealed off as
+// the strongroom, the two before them the vault door's (against the strongroom's wall), the two before those its
+// way up, and the rest of the floor still all got to from the door round it. Nearest the middle of its wall first.
+// -> { dead: [i, j], vault: [i, j], f: the way the door faces } or null
+function bankVaultRoom(S, ins, d, back) {
+  const step = (i, e) => T(i % N + DC[e], Math.floor(i / N) + DR[e]);
+  let best = null, bs = 1e9;
+  for (const i of S) for (let e = 0; e < 4; e++) {
+    if (e === back) continue;
+    const g = (e + 1) & 3, f = (e + 2) & 3, j = step(i, g), dead = [i, j];
+    if (!S.has(j) || dead.some(x => S.has(step(x, e)))) continue;
+    const vault = dead.map(x => step(x, f)), front = vault.map(x => step(x, f));
+    if (![...vault, ...front].every(x => S.has(x)) || [...dead, ...vault].includes(ins)) continue;
+    // (the floor round it all reached from the door)
+    const shut = new Set([...dead, ...vault]), seen = new Set([ins]), q = [ins];
+    while (q.length) { const x = q.pop(); for (let k = 0; k < 4; k++) { const y = step(x, k); if (S.has(y) && !shut.has(y) && !seen.has(y)) { seen.add(y); q.push(y); } } }
+    if (seen.size !== S.size - shut.size) continue;
+    // (how far its middle is from the floor's middle along the wall)
+    let m = 0; for (const x of S) m += (x % N) * DC[g] + Math.floor(x / N) * DR[g]; m /= S.size;
+    const u = (i % N) * DC[g] + Math.floor(i / N) * DR[g] + 0.5;
+    const score = (e === d ? 0 : 20) + Math.abs(u - m) + hs(i % N, Math.floor(i / N), 724 + e) * 0.1;
+    if (score < bs) { bs = score; best = { dead, vault, f }; }
+  }
+  return best;
 }
 // A large town's cathedral (v426, Jordan: stone on every floor, square towers like Notre Dame's that needn't be
 // reached, marble from the mausoleum): a box W wide (odd) and dep deep fronting a street, its two front corners
@@ -6843,7 +6910,7 @@ function finishTowns() {
         a.pair = b; b.pair = a; doors.set(key, a); doors.set('pair:' + key, b);
         bankLanterns(t, hse);
       } else { makeDoor(...hse.door); if (hse.role === 'guard') bankLanterns(t, hse); }
-      makeRoom(hse.tiles, hse.color, hse.chapel ? (hse.chapel.prayer ? prayerRoof(hse.chapel) : cathRoof(hse.chapel)) : null);
+      makeRoom(hse.dead ? [...hse.tiles, ...hse.dead] : hse.tiles, hse.color, hse.chapel ? (hse.chapel.prayer ? prayerRoof(hse.chapel) : cathRoof(hse.chapel)) : null);
       if (hse.up) { for (const e of hse.up.doors) makeDoor(...e, 'door', false, 1); makeRoom(hse.up.tiles, hse.color, hse.cathedral ? (hse.cathedral.mosque ? mosqueRoof(hse.cathedral) : cathRoof(hse.cathedral)) : null, 1); }
     }
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
@@ -15219,7 +15286,7 @@ function wallPieceRaw(c, r, w, type, cut) {
     }
     // (v539: none on a wall inside a building, rooms on both sides, which would poke up through a flat stone roof)
     const sk = PCUT / (2 * SNN) * SNN, inner = roomOf.has(sk + i) && roomOf.has(sk + j);
-    if (St === STONE_SAND) { if (!cut && !PDY) desertBand(c, r, w, y, at, ry); }   // (v649: the belt course, no crenels)
+    if (St === STONE_SAND) { if (!cut && !PDY && !(inner && BANK_WALLS.has(edgeKey(c, r, w)))) desertBand(c, r, w, y, at, ry); }   // (v649: the belt course, no crenels; v725: none round a bank's strongroom)
     else if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC(St.crenel), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
     return;
   }
@@ -31392,7 +31459,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 724, crashSeen = new Map();
+const GAME_VERSION = 725, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

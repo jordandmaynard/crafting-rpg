@@ -424,6 +424,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v724:** (Jordan) Barrels in buildings open and can be looted (F: SEARCH THE BARREL). The new window is Jordan's open-barrel painting with a 2 x 2 piece of the foot locker's grid laid in its floor, hue-matched with a soft shadow (art/src/barrel-locker-grid.py, ui/barrel/barrel-window.webp, 470 x 734). The title, count and the shared close X sit on the lid's widest board. Squares, items, stack numbers and the mask are the foot locker's. Barrel loot tables (barrel, tavernBarrel, guardBarrel, farmBarrel, millBarrel, cabinBarrel) hold most of the food, wheat and sourdough bread for now. Bread and wheat in the crate, foot locker and iron chest tables are cut down to a little.
 
+**v725:** (Jordan) Every bank has its vault. When a bank goes up it first picks two tiles side by side against an outside wall, the wall across from the door if it can, centred on it. Those two tiles become a sealed strongroom: stone walls separate them from the floor, the outside walls behind them have no windows, and the roof covers them, but they belong to no one's floor, so nothing stands there and no one goes in. The vault door is set on the strongroom's wall, facing the room, before the teller counter goes in. A site with no room for the strongroom is skipped and the bank goes up elsewhere. The counter then prefers a line that leaves the vault behind it. A desert bank's strongroom walls get no teal belt course.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
