@@ -694,6 +694,7 @@ class Renderer {
     this._lights = { frame: this._frameNo, scene, L };
     scene.traverse(o => {
       if (!o.isLight || !o.visible) return;
+      if (o._mwH) o.updateMatrixWorld();   // (v780: shown since the scene's matrix pass left it hidden)
       if (o.isHemisphereLight) { if (!L.hemi) L.hemi = o; }
       else if (o.isDirectionalLight) { if (!L.sun) L.sun = o; }
       else if (o.isPointLight && L.points.length < MAX_POINTS) L.points.push(o);

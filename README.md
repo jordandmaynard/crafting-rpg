@@ -534,6 +534,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v779:** (Jordan: so we know we're looking at the right version) The version is on the G panel's title line (after fps and ms/frame) and the T panel's heading. GAME_VERSION is set at the top of the game's script now.
 
+**v780:** (Jordan: draw the hero the way the people are drawn, but keep armour and weapon changes showing as worn) The hero's boxes are baked joint by joint (bakeHeroParts, run by heroCopies): the boxes on one joint with the same material, gear tag, pack mark, shadows and draw order become one mesh in the joint's frame. The joints still pose it, and dressHero still shows, hides and recolours by gear tag, so every look, armour piece and weapon in every metal stays as it was (a node test checks the same triangles land in the same places per material and gear). Fewer objects and draws: each part also had a silhouette and a shadow copy. The scene's matrix pass now also leaves hidden groups and all under them (v778 only left hidden meshes, and most of the hero's hidden pieces were inside the weapons' hidden metal groups); the renderer's walks and its light gathering bring one up to date if it's shown before the next pass.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

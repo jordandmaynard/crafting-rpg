@@ -68,8 +68,10 @@ export class Object3D {
   // hidden mesh with nothing under it is left until it shows; its matrices are made then, as nothing draws it meanwhile.
   // A call on an object of its own (a rig being built) still makes every one. One left is marked _mwH, and the
   // renderer's walks bring it up to date if it's shown before the next pass. Not one hidden that still casts (castHidden)
+  // (v780: nor did v778 save much, as most of them were under hidden groups, the weapons in every metal waiting in the
+  // hand: a hidden group is left now too, with all under it, as neither walk goes into one)
   updateMatrixWorld(hidden = false) {
-    if (hidden && !this.visible && this.isMesh && !this.castHidden && this.children.length === 0) { this._mwH = true; return; }
+    if (hidden && !this.visible && !this.castHidden) { this._mwH = true; return; }
     this._mwH = false;
     let moved = false;
     if (this.matrixAutoUpdate) {

@@ -1350,7 +1350,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 779;
+const GAME_VERSION = 780;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -19040,7 +19040,60 @@ const SILHOUETTE = { color: '#4fb8b0', steady: 1 };
 const silMat = new GFX.MeshBasicMaterial({ color: SILHOUETTE.color, depthWrite: false, depthFunc: GFX.GreaterDepth });
 // (each part's see-through silhouette, all on the hero's layer, then a copy of each on the world layer that draws
 // nothing but casts the hero's shadow; again whenever the hero's rebuilt for a new look: rebuildHero)
+// (v780, Jordan: draw the hero the way the people are drawn, still dressed in what's worn) The hero's few hundred boxes
+// (and every weapon in every metal, waiting hidden in the hand) baked, joint by joint, into one mesh for each
+// material and piece of gear: the boxes on one joint that look the same and are put on and taken off together (same
+// material, gear tag, pack mark, shadows, draw order) laid end to end in the joint's frame, so the joint still moves
+// them all and dressHero still shows, hides and recolours them by their gear tag. Every look, every weapon and every
+// armour piece is kept, and the pose is the joints', as before; only the number of objects drops, and with it the
+// world matrices made each time the hero moves and the draws (each part had a silhouette and a shadow copy too).
+function bakeHeroParts(h) {
+  const runs = new Map(), out = [];
+  for (const p of h.parts) {
+    const g = p.geometry, names = Object.keys(g.attributes);
+    if (!p.parent || names.length !== 1 || names[0] !== 'position' || p.children.length) { out.push(p); continue; }
+    const key = [p.parent.id ?? '', p.material.id, p.userData.gear || '', p.userData.pack ? 1 : 0, p.visible ? 1 : 0, p.renderOrder,
+      p.castShadow ? 1 : 0, p.receiveShadow ? 1 : 0, p.layers.mask, p.frustumCulled ? 1 : 0].join('|');
+    let r = runs.get(key);
+    if (!r) { r = { par: p.parent, list: [] }; runs.set(key, r); }
+    r.list.push(p);
+  }
+  for (const { par, list } of runs.values()) {
+    if (list.length === 1) { out.push(list[0]); continue; }
+    let nv = 0, ni = 0;
+    for (const p of list) { const g = p.geometry; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+    const pos = new Float32Array(nv * 3), idx = new (nv > 65535 ? Uint32Array : Uint16Array)(ni);
+    let ov = 0, oi = 0;
+    for (const p of list) {
+      p.updateMatrix();
+      const e = p.matrix.elements, g = p.geometry, a = g.attributes.position.array, n = a.length / 3;
+      for (let k = 0; k < n; k++) {
+        const x = a[k * 3], y = a[k * 3 + 1], z = a[k * 3 + 2], o = (ov + k) * 3;
+        pos[o] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+      }
+      const src = g.index ? g.index.array : null, m = src ? src.length : n;
+      for (let k = 0; k < m; k += 3) {
+        const i0 = src ? src[k] : k, i1 = src ? src[k + 1] : k + 1, i2 = src ? src[k + 2] : k + 2;
+        idx[oi + k] = ov + i0; idx[oi + k + 1] = ov + i1; idx[oi + k + 2] = ov + i2;
+      }
+      ov += n; oi += m;
+    }
+    const geo = new GFX.BufferGeometry();
+    geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
+    geo.setIndex(new GFX.BufferAttribute(idx, 1));
+    geo.heroBaked = true;   // (its own, so let go of when the hero's made again: rebuildHero)
+    const f = list[0], mesh = new GFX.Mesh(geo, f.material);
+    mesh.renderOrder = f.renderOrder; mesh.castShadow = f.castShadow; mesh.receiveShadow = f.receiveShadow;
+    mesh.layers.mask = f.layers.mask; mesh.frustumCulled = f.frustumCulled; mesh.visible = f.visible;
+    if (f.userData.gear) mesh.userData.gear = f.userData.gear;
+    if (f.userData.pack) mesh.userData.pack = true;
+    for (const p of list) par.remove(p);
+    par.add(mesh); out.push(mesh);
+  }
+  h.parts = out;
+}
 function heroCopies() {
+  bakeHeroParts(hero);
   hero.parts.slice().forEach(p => {
     const s = new GFX.Mesh(p.geometry, silMat);
     s.position.copy(p.position); s.rotation.copy(p.rotation); s.renderOrder = -1; s.userData.gear = p.userData.gear;
@@ -19057,6 +19110,7 @@ heroCopies();
 // (v450) the hero made again for the look in Options (body type and rolled look), dressed in what's worn
 function rebuildHero() {
   heroRoot.remove(hero.g);
+  { const gone = new Set(); hero.g.traverse(o => { if (o.isMesh && o.geometry.heroBaked) gone.add(o.geometry); }); for (const geo of gone) geo.dispose(); }
   Object.assign(hero, makeHuman(heroLook()));
   heroRoot.add(shadowy(hero.g));
   heroCopies();
