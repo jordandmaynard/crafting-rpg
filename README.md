@@ -538,6 +538,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v781:** (Jordan: yes to both) Throwing a potion is an overhand toss (POTION_TOSS, T > Thrown potions: Throw rows): the arm swings up behind the shoulder, whips over and forward and eases back; the bottle stays in the hand through the wind-up and leaves from the fist POTION_TOSS.windup (0.14 s) after the click, when one is taken from its square (tossTick; 0 throws at once as before). Doors and gates at rest are left alone: the swing is set to open or shut once within a hair, where before a shut door crept on for a minute or more, its every board and stud's matrices made again each frame. scene.js _updateUp (getWorldPosition and the like) only counts a change when the world matrix did change: before, each call counted one up to the scene, so the next matrix pass made every object's again (the held 2D potion asked for the fist's place every frame).
 
+**v782:** (Jordan's G: the hero's movers climbed to ~800 with the pack open) The Character folio's standing pose (idleDollPose) made the matrices of the whole hero, hidden weapons in every metal included, when it put the game's pose back each frame. Both it and the standing pose now leave hidden pieces as the scene's own pass does, and the standing pose's matrices are made before the view is drawn (the frame's matrix pass is over by then, so it was drawn from the game's).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
