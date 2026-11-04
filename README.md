@@ -548,6 +548,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v786:** shadow map encode (Jordan's G: 0.80 ms of ~4.7 ms CPU). Finding the casters is cheaper: each mesh keeps its bounding sphere in the world until it moves (or its geometry changes), and in view, just out of it, or out is told in one look at the planes, in the shadow map's walk and the camera's (which tested most meshes twice). The recorded shadow list now takes the built pieces and folk too (their own shadow code, with their material's bind group; before, every one was drawn one by one each frame), and a replay sends only the matrices of the casters that moved since, not every caster's block. G rows split the shadow map's encode: finding casters, recorded list, drawn one by one, with counts of casters, those drawn one by one, and matrices sent.
 
+**v787:** (Jordan's G: CPU 3.9 ms and GPU passes 3.5 ms both fit a 240 Hz frame, yet frames take 7 ms; mosaic 4 and HDR off each took away only what they saved in the passes) G > Between frames has two new rows: the GPU's time from the frame's first timed pass starting to its last ending, and the gaps between passes in that (waits, copies, uploads). With the frame time, they tell whether the time the pass timers miss is between our passes or outside them (the browser showing the picture).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

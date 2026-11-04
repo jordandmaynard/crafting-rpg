@@ -31,6 +31,7 @@ export class GpuProfiler {
     this.doneMs = 0;        // smoothed: from the frame's last submit to the GPU reporting all its work done
     this.donePending = false;
     this.doneSeen = false;
+    this.spanMs = 0; this.gapMs = 0; this.spanSeen = false;   // (v787) smoothed: first timed pass start to last end, and the gaps in it
     if (this.hasTimestamps) {
       this.qs = device.createQuerySet({ type: 'timestamp', count: MAX_PASSES * 2 });
       this.resolveBuf = device.createBuffer({ size: MAX_PASSES * 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
@@ -84,10 +85,23 @@ export class GpuProfiler {
       this.pending = false;
       if (!this.on) return;
       const sums = new Map();
+      let first = null, last = null, inside = 0;
       names.forEach((nm, i) => {
         const ms = Math.max(0, Number(t[i * 2 + 1] - t[i * 2]) / 1e6);
         sums.set(nm, (sums.get(nm) ?? 0) + ms);
+        inside += ms;
+        const b = t[i * 2], e = t[i * 2 + 1];
+        if (b > 0n && (first === null || b < first)) first = b;
+        if (e > 0n && (last === null || e > last)) last = e;
       });
+      // (v787) the GPU's time from the frame's first timed pass starting to its last ending, and the part of that
+      // in none of them (the gaps between passes: waits, copies, uploads)
+      if (first !== null && last !== null && last > first) {
+        const span = Number(last - first) / 1e6, gaps = Math.max(0, span - inside);
+        this.spanMs = this.spanSeen ? this.spanMs + (span - this.spanMs) * SMOOTH : span;
+        this.gapMs = this.spanSeen ? this.gapMs + (gaps - this.gapMs) * SMOOTH : gaps;
+        this.spanSeen = true;
+      }
       // Passes that only run some frames (the caustics by day, a probe update) count as 0 on frames without them.
       for (const nm of new Set([...this.ema.keys(), ...sums.keys()])) {
         const ms = sums.get(nm) ?? 0, prev = this.ema.get(nm);
@@ -167,7 +181,7 @@ export class GpuProfiler {
     if (this.cnt) this.cnt.clear();
     this.order = [];
     this.shown = 0;
-    this.doneSeen = false;
+    this.doneSeen = false; this.spanSeen = false;
     return this.on;
   }
 
@@ -201,6 +215,8 @@ export class GpuProfiler {
     const between = [...(this.out || [])];
     between.push(['idle (main thread waiting)', Math.max(0, this.frameMs - this.cpuMs - [...(this.out || new Map()).values()].reduce((a, v) => a + v, 0))]);
     between.push(['GPU done, after last submit', this.doneSeen ? this.doneMs : '…']);
+    between.push(['GPU: first pass start to last pass end', this.spanSeen ? this.spanMs : '…']);
+    between.push(['GPU: gaps between passes', this.spanSeen ? this.gapMs : '…']);
     // (v775) the counts in groups by what they're of, each its own section: encode parts, recorded draw lists, overdraw
     const groups = new Map([['Each frame', []], ['Encode, by part (ms)', []], ['Recorded draw lists', []], ['Moving objects (in ½ s)', []], ['Overdraw', []]]);
     for (const [nm, n] of this.cnt || []) {
@@ -216,7 +232,7 @@ export class GpuProfiler {
         ? table('GPU pass', 'GPU ms', rows, 'All passes', gpuTotal)
         : `<div class="gnote">This browser doesn't expose GPU timestamps (timestamp-query), so only frame timing is shown.</div>`) +
       table('CPU (JavaScript)', 'CPU ms', [...this.cpu], 'All CPU', this.cpuMs) +
-      plain('Between frames', 'ms', between, 2, 'GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck.') +
+      plain('Between frames', 'ms', between, 2, 'GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck. First pass to last: the GPU\'s time on the frame\'s own passes, gaps between them included; what the frame takes beyond that is outside them (the browser showing the picture, other work).') +
       [...groups].filter(([, r]) => r.length).map(([g, r]) => plain(g, g === 'Encode, by part (ms)' ? 'ms' : 'count', r, g === 'Encode, by part (ms)' ? 2 : 1, NOTES[g])).join('') +
       `<div class="gnote">${extra}` +
       (this.hasTimestamps ? ' Chrome rounds GPU times to 0.1 ms unless chrome://flags "WebGPU Developer Features" is on.' : '') + '</div>';
