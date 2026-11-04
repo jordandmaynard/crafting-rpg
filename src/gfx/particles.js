@@ -154,6 +154,7 @@ struct VOut {
   @location(7) cover: f32,
   @location(8) extra: f32,     // a ring's thickness, a glint's twinkle, a flame's heat
   @location(9) rad: f32,       // a ball's radius (puffs and flames: see fs), else 0
+  @location(10) nz: vec2f,     // its seed, how far through its life (a puff's noise)
 }
 @vertex fn vs(v: VIn, @builtin(instance_index) ii: u32) -> VOut {
   var o: VOut;
@@ -235,7 +236,7 @@ struct VOut {
     cover = 0.0;
   }
   o.pos = F.viewProj * vec4f(w, 1.0);
-  o.uv = corner; o.st = st; o.wpos = at; o.pix = w; o.rad = 0.0;
+  o.uv = corner; o.st = st; o.wpos = at; o.pix = w; o.rad = 0.0; o.nz = vec2f(q.g.y, k);
   // (v615, Jordan: the smoke cut off along straight lines by the wall or roof behind it) a puff or a flame is a ball,
   // not its flat card: the card, square-on to us and leaning back as we look down, ran into a wall or roof the ball
   // was only near and was cut along the line they crossed. So its depth is the ball's front (nothing just behind
@@ -252,6 +253,19 @@ struct VOut {
   o.glow = q.g.z * U.look.y; o.cover = cover; o.extra = extra;
   return o;
 }
+// (v741) smooth value noise and a few octaves of it, for a puff's lumps
+fn pHash(p: vec3f) -> f32 {
+  var q = fract(p * 0.1031);
+  q += dot(q, q.zyx + 31.32);
+  return fract((q.x + q.y) * q.z);
+}
+fn pNoise(p: vec3f) -> f32 {
+  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  let a = mix(mix(pHash(i), pHash(i + vec3f(1.0, 0.0, 0.0)), u.x), mix(pHash(i + vec3f(0.0, 1.0, 0.0)), pHash(i + vec3f(1.0, 1.0, 0.0)), u.x), u.y);
+  let b = mix(mix(pHash(i + vec3f(0.0, 0.0, 1.0)), pHash(i + vec3f(1.0, 0.0, 1.0)), u.x), mix(pHash(i + vec3f(0.0, 1.0, 1.0)), pHash(i + vec3f(1.0, 1.0, 1.0)), u.x), u.y);
+  return mix(a, b, u.z);
+}
+fn pFbm(p: vec3f) -> f32 { return (pNoise(p) * 0.57 + pNoise(p * 2.03 + vec3f(5.1, 1.7, 9.3)) * 0.29 + pNoise(p * 4.11 + vec3f(2.3, 7.9, 4.4)) * 0.14); }
 // the light a soft volume at w gets, from the way n faces (sky, ground, the sun through its shadow, lamps)
 fn fxLight(w: vec3f, n: vec3f) -> vec3f {
   var l = mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.5 + 0.5 * n.y);
@@ -301,8 +315,30 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
       let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
       let up = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
       let back = vec3f(F.view[0][2], F.view[1][2], F.view[2][2]);
-      let n = normalize(right * uv.x + up * uv.y + back * sqrt(1.0 - r2));
-      lit = i.col * fxLight(i.wpos, n) + i.col * i.glow;
+      var n = normalize(right * uv.x + up * uv.y + back * sqrt(1.0 - r2));
+      // (v741, Jordan: lit, not in bands, but lumpy and uneven, more like a volume) a few octaves of noise over the
+      // ball, fixed to it in the world (so it doesn't swim as the camera turns), its own for each puff by its seed and
+      // slowly churning over its life: the edge pulled in where it's low (a ragged outline), thinner there and thicker
+      // in the lumps, the lumps' slopes bending its normal, and the hollows between them a little darker
+      let P = U.puff;
+      if (P.x + P.y + P.w > 0.0) {
+        let sc = max(P.z, 0.1);
+        let o3 = vec3f(i.nz.x * 37.0, i.nz.x * 11.0 + i.nz.y * 0.9, i.nz.x * 23.0);
+        let p = n * sc + o3;
+        let e = pFbm(p);
+        let lim = 1.0 - P.y * sat(1.0 - e * 1.6);
+        if (r2 > lim * lim) { discard; }
+        let rr = r2 / (lim * lim);
+        m = pow(1.0 - rr, 1.5) * mix(1.0, sat(0.3 + e * 1.4), P.w);
+        // (shaded as the smaller ball its ragged edge leaves, so it's still round right to that edge)
+        let ns = normalize((right * uv.x + up * uv.y) / lim + back * sqrt(1.0 - rr));
+        let h = 0.08;
+        let g = vec3f(pFbm(p + vec3f(h, 0.0, 0.0)) - e, pFbm(p + vec3f(0.0, h, 0.0)) - e, pFbm(p + vec3f(0.0, 0.0, h)) - e) / h;
+        n = normalize(ns - (g - dot(g, ns) * ns) * P.x * 0.35);
+        lit = i.col * fxLight(i.wpos, n) * mix(1.0, 0.55 + 0.9 * e, min(P.x, 1.0) * 0.6) + i.col * i.glow;
+      } else {
+        lit = i.col * fxLight(i.wpos, n) + i.col * i.glow;
+      }
     }
   } else if (st == ${FX.SMOKE}) {
     // its sprite's grey (the four in a 2 x 2 atlas, a texel in from each cell's edge), rounded off toward its edge;
@@ -498,8 +534,9 @@ export class FxParticles {
     // ramps: names to ids, and their colours for the shaders
     this.rampIds = new Map(); this.rampData = new Float32Array(MAX_RAMPS * RAMP_N * 4);
     this.look = { x: 1, y: 1, z: 1, w: 3 };   // hard ramp steps (1) or blended (0); glow ×; size ×; light bands on soft volumes (0 smooth)
+    this.puff = { x: 1, y: 0.35, z: 2.2, w: 0.6 };   // puffs' lumps: how much they bend its light, how ragged its edge, how many across, how uneven its thickness
     const U = {
-      now: { value: { x: 0, y: 0, z: 0, w: 0 } }, look: { value: this.look }, ramps: { value: this.rampData },
+      now: { value: { x: 0, y: 0, z: 0, w: 0 } }, look: { value: this.look }, puff: { value: this.puff }, ramps: { value: this.rampData },
       tRefrD: shared.tRefrD || { value: null }, refr: shared.refr || { value: 0 }, base: { value: { x: 0, y: 0 } },
     };
     this.uniforms = U;
