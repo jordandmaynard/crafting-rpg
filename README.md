@@ -412,6 +412,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v718:** Iron chests (built ones and the guard house's) open in their own painted window from Jordan's open iron chest art (art/deliveries/iron-chest-window-v1.png). The painting's 3 x 5 wells got a fourth row so chests keep 20 squares (art/src/iron-chest-rows.py: a copy of row 2 in the grid, the side walls stretched to keep one straight slant). Sized like the foot locker: each painted well (145 x 141) scaled to the pack's 90 px square (CHEST_UI.scale 0.62), the pack's 78 px items and stack numbers, tinted through the foot locker's square mask. Title and count sit on the lid's inner band, and the close X is the vault's (smelter) X.
 
+**v719:** (Jordan) Iron chests hold 15 squares, the 3 x 5 wells of the painting as delivered: the v718 fourth row and its script are gone, and the window shows the original painting (1122 x 1402 at 0.62). The guard house chests roll for 15 too. Chest contents aren't kept between visits, so there's nothing in old chests to move.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
