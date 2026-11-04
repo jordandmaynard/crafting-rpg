@@ -606,7 +606,7 @@ export function makeFolkKit(GFX) {
     if (d.creature === 'goblin') return buildGoblin();
     // (v701) a goblin on the person's joints (hips, knees, ankles, waist, shoulders, elbows, wrists, neck), which the
     // whole is shrunk round (GOBLIN_SCALE): bare green legs under a ragged tunic, big bare feet, a hunched wide chest,
-    // long arms with big hands, and the old goblin's big plain head (v702)
+    // long arms with big hands, and the old goblin's big plain head (v703)
     function buildGoblin() {
       const S = d.skin, SD = shade(S, -0.2), C = d.torso.color, CD = shade(C, -0.3), LEA = '#4a3020', G = d.gob, CH = 0.42;
       const body = pivot(g, 0, 0, 0), flaps = [], fronts = [], backs = [];
@@ -637,7 +637,7 @@ export function makeFolkKit(GFX) {
       box(chest, 0.33, 0.11, 0.19, 0, 0.175, -0.005, C);
       box(chest, 0.18, 0.06, 0.012, 0, 0.21, 0.098, shade(S, -0.05));
       if (G.strap) { box(chest, 0.04, 0.3, 0.012, 0, 0.12, 0.1, LEA, 0, 0.65); box(chest, 0.04, 0.3, 0.012, 0, 0.12, -0.1, LEA, 0, -0.65); }
-      // the head (v702, the old goblin's face back): big, wider than the tunic and sat straight on the shoulders with
+      // the head (v703, the old goblin's face back): big, wider than the tunic and sat straight on the shoulders with
       // no neck, plain round glowing eyes flush on the skin, a little stub of a nose, flat ears out to the sides, no
       // brow, mouth or teeth; the old goblin's head box blown up by its old scale over GOBLIN_SCALE (1.3 / 0.8), so
       // it is the old size in the world while the body is a little longer
