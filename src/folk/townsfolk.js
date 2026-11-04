@@ -211,7 +211,7 @@ export const WILD_WHERE = {
 };
 const WILD_LIST = Object.keys(WILDS).map(k => [k, 1]);
 Object.assign(JOBS, WILDS);
-// (v692, Jordan: skeletons and zombies on the hostile folk's rig, to walk, strike and fall as they do) never rolled for
+// (v695, Jordan: skeletons and zombies on the hostile folk's rig, to walk, strike and fall as they do) never rolled for
 // the wilds (after WILD_LIST, so every kept seed is as it was): the game asks for them by name, design(seed, 'wilds',
 // 'skeleton'); tier 'undead' keeps them out of the viewer's lists. A skeleton is built bone by bone on the same joints
 // (buildSkeleton), now and then in a rusted helm, a rag at the hips or an old shield on its back; a zombie is a person
@@ -335,7 +335,7 @@ export function design(seed, pool = 'town', want = null) {
     d.warpaint = roll(X.warpaint) ? tint(['woad', 'ochre', 'black', 'crimson', 'white']).color : null;
     if (hat === 'cultHood') d.head.glow = pick(r, [['#ff5a2a', 3], ['#ffd24a', 1], ['#7ae0ff', 1], ['#c070ff', 1]]);
   }
-  // (v692) the dead: nameless, eyes aglow ('*' marks a glowing colour), a skeleton's bones yellowed and its helm rusted,
+  // (v695) the dead: nameless, eyes aglow ('*' marks a glowing colour), a skeleton's bones yellowed and its helm rusted,
   // a zombie's skin gone grey-green, its hair dulled and its clothes faded
   if (J.undead) {
     d.undead = J.undead;
@@ -526,7 +526,7 @@ export function describe(d) {
 export function makeFolkKit(GFX) {
   const mats = new Map();
   const mat = c => { let m = mats.get(c); if (!m) { m = new GFX.MeshStandardMaterial({ color: c, flatShading: true, roughness: 1, metalness: 0 }); mats.set(c, m); } return m; };
-  // (v692) a colour written '*#rrggbb' glows (unlit): the undead's eyes. The game's bake marks it (bakeFolk) so its shader
+  // (v695) a colour written '*#rrggbb' glows (unlit): the undead's eyes. The game's bake marks it (bakeFolk) so its shader
   // lights it from within.
   const matOf = c => {
     if (c[0] !== '*') return mat(c);
@@ -577,7 +577,7 @@ export function makeFolkKit(GFX) {
     };
     const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
     if (d.undead === 'skeleton') return buildSkeleton();
-    // (v692) a skeleton, bone by bone on the person's own joints (hips, knees, ankles, the waist, shoulders, elbows,
+    // (v695) a skeleton, bone by bone on the person's own joints (hips, knees, ankles, the waist, shoulders, elbows,
     // wrists, the neck) so it walks, strikes and falls as they do: thin limb bones with knobs at the joints, a pelvis, a
     // spine and a cage of ribs, the shoulder girdle, a skull with dark sockets, eyes glowing in them and a jaw on a
     // hinge of its own (the rig's `jaw`, for its chatter); sometimes a rusted helm, a rag at the hips (on the skirts'
@@ -719,7 +719,7 @@ export function makeFolkKit(GFX) {
         box(foot, B.leg + 0.006, 0.014, 0.145, 0, -0.045, 0.015, shade(F.color, -0.35));
       }
     }
-    // (v692) a zombie's trouser leg torn open over the shin, the skin showing
+    // (v695) a zombie's trouser leg torn open over the shin, the skin showing
     if (d.undead === 'zombie' && !skirted) {
       const shin = knees[d.wound > 0 ? 1 : 0];
       box(shin, B.leg + 0.008, 0.05, B.leg + 0.018, 0, -0.075, 0, skin);
@@ -989,7 +989,7 @@ export function makeFolkKit(GFX) {
       box(sw, 0.03, 0.02, 0.12, 0, 0.02, 0, '#c8a048');
       box(sw, 0.026, 0.09, 0.026, 0, 0.07, 0, '#4e3220');
     }
-    // (v692) a zombie's rents: the ribs showing through a tear in the shirt on one side, and dark stains front and back
+    // (v695) a zombie's rents: the ribs showing through a tear in the shirt on one side, and dark stains front and back
     if (d.undead === 'zombie') {
       const s = d.wound, y = 0.52, lift = ['vest', 'jerkin', 'gambeson'].includes(T.item) ? 0.012 : 0.005, zf = chestFront(y) + lift;
       box(chest, 0.085, 0.1, 0.006, s * 0.06, y - CH, zf, '#3a2420');
@@ -999,7 +999,7 @@ export function makeFolkKit(GFX) {
     }
     // ---- the head (a neck pivot) ----
     const head = pivot(chest, 0, 0.7 - CH, 0);
-    // (v692) a zombie's sunken eyes and slack, dark mouth
+    // (v695) a zombie's sunken eyes and slack, dark mouth
     if (d.undead === 'zombie') {
       for (const s of [1, -1]) box(head, 0.05, 0.05, 0.004, s * 0.045, 0.108, 0.0905, shade(skin, -0.35));
       box(head, 0.08, 0.022, 0.008, 0.01, 0.048, 0.093, '#2a1418');
@@ -1267,7 +1267,7 @@ export function makeFolkKit(GFX) {
     const tool = pivot(wrists[hand], 0, -0.045, 0.0);
     const P = d.prop;
     holdProp(tool, P);
-    // (v692: one function, so the skeletons' build hands them theirs too) the tool or weapon `P` on the hand's frame
+    // (v695: one function, so the skeletons' build hands them theirs too) the tool or weapon `P` on the hand's frame
     function holdProp(tool, P) {
       const WOOD = '#8a6440', DARK = '#4e3220', STEEL = '#b8bec8', GOLD = '#c8a048', WICKER = '#a8844e', RUST = '#8a5e44', RUST_DARK = '#5e4030';
       const basket = fill => {
@@ -1390,7 +1390,7 @@ export function makeFolkKit(GFX) {
         [['#d84a5a', -0.05, 0.0], ['#f0d04a', 0.0, 0.05], ['#9a6ad8', 0.05, 0.0], ['#f0f0f0', -0.02, -0.03], ['#e88a3a', 0.04, 0.06]].forEach(([c, sx, sz]) => box(tool, 0.035, 0.035, 0.035, sx, -0.075, 0.03 + sz, c));
       });
       else if (P === 'rustySword') {
-        // (v692) a skeleton's old sword, rusted and notched
+        // (v695) a skeleton's old sword, rusted and notched
         box(tool, 0.026, 0.09, 0.026, 0, 0.0, 0.02, DARK);
         box(tool, 0.034, 0.024, 0.034, 0, 0.056, 0.02, RUST_DARK);
         box(tool, 0.11, 0.02, 0.03, 0, -0.054, 0.02, RUST_DARK, 0, 0.08);

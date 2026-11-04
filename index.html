@@ -2429,8 +2429,73 @@ function markShoals() {
     for (let dr = -1; dr <= 1 && !SHORE[i]; dr++) for (let dc = -1; dc <= 1; dc++) if (BDIRT[T(c + dc, r + dr)]) { SHORE[i] = 1; break; }
   }
   beachStats.shoals = rows[0].length; beachStats.shoals2 = rows[1].length;
+  markMouths();
   computeRim();
   markShelf();
+}
+// River mouths (v691, Jordan): where a river runs out over the shoals into a lake or the sea it has carved its way
+// through them, a channel at the river's depth fanning out from the mouth, its sides sloping up to the shoals and its
+// floor rising, past MOUTH.len tiles, into the shelf. Each mouth is a river tile beside a shoal; MOUTH_AT lists for
+// each tile the mouths that reach it, and carveH the channel's floor there (the ground is the lower of it and the
+// tile's own). A shoal tile the channel cuts deep through is shoal no more, but water.
+// len: tiles of flat floor, spread: widening a tile, side: rise of its sides a tile, end: rise of its floor a tile past
+// len, reach: tiles a mouth looks out to, wade: depth under a shoal's own floor that makes it water
+const MOUTH = { len: 5, spread: 0.3, side: 1.1, end: 0.1, reach: 16, wade: 0.35 };
+const MOUTHS = [], MOUTH_AT = new Map();
+function carveH(i, x, z) {
+  const ms = MOUTH_AT.get(i);
+  let h = 1e9;
+  if (ms) for (const m of ms) {
+    const rx = x - m.x, rz = z - m.z, a = rx * m.dx + rz * m.dz;
+    if (a < -0.5) continue;
+    const s = Math.abs(rx * m.dz - rz * m.dx), w = 0.5 + Math.max(0, a) * MOUTH.spread;
+    const y = m.hb + Math.max(0, s - w) * MOUTH.side + Math.max(0, a - MOUTH.len) * MOUTH.end;
+    if (y < h) h = y;
+  }
+  return h;
+}
+function markMouths() {
+  MOUTHS.length = 0; MOUTH_AT.clear();
+  const open = n => SHOAL[n] || (!LV[n] && !BR[n] && WL[n] && !LAVA[n] && !CY[n] && (!WT[n] || WT[n] === 2));
+  for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) {
+    const i = T(c, r);
+    if (WT[i] !== 3 || LV[i] || BR[i] || LAVA[i] || CY[i]) continue;
+    let by = false, gx = 0, gz = 0;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const n = T(c + dc, r + dr);
+      if ((dc || dr) && open(n) && WL[n] === WL[i]) { gx += dc; gz += dr; if (SHOAL[n]) by = true; }
+    }
+    if (!by) continue;
+    // (out the way the river runs, toward the open water)
+    let fx = FX[i] / 127, fz = FZ[i] / 127;
+    if (fx * gx + fz * gz < 0) { fx = -fx; fz = -fz; }
+    let dx = gx / (Math.hypot(gx, gz) || 1) + fx * 0.5, dz = gz / (Math.hypot(gx, gz) || 1) + fz * 0.5;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-3) continue;
+    MOUTHS.push({ x: c + 0.5, z: r + 0.5, dx: dx / l, dz: dz / l, hb: GL[i] * STEP });
+  }
+  const R = MOUTH.reach;
+  for (const m of MOUTHS) {
+    const c0 = Math.floor(m.x), r0 = Math.floor(m.z);
+    for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+      const c = c0 + dc, r = r0 + dr;
+      if (c < 0 || r < 0 || c >= N || r >= N) continue;
+      const i = T(c, r);
+      if (!SHOAL[i] && (LV[i] || BR[i] || !WL[i] || LAVA[i] || CY[i] || WT[i] === 1 || WT[i] === 3)) continue;
+      if ((c + 0.5 - m.x) * m.dx + (r + 0.5 - m.z) * m.dz < -1) continue;
+      let l = MOUTH_AT.get(i);
+      if (!l) MOUTH_AT.set(i, l = []);
+      l.push(m);
+    }
+  }
+  // (a shoal tile cut deep through: water now)
+  let cut = 0;
+  for (const [i] of MOUTH_AT) {
+    if (!SHOAL[i]) continue;
+    const c = i % N, r = (i - c) / N;
+    if (carveH(i, c + 0.5, r + 0.5) < LV[i] * STEP - BEACH_DROP * (SHOAL[i] & 512 ? 2.5 : 1.5) - MOUTH.wade) { SHOAL[i] = 0; LV[i] = 0; cut++; }
+  }
+  beachStats.mouths = MOUTHS.length; beachStats.mouthCut = cut;
 }
 // The shelf (Jordan, v678): past the shoals the sea or lake bed no longer drops off a cliff but slopes on down, SHELF_SLOPE
 // a tile, from the second shoal row's foot until it meets the bed as it was (so the deep sea is as deep as ever), making
@@ -7168,7 +7233,10 @@ function placeTowns(rand) {
 // its four streets, where the ground outside is higher or lower, a cutting three tiles wide straight out, ramps up
 // or down (RAMP_LEN long) at each step and flat between, until it meets ground at its own level. Nothing is cut
 // through water, canyons, bridges or another town; then that street is left as it was.
-const TOWN_EXIT = { wide: 3, reach: 26 };
+// (v694, Jordan: a cliff stood a few tiles past an archway: one flat row used to be enough, so a street ending on a
+// strip of level ground with a cliff just beyond was left alone. Now it takes `clear` level rows in a row, and the
+// cutting carries on up or down any cliff before them.)
+const TOWN_EXIT = { wide: 3, reach: 30, clear: 6 };
 function townExits(lock) {
   towns.forEach((t, n) => {
     const own = n + 1;
@@ -7176,38 +7244,57 @@ function townExits(lock) {
       // the street's last tile in the town
       let e = 0;
       while (e < t.R + 3 && TN[T(t.c + DC[d] * (e + 1), t.r + DR[d] * (e + 1))] === own) e++;
-      const pc = -DR[d], pr = DC[d], half = (TOWN_EXIT.wide - 1) >> 1;
-      const at = (j, w) => T(t.c + DC[d] * (e + j) + pc * w, t.r + DR[d] * (e + j) + pr * w);
-      const plan = new Map(), set = (j, lv, sh) => { for (let w = -half; w <= half; w++) if (TN[at(j, w)] !== own) plan.set(at(j, w), [lv, sh]); };
-      const shape = (left, up) => RAMP_LEN === 1 ? up + 1 : RAMP_LEN === 2 ? (left ? 5 : 9) + up : (left === 2 ? 13 : left === 1 ? 17 : 21) + up;
-      let level = t.L, j = 1, ok = false;
-      // (past any of the town's own ragged edge beside the street first: that stays town ground)
-      while (j < 4 && [-half, 0, half].some(w => TN[at(j, w)] === own)) { set(j, level, 0); j++; }
-      while (j < TOWN_EXIT.reach) {
-        const o = LV[at(j, 0)];
-        if (!o) break;
-        if (o === level) {
-          let flat = true;
-          for (let w = -half; w <= half; w++) if (LV[at(j, w)] !== level || SH[at(j, w)]) flat = false;
-          if (flat) { ok = true; break; }
-          set(j, level, 0); j++; continue;
+      const pc = -DR[d], pr = DC[d];
+      // (v694: where the full width can't be cut, say for the sea beside it, a single ramp's width down the middle)
+      for (const half of [(TOWN_EXIT.wide - 1) >> 1, 0]) {
+        const at = (j, w) => T(t.c + DC[d] * (e + j) + pc * w, t.r + DR[d] * (e + j) + pr * w);
+        const plan = new Map(), set = (j, lv, sh) => { for (let w = -half; w <= half; w++) if (TN[at(j, w)] !== own) plan.set(at(j, w), [lv, sh, j]); };
+        const shape = (left, up) => RAMP_LEN === 1 ? up + 1 : RAMP_LEN === 2 ? (left ? 5 : 9) + up : (left === 2 ? 13 : left === 1 ? 17 : 21) + up;
+        let level = t.L, j = 1, ok = false, run = 0;
+        const keep = [], goods = [];   // (level rows already as they should be, [i, j]: left alone, but locked so no ramp lands on them)
+        // (past any of the town's own ragged edge beside the street first: that stays town ground)
+        while (j < 4 && [-half, 0, half].some(w => TN[at(j, w)] === own)) { set(j, level, 0); j++; }
+        while (j < TOWN_EXIT.reach) {
+          const o = LV[at(j, 0)];
+          if (!o) break;
+          if (o === level) {
+            let flat = true;
+            for (let w = -half; w <= half; w++) if (LV[at(j, w)] !== level || SH[at(j, w)]) flat = false;
+            if (flat) for (let w = -half; w <= half; w++) keep.push([at(j, w), j]);
+            else set(j, level, 0);
+            goods.push(++j);
+            if (++run >= TOWN_EXIT.clear) { ok = true; break; }
+            continue;
+          }
+          run = 0;
+          if (o > level) {   // up: the ramp's foot on the tile before, its top the tile after it
+            for (let k = 0; k < RAMP_LEN; k++) set(j + k, level, shape(RAMP_LEN - 1 - k, d));
+            j += RAMP_LEN; level++; set(j, level, 0); j++;
+          } else {   // down: its top the tile before, rising back toward the town
+            for (let k = 0; k < RAMP_LEN; k++) set(j + k, level - 1, shape(k, (d + 2) & 3));
+            j += RAMP_LEN; level--;
+          }
         }
-        if (o > level) {   // up: the ramp's foot on the tile before, its top the tile after it
-          for (let k = 0; k < RAMP_LEN; k++) set(j + k, level, shape(RAMP_LEN - 1 - k, d));
-          j += RAMP_LEN; level++; set(j, level, 0); j++;
-        } else {   // down: its top the tile before, rising back toward the town
-          for (let k = 0; k < RAMP_LEN; k++) set(j + k, level - 1, shape(k, (d + 2) & 3));
-          j += RAMP_LEN; level--;
+        // how far to cut: all the way when it found its long level run. Otherwise (water or the reach first), or when
+        // the way crosses something not to be cut (another town, water, a canyon, a bridge, a dock, a floor, another
+        // cutting), only as far as the last level row before that, as before v694: there the ground at least meets it
+        const isBad = i => (TN[i] && TN[i] !== own) || !LV[i] || BR[i] || DOCK[i] || WT[i] >= 2 || LAVA[i] || CY[i] || FL[i] || lock[i];
+        let badRow = Infinity, bad = '';
+        for (const [i, v] of plan) if (isBad(i) && v[2] < badRow) { badRow = v[2]; bad = TN[i] ? 'town' : !LV[i] ? 'water' : CY[i] ? 'canyon' : lock[i] ? 'lock' : 'other'; }
+        let stop = ok ? Infinity : goods.length ? goods[goods.length - 1] : 0;
+        if (badRow < stop) { stop = 0; for (const g of goods) if (g <= badRow) stop = g; } else bad = '';
+        if (stop < Infinity) {
+          for (const [i, v] of plan) if (v[2] >= stop) plan.delete(i);
+          for (let k = keep.length - 1; k >= 0; k--) if (keep[k][1] >= stop) keep.splice(k, 1);
         }
+        (t.exitWhy = t.exitWhy || [])[d] = (half ? '' : 'narrow ') + (!stop ? bad || 'reach ' + j + ' L' + level : stop < Infinity ? 'short ' + stop + (bad ? ' ' + bad : '') : plan.size ? '' : 'flat');
+        if (!stop) continue;
+        for (const [i] of keep) lock[i] = 1;
+        if (!plan.size) break;
+        for (const [i, [lv, sh]] of plan) { LV[i] = lv; SH[i] = sh; WT[i] = 0; OB[i] = 0; lock[i] = 1; for (let dd = 0; dd < 4; dd++) lock[i + DI[dd]] = 1; }
+        (t.exits = t.exits || []).push(d);
+        break;
       }
-      (t.exitWhy = t.exitWhy || [])[d] = !ok ? 'reach ' + j + ' L' + level : plan.size ? '' : 'flat';
-      if (!ok || !plan.size) continue;
-      let bad = '';
-      for (const [i, [lv, sh]] of plan) if ((TN[i] && TN[i] !== own) || !LV[i] || BR[i] || DOCK[i] || WT[i] >= 2 || LAVA[i] || CY[i] || FL[i] || lock[i]) bad = TN[i] ? 'town' : !LV[i] ? 'water' : CY[i] ? 'canyon' : lock[i] ? 'lock' : 'other';
-      t.exitWhy[d] = bad;
-      if (bad) continue;
-      for (const [i, [lv, sh]] of plan) { LV[i] = lv; SH[i] = sh; WT[i] = 0; OB[i] = 0; lock[i] = 1; for (let dd = 0; dd < 4; dd++) lock[i + DI[dd]] = 1; }
-      (t.exits = t.exits || []).push(d);
     }
   });
 }
@@ -8838,11 +8925,14 @@ function groundColor(c, r, i, j) {
 // so the lower tile's outer half rises to meet its higher neighbour, and corners fill in by themselves.
 const tileSurf = (c, r, u, v) => {
   const i = T(c, r), l = LIFT[SH[i]];
-  if (SHOAL[i]) { const m = SHOAL[i] & 255; return LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5)); }
+  if (SHOAL[i]) {
+    const m = SHOAL[i] & 255, h = LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5));
+    return MOUTH_AT.size && MOUTH_AT.has(i) ? Math.min(h, carveH(i, c + u, r + v)) : h;   // (cut by a river's mouth)
+  }
   if (!LV[i] || BR[i]) {   // a lake or river bed, the sea floor, a canyon's floor
     // (the shelf off the shoals: the bed sloping on down from them until it meets the bed as it was: see markShelf)
-    if (SHELFT[i]) return Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v));
-    return GL[i] * STEP;
+    const h = SHELFT[i] ? Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v)) : GL[i] * STEP;
+    return MOUTH_AT.size && MOUTH_AT.has(i) ? Math.min(h, carveH(i, c + u, r + v)) : h;
   }
   if (WT[i] === 1) return LV[i] * STEP - BOG_BED;   // a swamp pool's bed (its banks are its neighbours' edges)
   if (BEACH[i]) return LV[i] * STEP - beachDrop(i) * (1 - beachH(BEACH[i], u, v));   // a beach, sloping into the water
@@ -17131,35 +17221,74 @@ function makeGoblin() {
   g.scale.setScalar(1.3);
   return { g, parts, topH: 0.62 };
 }
+// (v693) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
+// hindquarters, the hind legs and the tail hang from it), the head turns and nods on a neck pivot, and each leg
+// hangs from a pivot at the shoulder or hip with a second one part way down: the front leg's wrist, which folds
+// the paw back as it lifts, and the hind leg's hock, which folds it forward. The body and each leg are their old
+// boxes cut in two where the joint is, so standing still it looks as it always did; the tail has a root of its own.
+// The boar is built the same way (BOAR_FRAME: shorter legs, a low head, no tail).
+// canineRig makes the pivots where the frame says; on(p) gives an adder that takes the build's own (unjointed)
+// coordinates. gait names the WOLF_GAIT or BOAR_GAIT that moves it (poseCanine).
+const CANINE = { spineY: 0.3, spineZ: -0.02, neck: [0, 0.42, 0.2], hipY: 0.24, knee: 0.13, tail: [0, 0.3, -0.2], legs: [[-1, 0.14], [1, 0.14], [-1, -0.17], [1, -0.17]], gait: 'wolf' };
+const BOAR_FRAME = { ...CANINE, neck: [0, 0.36, 0.19], hipY: 0.2, knee: 0.11, tail: null, gait: 'boar' };
+function canineRig(g, parts, legX, C = CANINE) {
+  const joint = (parent, x, y, z) => {
+    const p = new GFX.Group(), a = parent.userData.at || [0, 0, 0];
+    p.position.set(x - a[0], y - a[1], z - a[2]); p.userData.at = [x, y, z]; parent.add(p); return p;
+  };
+  const on = p => { const b = boxer(p, parts), a = p.userData.at || [0, 0, 0]; return (w, h, d, x, y, z, m, rx, rz, ry) => b(w, h, d, x - a[0], y - a[1], z - a[2], m, rx, rz, ry); };
+  const spine = joint(g, 0, C.spineY, C.spineZ), neck = joint(g, ...C.neck), tail = C.tail ? joint(spine, ...C.tail) : null;
+  const upper = [], lower = [];
+  C.legs.forEach(([s, z], k) => { const u = joint(k < 2 ? g : spine, s * legX, C.hipY, z); upper.push(u); lower.push(joint(u, s * legX, C.hipY - C.knee, z)); });
+  // the body's box (or one along the back) cut at the spine: the hindquarters a hair slimmer and running 0.02 on
+  // into the front half
+  const body = (w, h, d, y, z, m) => {
+    const c = C.spineZ, f0 = z + d / 2, r0 = z - d / 2;
+    on(g)(w, h, f0 - c, 0, y, (f0 + c) / 2, m);
+    on(spine)(w - 0.006, h - 0.006, c + 0.02 - r0, 0, y, (c + 0.02 + r0) / 2, m);
+  };
+  // a leg's box (it ran from the ground to just under the body) from the hip down to the knee, and from there to the ground,
+  // the lower part a hair slimmer and running 0.01 up into the upper one
+  const leg = (k, w, m) => {
+    const x = C.legs[k][0] * legX, z = C.legs[k][1], kn = C.hipY - C.knee;
+    on(upper[k])(w, C.hipY - kn + 0.01, w, x, (C.hipY + kn - 0.01) / 2, z, m);
+    on(lower[k])(w - 0.006, kn + 0.01, w - 0.006, x, (kn + 0.01) / 2, z, m);
+  };
+  return { joint, on, spine, neck, tail, upper, lower, body, leg };
+}
 // a hellhound: a wolf's build gone to charcoal, with horns, burning eyes, a glowing maw, and a mane, tail
 // tip and paws of flickering flame
 function makeHellhound() {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts), flames = [];
+  const g = new GFX.Group(), parts = [], flames = [], J = canineRig(g, parts, 0.075), add = J.on(g), head = J.on(J.neck);
   const f = flatMat({ color: '#2a2224' }), fd = flatMat({ color: '#171214' }), horn = flatMat({ color: '#d8c8a0' });
   const glow = new GFX.MeshBasicMaterial({ color: '#ff6a1a' }), eye = new GFX.MeshBasicMaterial({ color: '#ffd23a' });
-  add(0.24, 0.21, 0.46, 0, 0.3, -0.02, f);
+  J.body(0.24, 0.21, 0.46, 0.3, -0.02, f);
   add(0.26, 0.13, 0.17, 0, 0.42, 0.12, fd);
-  add(0.21, 0.19, 0.19, 0, 0.44, 0.27, f);
-  add(0.12, 0.08, 0.15, 0, 0.39, 0.42, fd);
-  add(0.1, 0.02, 0.12, 0, 0.36, 0.43, glow);   // the maw
-  add(0.04, 0.03, 0.02, 0, 0.42, 0.5, darkMat);
-  add(0.035, 0.12, 0.035, -0.07, 0.57, 0.22, horn, -0.5, 0.25); add(0.035, 0.12, 0.035, 0.07, 0.57, 0.22, horn, -0.5, -0.25);
-  add(0.05, 0.03, 0.02, -0.05, 0.47, 0.366, eye); add(0.05, 0.03, 0.02, 0.05, 0.47, 0.366, eye);
-  for (const [lx, lz] of [[-0.075, 0.14], [0.075, 0.14], [-0.075, -0.17], [0.075, -0.17]]) add(0.065, 0.22, 0.065, lx, 0.11, lz, fd);
-  add(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
-  const flame = (r, h, x, y, z, mat, rx = 0) => { const m = new GFX.Mesh(new GFX.ConeGeometry(r, h, 5), mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); parts.push(m); flames.push(m); };
+  head(0.21, 0.19, 0.19, 0, 0.44, 0.27, f);
+  head(0.12, 0.08, 0.15, 0, 0.39, 0.42, fd);
+  head(0.1, 0.02, 0.12, 0, 0.36, 0.43, glow);   // the maw
+  head(0.04, 0.03, 0.02, 0, 0.42, 0.5, darkMat);
+  head(0.035, 0.12, 0.035, -0.07, 0.57, 0.22, horn, -0.5, 0.25); head(0.035, 0.12, 0.035, 0.07, 0.57, 0.22, horn, -0.5, -0.25);
+  head(0.05, 0.03, 0.02, -0.05, 0.47, 0.366, eye); head(0.05, 0.03, 0.02, 0.05, 0.47, 0.366, eye);
+  for (let k = 0; k < 4; k++) J.leg(k, 0.065, fd);
+  J.on(J.tail)(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
+  const flame = (p, r, h, x, y, z, mat, rx = 0) => {
+    const a = p.userData.at || [0, 0, 0], m = new GFX.Mesh(new GFX.ConeGeometry(r, h, 5), mat);
+    m.position.set(x - a[0], y - a[1], z - a[2]); m.rotation.x = rx; p.add(m); parts.push(m); flames.push(m);
+  };
   // the mane, along the neck and shoulders, leaning back
-  flame(0.07, 0.2, 0, 0.56, 0.16, flameMats[0], -0.5); flame(0.06, 0.17, 0, 0.53, 0.06, flameMats[1], -0.6);
-  flame(0.05, 0.14, -0.05, 0.52, 0.12, flameMats[0], -0.5); flame(0.05, 0.14, 0.05, 0.52, 0.12, flameMats[0], -0.5);
-  flame(0.04, 0.11, 0, 0.47, -0.04, flameMats[2], -0.7);
+  flame(g, 0.07, 0.2, 0, 0.56, 0.16, flameMats[0], -0.5); flame(g, 0.06, 0.17, 0, 0.53, 0.06, flameMats[1], -0.6);
+  flame(g, 0.05, 0.14, -0.05, 0.52, 0.12, flameMats[0], -0.5); flame(g, 0.05, 0.14, 0.05, 0.52, 0.12, flameMats[0], -0.5);
+  flame(J.spine, 0.04, 0.11, 0, 0.47, -0.04, flameMats[2], -0.7);
   // the tail's tip
-  flame(0.05, 0.16, 0, 0.47, -0.42, flameMats[1], -1.0);
+  flame(J.tail, 0.05, 0.16, 0, 0.47, -0.42, flameMats[1], -1.0);
   // and the paws
-  for (const [lx, lz] of [[-0.075, 0.14], [0.075, 0.14], [-0.075, -0.17], [0.075, -0.17]]) {
-    flame(0.055, 0.12, lx, 0.05, lz, flameMats[0]); flame(0.035, 0.08, lx, 0.04, lz + 0.02, flameMats[2]);
-  }
-  g.scale.setScalar(1.45);
-  return { g, parts, flames, topH: 0.68 };
+  CANINE.legs.forEach(([s, lz], k) => {
+    const lx = s * 0.075;
+    flame(J.lower[k], 0.055, 0.12, lx, 0.05, lz, flameMats[0]); flame(J.lower[k], 0.035, 0.08, lx, 0.04, lz + 0.02, flameMats[2]);
+  });
+  g.scale.setScalar(1.45); g.rotation.order = 'YXZ';
+  return { g, parts, flames, spine: J.spine, neck: J.neck, tailRoot: J.tail, upperLegs: J.upper, lowerLegs: J.lower, canine: CANINE, topH: 0.68 };
 }
 // a fire spirit: a floating flame with a bright heart, its tongues flickering, two dark eyes in the blaze
 const flameMats = ['#ff4a10', '#ff8a20', '#ffd060'].map((c, k) => new GFX.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.9 + k * 0.2, flatShading: true, transparent: true, opacity: 0.8 + k * 0.08, roughness: 1 }));
@@ -17175,19 +17304,19 @@ function makeFireSpirit() {
   return { g, parts, flames, ghost: true, topH: 0.9 };
 }
 function makeWolf(fur = '#6c6a78', furD = '#4c4a58', eye = '#ff4a3a') {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const g = new GFX.Group(), parts = [], J = canineRig(g, parts, 0.07), add = J.on(g), head = J.on(J.neck);
   const f = flatMat({ color: fur }), fd = flatMat({ color: furD }), red = new GFX.MeshBasicMaterial({ color: eye });
-  add(0.22, 0.2, 0.44, 0, 0.3, -0.02, f);
+  J.body(0.22, 0.2, 0.44, 0.3, -0.02, f);
   add(0.24, 0.12, 0.16, 0, 0.42, 0.12, fd);
-  add(0.2, 0.18, 0.18, 0, 0.44, 0.27, f);
-  add(0.11, 0.08, 0.14, 0, 0.39, 0.42, fd);
-  add(0.04, 0.03, 0.02, 0, 0.42, 0.495, darkMat);
-  add(0.05, 0.09, 0.04, -0.06, 0.56, 0.24, fd); add(0.05, 0.09, 0.04, 0.06, 0.56, 0.24, fd);
-  add(0.04, 0.03, 0.02, -0.05, 0.47, 0.361, red); add(0.04, 0.03, 0.02, 0.05, 0.47, 0.361, red);
-  for (const [lx, lz] of [[-0.07, 0.14], [0.07, 0.14], [-0.07, -0.17], [0.07, -0.17]]) add(0.06, 0.22, 0.06, lx, 0.11, lz, fd);
-  add(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
-  g.scale.setScalar(1.35);
-  return { g, parts, topH: 0.62 };
+  head(0.2, 0.18, 0.18, 0, 0.44, 0.27, f);
+  head(0.11, 0.08, 0.14, 0, 0.39, 0.42, fd);
+  head(0.04, 0.03, 0.02, 0, 0.42, 0.495, darkMat);
+  head(0.05, 0.09, 0.04, -0.06, 0.56, 0.24, fd); head(0.05, 0.09, 0.04, 0.06, 0.56, 0.24, fd);
+  head(0.04, 0.03, 0.02, -0.05, 0.47, 0.361, red); head(0.04, 0.03, 0.02, 0.05, 0.47, 0.361, red);
+  for (let k = 0; k < 4; k++) J.leg(k, 0.06, fd);
+  J.on(J.tail)(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
+  g.scale.setScalar(1.35); g.rotation.order = 'YXZ';   // (its lean and gallop rocking pitch about its own side, whichever way it faces)
+  return { g, parts, spine: J.spine, neck: J.neck, tailRoot: J.tail, upperLegs: J.upper, lowerLegs: J.lower, canine: CANINE, topH: 0.62 };
 }
 const SLIME_PROFILE = [[0.3, 0.01], [0.34, 0.05], [0.33, 0.14], [0.27, 0.25], [0.17, 0.33], [0.07, 0.37], [0, 0.375]].map(([r, y]) => new GFX.Vector2(r, y));
 const slimeMat = new GFX.MeshStandardMaterial({ color: '#5fe36a', emissive: '#1b6b22', roughness: 0.25, metalness: 0, flatShading: true, transparent: true, opacity: 0.62, side: GFX.DoubleSide });
@@ -17230,18 +17359,18 @@ function makeScorpion() {
   return { g, parts, topH: 0.6 };
 }
 function makeBoar() {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const g = new GFX.Group(), parts = [], J = canineRig(g, parts, 0.09, BOAR_FRAME), add = J.on(g), head = J.on(J.neck);
   const hide = flatMat({ color: '#6a4a34' }), dark = flatMat({ color: '#4a3424' }), snout = flatMat({ color: '#c8908a' }), tusk = flatMat({ color: '#f0ead8' }), red = new GFX.MeshBasicMaterial({ color: '#ff4a3a' });
-  add(0.28, 0.24, 0.46, 0, 0.3, -0.02, hide);
-  add(0.06, 0.08, 0.36, 0, 0.45, -0.02, dark);
-  add(0.22, 0.2, 0.16, 0, 0.3, 0.27, hide);
-  add(0.12, 0.1, 0.06, 0, 0.26, 0.37, snout);
-  add(0.03, 0.08, 0.03, -0.07, 0.26, 0.38, tusk, -0.4); add(0.03, 0.08, 0.03, 0.07, 0.26, 0.38, tusk, -0.4);
-  add(0.04, 0.03, 0.02, -0.06, 0.35, 0.351, red); add(0.04, 0.03, 0.02, 0.06, 0.35, 0.351, red);
-  add(0.05, 0.07, 0.04, -0.08, 0.42, 0.24, dark); add(0.05, 0.07, 0.04, 0.08, 0.42, 0.24, dark);
-  for (const [lx, lz] of [[-0.09, 0.14], [0.09, 0.14], [-0.09, -0.17], [0.09, -0.17]]) add(0.07, 0.18, 0.07, lx, 0.09, lz, dark);
-  g.scale.setScalar(1.35);
-  return { g, parts, topH: 0.6 };
+  J.body(0.28, 0.24, 0.46, 0.3, -0.02, hide);
+  J.body(0.06, 0.08, 0.36, 0.45, -0.02, dark);   // the bristly ridge along the back
+  head(0.22, 0.2, 0.16, 0, 0.3, 0.27, hide);
+  head(0.12, 0.1, 0.06, 0, 0.26, 0.37, snout);
+  head(0.03, 0.08, 0.03, -0.07, 0.26, 0.38, tusk, -0.4); head(0.03, 0.08, 0.03, 0.07, 0.26, 0.38, tusk, -0.4);
+  head(0.04, 0.03, 0.02, -0.06, 0.35, 0.351, red); head(0.04, 0.03, 0.02, 0.06, 0.35, 0.351, red);
+  head(0.05, 0.07, 0.04, -0.08, 0.42, 0.24, dark); head(0.05, 0.07, 0.04, 0.08, 0.42, 0.24, dark);
+  for (let k = 0; k < 4; k++) J.leg(k, 0.07, dark);
+  g.scale.setScalar(1.35); g.rotation.order = 'YXZ';
+  return { g, parts, spine: J.spine, neck: J.neck, upperLegs: J.upper, lowerLegs: J.lower, canine: BOAR_FRAME, topH: 0.6 };
 }
 // a giant spider: low and quick on eight jointed legs, which scuttle as it runs
 function makeSpider() {
@@ -17294,7 +17423,7 @@ const FOE = {
   wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28, hide: true, bone: 0.5 },
   slime: { make: makeSlime, name: 'Bog slime', hp: 26, dmg: 6, speed: 1.8, reach: 0.75, aggro: 6, rad: 0.3 },
   ghost: { make: () => makeGhost(), name: 'Wailing ghost', hp: 28, dmg: 9, speed: 2.4, reach: 0.85, aggro: 9, rad: 0.25 },
-  // (v692, Jordan) the dead on the people's rig (human, undead: see Hostile folk): they walk, strike and ragdoll as people
+  // (v695, Jordan) the dead on the people's rig (human, undead: see Hostile folk): they walk, strike and ragdoll as people
   // do, a skeleton with a rusted weapon (now and then a bow), a zombie with its hands; still spawned by the biomes
   zombie: { human: true, undead: true, name: 'Zombie', hp: 48, dmg: 11, speed: 1.55, reach: 0.85, aggro: 7, rad: 0.25 },
   skeleton: { human: true, undead: true, name: 'Skeleton', hp: 34, dmg: 9, speed: 2.5, reach: 0.9, aggro: 8, rad: 0.23, bone: 1 },
@@ -18591,7 +18720,8 @@ function spawnFoe(kind, x, z) {
   f.g.position.set(x, surfaceY(x, z), z);
   const sh = new GFX.Object3D(); sh.position.set(x, surfaceY(x, z) + 0.02, z);
   const foe = Object.assign(f, { kind, def: d, level: lvl, x, z, y: surfaceY(x, z), hp: mhp, maxHp: mhp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
-    home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
+    home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x,
+    gait: Math.random(), run: 0, amp: 0, turnV: 0, lastFace: null });
   if (d.human) humanFoe(foe);
   foes.push(foe);
   return foe;
@@ -25267,7 +25397,7 @@ fn boneOf(b: f32) -> mat4x4f {
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let N = flatNormal(i.eye);
-  // (v692: a colour marked 2 over glows, unlit: the undead's eyes)
+  // (v695: a colour marked 2 over glows, unlit: the undead's eyes)
   let hot = select(0.0, 1.0, i.color.r > 1.5);
   let alb = i.color - vec3f(2.0 * hot);
   let c = shadeLit(alb * (1.0 - hot), alb * hot * 1.6, 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
@@ -25534,7 +25664,7 @@ function bakeFolk(p) {
   let ov = 0, oi = 0;
   for (const [o, b, m] of parts) {
     const a = o.geometry.attributes.position.array, n = a.length / 3, ix = o.geometry.index && o.geometry.index.array, cc = o.material.color;
-    // (v692) an unlit part (the undead's eyes) glows: its colour is marked 2 over, which FOLK_WGSL lights from within
+    // (v695) an unlit part (the undead's eyes) glows: its colour is marked 2 over, which FOLK_WGSL lights from within
     const hot = o.material.isMeshBasicMaterial ? 2 : 0;
     for (let k = 0; k < n; k++) {
       v.set(a[k * 3], a[k * 3 + 1], a[k * 3 + 2]).applyMatrix4(m);
@@ -26154,7 +26284,7 @@ function drawFolk() {
 // crossbow shoots from range (HUMAN_RANGED, humanShoot: arrows in `arrows`, marked hostile, that hit the hero).
 // cap: people about at once; every: seconds between tries; lie, sink: seconds a body lies, and sinks
 const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 5, sink: 1.5 };
-// (v692, Jordan: "redo our skeletons and our zombies to work on our hostile humans rig so they can do walk, attack and
+// (v695, Jordan: "redo our skeletons and our zombies to work on our hostile humans rig so they can do walk, attack and
 // ragdoll on death") The dead are FOE kinds marked human and undead, built by townsfolk.js on the same joints
 // (design(seed, 'wilds', kind)): a skeleton bone by bone, its jaw on a hinge, a zombie as a rotting person. A skeleton
 // fights as the people do with what it holds (a rusted sword or axe the sword's combo, a spear the poke, a bow from
@@ -26191,7 +26321,7 @@ function humanShoot(f) {
 // a person of this kind: their build, baked, in a mesh of their own
 function humanRig(kind) {
   let d = null;
-  // (v692: the dead are asked for by name)
+  // (v695: the dead are asked for by name)
   if (FOE[kind].undead) d = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds', kind);
   for (let a = 0; a < 2000 && !d; a++) { const e = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds'); if (e.job === kind) d = e; }
   const p = { d: d || folkKit.design(1, 'wilds') };
@@ -26341,7 +26471,7 @@ function humanBones(f, shown) {
 function drawHumans() {
   for (const f of foes) if (f.hmesh) { f.rig.g.updateMatrixWorld(); humanBones(f, f.g.visible); }
 }
-// (v692) a zombie on the people's rig, over their walk or standing pose: hunched, the head lolling to one side (f.loll),
+// (v695) a zombie on the people's rig, over their walk or standing pose: hunched, the head lolling to one side (f.loll),
 // one leg dragging (half its stride, the body rocking over the good one), the arms held out ahead for you once it's
 // after you (f.reachK eases them up and down) and hanging loose otherwise. Its blows (f.atk as the people's, the blow
 // landing at 0.45; f.combo): a claw raised high and raked down, the right hand then the left, then a lunge with both arms
@@ -26487,7 +26617,7 @@ function poseHuman(f, dt, sp) {
     r.tool.rotation.set(wp === 'spear' ? Math.PI / 2 - (chestX + ax + elbowR + wr[0]) : wp === 'torch' ? Math.PI : 0, 0, 0);
     if (wp === 'shovel') { r.tool.position.y = f.toolY - 0.5; r.tool.rotation.x = 0.8; }
   }
-  // (v692) a skeleton's jaw: chattering as it comes for you, gaping as it strikes
+  // (v695) a skeleton's jaw: chattering as it comes for you, gaping as it strikes
   if (r.jaw) {
     const u = f.atk >= 0 ? Math.min(1, f.atk / 0.85) : 0;
     r.jaw.rotation.x = f.atk >= 0 ? 0.45 * smooth(0.3, 0.5, u) * (1 - smooth(0.62, 1, u))
@@ -27514,6 +27644,94 @@ function helmHands() {
   }
 }
 
+// (v693) How wolves, frost wolves and hellhounds move on their joints (canineRig). Wandering or walking home they
+// trot, diagonal pairs of legs together; chasing (over runFrom of their top speed) they gallop, the hind legs
+// then the front ones, the back flexing as the hind legs reach under and stretching as the front ones reach out,
+// a little leap between strides. The legs' phase runs on the ground covered (stride tiles a stride), so the paws
+// don't slide. A leg swings from its shoulder or hip; lifting, the front wrist folds the paw back and the hind
+// hock folds it forward (the hind legs stand a little crooked, rest). Turning, the back curves into the turn and
+// the head leads it; chasing, the head turns to you. To bite it crouches back on its haunches, head low, and
+// springs, forelegs out and hind legs thrown back. T > Wolf moves; on 0 = the old stiff-legged wolf.
+// The boar trots and charges the same way, stiffer in the back and shorter in the stride, and gores rather than
+// pounces: head down, then thrown up (toss) as it drives in, forelegs barely leaving the ground (reach). T > Boar moves.
+const WOLF_GAIT = {
+  on: 1, trotStride: 0.65, runStride: 1.4, runFrom: 0.7, swing: 0.5, runSwing: 0.75, knee: 1.1, hock: 0.8, rest: 0.25,
+  flex: 0.22, sway: 0.08, turn: 0.12, head: 0.6, tail: 1, leap: 0.05, pounce: 1, crouch: 0.89, reach: 0.95, kick: 0.6, toss: 0.35,
+};
+const BOAR_GAIT = {
+  on: 1, trotStride: 0.55, runStride: 1.1, runFrom: 0.7, swing: 0.45, runSwing: 0.65, knee: 1.2, hock: 1, rest: 0.15,
+  flex: 0.12, sway: 0.06, turn: 0.08, head: 0.6, tail: 0, leap: 0.03, pounce: 1, crouch: 1.05, reach: 0.3, kick: 0.2, toss: 0.7,
+};
+const GAITS = { wolf: WOLF_GAIT, boar: BOAR_GAIT };
+const TROT_OFF = [0, 0.5, 0.5, 0], GALLOP_OFF = [0.55, 0.45, 0, 0.1];
+const canineOut = { lift: 0, pitch: 0, roll: 0 };
+// a bump of 1 at phase c (of a cycle), falling to 0 w either side
+const phaseBump = (x, c, w) => { const e = ((x - c) % 1 + 1.5) % 1 - 0.5; return Math.abs(e) < w ? 0.5 + 0.5 * Math.cos(Math.PI * e / w) : 0; };
+// a paw's sole, (y, z) in the build's frame, from the leg's hip (or shoulder) and its two bends
+const rotYZ = (y, z, a) => [y * Math.cos(a) - z * Math.sin(a), y * Math.sin(a) + z * Math.cos(a)];
+function canineSole(f, k) {
+  const C = f.canine, U = f.upperLegs[k], L = f.lowerLegs[k];
+  let hy = C.hipY, hz = C.legs[k][1], a = U.rotation.x;
+  if (k >= 2) { const s = f.spine.rotation.x, [dy, dz] = rotYZ(hy - C.spineY, hz - C.spineZ, s); hy = C.spineY + dy; hz = C.spineZ + dz; a += s; }
+  const [y1, z1] = rotYZ(-C.knee, 0, a), [y2, z2] = rotYZ(C.knee - C.hipY, 0, a + L.rotation.x);
+  return [hy + y1 + y2, hz + z1 + z2];
+}
+// lean: the root's pitch from the bite (nose down +)
+function poseCanine(f, dt, sp, lean) {
+  const G = GAITS[f.canine.gait], U = f.upperLegs, L = f.lowerLegs, out = canineOut;
+  if (!G.on) {
+    for (const j of [f.spine, f.neck, f.tailRoot, ...U, ...L]) if (j) j.rotation.set(0, 0, 0);
+    out.lift = sp > 0 ? Math.abs(Math.sin(time * 11 + f.phase)) * 0.06 : 0; out.pitch = 0; out.roll = sp > 0 ? Math.sin(time * 11 + f.phase) * 0.06 : 0;
+    return out;
+  }
+  const ease = 1 - Math.exp(-dt * 8), d = f.def, TAU = Math.PI * 2;
+  f.run += ((sp > d.speed * G.runFrom ? 1 : 0) - f.run) * (1 - Math.exp(-dt * 4));
+  f.amp += ((sp > 0.05 ? Math.min(1, sp / 1.2) : 0) - f.amp) * ease;
+  const R = f.run, A = f.amp;
+  f.gait = (f.gait + sp * dt / (G.trotStride + (G.runStride - G.trotStride) * R)) % 1;
+  const p = f.gait;
+  // turning: how fast it's coming round, eased
+  if (f.lastFace === null) f.lastFace = f.face;
+  if (dt > 0) f.turnV += (angDiff(f.face, f.lastFace) / dt - f.turnV) * (1 - Math.exp(-dt * 6));
+  f.lastFace = f.face;
+  const bend = clamp(f.turnV * G.turn, -0.4, 0.4);
+  // the bite: crouch (wind) then spring
+  const u = f.atk, wind = u >= 0 ? smooth(0, 0.4, u) * (1 - smooth(0.44, 0.5, u)) * G.pounce : 0, spring = u >= 0 ? smooth(0.42, 0.5, u) * (1 - smooth(0.6, 0.85, u)) * G.pounce : 0;
+  // the back: flexed (rump down, hind legs under) as the gallop gathers, stretched as it reaches out
+  const flexC = Math.cos(TAU * (p - 0.93)) * G.flex * R * A;
+  f.spine.rotation.set(-flexC - 0.12 * wind + 0.12 * spring, -G.sway * (1 - R) * A * Math.sin(TAU * p) - bend, 0);
+  out.pitch = flexC * 0.4;
+  out.roll = 0.04 * (1 - R) * A * Math.sin(TAU * p);
+  const swingA = (G.swing + (G.runSwing - G.swing) * R) * A, stance = 0.5 - 0.2 * R;
+  for (let k = 0; k < 4; k++) {
+    const q = ((p + TROT_OFF[k] + (GALLOP_OFF[k] - TROT_OFF[k]) * R) % 1 + 1) % 1;
+    let w, lift = 0;
+    if (q < stance) w = 1 - 2 * q / stance;
+    else { const t = (q - stance) / (1 - stance); w = -1 + 2 * t * t * (3 - 2 * t); lift = Math.sin(Math.PI * t) * A; }
+    const th = -swingA * w;
+    if (k < 2) {
+      U[k].rotation.x = th - 0.15 * wind - G.reach * spring;
+      L[k].rotation.x = G.knee * lift + 0.15 * wind + 0.35 * spring;
+    } else {
+      // (the hip hangs from the spine, so its bend is taken back out: the legs keep to the ground)
+      // (crouching, the hock folds twice the hip's bend, so the paw stays under the hip)
+      U[k].rotation.x = th + G.rest - f.spine.rotation.x + G.crouch * wind + G.kick * spring;
+      L[k].rotation.x = -2 * G.rest - G.hock * lift - (2 * G.crouch - 0.5) * wind + 2 * G.rest * spring;
+    }
+  }
+  // the body rides as low as its legs let it (its lowest paw on the ground), and leaps a little between gallop strides
+  const P = lean + out.pitch, cp = Math.cos(P), sn = Math.sin(P);
+  let low = 9;
+  for (let k = 0; k < 4; k++) { const [y, z] = canineSole(f, k); low = Math.min(low, y * cp - z * sn); }
+  out.lift = (-low + G.leap * R * A * phaseBump(p, 0.93, 0.12)) * f.base;
+  // the head held steady against the rocking, leading turns, and turned to you while it hunts you
+  let look = 0;
+  if (f.aggro) look = clamp(angDiff(Math.atan2(H.x - f.x, H.z - f.z), f.face), -0.5, 0.5) * 0.6;
+  f.neck.rotation.set(-out.pitch * G.head + 0.06 * R * A * Math.sin(TAU * (p - 0.3)) + 0.45 * wind - G.toss * spring, clamp(bend * 0.7 + look, -0.6, 0.6), 0);
+  // the tail streams out at a gallop, sways at a trot, and drops as it crouches
+  if (f.tailRoot) f.tailRoot.rotation.set(G.tail * (R * A * (-0.35 + 0.15 * Math.sin(TAU * (p - 0.2))) - 0.3 * wind - 0.2 * spring), G.tail * 0.25 * (1 - R) * A * Math.sin(TAU * p + 1), 0);
+  return out;
+}
 function updateFoe(f, dt, night) {
   const d = f.def;
   const dx = H.x - f.x, dz = H.z - f.z, dist = Math.hypot(dx, dz);
@@ -27631,8 +27849,10 @@ function updateFoe(f, dt, night) {
   if (f.plant) { posePlant(f, sq); return; }
   if (f.legs) f.legs.forEach((p, k) => { p.rotation.y = p.userData.ry + (moving ? Math.sin(time * 22 + f.phase + k * 1.9) * 0.3 : 0); p.rotation.z = moving ? Math.max(0, Math.sin(time * 22 + f.phase + k * 1.9)) * 0.15 * (k < 4 ? -1 : 1) : 0; });
   if (f.atk >= 0) { if (f.atk < 0.45) lean = -0.25 * (f.atk / 0.45); else if (f.atk < 0.6) { lean = 0.35; fwd = 0.25; } else lean = 0.35 * (1 - (f.atk - 0.6) / 0.25); }
+  let roll = moving && !f.slime ? Math.sin(time * 11 + f.phase) * 0.06 : 0;
+  if (f.spine) { const c = poseCanine(f, dt, moving ? want / dt : 0, lean); lift = c.lift; lean += c.pitch; roll = c.roll; }
   f.g.position.set(f.x + Math.sin(f.face) * fwd, f.y + lift, f.z + Math.cos(f.face) * fwd);
-  f.g.rotation.set(lean, f.face, moving && !f.slime ? Math.sin(time * 11 + f.phase) * 0.06 : 0);
+  f.g.rotation.set(lean, f.face, roll);
   if (f.jaw) f.jaw.position.y = 0.625 - Math.max(0, Math.sin(time * 9 + f.phase)) * 0.02;
   f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
   f.shadow.position.set(f.x, f.y + 0.02, f.z);
@@ -29104,7 +29324,7 @@ const TUNING = [
     [HUMAN_SPAWN, 'raider', 'A war band of three raiders in front of you', 'action', () => spawnHumansAhead('raider', 3)],
     [HUMAN_SPAWN, 'graveRobber', 'A grave robber in front of you', 'action', () => spawnHumansAhead('graveRobber', 1)],
     [HUMAN_SPAWN, 'highwayman', 'A highwayman in front of you', 'action', () => spawnHumansAhead('highwayman', 1, 7)],
-    // (v692) the dead
+    // (v695) the dead
     [HUMAN_SPAWN, 'skeleton', 'Three skeletons in front of you', 'action', () => spawnHumansAhead('skeleton', 3)],
     [HUMAN_SPAWN, 'zombie', 'Three zombies in front of you', 'action', () => spawnHumansAhead('zombie', 3)],
     [HUMAN_SPAWN, 'clear', 'Clear away every foe about', 'action', () => foes.slice().forEach(removeFoe)],
@@ -29130,7 +29350,7 @@ const TUNING = [
     [HUMAN, 'lie', 'Seconds they lie there before sinking', 0, 60, 0.5],
     [UNDEAD, 'skullPop', 'Skeletons: chance the skull comes off', 0, 1, 0.01],
   ]],
-  // (v692) skeletons and zombies on the people's rig
+  // (v695) skeletons and zombies on the people's rig
   ['Undead moves', [
     [UNDEAD, 'hunch', 'Zombie: stoop', 0, 0.8, 0.01],
     [UNDEAD, 'loll', 'Zombie: head lolled over', 0, 1, 0.01],
@@ -29233,6 +29453,28 @@ const TUNING = [
     [SWORD_POSE, 'whirlCrouch', 'Cleave / buzzsaw: crouch', 0, 0.8, 0.01],
     [SWORD_POSE, 'lungeDepth', 'Lunge: depth of the front knee', 0, 1.5, 0.01],
   ]],
+  ...[['Wolf moves', WOLF_GAIT, 'the old stiff wolf'], ['Boar moves', BOAR_GAIT, 'the old stiff boar']].map(([title, G, old]) => [title, [
+    [G, 'on', `Jointed legs and back (0 = ${old})`, 0, 1, 1],
+    [G, 'trotStride', 'Trot: tiles a stride', 0.2, 2, 0.01],
+    [G, 'runStride', 'Gallop: tiles a stride', 0.4, 3, 0.01],
+    [G, 'runFrom', 'Gallops over this share of its top speed', 0, 1, 0.01],
+    [G, 'swing', 'Trot: legs swing (radians either way)', 0, 1.2, 0.01],
+    [G, 'runSwing', 'Gallop: legs swing (radians either way)', 0, 1.5, 0.01],
+    [G, 'knee', 'Front wrists fold the paw back as it lifts', -2, 2.5, 0.01],
+    [G, 'hock', 'Hind hocks fold the paw forward as it lifts', -2, 2.5, 0.01],
+    [G, 'rest', 'Hind legs: crook at the hock standing', -0.5, 0.8, 0.01],
+    [G, 'flex', 'Gallop: back flexing and stretching', 0, 0.8, 0.01],
+    [G, 'sway', 'Trot: hindquarters sway', 0, 0.4, 0.01],
+    [G, 'turn', 'Back curving into turns', 0, 0.5, 0.01],
+    [G, 'head', 'Head held steady against the rocking', 0, 1, 0.01],
+    [G, 'tail', 'Tail movement', 0, 2, 0.01],
+    [G, 'leap', 'Gallop: leap between strides (tiles)', 0, 0.3, 0.005],
+    [G, 'pounce', 'Attack: all of its crouch and spring', 0, 2, 0.01],
+    [G, 'crouch', 'Attack: crouch on the haunches', 0, 1.5, 0.01],
+    [G, 'reach', 'Attack: forelegs thrown out', 0, 1.8, 0.01],
+    [G, 'kick', 'Attack: hind legs thrown back', 0, 1.5, 0.01],
+    [G, 'toss', 'Attack: head thrown up into the blow', -0.5, 1.5, 0.01],
+  ]]),
   ['Auralith shimmer', [
     [PRISM, 'bands', 'Rainbow turns from face-on to edge-on', 0, 4, 0.05],
     [PRISM, 'swirl', 'Swirl across the surface', 0, 2, 0.05],
@@ -30399,7 +30641,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 692, crashSeen = new Map();
+const GAME_VERSION = 695, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -30646,7 +30888,7 @@ window.GAME = {
   mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, cut: k.cut, why: k.why, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   beaches: () => ({ ...beachStats, n: BEACH.reduce((a, v) => a + (v ? 1 : 0), 0) }),
-  raw: () => ({ BEACH, SHOAL, BDIRT, SHORE, beachH, TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
+  raw: () => ({ BEACH, SHOAL, BDIRT, SHORE, MOUTHS, beachH, TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
