@@ -450,6 +450,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v737:** (Jordan) Auto mosaic size switches at set zooms instead: 2 below zoom 1.5, 3 from 1.5, 4 from 2.0 (T > Pixels: Auto min, and the two zooms it steps up at). Still never below 2, a boat's wheel included.
 
+**v738:** (Jordan) Falling snow no longer resets every few seconds as you walk. The air life round you (snow, butterflies, fireflies, embers, dragonflies, fairies) is rebuilt every 8 tiles you move, and its random seed also took in your exact position, so every rebuild re-rolled every flake: which tiles had one, where it fell and how far through its fall it was. The seed is now the tile's alone, so each tile keeps the same flakes through a rebuild.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
