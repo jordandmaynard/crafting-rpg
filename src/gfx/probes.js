@@ -281,7 +281,7 @@ export class HeightProbes {
   }
 
   // for the renderer: the newest probes and the height field, and the frame's numbers for them
-  views() { const s = this.sets[this.cur]; return { vis: s.visV, light: s.lightV, hf: this.hfView, key: this.N + ':' + this.cur }; }
+  views() { const s = this.sets[this.cur]; return { vis: s.visV, light: s.lightV, hf: this.hfView, key: this.N + ':' + this.gen + ':' + this.cur }; }   // (v771: gen, as the renderer keeps bind groups by key)
   uniforms() {
     return [this.mode, this.strength, this.minimum, this.bias, this.grid[0], this.grid[1], this.N, GI_LAYERS.length,
       this.hfOrigin[0], this.hfOrigin[1], HF, 0];

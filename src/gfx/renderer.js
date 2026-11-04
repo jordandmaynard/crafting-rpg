@@ -151,8 +151,8 @@ class Renderer {
     // keyShare, ground (the hemisphere's floor-facing share), even (0..1: only what it adds over the light there) }
     this.inside = null;   // a world height: the plain and lit materials draw nothing below it while set (a water mirror)
     this.gi = null;
+    this._frameBGs = new Map();   // (v771) frame bind groups by what they bind, so a set the probes swap back to is the same object
     this._ensureShadow(512);
-    this._frameBG = null; this._frameBGKey = '';
     this.frameBGShadow = device.createBindGroup({ layout: this.bglFrameShadow, entries: [{ binding: 0, resource: { buffer: this.frameBuf, size: FRAME_BYTES } }] });
     this._canvasDepth = null;
   }
@@ -184,15 +184,15 @@ class Renderer {
   setClouds(u) { this.clouds = u; }
   // probe lighting (probes.js): something with views() -> { vis, light, hf, key } and uniforms() -> 12 numbers
   // (the frame's giA, giB, giC), or null
-  setGI(gi) { this.gi = gi; this._frameBGKey = ''; }
+  setGI(gi) { this.gi = gi; this._frameBGs.clear(); }
   // lit haze (haze.js): something with view() -> its texture (a texel a mosaic pixel) or null, uniforms() -> 8
   // numbers (the frame's hazeA, hazeB) and key, or null
-  setHaze(h) { this.haze = h; this._frameBGKey = ''; }
+  setHaze(h) { this.haze = h; this._frameBGs.clear(); }
   // eye adaptation (exposure.js): something with buffer() -> its state (the exposure first) and on, or null
-  setEye(e) { this.eye = e; this._frameBGKey = ''; }
+  setEye(e) { this.eye = e; this._frameBGs.clear(); }
   // bloom (bloom.js): something with view() -> its glow (or null) and uniforms() -> 4 numbers (the frame's bloom)
   // and key, or null
-  setBloom(b) { this.bloom = b; this._frameBGKey = ''; }
+  setBloom(b) { this.bloom = b; this._frameBGs.clear(); }
   // HDR output: on an HDR display, a float canvas whose values above 1 show brighter than white; peak: the
   // brightest highlights, × white's brightness. Off: the usual canvas, everything over white clipped.
   setHDR(on, peak = 3) {
@@ -680,7 +680,7 @@ class Renderer {
     this.shadowSize = size;
     this.shadowTex = this.device.createTexture({ size: [size, size], format: SHADOW_FORMAT, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowView = this.shadowTex.createView();
-    this._frameBGKey = '';
+    this._frameBGs.clear();
   }
   _frameBindGroup(noHaze = false) {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
@@ -689,10 +689,13 @@ class Renderer {
     const bv = this.bloom && !noHaze ? this.bloom.view() : null;
     const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-') + ':' + (eb ? 'e' : '-') +
       ':' + (bv ? this.bloom.key : '-');
-    const C = noHaze ? (this._frameBGc = this._frameBGc || { key: '', bg: null }) : null;
-    if (C ? key !== C.key : key !== this._frameBGKey) {
-      if (C) C.key = key; else this._frameBGKey = key;
-      const bg = this.device.createBindGroup({ layout: this.bglFrame, entries: [
+    // (v771) kept by key, not only the last one: the probes swap between two texture sets frame to frame, and a new
+    // bind group each time made every recorded draw list (bundles are tied to the bind group) encode again
+    const k = (noHaze ? 'n' : 'h') + key;
+    let bg = this._frameBGs.get(k);
+    if (!bg) {
+      if (this._frameBGs.size >= 16) this._frameBGs.clear();
+      bg = this.device.createBindGroup({ layout: this.bglFrame, entries: [
         { binding: 0, resource: { buffer: this.frameBuf, size: FRAME_BYTES } },
         { binding: 1, resource: this.shadowView },
         { binding: 2, resource: this.shadowSamp },
@@ -705,9 +708,9 @@ class Renderer {
         { binding: 9, resource: { buffer: eb || this.noEye } },
         { binding: 10, resource: bv || this.noHaze },
       ] });
-      if (C) C.bg = bg; else this._frameBG = bg;
+      this._frameBGs.set(k, bg);
     }
-    return C ? C.bg : this._frameBG;
+    return bg;
   }
   _frameSlotAlloc() {
     if (this.frameSlot >= FRAME_SLOTS) this.flush();
