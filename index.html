@@ -17345,6 +17345,41 @@ function makeHuman(L = heroLook()) {
   return { g, parts, look: L, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer };
 }
 
+// (v693) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
+// hindquarters, the hind legs and the tail hang from it), the head turns and nods on a neck pivot, and each leg
+// hangs from a pivot at the shoulder or hip with a second one part way down: the front leg's wrist, which folds
+// the paw back as it lifts, and the hind leg's hock, which folds it forward. The body and each leg are their old
+// boxes cut in two where the joint is, so standing still it looks as it always did; the tail has a root of its own.
+// The boar is built the same way (BOAR_FRAME: shorter legs, a low head, no tail).
+// canineRig makes the pivots where the frame says; on(p) gives an adder that takes the build's own (unjointed)
+// coordinates. gait names the WOLF_GAIT or BOAR_GAIT that moves it (poseCanine).
+const CANINE = { spineY: 0.3, spineZ: -0.02, neck: [0, 0.42, 0.2], hipY: 0.24, knee: 0.13, tail: [0, 0.3, -0.2], legs: [[-1, 0.14], [1, 0.14], [-1, -0.17], [1, -0.17]], gait: 'wolf' };
+const BOAR_FRAME = { ...CANINE, neck: [0, 0.36, 0.19], hipY: 0.2, knee: 0.11, tail: null, gait: 'boar' };
+function canineRig(g, parts, legX, C = CANINE) {
+  const joint = (parent, x, y, z) => {
+    const p = new GFX.Group(), a = parent.userData.at || [0, 0, 0];
+    p.position.set(x - a[0], y - a[1], z - a[2]); p.userData.at = [x, y, z]; parent.add(p); return p;
+  };
+  const on = p => { const b = boxer(p, parts), a = p.userData.at || [0, 0, 0]; return (w, h, d, x, y, z, m, rx, rz, ry) => b(w, h, d, x - a[0], y - a[1], z - a[2], m, rx, rz, ry); };
+  const spine = joint(g, 0, C.spineY, C.spineZ), neck = joint(g, ...C.neck), tail = C.tail ? joint(spine, ...C.tail) : null;
+  const upper = [], lower = [];
+  C.legs.forEach(([s, z], k) => { const u = joint(k < 2 ? g : spine, s * legX, C.hipY, z); upper.push(u); lower.push(joint(u, s * legX, C.hipY - C.knee, z)); });
+  // the body's box (or one along the back) cut at the spine: the hindquarters a hair slimmer and running 0.02 on
+  // into the front half
+  const body = (w, h, d, y, z, m) => {
+    const c = C.spineZ, f0 = z + d / 2, r0 = z - d / 2;
+    on(g)(w, h, f0 - c, 0, y, (f0 + c) / 2, m);
+    on(spine)(w - 0.006, h - 0.006, c + 0.02 - r0, 0, y, (c + 0.02 + r0) / 2, m);
+  };
+  // a leg's box (it ran from the ground to just under the body) from the hip down to the knee, and from there to the ground,
+  // the lower part a hair slimmer and running 0.01 up into the upper one
+  const leg = (k, w, m) => {
+    const x = C.legs[k][0] * legX, z = C.legs[k][1], kn = C.hipY - C.knee;
+    on(upper[k])(w, C.hipY - kn + 0.01, w, x, (C.hipY + kn - 0.01) / 2, z, m);
+    on(lower[k])(w - 0.006, kn + 0.01, w - 0.006, x, (kn + 0.01) / 2, z, m);
+  };
+  return { joint, on, spine, neck, tail, upper, lower, body, leg };
+}
 // a hellhound: a wolf's build gone to charcoal, with horns, burning eyes, a glowing maw, and a mane, tail
 // tip and paws of flickering flame
 function makeHellhound() {
