@@ -39,7 +39,7 @@ export class Object3D {
     this.renderOrder = 0;
     this.userData = {};
     // (v776: updateMatrixWorld's record of what its matrices were made from, set here so every object keeps one shape)
-    this._mc = undefined; this._mm = undefined; this._mwV = 0; this._mwP = undefined; this._mwPV = -1; this._mwS = 0;
+    this._mc = undefined; this._mm = undefined; this._mwV = 0; this._mwP = undefined; this._mwPV = -1; this._mwS = 0; this._mwH = false;
   }
   add(...objs) {
     for (const o of objs) {
@@ -63,7 +63,14 @@ export class Object3D {
   // Only what changed is worked out again: the matrix when the position, turn or size differ from when it was last
   // made (or, set by hand, when its numbers differ), the world matrix when that did or the parent's world matrix
   // (its _mwV, a count of its changes) or the parent itself did. The result is the same as making them all.
-  updateMatrixWorld() {
+  // (v778, Jordan's G: 1,766 of the 1,955 made anew each frame were the hero's, most of them gear worn by nobody: every
+  // part's hidden piece, silhouette and shadow copy) hidden: from the scene's own pass (Scene.updateMatrixWorld), a
+  // hidden mesh with nothing under it is left until it shows; its matrices are made then, as nothing draws it meanwhile.
+  // A call on an object of its own (a rig being built) still makes every one. One left is marked _mwH, and the
+  // renderer's walks bring it up to date if it's shown before the next pass. Not one hidden that still casts (castHidden)
+  updateMatrixWorld(hidden = false) {
+    if (hidden && !this.visible && this.isMesh && !this.castHidden && this.children.length === 0) { this._mwH = true; return; }
+    this._mwH = false;
     let moved = false;
     if (this.matrixAutoUpdate) {
       const p = this.position, q = this.quaternion, s = this.scale, c = this._mc;
@@ -86,7 +93,7 @@ export class Object3D {
       MATRIX_STATS.made++;
     }
     const ch = this.children;
-    for (let i = 0; i < ch.length; i++) ch[i].updateMatrixWorld();
+    for (let i = 0; i < ch.length; i++) ch[i].updateMatrixWorld(hidden);
   }
   // this object's world matrix brought up to date along with every parent's, but not its children's (counted as a
   // change, so updateMatrixWorld redoes them)
@@ -120,6 +127,7 @@ export class Group extends Object3D {}
 
 export class Scene extends Object3D {
   constructor() { super(); this.fog = null; this.overrideMaterial = null; }
+  updateMatrixWorld() { super.updateMatrixWorld(true); }
 }
 Scene.prototype.isScene = true;
 

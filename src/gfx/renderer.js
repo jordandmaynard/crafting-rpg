@@ -855,6 +855,8 @@ class Renderer {
     const opaque = [], clear = [], override = scene.overrideMaterial, vp = this._m, v = this._v;
     const visit = o => {
       if (!o.visible) return;
+      // (v778) a mesh the scene's matrix pass left while hidden (scene.js _mwH), shown since: its matrices made now
+      if (o._mwH) o.updateMatrixWorld();
       if (o.isMesh && (!layered || o.layers.test(camera.layers)) && !(o.isInstancedMesh && !o.count)) {
         const mat = override || o.material;
         if (mat && mat.visible && wn >= 0) o._wv = wn;
@@ -905,6 +907,7 @@ class Renderer {
     // (v769: every caster found, in the sun's view or not, is marked _sv with this walk's number, for _bundledShadow)
     const visit = o => {
       if (!o.visible && !o.castHidden) return;
+      if (o._mwH) o.updateMatrixWorld();
       if (o.isMesh && o.castShadow && o.layers.test(SL) && o.material && !(o.isInstancedMesh && !o.count)) {
         o._sv = swn;
         if (!o.frustumCulled || this._inFrustum(o, fr)) casters.push(o);
