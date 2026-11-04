@@ -488,6 +488,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v756:** (Jordan) Holding a potion, the right arm is bent at the elbow with the hand out in front (POTION_HOLD raise 0.2, elbow 1.45, out 0.1), and walking swings it only a little (swing 0.25). The 2D bottle hangs upright from its neck below the hand (it turns with the hand only while reaching to the pack); the 3D one stands up in the fist. Jordan's tuning: inHand 2 (the 2D bottle) by default, flying size 0.35, size2d 0.35, neck2d 0.3, gripBias 0.
 
+**v757:** (Jordan) Potions on the hotbar slosh while you walk, the same push as the pack's (their home is 'hot'). The 2D bottles in the world slosh too: the one in hand is pushed by the fist's moves in the world (mapped to the screen like the pack's walk push, x POTION_DRAW.slosh2d), a flying one by where it is on the screen (x POTION_THROW.slosh), and a thrown bottle carries on the liquid of the one that was in hand. A moving bottle is drawn live into one of PCARD_LIVE atlas cells after the icons (pcardBake, region uploads); a settled one goes back to its icon cell. Jordan's tuning: POTION_HOLD raise -0.5, elbow 1.58, out 0.4, swing 0.62; neck2d 0.32, gripBias 0.055.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
