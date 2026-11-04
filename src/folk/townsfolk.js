@@ -224,6 +224,17 @@ Object.assign(JOBS, {
     dye: { torso: ['moss', 'umber', 'grey', 'oat', 'wool', 'brown', 'russet'], under: ['oat', 'grey', 'wool'], legs: ['umber', 'charcoal', 'grey', 'brown'], head: ['umber', 'grey', 'moss'] },
     x: { belt: 0.3 }, prop: 'none' }),
 });
+// (v701, Jordan: goblins on the people's rig, kept short) a goblin: built on the same joints (buildGoblin) with a big
+// head, long ears and wide shoulders, then shrunk as a whole (GOBLIN_SCALE) to about the old goblin's height, so every
+// pose, the foot plant and the ragdoll work unchanged. (If they come out too tall, the next step is letting the poses
+// and the ragdoll read each rig's own leg lengths, so the legs themselves can be shortened.)
+export const GOBLIN_SCALE = 0.8;
+Object.assign(JOBS, {
+  goblin: wj('Goblin', 'monster', { creature: 'goblin', ages: [['adult', 1]], head: [['none', 1]], torso: [['tunic', 1]], legs: [['trousers', 1]], feet: [['wraps', 1]],
+    dye: { torso: ['brown'], legs: ['brown'] }, x: {}, prop: [['club', 5], ['dagger', 2], ['spear', 1], ['shortbow', 1]] }),
+});
+const GOBLIN_SKIN = ['#6f9a3a', '#7aa040', '#5e8a34', '#86a24a', '#6a8e44', '#7c9a52'];
+const GOBLIN_CLOTH = ['#6a4a2a', '#5a4632', '#7a5a34', '#4e3a28', '#6a5a3a', '#5a3e2a'];
 const UNDEAD_SKIN = ['#8aa27a', '#7e9672', '#96a486', '#8a9a70', '#9aa894', '#7a8a78'];
 export const TIERS = { hamlet: 'Hamlet', medium: 'Medium town', large: 'Large town', road: 'On the road', wilds: 'In the wilds', cult: 'Cults' };
 export const POOLS = { town: ['hamlet', 'medium', 'large'], wilds: ['road', 'wilds', 'cult'] };
@@ -334,6 +345,21 @@ export function design(seed, pool = 'town', want = null) {
     d.sigil = roll(X.sigil) ? (D.trim ? tint(D.trim).color : '#b8282a') : null;
     d.warpaint = roll(X.warpaint) ? tint(['woad', 'ochre', 'black', 'crimson', 'white']).color : null;
     if (hat === 'cultHood') d.head.glow = pick(r, [['#ff5a2a', 3], ['#ffd24a', 1], ['#7ae0ff', 1], ['#c070ff', 1]]);
+  }
+  // (v701) a goblin: green, yellow-eyed, in a rough tunic; now and then a leather cap, a tuft of hair, a gold ring in
+  // an ear, a bone tied in its hair, a strap across its chest
+  if (J.creature === 'goblin') {
+    d.creature = 'goblin';
+    d.name = { first: J.title, last: '', full: J.title };
+    d.mask = d.furs = d.sigil = d.warpaint = d.gloves = d.chain = d.satchel = d.stole = d.cloak = d.shawl = d.neckerchief = d.apron = d.shield = null;
+    d.quiver = d.prop === 'shortbow' ? '#4a3626' : null;
+    d.skin = jitter(r, oneOf(r, GOBLIN_SKIN), 0.03);
+    d.eyes = '*' + pick(r, [['#ffe04a', 4], ['#ff8a2a', 2], ['#ff4a3a', 1]]);
+    d.torso.color = jitter(r, oneOf(r, GOBLIN_CLOTH), 0.04);
+    d.legs.color = shade(d.torso.color, -0.25);
+    d.build = 0.96 + r() * 0.1; d.height = 0.94 + r() * 0.12;
+    d.gob = { cap: r() < 0.3, tuft: r() < 0.4, ring: r() < 0.35 ? (r() < 0.5 ? 1 : -1) : 0, bone: r() < 0.15, strap: r() < 0.5, ears: 0.85 + r() * 0.3, nose: 0.8 + r() * 0.4 };
+    d.hair = jitter(r, oneOf(r, ['#1c1612', '#36231a', '#3a2a1a', '#2a2a22']), 0.04);
   }
   // (v695) the dead: nameless, eyes aglow ('*' marks a glowing colour), a skeleton's bones yellowed and its helm rusted,
   // a zombie's skin gone grey-green, its hair dulled and its clothes faded
@@ -577,6 +603,94 @@ export function makeFolkKit(GFX) {
     };
     const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
     if (d.undead === 'skeleton') return buildSkeleton();
+    if (d.creature === 'goblin') return buildGoblin();
+    // (v701) a goblin on the person's joints (hips, knees, ankles, waist, shoulders, elbows, wrists, neck), which the
+    // whole is shrunk round (GOBLIN_SCALE): bare green legs under a ragged tunic, big bare feet, a hunched wide chest,
+    // long arms with big hands, and a big head with a heavy brow, glowing eyes, a long nose, a wide mouth with two
+    // teeth, and long ears swept out and up
+    function buildGoblin() {
+      const S = d.skin, SD = shade(S, -0.2), C = d.torso.color, CD = shade(C, -0.3), LEA = '#4a3020', G = d.gob, CH = 0.42;
+      const body = pivot(g, 0, 0, 0), flaps = [], fronts = [], backs = [];
+      const legL = pivot(body, 0.075, 0.36, 0), legR = pivot(body, -0.075, 0.36, 0), KNEE = -0.14, ANKLE = -0.3;
+      const knees = [], ankles = [];
+      for (const leg of [legL, legR]) {
+        box(leg, 0.1, 0.15, 0.11, 0, -0.065, 0, d.legs.color);
+        const shin = pivot(leg, 0, KNEE, 0); knees.push(shin);
+        box(shin, 0.085, 0.07, 0.09, 0, -0.005, 0.005, S);
+        box(shin, 0.075, 0.12, 0.08, 0, -0.08, 0, S);
+        const foot = pivot(shin, 0, ANKLE - KNEE, 0); ankles.push(foot);
+        box(foot, 0.1, 0.055, 0.17, 0, -0.0325, 0.03, S);
+        box(foot, 0.11, 0.03, 0.05, 0, -0.045, 0.115, SD);
+        for (const x of [-0.035, 0, 0.035]) box(foot, 0.022, 0.018, 0.02, x, -0.051, 0.15, '#2a2018');
+      }
+      // the hips and belt, and the tunic's skirt in two ragged halves that swing with the legs
+      box(body, 0.27, 0.1, 0.17, 0, 0.37, 0, C);
+      box(body, 0.29, 0.045, 0.19, 0, 0.42, 0, LEA);
+      box(body, 0.045, 0.05, 0.012, 0.04, 0.42, 0.1, '#a88a48');
+      for (const sd of [1, -1]) {
+        const pv = pivot(body, sd * 0.05, 0.4, 0); flaps.push(pv);
+        box(pv, 0.15, 0.13, 0.2, sd * 0.025, -0.07, 0, C);
+        [[-0.05, 0.05], [0, 0.03], [0.05, 0.06]].forEach(([x, h]) => box(pv, 0.045, h, 0.205, sd * 0.025 + x, -0.135 - h / 2 + 0.01, 0, CD));
+      }
+      // the chest, hunched and wide at the shoulders, a strap across it, a short thick neck
+      const chest = pivot(body, 0, CH, 0);
+      box(chest, 0.27, 0.13, 0.17, 0, 0.065, 0, C);
+      box(chest, 0.33, 0.11, 0.19, 0, 0.175, -0.005, C);
+      box(chest, 0.18, 0.06, 0.012, 0, 0.21, 0.098, shade(S, -0.05));
+      if (G.strap) { box(chest, 0.04, 0.3, 0.012, 0, 0.12, 0.1, LEA, 0, 0.65); box(chest, 0.04, 0.3, 0.012, 0, 0.12, -0.1, LEA, 0, -0.65); }
+      box(chest, 0.12, 0.06, 0.11, 0, 0.26, 0.015, S);
+      if (d.quiver) {
+        const q = pivot(chest, -0.06, 0.1, -0.12); q.rotation.z = 0.35;
+        box(q, 0.07, 0.28, 0.07, 0, 0, 0, d.quiver);
+        box(q, 0.078, 0.03, 0.078, 0, -0.12, 0, shade(d.quiver, -0.3));
+        [[-0.016, -0.012], [0.016, 0.0], [0, 0.016]].forEach(([x, z]) => { box(q, 0.008, 0.06, 0.008, x, 0.16, z, '#6a5440'); box(q, 0.004, 0.05, 0.022, x, 0.2, z, '#c8c0a8'); });
+      }
+      // the head: big, heavy-browed, long-nosed, long-eared
+      const head = pivot(chest, 0, 0.7 - CH, 0.02);
+      box(head, 0.3, 0.24, 0.26, 0, 0.12, 0.005, S);
+      box(head, 0.29, 0.045, 0.05, 0, 0.18, 0.12, SD);
+      for (const sx of [1, -1]) {
+        box(head, 0.065, 0.045, 0.012, sx * 0.068, 0.137, 0.137, '#1a1410');
+        box(head, 0.04, 0.03, 0.008, sx * 0.068, 0.137, 0.146, d.eyes);
+        const ear = pivot(head, sx * 0.15, 0.15, -0.01); ear.rotation.set(0, 0, -sx * 0.4); ear.scale.setScalar(G.ears);
+        box(ear, 0.2, 0.08, 0.028, sx * 0.1, 0, 0, S);
+        box(ear, 0.12, 0.05, 0.03, sx * 0.17, 0.01, 0, S);
+        box(ear, 0.13, 0.04, 0.012, sx * 0.09, 0, 0.016, SD);
+        if (G.ring === sx) box(ear, 0.02, 0.04, 0.04, sx * 0.05, -0.05, 0, '#d8b048');
+      }
+      const nose = pivot(head, 0, 0.11, 0.13); nose.rotation.x = 0.35; nose.scale.setScalar(G.nose);
+      box(nose, 0.06, 0.06, 0.11, 0, 0, 0.04, S);
+      box(head, 0.16, 0.03, 0.012, 0, 0.045, 0.138, '#2a1418');
+      for (const sx of [1, -1]) box(head, 0.022, 0.035, 0.012, sx * 0.05, 0.06, 0.14, '#efe6c8');
+      if (G.cap) { box(head, 0.31, 0.06, 0.27, 0, 0.255, 0.005, LEA); box(head, 0.32, 0.02, 0.28, 0, 0.228, 0.005, shade(LEA, -0.3)); }
+      else if (G.tuft) { box(head, 0.06, 0.08, 0.14, 0, 0.27, -0.01, d.hair); box(head, 0.05, 0.05, 0.08, 0, 0.3, -0.06, d.hair, 0.4); }
+      if (G.bone && !G.cap) box(head, 0.12, 0.025, 0.025, 0, 0.25, -0.1, '#e8dcc0', 0, 0.3);
+      // the arms: long, bare, with big hands
+      const armL = pivot(chest, 0.195, 0.64 - CH, 0), armR = pivot(chest, -0.195, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
+      armL.rotation.order = armR.rotation.order = 'YXZ';
+      const elbows = [], wrists = [];
+      for (const arm of [armL, armR]) {
+        box(arm, 0.085, 0.07, 0.09, 0, -0.01, 0, C);
+        box(arm, 0.07, 0.1, 0.075, 0, -0.055, 0, S);
+        const fore = pivot(arm, 0, ELBOW, 0); elbows.push(fore);
+        box(fore, 0.066, 0.1, 0.07, 0, -0.05, 0, S);
+        box(fore, 0.074, 0.04, 0.078, 0, -0.07, 0, LEA);
+        const hand = pivot(fore, 0, WRIST - ELBOW, 0); wrists.push(hand);
+        hand.rotation.order = 'XZY';
+        box(hand, 0.08, 0.075, 0.09, 0, -0.035, 0, S);
+      }
+      const broom = pivot(body, 0, 0, 0), crate = pivot(chest, 0, 0, 0), hoe = pivot(body, 0, 0, 0);
+      broom.visible = crate.visible = hoe.visible = false;
+      const hand = ['shortbow', 'crossbow'].includes(d.prop) ? 0 : 1;
+      const tool = pivot(wrists[hand], 0, -0.045, 0.0);
+      holdProp(tool, d.prop);
+      const staff = d.prop === 'spear';
+      const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
+      g.scale.set(GOBLIN_SCALE * d.build, GOBLIN_SCALE * d.height, GOBLIN_SCALE * d.build);
+      // (the head's box for the ragdoll, from the neck: bigger than a person's)
+      return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff, shadow,
+        headY: 0.82, headHalf: [0.15, 0.125, 0.13] };
+    }
     // (v695) a skeleton, bone by bone on the person's own joints (hips, knees, ankles, the waist, shoulders, elbows,
     // wrists, the neck) so it walks, strikes and falls as they do: thin limb bones with knobs at the joints, a pelvis, a
     // spine and a cage of ribs, the shoulder girdle, a skull with dark sockets, eyes glowing in them and a jaw on a

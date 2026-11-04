@@ -17345,56 +17345,6 @@ function makeHuman(L = heroLook()) {
   return { g, parts, look: L, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer };
 }
 
-function makeGoblin() {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
-  const skin = flatMat({ color: '#6f9a3a' }), tunic = flatMat({ color: '#6a4a2a' }), yel = new GFX.MeshBasicMaterial({ color: '#ffe04a' });
-  add(0.08, 0.18, 0.08, -0.06, 0.09, 0, skin); add(0.08, 0.18, 0.08, 0.06, 0.09, 0, skin);
-  add(0.22, 0.2, 0.14, 0, 0.28, 0, tunic);
-  add(0.23, 0.04, 0.15, 0, 0.21, 0, hiltMat);
-  add(0.06, 0.18, 0.06, -0.15, 0.29, 0, skin, 0, 0.15); add(0.06, 0.18, 0.06, 0.15, 0.29, 0.03, skin, -0.4, -0.15);
-  add(0.24, 0.18, 0.2, 0, 0.47, 0, skin);
-  add(0.14, 0.05, 0.03, -0.17, 0.5, 0, skin, 0, 0.45); add(0.14, 0.05, 0.03, 0.17, 0.5, 0, skin, 0, -0.45);
-  add(0.05, 0.035, 0.02, -0.055, 0.49, 0.101, yel); add(0.05, 0.035, 0.02, 0.055, 0.49, 0.101, yel);
-  add(0.04, 0.06, 0.05, 0, 0.44, 0.11, skin);
-  add(0.05, 0.3, 0.05, 0.17, 0.3, 0.14, hiltMat, 0.9); add(0.1, 0.1, 0.1, 0.17, 0.4, 0.27, flatMat({ color: '#4a3020' }), 0.9);
-  g.scale.setScalar(1.3);
-  return { g, parts, topH: 0.62 };
-}
-// (v693) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
-// hindquarters, the hind legs and the tail hang from it), the head turns and nods on a neck pivot, and each leg
-// hangs from a pivot at the shoulder or hip with a second one part way down: the front leg's wrist, which folds
-// the paw back as it lifts, and the hind leg's hock, which folds it forward. The body and each leg are their old
-// boxes cut in two where the joint is, so standing still it looks as it always did; the tail has a root of its own.
-// The boar is built the same way (BOAR_FRAME: shorter legs, a low head, no tail).
-// canineRig makes the pivots where the frame says; on(p) gives an adder that takes the build's own (unjointed)
-// coordinates. gait names the WOLF_GAIT or BOAR_GAIT that moves it (poseCanine).
-const CANINE = { spineY: 0.3, spineZ: -0.02, neck: [0, 0.42, 0.2], hipY: 0.24, knee: 0.13, tail: [0, 0.3, -0.2], legs: [[-1, 0.14], [1, 0.14], [-1, -0.17], [1, -0.17]], gait: 'wolf' };
-const BOAR_FRAME = { ...CANINE, neck: [0, 0.36, 0.19], hipY: 0.2, knee: 0.11, tail: null, gait: 'boar' };
-function canineRig(g, parts, legX, C = CANINE) {
-  const joint = (parent, x, y, z) => {
-    const p = new GFX.Group(), a = parent.userData.at || [0, 0, 0];
-    p.position.set(x - a[0], y - a[1], z - a[2]); p.userData.at = [x, y, z]; parent.add(p); return p;
-  };
-  const on = p => { const b = boxer(p, parts), a = p.userData.at || [0, 0, 0]; return (w, h, d, x, y, z, m, rx, rz, ry) => b(w, h, d, x - a[0], y - a[1], z - a[2], m, rx, rz, ry); };
-  const spine = joint(g, 0, C.spineY, C.spineZ), neck = joint(g, ...C.neck), tail = C.tail ? joint(spine, ...C.tail) : null;
-  const upper = [], lower = [];
-  C.legs.forEach(([s, z], k) => { const u = joint(k < 2 ? g : spine, s * legX, C.hipY, z); upper.push(u); lower.push(joint(u, s * legX, C.hipY - C.knee, z)); });
-  // the body's box (or one along the back) cut at the spine: the hindquarters a hair slimmer and running 0.02 on
-  // into the front half
-  const body = (w, h, d, y, z, m) => {
-    const c = C.spineZ, f0 = z + d / 2, r0 = z - d / 2;
-    on(g)(w, h, f0 - c, 0, y, (f0 + c) / 2, m);
-    on(spine)(w - 0.006, h - 0.006, c + 0.02 - r0, 0, y, (c + 0.02 + r0) / 2, m);
-  };
-  // a leg's box (it ran from the ground to just under the body) from the hip down to the knee, and from there to the ground,
-  // the lower part a hair slimmer and running 0.01 up into the upper one
-  const leg = (k, w, m) => {
-    const x = C.legs[k][0] * legX, z = C.legs[k][1], kn = C.hipY - C.knee;
-    on(upper[k])(w, C.hipY - kn + 0.01, w, x, (C.hipY + kn - 0.01) / 2, z, m);
-    on(lower[k])(w - 0.006, kn + 0.01, w - 0.006, x, (kn + 0.01) / 2, z, m);
-  };
-  return { joint, on, spine, neck, tail, upper, lower, body, leg };
-}
 // a hellhound: a wolf's build gone to charcoal, with horns, burning eyes, a glowing maw, and a mane, tail
 // tip and paws of flickering flame
 function makeHellhound() {
@@ -17556,7 +17506,8 @@ function makeMantrap() {
   return { g, parts, plant: { stalk, neck, head, jawU, jawL }, topH: 0.95 };
 }
 const FOE = {
-  goblin: { make: makeGoblin, name: 'Goblin', hp: 30, dmg: 7, speed: 2.7, reach: 0.8, aggro: 8, rad: 0.25 },
+  // (v701, Jordan) goblins on the people's rig too, shrunk to their old height (human, monster: see Hostile folk)
+  goblin: { human: true, monster: true, name: 'Goblin', hp: 30, dmg: 7, speed: 2.7, reach: 0.8, aggro: 8, rad: 0.23 },
   hellhound: { make: makeHellhound, name: 'Hellhound', hp: 38, dmg: 10, speed: 4.2, reach: 0.9, aggro: 10, rad: 0.3, bone: 0.5 },
   firespirit: { make: makeFireSpirit, name: 'Fire spirit', hp: 30, dmg: 10, speed: 2.5, reach: 0.9, aggro: 9, rad: 0.27 },
   wolf: { make: () => makeWolf(), name: 'Grey wolf', hp: 32, dmg: 8, speed: 3.9, reach: 0.85, aggro: 9, rad: 0.28, hide: true, bone: 0.5 },
@@ -17564,8 +17515,8 @@ const FOE = {
   ghost: { make: () => makeGhost(), name: 'Wailing ghost', hp: 28, dmg: 9, speed: 2.4, reach: 0.85, aggro: 9, rad: 0.25 },
   // (v695, Jordan) the dead on the people's rig (human, undead: see Hostile folk): they walk, strike and ragdoll as people
   // do, a skeleton with a rusted weapon (now and then a bow), a zombie with its hands; still spawned by the biomes
-  zombie: { human: true, undead: true, name: 'Zombie', hp: 48, dmg: 11, speed: 1.55, reach: 0.85, aggro: 7, rad: 0.25 },
-  skeleton: { human: true, undead: true, name: 'Skeleton', hp: 34, dmg: 9, speed: 2.5, reach: 0.9, aggro: 8, rad: 0.23, bone: 1 },
+  zombie: { human: true, monster: true, undead: true, name: 'Zombie', hp: 48, dmg: 11, speed: 1.55, reach: 0.85, aggro: 7, rad: 0.25 },
+  skeleton: { human: true, monster: true, undead: true, name: 'Skeleton', hp: 34, dmg: 9, speed: 2.5, reach: 0.9, aggro: 8, rad: 0.23, bone: 1 },
   frostwolf: { make: () => makeWolf('#dfe8f2', '#a8b8cc', '#5ad0ff'), name: 'Frost wolf', hp: 40, dmg: 10, speed: 4.1, reach: 0.85, aggro: 10, rad: 0.28, hide: true, bone: 0.5 },
   wraith: { make: () => makeGhost('#a8d8ff', '#2a5a9a'), name: 'Ice wraith', hp: 36, dmg: 11, speed: 2.6, reach: 0.9, aggro: 10, rad: 0.25 },
   scorpion: { make: makeScorpion, name: 'Giant scorpion', hp: 36, dmg: 9, speed: 3.1, reach: 0.9, aggro: 8, rad: 0.3 },
@@ -18880,7 +18831,7 @@ function spawnFoe(kind, x, z) {
 }
 function removeFoe(f) {
   foes.splice(foes.indexOf(f), 1);
-  if (f.hmesh) freeHuman(f);
+  if (f.hb) freeHuman(f);
 }
 
 // ---------- HUD ----------
@@ -23783,7 +23734,7 @@ function rollQuest(n, kind) {
   if (kind === 'kill' && foes.length) {
     const what = foes[Math.floor(rnd() * foes.length)], [lo, hi, title, about, plural] = QUEST_FOES[what];
     const need = lo + Math.floor(rnd() * (hi - lo + 1));
-    return { id, town: n, kind, what, need, got: 0, title, about, plural, xp: round5(QUEST.base + need * XP.perKill * QUEST.killXp * (FOE[what].human && !FOE[what].undead ? 1.5 : 1)), state: 'open' };
+    return { id, town: n, kind, what, need, got: 0, title, about, plural, xp: round5(QUEST.base + need * XP.perKill * QUEST.killXp * (FOE[what].human && !FOE[what].monster ? 1.5 : 1)), state: 'open' };
   }
   const [what, lo, hi, each, , title, about] = goods[Math.floor(rnd() * goods.length)];
   let need = lo + Math.floor(rnd() * (hi - lo + 1));
@@ -26487,10 +26438,46 @@ const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 5, sink: 1.5 };
 // hunch, loll: a zombie's stoop and head tilt (radians); drag: its bad leg's share of the stride; rock: its sway as
 // it walks; reach: its arms raised ahead when it's after you; chatter: a skeleton's jaw
 const UNDEAD = { hunch: 0.2, loll: 0.35, drag: 0.55, rock: 0.07, reach: 1.35, chatter: 1 };
-// (each person's own material, sized for one person's joints: a batch's holds FOLK_BONES, 48 KB sent every frame)
-const HUMAN_BONES = 48, humanMats = [];
-const humanMat = () => humanMats.pop() || new GFX.ShaderMaterial({ uniforms: { bones: { value: new Float32Array(HUMAN_BONES * 16) } }, vertexColors: true, attributes: { bone: 'f32' }, lit: true,
-  code: FOLK_WGSL, shadowCode: FOLK_SHADOW_WGSL });
+// (v701) goblins: hunch, their stoop (radians, the head held up against it); shatter 1 bursts them into their pieces
+// when killed, as they used to, 0 ragdolls them as the people
+const GOBLIN = { hunch: 0.18, shatter: 0 };
+// (v701, Jordan: the rigged foes should cost about what the crowds do) Every rigged foe (people, skeletons, zombies,
+// goblins), alive or lying dead, is drawn in a shared batch as the townsfolk are: their baked meshes laid end to end in
+// one mesh, each with its run of joints in the batch's matrices (FOLK_BONES, as many to a batch as fit: ~35 people), so
+// a band of them is one draw and one shadow draw, not one each. A batch's mesh is laid again when someone joins or
+// leaves it (humanJoin, freeHuman: dirty, rebuilt by drawHumans before it's drawn), not every frame.
+const humanBatches = [];
+function humanJoin(f) {
+  const nb = f.folk.bones.length;
+  let b = humanBatches.find(b => b.nb + nb <= FOLK_BONES);
+  if (!b) { b = { members: [], nb: 0, mesh: null, mat: folkMat(), dirty: true }; b.mat.uniforms.bones.value.fill(0); humanBatches.push(b); }
+  b.members.push(f); b.nb += nb; b.dirty = true; f.hb = b;
+}
+function layHumanBatch(b) {
+  b.dirty = false;
+  if (b.mesh) { scene.remove(b.mesh); b.mesh.geometry.dispose(); b.mesh = null; }
+  if (!b.members.length) { folkMats.push(b.mat); humanBatches.splice(humanBatches.indexOf(b), 1); return; }
+  let nv = 0, ni = 0, base = 0;
+  for (const f of b.members) { const M = f.folk.mesh; nv += M.bone.length; ni += M.idx.length; }
+  const pos = new Float32Array(nv * 3), col = new Float32Array(nv * 3), bone = new Float32Array(nv), idx = new Uint32Array(ni);
+  let ov = 0, oi = 0;
+  for (const f of b.members) {
+    const M = f.folk.mesh, n = M.bone.length;
+    f.hbase = base;
+    pos.set(M.pos, ov * 3); col.set(M.col, ov * 3);
+    for (let k = 0; k < n; k++) bone[ov + k] = M.bone[k] + base;
+    for (let k = 0; k < M.idx.length; k++) idx[oi + k] = M.idx[k] + ov;
+    ov += n; oi += M.idx.length; base += f.folk.bones.length;
+  }
+  const geo = new GFX.BufferGeometry();
+  geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new GFX.BufferAttribute(col, 3));
+  geo.setAttribute('bone', new GFX.BufferAttribute(bone, 1));
+  geo.setIndex(new GFX.BufferAttribute(idx, 1));
+  const mesh = b.mesh = new GFX.Mesh(geo, b.mat);
+  mesh.frustumCulled = false; mesh.castShadow = mesh.receiveShadow = true; mesh.matrixAutoUpdate = false;
+  scene.add(mesh);
+}
 const HUMAN_KINDS = Object.keys(FOE).filter(k => FOE[k].human && WILD_WHERE[k]);
 const WILD_BIOME = { meadow: MEADOW, forest: FOREST, swamp: SWAMP, graveyard: GRAVE, snow: SNOW, desert: DESERT, 'deep forest': DEEP, 'blasted wastes': WASTES };
 const humanFallen = [];
@@ -26512,22 +26499,15 @@ function humanShoot(f) {
 // a person of this kind: their build, baked, in a mesh of their own
 function humanRig(kind) {
   let d = null;
-  // (v695: the dead are asked for by name)
-  if (FOE[kind].undead) d = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds', kind);
+  // (v695: the dead, v701: goblins, are asked for by name)
+  if (FOE[kind].monster) d = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds', kind);
   for (let a = 0; a < 2000 && !d; a++) { const e = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds'); if (e.job === kind) d = e; }
   const p = { d: d || folkKit.design(1, 'wilds') };
-  p.keepParts = p.d.undead === 'skeleton';
+  p.keepParts = p.d.undead === 'skeleton' || (p.d.creature === 'goblin' && GOBLIN.shatter > 0.5);
   bakeFolk(p);
-  const M = p.mesh, geo = new GFX.BufferGeometry();
-  geo.setAttribute('position', new GFX.BufferAttribute(M.pos, 3));
-  geo.setAttribute('color', new GFX.BufferAttribute(M.col, 3));
-  geo.setAttribute('bone', new GFX.BufferAttribute(M.bone, 1));
-  geo.setIndex(new GFX.BufferAttribute(M.idx, 1));
-  const mat = p.bones.length <= HUMAN_BONES ? humanMat() : folkMat(), mesh = new GFX.Mesh(geo, mat);
-  mesh.frustumCulled = false; mesh.castShadow = mesh.receiveShadow = true; mesh.matrixAutoUpdate = false;
-  mat.uniforms.bones.value.fill(0);
-  scene.add(mesh);
-  return { g: p.rig.g, rig: p.rig, folk: p, hmesh: mesh, hmat: mat };
+  const f = { g: p.rig.g, rig: p.rig, folk: p, hb: null, hbase: 0 };
+  humanJoin(f);
+  return f;
 }
 // what spawnFoe's foe needs besides: its own reach (a spear's longer), the bar's height, the walk and the combo
 function humanFoe(f) {
@@ -26542,8 +26522,10 @@ function humanFoe(f) {
   f.loll = Math.random() < 0.5 ? 1 : -1; f.reachK = 0;   // (a zombie's head lolls to one side or the other)
 }
 function freeHuman(f) {
-  scene.remove(f.hmesh); f.hmesh.geometry.dispose(); (f.hmat.uniforms.bones.value.length === HUMAN_BONES * 16 ? humanMats : folkMats).push(f.hmat);
-  f.hmesh = f.hmat = null;
+  const b = f.hb;
+  if (!b) return;
+  b.members.splice(b.members.indexOf(f), 1); b.nb -= f.folk.bones.length; b.dirty = true;
+  f.hb = null;
 }
 // killed (v604, Jordan: "ragdoll using the system from my crafting-and-conquest repo"): the person goes limp and
 // tumbles as crafting-and-conquest's villagers do (src/ragdoll.js): knocked away from the blow by the weapon that
@@ -26588,7 +26570,7 @@ function fellHuman(f, dx, dz) {
   // (the body's frame: left is +x, so each left limb's roll reaches out the + way)
   const limb = (o, x, y, len, upper, lo, hi, rlo, rhi, bend, now) => ({ pivot: sc([x, y, 0]), len: len * S.y, upper: upper * S.y, lo, hi, rlo, rhi, bend, dir: rigDir(r, o, face), bendNow: now });
   const shape = {
-    bodyY: 0.5 * S.y, bodyHalf: sc([0.2, 0.2, 0.09]), headY: 0.8 * S.y, headHalf: sc([0.1, 0.1, 0.095]),
+    bodyY: 0.5 * S.y, bodyHalf: sc([0.2, 0.2, 0.09]), headY: (r.headY || 0.8) * S.y, headHalf: sc(r.headHalf || [0.1, 0.1, 0.095]),
     limbs: [
       limb(r.legL, legX, legY, 0.36, 0.14, -1.9, 0.5, -0.15, 0.7, [0, 2, 0.15], r.knees[0].rotation.x),
       limb(r.legR, -legX, legY, 0.36, 0.14, -1.9, 0.5, -0.7, 0.15, [0, 2, 0.15], r.knees[1].rotation.x),
@@ -26622,6 +26604,7 @@ function fellHuman(f, dx, dz) {
     b.ig = new GFX.Group(); b.ig.scale.copy(S); b.ig.add(r.tool);
     r.tool.position.set(-held[0].mid[0], -held[0].mid[1], -held[0].mid[2]); r.tool.rotation.set(0, 0, 0);
   }
+  f.down = true; f.g.visible = true;   // (v701: drawn by its batch from here on as updateFallen places it)
   humanFallen.push(b);
 }
 const placeGroup = (g, o, y) => { g.position.set(o.pos[0], o.pos[1] + y, o.pos[2]); g.quaternion.set(o.q[0], o.q[1], o.q[2], o.q[3]); g.updateMatrixWorld(); };
@@ -26651,16 +26634,21 @@ function updateFallen(dt) {
     r.g.updateMatrixWorld();
     if (b.hg) placeGroup(b.hg, rd.head, sink);
     if (b.ig) placeGroup(b.ig, rd.items[0].body, sink);
-    humanBones(f, true);
   }
 }
 // a person's joints into their mesh's matrices (the hit flash hides them, as the crowds' foes)
 function humanBones(f, shown) {
-  const P = f.folk, M = f.hmat.uniforms.bones.value;
-  P.bones.forEach((o, j) => M.set(shown && P.chains[j].every(q => q.visible) ? o.matrixWorld.elements : ZERO16, j * 16));
+  const P = f.folk, M = f.hb.mat.uniforms.bones.value, o0 = f.hbase * 16;
+  P.bones.forEach((o, j) => M.set(shown && P.chains[j].every(q => q.visible) ? o.matrixWorld.elements : ZERO16, o0 + j * 16));
 }
+// (v701) each batch laid again if its people changed, then every one's joints into its matrices (the fallen too, whose
+// joints updateFallen has placed; a hit flash hides the living, as the crowds' foes)
 function drawHumans() {
-  for (const f of foes) if (f.hmesh) { f.rig.g.updateMatrixWorld(); humanBones(f, f.g.visible); }
+  for (const b of humanBatches.slice()) if (b.dirty) layHumanBatch(b);
+  for (const b of humanBatches) for (const f of b.members) {
+    if (!f.down) f.rig.g.updateMatrixWorld();
+    humanBones(f, f.down || f.g.visible);
+  }
 }
 // (v695) a zombie on the people's rig, over their walk or standing pose: hunched, the head lolling to one side (f.loll),
 // one leg dragging (half its stride, the body rocking over the good one), the arms held out ahead for you once it's
@@ -26814,6 +26802,8 @@ function poseHuman(f, dt, sp) {
     r.jaw.rotation.x = f.atk >= 0 ? 0.45 * smooth(0.3, 0.5, u) * (1 - smooth(0.62, 1, u))
       : UNDEAD.chatter * (moving || f.aggro ? 0.2 : 0.05) * Math.max(0, Math.sin(f.animT * (f.aggro ? 17 : 6) + f.phase));
   }
+  // (v701) a goblin's stoop
+  if (r.d.creature === 'goblin') { r.chest.rotation.x += GOBLIN.hunch; r.head.rotation.x -= GOBLIN.hunch * 0.7; }
   // hit: a flinch back from the blow
   if (f.hitT < 0.3) {
     const k = Math.sin(f.hitT / 0.3 * Math.PI);
@@ -26842,7 +26832,7 @@ function humanTick(dt) {
   if (humanT > 0) return;
   humanT = HUMAN.every * (0.6 + Math.random() * 0.8);
   if (heroInTown() || !HUMAN_KINDS.length) return;
-  const have = foes.reduce((n, f) => n + (f.rig && !f.def.undead ? 1 : 0), 0);
+  const have = foes.reduce((n, f) => n + (f.rig && !f.def.monster ? 1 : 0), 0);
   if (have >= HUMAN.cap) return;
   // (each kind out now, in a random order, looked for a place in turn, so the roads' kinds aren't crowded out by the
   // kinds that can stand anywhere)
@@ -26868,7 +26858,7 @@ function humanTick(dt) {
   }
 }
 // (v479) the T panel's spawn buttons (Crowd test): n of a kind d tiles ahead of you, side by side
-const HUMAN_SPAWN = { footpad: 0, bandit: 0, poacher: 0, raider: 0, graveRobber: 0, highwayman: 0, skeleton: 0, zombie: 0, clear: 0 };
+const HUMAN_SPAWN = { footpad: 0, bandit: 0, poacher: 0, raider: 0, graveRobber: 0, highwayman: 0, skeleton: 0, zombie: 0, goblin: 0, clear: 0 };
 function spawnHumansAhead(kind, n, d = 4) {
   const out = [];
   for (let k = 0; k < n; k++) {
@@ -29525,6 +29515,7 @@ const TUNING = [
     // (v695) the dead
     [HUMAN_SPAWN, 'skeleton', 'Three skeletons in front of you', 'action', () => spawnHumansAhead('skeleton', 3)],
     [HUMAN_SPAWN, 'zombie', 'Three zombies in front of you', 'action', () => spawnHumansAhead('zombie', 3)],
+    [HUMAN_SPAWN, 'goblin', 'Three goblins in front of you', 'action', () => spawnHumansAhead('goblin', 3)],
     [HUMAN_SPAWN, 'clear', 'Clear away every foe about', 'action', () => foes.slice().forEach(removeFoe)],
   ]],
   // (v604) the fallen people's ragdolls (src/ragdoll.js)
@@ -29548,13 +29539,15 @@ const TUNING = [
     [HUMAN, 'lie', 'Seconds they lie there before sinking', 0, 60, 0.5],
   ]],
   // (v695) skeletons and zombies on the people's rig
-  ['Undead moves', [
+  ['Undead and goblin moves', [
     [UNDEAD, 'hunch', 'Zombie: stoop', 0, 0.8, 0.01],
     [UNDEAD, 'loll', 'Zombie: head lolled over', 0, 1, 0.01],
     [UNDEAD, 'drag', 'Zombie: dragged leg\'s stride (1 = even)', 0, 1, 0.01],
     [UNDEAD, 'rock', 'Zombie: rocking as it walks', 0, 0.3, 0.005],
     [UNDEAD, 'reach', 'Zombie: arms raised ahead when after you', 0, 2, 0.01],
     [UNDEAD, 'chatter', 'Skeleton: jaw chatter', 0, 3, 0.05],
+    [GOBLIN, 'hunch', 'Goblin: stoop', 0, 0.6, 0.01],
+    [GOBLIN, 'shatter', 'Goblin: killed, bursts apart (1) or ragdolls (0)', 0, 1, 1],
   ]],
   ['Ground haze', [
     [GROUND_HAZE, 'on', 'Ground haze (0 off, 1 on)', 0, 1, 1],
@@ -30908,7 +30901,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 700, crashSeen = new Map();
+const GAME_VERSION = 701, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
