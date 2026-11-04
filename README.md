@@ -430,6 +430,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v727:** (Jordan) F only reaches what's on the floor you stand on: upstairs it opens the door in front of you, not the one under it on the floor below, and the tables, stations and loot on the ground floor are out of reach from above. On a stair you count as on the floor you're nearer (the one above once you're past halfway up).
 
+**v728:** (Jordan) A bank's strongroom stays closed when you're inside the bank. The cutaway never lowers its walls, inside or out, and a stone ceiling sits across their tops. That ceiling is drawn with the bank's furniture, so it only shows when the roof is off (prop `strongroomLid`, walls in `STRONG_WALLS`). You can't see into the sealed space behind the vault door from any angle.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

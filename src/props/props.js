@@ -754,6 +754,12 @@ export const PROPS = {
       scroll: r() < 0.8, chains: r() < 0.6 }),
     describe: L => [['Board', L.board[1], L.board[0]], ['A pile of gold coins in a border of', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
     build(L, C) { tavernSign(L, C, 'coins'); } },
+  // (v728, Jordan: the vault's strongroom never opens up when you're in the bank) the ceiling over its two sealed tiles,
+  // on its walls' tops, shown while the bank's roof is off (the game draws it with the bank's furniture)
+  strongroomLid: { name: 'Strongroom ceiling', group: 'Bank', tiles: [2, 1], use: 'Show: closes the vault\'s strongroom over', goes: 'Bank, over the sealed space behind the vault door',
+    roll: r => ({ col: pick(r, ['#b8b0a0', '#a8a294', '#c8bc9c']) }),
+    describe: L => [['Stone', L.col, L.col]],
+    build(L, C) { strongroomLid(L, C); } },
   // (v725, Jordan: every trade's building has a sign like the tavern's and the bank's) the trade's emblem on the board
   tradeSign: { name: 'Trade sign', group: 'Tavern', tiles: [1, 1], wall: true, hang: true, outside: true, use: 'Show (outside, by or over the door)', goes: 'Every trade\'s workshop front',
     roll: r => ({ board: pick(r, [['#a07848', 'Weathered oak'], ['#8a6440', 'Old oak'], ['#b08a58', 'Pale pine']]), paint: pick(r, [['#2a1c12', 'Black'], ['#5a2a1a', 'Ox-blood'], ['#3a2a1a', 'Brown'], ['#2a3a24', 'Dark green'], ['#24344a', 'Navy']]),
@@ -1089,6 +1095,14 @@ const SIGN_EMBLEMS = {
     f2(star(0.09, 0.025, Math.PI / 4), K);
   } },
 };
+// (v728) a strongroom's ceiling: a dark bed across its two tiles and half its walls' thickness all round, the walls'
+// top (CEIL less 0.18 over the floor) under it, laid over with eight flagstones
+function strongroomLid(L, C) {
+  const W = 2 + 0.32, D = 1 + 0.32, y0 = CEIL - 0.18, col = typeof L.col === 'string' ? L.col : L.col[0];
+  part(G.box, '#3e3a44', 0, y0 + 0.035, 0, { sx: W, sy: 0.07, sz: D });
+  for (let a = 0; a < 4; a++) for (let b = 0; b < 2; b++)
+    part(G.box, shade(col, 0.86 + 0.14 * (((a * 3 + b * 5) % 4) / 3)), -W / 2 + W / 8 * (2 * a + 1), y0 + 0.085, -D / 2 + D / 4 * (2 * b + 1), { sx: W / 4 - 0.02, sy: 0.03, sz: D / 2 - 0.02 });
+}
 // a stack of n coins at (x, y, z), its top a little off true
 function coinStack(x, y, z, n, r = 0.026) {
   for (let k = 0; k < n; k++) part(G.cyl12, k % 2 ? GOLD : shade(CC(GOLD), 0.9), x + ((k * 7) % 3 - 1) * 0.002, y + 0.006 + k * 0.012, z + ((k * 5) % 3 - 1) * 0.002, { sx: r * 2, sy: 0.011, sz: r * 2 });
