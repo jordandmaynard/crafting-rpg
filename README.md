@@ -448,6 +448,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v736:** (Jordan) Auto mosaic size spread evenly across the zoom range instead: 2 for the farthest third (zoom 0.9 to 1.26), 3 for the middle third (to 1.78), 4 for the closest third (to 2.5), the thirds taken evenly in scale as the wheel steps the zoom. Still never below 2, a boat's wheel included.
 
+**v737:** (Jordan) Auto mosaic size switches at set zooms instead: 2 below zoom 1.5, 3 from 1.5, 4 from 2.0 (T > Pixels: Auto min, and the two zooms it steps up at). Still never below 2, a boat's wheel included.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
