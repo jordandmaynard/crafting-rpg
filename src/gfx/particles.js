@@ -266,6 +266,20 @@ fn pNoise(p: vec3f) -> f32 {
   return mix(a, b, u.z);
 }
 fn pFbm(p: vec3f) -> f32 { return (pNoise(p) * 0.57 + pNoise(p * 2.03 + vec3f(5.1, 1.7, 9.3)) * 0.29 + pNoise(p * 4.11 + vec3f(2.3, 7.9, 4.4)) * 0.14); }
+// (v768) pNoise's slope at p, worked out from its eight corners at once (the same corners pNoise mixes): one call
+// does what three more pNoise calls a step apart did
+fn pNoiseD(p: vec3f) -> vec3f {
+  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f); let du = 6.0 * f * (1.0 - f);
+  let a = pHash(i); let b = pHash(i + vec3f(1.0, 0.0, 0.0)); let c = pHash(i + vec3f(0.0, 1.0, 0.0)); let d = pHash(i + vec3f(1.0, 1.0, 0.0));
+  let e = pHash(i + vec3f(0.0, 0.0, 1.0)); let g = pHash(i + vec3f(1.0, 0.0, 1.0)); let h = pHash(i + vec3f(0.0, 1.0, 1.0)); let k = pHash(i + vec3f(1.0, 1.0, 1.0));
+  let k1 = b - a; let k2 = c - a; let k3 = e - a; let k4 = a - b - c + d; let k5 = a - c - e + h; let k6 = a - b - e + g;
+  let k7 = -a + b + c - d + e - g - h + k;
+  return du * vec3f(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z, k2 + k4 * u.x + k5 * u.z + k7 * u.x * u.z, k3 + k5 * u.y + k6 * u.x + k7 * u.x * u.y);
+}
+// pFbm's slope at p
+fn pFbmD(p: vec3f) -> vec3f {
+  return pNoiseD(p) * 0.57 + pNoiseD(p * 2.03 + vec3f(5.1, 1.7, 9.3)) * (0.29 * 2.03) + pNoiseD(p * 4.11 + vec3f(2.3, 7.9, 4.4)) * (0.14 * 4.11);
+}
 // (v745, Jordan: smoke and dust lit as round balls, not in bands, lumpy only in their normals) the normal of a ball
 // at card point c (-1 to 1 across it, as seen), turned into the world, bent by the slopes of a few octaves of noise
 // over it: lumps fixed to the ball in the world (they don't swim as the camera turns), its own by its seed (nz.x),
@@ -278,9 +292,8 @@ fn puffNormal(c: vec2f, nz: vec3f) -> vec3f {
   let P = U.puff;
   if (P.x <= 0.0) { return n; }
   let p = n * max(P.z, 0.1) + vec3f(nz.x * 37.0, nz.x * 11.0 + nz.y * 0.9, nz.x * 23.0);
-  let e = pFbm(p);
-  let h = 0.08;
-  let g = vec3f(pFbm(p + vec3f(h, 0.0, 0.0)) - e, pFbm(p + vec3f(0.0, h, 0.0)) - e, pFbm(p + vec3f(0.0, 0.0, h)) - e) / h;
+  // (v768: the slope worked out directly, not from four pFbm calls a step apart: a quarter of the noise work)
+  let g = pFbmD(p);
   return normalize(n - (g - dot(g, n) * n) * P.x * 0.35);
 }
 // the light a soft volume at w gets, from the way n faces (sky, ground, the sun through its shadow, lamps)
@@ -297,10 +310,29 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
     let p = F.points[i];
     let d = p.pos.xyz - w; let dist = length(d);
     var att = 1.0;
-    if (p.pos.w > 0.0 && p.color.w > 0.0) { att = pow(sat(1.0 - dist / p.pos.w), p.color.w); }
+    if (p.pos.w > 0.0 && p.color.w > 0.0) {
+      if (dist >= p.pos.w) { continue; }   // (v768: out of its reach it adds nothing)
+      att = pow(sat(1.0 - dist / p.pos.w), p.color.w);
+    }
     l += p.color.rgb * att * sat(dot(n, d / max(dist, 1e-4)) * 0.5 + 0.5);
   }
   return l;
+}
+// soft where it meets what's behind it: how much of it shows at this pixel (1 with no depth to read)
+fn fxSoft(pos: vec2f, pix: vec3f, rad: f32, r2: f32) -> f32 {
+  if (U.refr <= 0.5) { return 1.0; }
+  let dims = vec2i(textureDimensions(tRefrD));
+  let zb = textureLoad(tRefrD, clamp(vec2i(pos), vec2i(0), dims - 1), 0);
+  let P = F.proj;
+  let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+  let vz = (F.view * vec4f(pix, 1.0)).z;
+  if (rad > 0.0) {
+    // a ball: of its depth here (front to back, half of it each side of its middle), the share in front of what's
+    // behind it, softened a little more for a small one
+    let th = sqrt(max(1.0 - r2, 0.0)) * rad + 0.04;
+    return smoothstep(0.0, 1.0, sat((vz + th - vb) / (2.0 * th)));
+  }
+  return smoothstep(0.0, 0.3, vz - vb);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let uv = i.uv; let r2 = dot(uv, uv);
@@ -324,6 +356,9 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
   } else if (st == ${FX.PUFF} || st == ${FX.FLAME}) {
     if (r2 > 1.0) { discard; }
     m = pow(1.0 - r2, 1.5);
+    // (v768) hidden or see-through here: nothing to light (the soft fade is taken now, not after the lighting)
+    m *= fxSoft(i.pos.xy, i.pix, i.rad, r2);
+    if (m * i.a < 1e-4) { discard; }
     let hot = st == ${FX.FLAME} && i.extra > 0.5;
     if (hot) {
       lit = mix(i.col, vec3f(1.0), exp(-r2 * 6.0) * 0.35) * max(i.glow, 1.0);
@@ -339,6 +374,9 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
     let tuv = clamp(vec2f(uv.x, -uv.y) * 0.5 + 0.5, vec2f(1.0 / 128.0), vec2f(1.0 - 1.0 / 128.0));
     let spr = textureSampleLevel(tSmoke, tSmokeS, (cell + tuv) * 0.5, 0.0).r;
     m = spr * smoothstep(1.0, 0.6, sqrt(r2));
+    // (v768) the card's empty corners, the sprite's clear parts and wherever it's hidden: nothing to light
+    m *= fxSoft(i.pos.xy, i.pix, i.rad, r2);
+    if (m * i.a < 1e-4) { discard; }
     let cs = cos(i.nz.z); let sn = sin(i.nz.z);
     lit = i.col * fxLight(i.wpos, puffNormal(vec2f(uv.x * cs - uv.y * sn, uv.x * sn + uv.y * cs), i.nz)) + i.col * i.glow;
   } else if (st == ${FX.PLUS}) {
@@ -366,22 +404,8 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
     m = exp(-x * x * 5.0) * (1.0 - smoothstep(0.85, 1.0, abs(uv.y)));
     lit = mix(i.col, vec3f(1.0), exp(-x * x * 40.0)) * i.glow;
   }
-  // soft where it meets what's behind it
-  if (U.refr > 0.5 && st != ${FX.RING} && st != ${FX.DISC}) {
-    let dims = vec2i(textureDimensions(tRefrD));
-    let zb = textureLoad(tRefrD, clamp(vec2i(i.pos.xy), vec2i(0), dims - 1), 0);
-    let P = F.proj;
-    let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
-    let vz = (F.view * vec4f(i.pix, 1.0)).z;
-    if (i.rad > 0.0) {
-      // a ball: of its depth here (front to back, half of it each side of its middle), the share in front of what's
-      // behind it, softened a little more for a small one
-      let th = sqrt(max(1.0 - r2, 0.0)) * i.rad + 0.04;
-      m *= smoothstep(0.0, 1.0, sat((vz + th - vb) / (2.0 * th)));
-    } else {
-      m *= smoothstep(0.0, 0.3, vz - vb);
-    }
-  }
+  // soft where it meets what's behind it (puffs, flames and smoke took theirs above)
+  if (st != ${FX.RING} && st != ${FX.DISC} && st != ${FX.PUFF} && st != ${FX.FLAME} && st != ${FX.SMOKE}) { m *= fxSoft(i.pos.xy, i.pix, i.rad, r2); }
   let al = sat(m * i.a);
   return vec4f(lit * al, al * i.cover);
 }`;

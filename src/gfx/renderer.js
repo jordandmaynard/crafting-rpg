@@ -63,7 +63,26 @@ class Renderer {
     this.clearColor = new Color(0, 0, 0); this.clearAlpha = 1;
     this.target = null;
     this.clouds = null;
-    this.info = { draws: 0, passes: 0 };
+    this.info = { draws: 0, passes: 0, submits: 0, canvases: 0, upKB: 0 };
+    // (v768) every send to the GPU and every upload counted, whoever makes it (the game, the GI probes, the potion
+    // squares), for the G panel's per-frame counts: work the pass timers can't see
+    {
+      const q = device.queue, info = this.info, sub = q.submit.bind(q), wb = q.writeBuffer.bind(q), wt = q.writeTexture.bind(q);
+      q.submit = (cbs) => { info.submits++; return sub(cbs); };
+      q.writeBuffer = (buf, off, data, dOff, size) => {
+        const el = data.BYTES_PER_ELEMENT || 1;
+        info.upKB += (size !== undefined ? size * el : data.byteLength - (dOff || 0) * el) / 1024;
+        return size !== undefined ? wb(buf, off, data, dOff, size) : dOff !== undefined ? wb(buf, off, data, dOff) : wb(buf, off, data);
+      };
+      q.writeTexture = (dst, data, layout, size) => {
+        const h = size[1] ?? size.height ?? 1, d = size[2] ?? size.depthOrArrayLayers ?? 1;
+        info.upKB += (layout.bytesPerRow ? layout.bytesPerRow * ((layout.rowsPerImage ?? h) * (d - 1) + h) : data.byteLength - (layout.offset || 0)) / 1024;
+        return wt(dst, data, layout, size);
+      };
+    }
+    // (v768) while set, renders into a canvas target wait for the next flush() instead of each sending at once, so a
+    // run of them (the potion squares) goes to the GPU in one send
+    this.holdFlush = false;
     this._time0 = performance.now();
     this._frustum = new Frustum(); this._m = new Matrix4(); this._vp = new Matrix4(); this._v = new Vector3(); this._v2 = new Vector3();
     this._pipelines = new Map(); this._modules = new Map();
@@ -301,7 +320,7 @@ class Renderer {
       this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
     }
     if (!this.mergePasses) this._closePass();
-    if (!this.target || this.target.isCanvasTarget) this.flush();
+    if (!this.target || (this.target.isCanvasTarget && !this.holdFlush)) this.flush();
     else this._queueFlush();
   }
 
@@ -667,7 +686,7 @@ class Renderer {
   _targetViews(rt) {
     const dev = this.device;
     if (rt && rt.isCanvasTarget) {
-      if (!rt.tex) { const t0 = performance.now(); rt.tex = rt.context.getCurrentTexture(); this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._liveCanvases.add(rt); }
+      if (!rt.tex) { const t0 = performance.now(); rt.tex = rt.context.getCurrentTexture(); this.info.canvases++; this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._liveCanvases.add(rt); }
       const t = rt.tex, w = t.width, h = t.height;
       if (!rt.depth || rt.depth.width !== w || rt.depth.height !== h) {
         if (rt.depth) this._trash.push(rt.depth);
@@ -677,7 +696,7 @@ class Renderer {
       return { color: t.createView(), depth: rt.depthView, format: this.format, width: w, height: h };
     }
     if (!rt) {
-      if (!this._canvasTex) { const t0 = performance.now(); this._canvasTex = this.context.getCurrentTexture(); this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._lastCanvasTex = this._canvasTex; }
+      if (!this._canvasTex) { const t0 = performance.now(); this._canvasTex = this.context.getCurrentTexture(); this.info.canvases++; this.info.texWait = (this.info.texWait || 0) + performance.now() - t0; this._lastCanvasTex = this._canvasTex; }
       const t = this._canvasTex, w = t.width, h = t.height;
       if (!this._canvasDepth || this._canvasDepth.width !== w || this._canvasDepth.height !== h) {
         if (this._canvasDepth) this._trash.push(this._canvasDepth);

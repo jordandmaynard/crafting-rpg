@@ -19996,10 +19996,14 @@ function potionGpu(list) {
   if (!todo.length) return;
   const tgt = renderer.getRenderTarget(), name = renderer.passName;
   renderer.passName = 'potion slosh';
-  for (const S of todo) {
-    renderer.setRenderTarget(S.gpu.tgt); renderer.setClearColor(0x000000, 0); renderer.clear();
-    renderer.render(S.gpu.scene, potionUi.cam);
-  }
+  // (v768) every square's bottle in one send to the GPU, not a send each
+  renderer.holdFlush = true;
+  try {
+    for (const S of todo) {
+      renderer.setRenderTarget(S.gpu.tgt); renderer.setClearColor(0x000000, 0); renderer.clear();
+      renderer.render(S.gpu.scene, potionUi.cam);
+    }
+  } finally { renderer.holdFlush = false; }
   renderer.setRenderTarget(tgt); renderer.setClearColor('#0b0912', 1); renderer.passName = name;
   renderer.flush();
 }
@@ -25045,12 +25049,21 @@ sealView.id = 'sealView'; sealView.width = sealView.height = 1;
 Object.assign(sealView.style, { pointerEvents: 'none', imageRendering: 'auto', cursor: 'default', display: 'none' });
 stage.appendChild(sealView);
 const sealTarget = renderer.canvasTarget(sealView);
+// (v768) the part of the screen the seals' canvas covers, in the screen's pixels from its top left (x, y) and its size
+// (z, w): only the box round what it draws, not the whole screen. Both shaders work in whole-screen pixels and map
+// into it (sealBoxNdc), and read the world's depth back at whole-screen pixels (+ box.xy)
+const SEAL_BOX = { x: 0, y: 0, z: 1, w: 1 };
+const SEAL_BOX_WGSL = /* wgsl */ `
+fn sealBoxNdc(cp: vec2f) -> vec2f {
+  let d = vec2f(cp.x - U.sbox.x, U.screen.y - cp.y - U.sbox.y);
+  return vec2f(d.x / U.sbox.z * 2.0 - 1.0, 1.0 - d.y / U.sbox.w * 2.0);
+}`;
 const SEAL_U = { tSeal: { value: new GFX.DataTexture(new Uint8Array(4), 1, 1) }, tD: { value: outlineRT.depthTexture },
-  cell: { value: 1 }, screen: { value: new GFX.Vector2(1, 1) }, lift: { value: 2.4 }, bob: { value: 0.05 }, useD: { value: 1 } };
+  cell: { value: 1 }, screen: { value: new GFX.Vector2(1, 1) }, lift: { value: 2.4 }, bob: { value: 0.05 }, useD: { value: 1 }, sbox: { value: SEAL_BOX } };
 const sealMat = new GFX.ShaderMaterial({
   uniforms: SEAL_U, attributes: { qm: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
   blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
-  code: /* wgsl */ `
+  code: SEAL_BOX_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32 }
 @vertex fn vs(v: VIn) -> VOut {
   let ctr = v.position + vec3f(0.0, U.lift + sin(F.camDir.w * 2.2 + v.position.x) * U.bob, 0.0);
@@ -25061,7 +25074,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
   let cp = (c.xy / max(c.w, 1e-6) * 0.5 + 0.5) * U.screen;
   let lo = floor(cp - vec2f(U.cell * 0.5) + 0.5);
   let px = lo + (v.qm.xy * 0.5 + 0.5) * U.cell;
-  o.pos = vec4f(px / U.screen * 2.0 - 1.0, 0.5, 1.0);
+  o.pos = vec4f(sealBoxNdc(px), 0.5, 1.0);
   if (c.w <= 0.0) { o.pos = vec4f(2.0, 2.0, 0.5, 1.0); }
   o.uv = vec2f((v.qm.z + v.qm.x * 0.5 + 0.5) / 3.0, 0.5 - v.qm.y * 0.5);
   return o;
@@ -25072,7 +25085,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
   if (U.useD > 0.5) {
     // the world's depth under this pixel (the mosaic's, finer by its anti-aliasing): hidden where it's nearer than the seal
     let dims = vec2i(textureDimensions(tD));
-    let zb = textureLoad(tD, clamp(vec2i(i.pos.xy / U.screen * vec2f(dims)), vec2i(0), dims - 1), 0);
+    let zb = textureLoad(tD, clamp(vec2i((i.pos.xy + U.sbox.xy) / U.screen * vec2f(dims)), vec2i(0), dims - 1), 0);
     let P = F.proj;
     let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
     k = 1.0 - smoothstep(0.1, 0.3, vb - i.vz);
@@ -25109,8 +25122,42 @@ function buildSealAtlas(cell) {
   sealCell = cell;
   return true;
 }
+// (v768) where the seals' canvas goes this frame (SEAL_BOX): round every seal and card on the screen, with room to
+// spare, its size in steps of 64 CSS px (grown at once, shrunk only after a second of needing less, so the canvas
+// isn't made afresh every frame) and its corner on 8 CSS px; false when nothing's on the screen
+const sealBoxKeep = { w: 0, h: 0, lessT: 0, sw: '', sh: '', tr: '' };
+const sbA = new GFX.Vector3();
+function sealPlaceBox(w, h, dpr, cell, cards) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = (x, y, z, r) => {
+    sbA.set(x, y, z).project(camera);
+    if (!Number.isFinite(sbA.x) || !Number.isFinite(sbA.y)) return;
+    const px = (sbA.x * 0.5 + 0.5) * w, py = (0.5 - sbA.y * 0.5) * h;
+    x0 = Math.min(x0, px - r); x1 = Math.max(x1, px + r); y0 = Math.min(y0, py - r); y1 = Math.max(y1, py + r);
+  };
+  if (sealMesh) for (const q of sealPts) add(q.x, q.y + QUEST_MARK.lift, q.z, cell + QUEST_MARK.bob * h / Math.max(1e-3, spanH) + 4);
+  if (cards) for (let k = 0; k < pcardN; k++) {
+    // (a card is its height tall, hung from this point: it reaches no farther than that from it, whichever way it's turned)
+    const ax = pcardPos[k * 18], ay = pcardPos[k * 18 + 1], az = pcardPos[k * 18 + 2];
+    h2a.set(ax, ay, az); h2b.set(ax, ay + pcardQs[k * 24], az); h2a.project(camera); h2b.project(camera);
+    add(ax, ay, az, Math.abs(h2b.y - h2a.y) / 2 * h + 4);
+  }
+  x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(w, x1); y1 = Math.min(h, y1);
+  if (!(x1 > x0 && y1 > y0)) return false;
+  const K = sealBoxKeep, step = 64 * dpr;
+  const nw = Math.min(Math.ceil(w / dpr / 64) * 64 * dpr, Math.ceil((x1 - x0 + 16 * dpr) / step) * step), nh = Math.min(Math.ceil(h / dpr / 64) * 64 * dpr, Math.ceil((y1 - y0 + 16 * dpr) / step) * step);
+  if (nw > K.w || nh > K.h || !K.w) { K.w = Math.max(K.w, nw); K.h = Math.max(K.h, nh); K.lessT = 0; }
+  else if (nw < K.w || nh < K.h) { if (++K.lessT > 60) { K.w = nw; K.h = nh; K.lessT = 0; } }
+  else K.lessT = 0;
+  const snap = v => Math.floor(v / dpr / 8) * 8 * dpr;
+  const bx = snap(Math.max(0, Math.min((x0 + x1) / 2 - K.w / 2, w - K.w))), by = snap(Math.max(0, Math.min((y0 + y1) / 2 - K.h / 2, h - K.h)));
+  Object.assign(SEAL_BOX, { x: Math.round(bx), y: Math.round(by), z: Math.round(K.w), w: Math.round(K.h) });
+  return true;
+}
+let sealPts = [];
 function setSealMesh(list) {
   if (sealMesh) { sealScene.remove(sealMesh); sealMesh.geometry.dispose(); sealMesh = null; }
+  sealPts = list.map(([q]) => q);
   if (!list.length) return;
   const pos = [], qm = [], C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
   for (const [q, k] of list) for (const [a, b] of C) { pos.push(q.x, q.y, q.z); qm.push(a, b, k, 0); }
@@ -25136,14 +25183,21 @@ function drawSeals(useD) {
   // (v755: the 2D potion bottles are drawn here too: pcardMesh, potionCards)
   const cards = pcardMesh.visible;
   if (!sealMesh && !cards) { if (sealsUp) { sealView.style.display = 'none'; sealsUp = false; } return; }
-  // the same place and size on the page as the game's canvas, at the screen's own pixels
+  // at the screen's own pixels, placed over the game's canvas (w, h: that canvas's size in them)
   const st = sealView.style, cs = cv.style;
-  if (st.width !== cs.width) st.width = cs.width;
-  if (st.height !== cs.height) st.height = cs.height;
-  if (st.transform !== cs.transform) st.transform = cs.transform;
   const dpr = Math.min(2, devicePixelRatio || 1), w = Math.max(1, Math.round(parseFloat(cs.width) * dpr)), h = Math.max(1, Math.round(parseFloat(cs.height) * dpr));
-  if (sealView.width !== w || sealView.height !== h) { sealView.width = w; sealView.height = h; }
   const cell = Math.max(8, Math.round(QUEST_MARK.size * uiScale() * dpr));
+  // (v768) the canvas covers only the box round the seals and cards (it was the whole screen, cleared and laid over
+  // the game every frame while a bottle was in hand)
+  if (!sealPlaceBox(w, h, dpr, cell, cards)) { if (sealsUp) { st.display = 'none'; sealsUp = false; } return; }
+  {
+    const B = SEAL_BOX, bw = Math.round(B.z), bh = Math.round(B.w);
+    if (sealView.width !== bw || sealView.height !== bh) { sealView.width = bw; sealView.height = bh; }
+    const sw = bw / dpr + 'px', sh = bh / dpr + 'px', tr = `${cs.transform} translate(${B.x / dpr}px, ${B.y / dpr}px)`, K = sealBoxKeep;
+    if (K.sw !== sw) st.width = K.sw = sw;
+    if (K.sh !== sh) st.height = K.sh = sh;
+    if (K.tr !== tr) st.transform = K.tr = tr;
+  }
   if (sealMesh && cell !== sealCell && !buildSealAtlas(cell)) return;
   if (cards) {
     // the potion atlas at about the size the biggest card shows (redrawn when that's changed by a sixth, or the icons have)
@@ -26130,11 +26184,11 @@ const PCARD_U = { tP: { value: new GFX.DataTexture(new Uint8Array(4), 1, 1) }, t
   tG: { value: new GFX.DataTexture(new Uint8Array(16), 4, 1) },
   screen: { value: new GFX.Vector2(1, 1) }, cells: { value: 6 }, useD: { value: 1 }, cellPx: { value: 16 },
   pfx: { value: POTION_PFX }, pbt: { value: new Float32Array(6 * 8) }, pbb: { value: new Float32Array(6 * POTION_BUB * 4) },
-  litK: { value: POTION_LIT.strength }, litRef: { value: POTION_LIT.ref }, glint: { value: POTION_LIT.glint }, gloss: { value: POTION_LIT.gloss } };
+  litK: { value: POTION_LIT.strength }, litRef: { value: POTION_LIT.ref }, glint: { value: POTION_LIT.glint }, gloss: { value: POTION_LIT.gloss }, sbox: { value: SEAL_BOX } };
 const pcardMat = new GFX.ShaderMaterial({
   uniforms: PCARD_U, attributes: { qm: 'vec4f', qs: 'vec4f', qb: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
   blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
-  code: POTION_WGSL + POTION_GEO_WGSL + /* wgsl */ `
+  code: POTION_WGSL + POTION_GEO_WGSL + SEAL_BOX_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32, @location(2) @interpolate(flat) soft: f32,
   @location(3) nuv: vec2f, @location(4) wp: vec3f, @location(5) @interpolate(flat) rc: vec2f,
   @location(6) @interpolate(flat) live: f32, @location(7) @interpolate(flat) pw: f32 }
@@ -26151,7 +26205,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
   let cs = cos(v.qm.w); let sn = sin(v.qm.w);
   let off = vec2f(lx * cs - ly * sn, lx * sn + ly * cs);
   let cp = (c.xy / cw * 0.5 + 0.5) * U.screen + off;
-  o.pos = vec4f(cp / U.screen * 2.0 - 1.0, 0.5, 1.0);
+  o.pos = vec4f(sealBoxNdc(cp), 0.5, 1.0);
   if (c.w <= 0.0 || v.qs.x <= 0.0) { o.pos = vec4f(2.0, 2.0, 0.5, 1.0); }
   o.uv = vec2f((v.qm.z + v.qm.x * 0.5 + 0.5) / U.cells, 0.5 - v.qm.y * 0.5);
   o.soft = v.qs.w;
@@ -26195,7 +26249,7 @@ fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
   var k = 1.0;
   if (U.useD > 0.5) {
     let dims = vec2i(textureDimensions(tD));
-    let zb = textureLoad(tD, clamp(vec2i(i.pos.xy / U.screen * vec2f(dims)), vec2i(0), dims - 1), 0);
+    let zb = textureLoad(tD, clamp(vec2i((i.pos.xy + U.sbox.xy) / U.screen * vec2f(dims)), vec2i(0), dims - 1), 0);
     let P = F.proj;
     let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
     k = 1.0 - smoothstep(i.soft, i.soft * 2.0 + 0.03, vb - i.vz);
@@ -32851,13 +32905,17 @@ function frameBody(now) {
   if (!profPanel.hidden && (sceneCountT -= real) < 0) { sceneCountT = 0.5; sceneMeshes = 0; scene.traverse(o => { if (o.isMesh) sceneMeshes++; }); }
   prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'} · ${renderer.info.draws} draws · ${renderer.info.passTotal || 0} render passes · ${sceneMeshes} meshes`;
   renderer.info.draws = 0; renderer.info.passTotal = 0;
+  // (v768) since the last frame, the potions' own loop's work included: sends to the GPU, canvases drawn, uploads
+  { const I = renderer.info;
+    prof.count('sends to the GPU (submits)', I.submits); prof.count('canvases drawn', I.canvases); prof.count('uploaded to the GPU (KB)', I.upKB);
+    I.submits = 0; I.canvases = 0; I.upKB = 0; }
   prof.frame(frameStart, now, profLive, `World built in ${(genMs / 1000).toFixed(1)} s. GPU rows are each pass's time; "scene" rows by what's drawn.`);
   spikes.end(performance.now() - frameStart, now, [dayNum, clock]);
   if (spikes.changed && !profPanel.hidden) showSpikes();
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 767, crashSeen = new Map();
+const GAME_VERSION = 768, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

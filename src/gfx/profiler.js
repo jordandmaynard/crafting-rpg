@@ -140,11 +140,21 @@ export class GpuProfiler {
     this.out.set(name, p === undefined ? ms : p + (ms - p) * SMOOTH);
   }
 
+  // (v768) a count for each frame (sends to the GPU, canvases drawn, KB uploaded): a row of its own in the "Each
+  // frame" table, smoothed like the laps
+  count(name, n) {
+    if (!this.on) return;
+    this.cnt = this.cnt || new Map();
+    const p = this.cnt.get(name);
+    this.cnt.set(name, p === undefined ? n : p + (n - p) * SMOOTH);
+  }
+
   toggle() {
     this.on = !this.on;
     this.ema.clear();
     this.cpu.clear();
     if (this.out) this.out.clear();
+    if (this.cnt) this.cnt.clear();
     this.order = [];
     this.shown = 0;
     this.doneSeen = false;
@@ -182,6 +192,9 @@ export class GpuProfiler {
       `<tr><td>idle (main thread waiting)</td><td><b>${Math.max(0, this.frameMs - this.cpuMs - [...(this.out || new Map()).values()].reduce((a, v) => a + v, 0)).toFixed(2)}</b></td></tr>` +
       `<tr><td>GPU done, after last submit</td><td><b>${this.doneSeen ? this.doneMs.toFixed(2) : '…'}</b></td></tr></table>` +
       `<div class="gnote">GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck.</div>` +
+      (this.cnt && this.cnt.size ? `<table><tr><th>Each frame</th><th>count</th></tr>` +
+        [...this.cnt].map(([nm, n]) => `<tr><td>${nm}</td><td><b>${n.toFixed(1)}</b></td></tr>`).join('') + '</table>' +
+        `<div class="gnote">Work the pass timers can't see: each send to the GPU and each canvas drawn has its own cost in the browser's GPU process, and uploads cross to the GPU before the passes can run.</div>` : '') +
       `<div class="gnote">${extra}` +
       (this.hasTimestamps ? ' Chrome rounds GPU times to 0.1 ms unless chrome://flags "WebGPU Developer Features" is on.' : '') + '</div>';
   }
