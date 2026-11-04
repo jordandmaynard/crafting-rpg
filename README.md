@@ -462,6 +462,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v743:** (Jordan's tuning) Potion bottles: fill 0.8 (was 0.62), inset 10 (4.5), soft 0.5 (2), persp 0.25 (0.3), mid 0.74 (0.76), contrast 2.85 (1.8), shade 0.46 (0.28), light 0.39 (0.6), depth 0.32 (0.3), surface 0.7 (0.55), rim 2 (0.8), front 0.8 (0.6), gleam 0.94 (0.9), slosh 2.2 (1), maxTilt 0.7 (0.42), bubbles 2 (1).
 
+**v744:** (Jordan) The magenta potion is now the Purple Potion and the violet one the Clear Potion. Jordan's tuning: potion colours red #e10e27, purple #aa20c5, green #10e525, blue #0951e1, amber #fdb435, clear #a8ddf5; mid 0.79 (was 0.74), contrast 2.7 (2.85), shade 0.57 (0.46).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
