@@ -1350,7 +1350,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 782;
+const GAME_VERSION = 783;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -10279,7 +10279,7 @@ function updateTrample(dt) {
 // a slope or cliff, nor round a tree's or rock's foot) and what ground it is (bits 4-7, GRASS_KIND); g b, how high
 // it lies ((y + 16) × 1024). Paths, streets, floors, bridges, water and lava grow none; swamp pools grow reeds.
 // They get no depth outline (GRASS.outline 0): taller grass would be all strokes.
-const GRASS = { on: 1, density: 16, range: 30, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
+const GRASS = { on: 1, nearFirst: 1, density: 16, range: 30, grass: 4, flowers: 0.5, reeds: 0.55, height: 0.5, width: 3, lean: 0.8, flowerSize: 2.5, flowerHeight: 1.05, reedHeight: 1.2,
   variation: 0.1, soft: 0.81, flowerSides: 6, flowerPeak: -0.55, outline: 0, poolReeds: 0.03, cut: 1, stub: 0.15, regrow: 40, bits: 1, meadowColor: '#78a844', forestColor: '#4a7c34', swampColor: '#62703a', reedColor: '#6a7a3a' };
 if (MOBILE) { GRASS.density = 4; GRASS.range = 18; }
 // 1 meadow, 2 forest, 3 a town's yards, 4 swamp, 5 a swamp pool, 6 the deep forest, 7 a graveyard; 8 and 9 a
@@ -10369,6 +10369,7 @@ const GRASS_U = {
   tGrass: { value: grassTex },
   tTrample: PLANT_U.tTrample, trV: PLANT_U.trV, windV: PLANT_U.windV, bend: PLANT_U.bend,
   win: { value: { x: 0, y: 0, z: 1, w: 28 } },        // the window's corner tile (x z), tiles across, how far out they're drawn
+  ord: { value: { x: 0, y: 0, z: 0, w: 0 } },         // (v783) the order the window's tiles are drawn in: rows along x or z, each way reversed
   at: { value: { x: 0, y: 0, z: 1, w: 1 } },          // the view's middle (x z), places a tile, how thick reeds grow in pools
   tuft: { value: { x: 8, y: 0.2, z: 1, w: 1 } },      // density, height, width, lean
   look: { value: { x: 0.12, y: 0.5, z: 1, w: 0.55 } },// shade variation, how much they're lit like the ground, flower blossom size, reed height
@@ -10431,7 +10432,13 @@ fn grassColor(kind: u32) -> vec3f {
   let n = u32(U.win.z);
   let slot = ii % S;
   let cell = ii / S;
-  let tile = vec2i(U.win.xy) + vec2i(i32(cell % n), i32(cell / n));
+  // (v783) the tiles taken nearest the camera first (U.ord: rows across the way it looks, from the near side), so a
+  // tuft behind one already drawn fails the depth test before it's lit
+  var tx = cell % n; var tz = cell / n;
+  if (U.ord.x > 0.5) { let q = tx; tx = tz; tz = q; }
+  if (U.ord.y > 0.5) { tx = n - 1u - tx; }
+  if (U.ord.z > 0.5) { tz = n - 1u - tz; }
+  let tile = vec2i(U.win.xy) + vec2i(i32(tx), i32(tz));
   if (any(tile < vec2i(0)) || any(tile >= vec2i(${N}))) { return o; }
   // (corners past the flower heads' sides go unused)
   if (vi >= 36u + 6u * u32(U.bloom.x)) { return o; }
@@ -10582,6 +10589,10 @@ function updateGrass() {
   if (!on) return;
   const u = GRASS_U;
   Object.assign(u.win.value, { x: Math.floor(camTarget.x) - R, y: Math.floor(camTarget.z) - R, z: n, w: R });
+  // (v783, Jordan's overdraw view: grass lit 3-6 times over) nearest first: the camera stands off toward (sin yaw, cos
+  // yaw), so the rows run across whichever way it looks more along, from that side
+  { const cx = Math.sin(yaw), cz = Math.cos(yaw), on1 = g.nearFirst > 0.5, xSlow = Math.abs(cx) > Math.abs(cz);
+    Object.assign(u.ord.value, { x: on1 && xSlow ? 1 : 0, y: on1 && cx > 0 ? 1 : 0, z: on1 && cz > 0 ? 1 : 0 }); }
   Object.assign(u.at.value, { x: camTarget.x, y: camTarget.z, z: S, w: g.poolReeds });
   Object.assign(u.tuft.value, { x: Math.min(g.density, 16), y: g.height, z: g.width, w: g.lean });
   Object.assign(u.look.value, { x: g.variation, y: g.soft, z: g.flowerSize, w: g.reedHeight });
@@ -32179,6 +32190,7 @@ const TUNING = [
     [GRASS, 'reeds', 'Share of reeds on swamp ground', 0, 4, 0.05],
     [GRASS, 'poolReeds', 'How thick reeds grow in swamp water (times density)', 0, 2, 0.01],
     [GRASS, 'range', 'How far out from the middle of the view (tiles)', 8, 60, 1],
+    [GRASS, 'nearFirst', 'Drawn nearest the camera first (1), so the tufts behind are mostly not lit at all; 0 row by row as before', 0, 1, 1],
     [GRASS, 'height', 'Grass height (tiles)', 0.05, 0.6, 0.01],
     [GRASS, 'width', 'Blade width', 0.3, 3, 0.05],
     [GRASS, 'lean', 'How far the blades lean out', 0, 3, 0.05],

@@ -540,6 +540,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v782:** (Jordan's G: the hero's movers climbed to ~800 with the pack open) The Character folio's standing pose (idleDollPose) made the matrices of the whole hero, hidden weapons in every metal included, when it put the game's pose back each frame. Both it and the standing pose now leave hidden pieces as the scene's own pass does, and the standing pose's matrices are made before the view is drawn (the frame's matrix pass is over by then, so it was drawn from the game's).
 
+**v783:** (Jordan's overdraw view: grass lit 3 to 6 times over) The grass tufts are drawn nearest the camera first (GRASS_U.ord: the window's tiles in rows across the way the camera looks, from its side), so a tuft behind one already drawn fails the depth test before it's lit, as nothing in the grass shader stops the GPU's early depth test. Same picture. T > Grass > Drawn nearest the camera first (0 = the old row by row order, to compare in G > Overdraw view and the grass pass row).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
