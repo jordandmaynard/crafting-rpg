@@ -388,6 +388,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v705:** (Jordan: skeletons back to their old look; zombies stay as they are) The skeleton is the old crowd skeleton again, box for box at its old size, on the people's joints so it still walks, strikes, chatters its jaw and bursts apart: square bone legs and arms cut at the knee, ankle, elbow and wrist, a pelvis, a spine, three ribs, a collarbone, a big skull with plain red glowing eyes and a dark nose hole, the jaw on its hinge below, and the old steel sword with the brown crossguard. All alike, as before: no helms, hip rags, shields, axes, spears or bows (so no skeleton archers).
 
+**v706:** (Jordan's Window titles paste: ink #f3d5a5; and the health frame's rim looked doubled at the bar's right end) The frame-ring over the health fill is no longer inside .bc-hp: it is its own img (.bc-frame.bc-hpf.bc-ring) right after the bar, placed by the same .bc-hpf rule as the frame under it, and the numbers sit in a second .bc-hp (.bc-hpt) over it.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
