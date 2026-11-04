@@ -390,6 +390,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v706:** (Jordan's Window titles paste: ink #f3d5a5; and the health frame's rim looked doubled at the bar's right end) The frame-ring over the health fill is no longer inside .bc-hp: it is its own img (.bc-frame.bc-hpf.bc-ring) right after the bar, placed by the same .bc-hpf rule as the frame under it, and the numbers sit in a second .bc-hp (.bc-hpt) over it.
 
+**v707:** (Jordan: the trees in the desert planters should look more like fiddle leaf figs) The basket planters' tree is now a fiddle leaf fig: a slim pale grey-brown trunk with a slight lean and kink, branching at the top into three or four short limbs plus a leader up the middle, each carrying five or six big violin-waisted leaves (broad round tip, narrow waist) spiralling round it. The leaves are their own shape (G.figLeafA/B/U: the two halves of the upper face folded up from the midrib and shaded apart so the fold reads as the rib, a slight wave along the edges, the leaf arching back to its tip, and a paler underside). Lower leaves are bigger and droop, the ones at the tips are smaller, tipped up and a fresher lime. The basket and soil are unchanged; the tree is about as tall and wide as the old ficus.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

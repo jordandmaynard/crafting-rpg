@@ -8964,6 +8964,31 @@ G.snowSkirt = (() => {
   g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
   return g;
 })();
+// (v707, Jordan) a fiddle leaf fig's leaf, a unit long: up y from its stalk (0) to its broad round tip (1), wide in x
+// with the fig's violin waist, its upper face toward +z. The halves fold up from the midrib (z rises out to the
+// edges, with a slight wave along them) and the leaf arches back toward its tip. figLeafA is the right half's upper
+// face, figLeafB the left's (shaded apart, so the fold reads as the midrib), figLeafU the whole underside.
+const FIG_LEAF = [[0, 0.03], [0.1, 0.16], [0.24, 0.24], [0.42, 0.21], [0.6, 0.28], [0.77, 0.33], [0.9, 0.29], [0.98, 0.15], [1, 0]];
+const figLeafHalf = (sd, under) => {
+  const pos = [], g = new GFX.BufferGeometry();
+  const mid = ([t]) => [0, t, -0.16 * t * t], edge = ([t, w]) => [sd * w, t, -0.16 * t * t + 0.34 * w + 0.025 * Math.sin(t * 17) * w / 0.33];
+  for (let j = 0; j + 1 < FIG_LEAF.length; j++) {
+    const m0 = mid(FIG_LEAF[j]), m1 = mid(FIG_LEAF[j + 1]), e0 = edge(FIG_LEAF[j]), e1 = edge(FIG_LEAF[j + 1]);
+    // (counter-clockwise seen from +z for the upper face, the other way round underneath)
+    const up = (sd > 0) !== under;
+    if (up) pos.push(...m0, ...e0, ...e1, ...m0, ...e1, ...m1);
+    else pos.push(...m0, ...e1, ...e0, ...m0, ...m1, ...e1);
+  }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+};
+G.figLeafA = figLeafHalf(1, false);
+G.figLeafB = figLeafHalf(-1, false);
+G.figLeafU = (() => {
+  const a = figLeafHalf(1, true).attributes.position.array, b = figLeafHalf(-1, true).attributes.position.array, g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute([...a, ...b], 3));
+  return g;
+})();
 const GP = new Map();
 for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attributes.position.array);
 // drop a primitive into the current buffer, posed and tinted
@@ -14024,26 +14049,63 @@ function planter(c, r) {
     }
   }
 }
-// (v654, Jordan) a desert town's street planter: a beaten copper pot, its hammered facets catching the light one by
-// one, a rolled rim, dark soil, and a ficus in it: a braided trunk and a round head of glossy leaves
-const COPPER_POT = { copper: '#b8693a', rim: '#d88a50', dark: '#7e4428', trunk: '#7a6650', leaf: '#2f5e2c' };
-// (v665, Jordan: woven baskets in place of the copper pots) the basket itself is in buildBaskets, its own mesh in the
-// thatch's straw map wrapped round it; here only its soil and the ficus
+// (v654, Jordan) a desert town's street planter, a woven basket since v665 (buildBaskets draws it, in the thatch's
+// straw map wrapped round it); here only its soil and the tree in it. (v707, Jordan) The tree is a fiddle leaf fig:
+// one slim pale trunk with a gentle lean, branching at the top into three or four short limbs and a leader, every
+// one carrying big violin-waisted leaves spiralling round it, glossy and dark, held out flat or tipped up near the
+// ends (where the young ones stand up, small and lime) and drooping lower down
+const FIG = { trunk: '#86775f', leaf: '#2c5a24', young: '#7aa83a', under: '#5a7c42' };
+const figM = new GFX.Matrix4(), figX = new GFX.Vector3(), figY = new GFX.Vector3(), figZ = new GFX.Vector3();
+// one leaf: its stalk at p, pointing d (a unit vector), L long, turned roll about its own length
+function figLeaf(col, p, d, L, roll) {
+  figY.set(d[0], d[1], d[2]);
+  figX.set(-d[2], 0, d[0]);   // (d × up: square to the leaf and level, so its upper face looks up)
+  if (figX.length() < 1e-4) figX.set(1, 0, 0); else figX.normalize();
+  figZ.crossVectors(figX, figY);
+  const cr = Math.cos(roll), sr = Math.sin(roll);
+  figX.set(figX.x * cr + figZ.x * sr, figX.y * cr + figZ.y * sr, figX.z * cr + figZ.z * sr);
+  figZ.crossVectors(figX, figY);
+  figM.set(figX.x, figY.x, figZ.x, 0, figX.y, figY.y, figZ.y, 0, figX.z, figY.z, figZ.z, 0, 0, 0, 0, 1);
+  dummy.quaternion.setFromRotationMatrix(figM);
+  dummy.position.set(p[0], p[1], p[2]); dummy.scale.set(L, L, L * 0.8); dummy.updateMatrix();
+  emitPart(G.figLeafA, col, 'world');
+  emitPart(G.figLeafB, shade(col, 0.84), 'world');
+  emitPart(G.figLeafU, CC(FIG.under).clone().lerp(col, 0.3), 'world');
+}
 function copperPlanter(c, r, x, y, z) {
-  const P = COPPER_POT;
   part(G.cyl16, '#3a2618', x, y + 0.49, z, { sx: 0.47, sy: 0.02, sz: 0.47 });              // (the soil)
-  // the ficus: three stems braided up (leaning in turn), then its head of leaves in clumps
-  for (let k = 0; k < 3; k++) {
-    const t = k / 3 * Math.PI * 2;
-    part(G.box, shade(CC(P.trunk), 0.9 + k * 0.08), x + Math.sin(t) * 0.025, y + 0.82, z + Math.cos(t) * 0.025, { sx: 0.035, sy: 0.62, sz: 0.035, ry: t, rz: 0.12 });
+  let seed = hs(c, r, 661) * 1000 + 7;
+  const rnd = () => { seed += 1; const v = Math.sin(seed * 12.9898) * 43758.5453; return v - Math.floor(v); };
+  const bark = shade(CC(FIG.trunk), 0.92 + rnd() * 0.14), leaf = CC(FIG.leaf), young = CC(FIG.young);
+  // the trunk: up from the soil in two pieces, leaning a little its own way, a touch of a kink between
+  const la = rnd() * Math.PI * 2, lx = Math.sin(la) * 0.05, lz = Math.cos(la) * 0.05;
+  const A = [x, y + 0.47, z], K = [x + lx * 0.35 + (rnd() - 0.5) * 0.02, y + 0.76, z + lz * 0.35 + (rnd() - 0.5) * 0.02], T = [x + lx, y + 1.02, z + lz];
+  part(G.cyl8, shade(bark, 0.85), x, y + 0.5, z, { sx: 0.075, sy: 0.04, sz: 0.075 });   // (its flare at the soil)
+  seg(G.cyl8, bark, A, K, 0.03);
+  seg(G.cyl8, shade(bark, 1.05), K, T, 0.026);
+  // the limbs: out and up from the trunk's top, and the leader on up the middle
+  const n = 3 + (rnd() > 0.55 ? 1 : 0), a0 = rnd() * Math.PI * 2, limbs = [];
+  for (let q = 0; q < n; q++) {
+    const a = a0 + q / n * Math.PI * 2 + (rnd() - 0.5) * 0.5, e = 0.75 + rnd() * 0.3, l = 0.17 + rnd() * 0.07;
+    const from = [T[0], T[1] - rnd() * 0.06, T[2]];
+    limbs.push({ from, a, d: [Math.sin(a) * Math.cos(e), Math.sin(e), Math.cos(a) * Math.cos(e)], l, leaves: 6 });
   }
-  const hy = y + 1.25;
-  part(G.ico, shade(CC(P.leaf), 0.8), x, hy, z, { sx: 0.5, sy: 0.38, sz: 0.5 });
-  for (let k = 0; k < 9; k++) {
-    const t = k / 9 * Math.PI * 2 + hs(c, r, 661), up = (k % 3 - 1) * 0.1, rr = 0.2 + hs(c + k, r, 662) * 0.06;
-    part(G.ico, shade(CC(P.leaf), 0.85 + hs(c + k, r, 663) * 0.35), x + Math.sin(t) * rr, hy + up, z + Math.cos(t) * rr, { sx: 0.2, sy: 0.16, sz: 0.2, ry: t });
+  limbs.push({ from: T, a: a0, d: [lx * 1.5, 1, lz * 1.5].map(v => v / Math.hypot(lx * 1.5, 1, lz * 1.5)), l: 0.2, leaves: 5 });
+  for (const b of limbs) {
+    const end = [b.from[0] + b.d[0] * b.l, b.from[1] + b.d[1] * b.l, b.from[2] + b.d[2] * b.l];
+    seg(G.cyl8, shade(bark, 0.95), b.from, end, 0.016);
+    // its leaves, spiralling round it from a third of the way out to its tip: the lower ones bigger and drooping,
+    // the ones at the tip smaller, younger and standing up
+    for (let j = 0; j < b.leaves; j++) {
+      const f = 0.32 + j / (b.leaves - 1) * 0.68, tip = j >= b.leaves - 2;
+      const p = [b.from[0] + b.d[0] * b.l * f, b.from[1] + b.d[1] * b.l * f, b.from[2] + b.d[2] * b.l * f];
+      const az = b.a + (j * 2.4 + rnd() * 0.5) * 0.85, e = -0.4 + f * 0.75 + (tip ? 0.45 : 0) + (rnd() - 0.5) * 0.25;
+      const dl = [Math.sin(az) * Math.cos(e), Math.sin(e), Math.cos(az) * Math.cos(e)];
+      const L = (tip ? 0.15 : 0.22 + (1 - f) * 0.05) * (0.92 + rnd() * 0.16);
+      const col = shade(tip && j === b.leaves - 1 ? leaf.clone().lerp(young, 0.75) : tip ? leaf.clone().lerp(young, 0.35) : leaf, 0.86 + rnd() * 0.28);
+      figLeaf(col, [p[0] + dl[0] * 0.015, p[1] + dl[1] * 0.015, p[2] + dl[2] * 0.015], dl, L, (rnd() - 0.5) * 0.5);
+    }
   }
-  part(G.ico, shade(CC(P.leaf), 1.15), x, hy + 0.18, z, { sx: 0.26, sy: 0.16, sz: 0.26 });
 }
 // A desert town's flower basket (v665): a bellied round basket with a rolled rim, one mesh for the whole world
 // (buildBaskets, from finishTowns), drawn in basketMat: the thatch's straw height map (THATCH_U.tSlate) wrapped round
@@ -30972,7 +31034,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 706, crashSeen = new Map();
+const GAME_VERSION = 707, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
