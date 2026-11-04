@@ -81,11 +81,10 @@ fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
     var wc = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
     let hl = clamp(h, giLayerH(0), giLayerH(g.w - 1));
     let pp = vec3f(f32(c.x) + 0.5, floorY + hl, f32(c.y) + 0.5);
-    var occ = 0.0;
-    for (var j = 1; j < 3; j++) {
-      let m = mix(q, pp, f32(j) / 3.0);
-      occ = max(occ, smoothstep(0.0, 0.4, giGround(m.xz) - m.y));
-    }
+    // (v773, Jordan's pick: one look halfway along, was two at a third and two thirds: 16 reads a pixel fewer; the
+    // light at a wall's or cliff's foot may sit a little differently)
+    let m = mix(q, pp, 0.5);
+    let occ = smoothstep(0.0, 0.4, giGround(m.xz) - m.y);
     wc *= mix(1.0, 0.005, occ);
     let to = pp - q;
     let wrap = (dot(normalize(to + vec3f(1e-4)), n) + 1.0) * 0.5;
