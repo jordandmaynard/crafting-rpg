@@ -22,7 +22,7 @@ const COLOR_RT = 'rgba16float';   // render targets keep light brighter than whi
 const OBJ_PAGE = 4096;             // object blocks per uniform buffer
 const FRAME_SLOTS = 64;
 // (v769) recorded draw lists (render bundles): at most this many kept (each its own frame slot, after FRAME_SLOTS)
-const BUNDLE_SLOTS = 24;
+const BUNDLE_SLOTS = 32;
 const SHADOW_FORMAT = 'depth32float';
 
 // z from -1 .. 1 to 0 .. 1, and the shadow map's x, y to texture coordinates (v down)
@@ -312,28 +312,34 @@ class Renderer {
     }
     pass.setBindGroup(0, this._frameBindGroup(), [frameOff]);
     const override = scene.overrideMaterial, clip = this.clipBelow != null;
-    let lastPipe = null, rest = list;
-    if (this.bundles && !override && !this.target?.isCanvasTarget) {
-      rest = this._bundled(pass, list, tgt, frameOff, clip, camera);
-      if (rest !== list) pass.setBindGroup(0, this._frameBindGroup(), [frameOff]);   // (a bundle leaves the pass's state cleared)
-    }
-    for (const it of rest) {
-      const mesh = it.mesh, mat = override || mesh.material;
-      if (!mat.colorWrite && !mat.depthWrite) continue;
-      const geo = mesh.geometry, kind = override && override.isMeshNormalMaterial ? 'normal' : mat.isShaderMaterial ? 'shader' : mat.isMeshStandardMaterial ? 'std' : 'basic';
-      const hasColor = kind !== 'normal' && mat.vertexColors && !!geo.attributes.color, inst = !!mesh.isInstancedMesh;
-      if (inst && kind === 'shader') continue;
-      const pipe = this._pipeline(kind, mat, hasColor, tgt.format, inst, clip && (kind === 'basic' || kind === 'std'));
-      if (!pipe) continue;
-      if (pipe !== lastPipe) { pass.setPipeline(pipe); lastPipe = pipe; }
-      const [bg, off] = this._writeObj(mesh, mat);
-      pass.setBindGroup(1, bg, [off]);
-      if (kind === 'shader') pass.setBindGroup(2, this._materialBindGroup(mat));
-      const slot = this._bindGeometry(pass, geo, kind === 'shader' ? mat : null, hasColor);
-      if (!slot) continue;
-      if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
-      this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
-    }
+    let lastPipe = null;
+    const drawList = items => {
+      for (const it of items) {
+        const mesh = it.mesh, mat = override || mesh.material;
+        if (!mat.colorWrite && !mat.depthWrite) continue;
+        const geo = mesh.geometry, kind = override && override.isMeshNormalMaterial ? 'normal' : mat.isShaderMaterial ? 'shader' : mat.isMeshStandardMaterial ? 'std' : 'basic';
+        const hasColor = kind !== 'normal' && mat.vertexColors && !!geo.attributes.color, inst = !!mesh.isInstancedMesh;
+        if (inst && kind === 'shader') continue;
+        const pipe = this._pipeline(kind, mat, hasColor, tgt.format, inst, clip && (kind === 'basic' || kind === 'std'));
+        if (!pipe) continue;
+        if (pipe !== lastPipe) { pass.setPipeline(pipe); lastPipe = pipe; }
+        const [bg, off] = this._writeObj(mesh, mat);
+        pass.setBindGroup(1, bg, [off]);
+        if (kind === 'shader') pass.setBindGroup(2, this._materialBindGroup(mat));
+        const slot = this._bindGeometry(pass, geo, kind === 'shader' ? mat : null, hasColor);
+        if (!slot) continue;
+        if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
+        this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
+      }
+    };
+    // (v769) with recorded draw lists, what comes before the list is drawn first, then the list (a bundle), then the rest
+    const B = this.bundles && !override && !this.target?.isCanvasTarget ? this._bundled(list, tgt, frameOff, clip, camera) : null;
+    if (B) {
+      drawList(B.pre);
+      pass.executeBundles([B.bundle]);
+      pass.setBindGroup(0, this._frameBindGroup(), [frameOff]); lastPipe = null;   // (a bundle leaves the pass's state cleared)
+      drawList(B.rest);
+    } else drawList(list);
     if (!this.mergePasses) this._closePass();
     this.info.tRender += performance.now() - tR0;
     if (!this.target || (this.target.isCanvasTarget && !this.holdFlush)) this.flush();
@@ -348,29 +354,40 @@ class Renderer {
   // geometry and buffers (no attribute changed). Meshes recorded but now just out of view are drawn anyway (the GPU
   // clips them) until a fifth of the list is like that. Each frame the list's object blocks (matrices, colours) and
   // frame are still written afresh, so moving and changing meshes are right; what's saved is the encoding of every
-  // draw. A list is recorded again when anything differs. Returns what's left to draw the usual way (list itself
-  // when nothing was recorded).
-  _bundled(pass, list, tgt, frameOff, clip, camera) {
+  // draw. A list is recorded again when anything differs. Returns { pre, bundle, rest }: draw pre the usual way, then
+  // the bundle, then rest; or null to draw the whole list the usual way.
+  _bundled(list, tgt, frameOff, clip, camera) {
     const ids = this._chanIds, idOf = o => { let v = ids.get(o); if (v === undefined) { v = ++this._chanN; ids.set(o, v); } return v; };
     const f = this.drawFilter;
     const key = idOf(camera) + '|' + camera.layers.mask + '|' + (f ? idOf(f) : 0) + '|' + tgt.format + '|' + (clip ? 1 : 0);
+    // (what comes before the first draw that can be recorded, pre, is drawn the usual way before the bundle; from
+    // there the bundle takes what can be recorded up to the first draw whose look depends on what was drawn before it
+    // (see-through, not writing or not testing depth, another depth test), and everything from that one on is drawn
+    // after the bundle, in order, so a draw like the hero's see-through silhouette (drawn first by its renderOrder, where
+    // something nearer already stands) still comes before what it's meant to. Draws of nothing (no colour, no depth)
+    // are left out: they draw nothing.)
+    const pre = [], elig = [], rest = [];
+    let i = 0, cutOrder = Infinity;
+    const now = performance.now(), bundleable = (m, mat) => !m.isInstancedMesh && m.geometry.instanceCount == null && !mat.noBundle && !(m._bunSkip > now) && this._orderSafe(mat);
+    for (; i < list.length; i++) { const m = list[i].mesh; if (bundleable(m, m.material)) break; pre.push(list[i]); }
+    for (; i < list.length; i++) {
+      const it = list[i], m = it.mesh, mat = m.material;
+      if (!mat.colorWrite && !mat.depthWrite) continue;
+      if (!this._orderSafe(mat)) { cutOrder = it.order; break; }
+      (bundleable(m, mat) ? elig : rest).push(it);
+    }
+    for (; i < list.length; i++) rest.push(list[i]);
+    if (elig.length < 4) return null;
     let ch = this._chans.get(key);
     if (!ch) {
       if (this._chans.size >= BUNDLE_SLOTS) { for (const c of this._chans.values()) if (c.objBuf) this._trash.push(c.objBuf); this._chans.clear(); }
       const used = new Set([...this._chans.values()].map(c => c.slot));
       let slot = 0; while (used.has(slot)) slot++;
-      ch = { slot, bundle: null, items: [], index: new Map(), objBuf: null, objBG: null, objCap: 0, objData: null, frameBG: null, flush: -1, stamp: 0, format: tgt.format };
+      ch = { slot, bundle: null, bgs: new Map(), items: [], index: new Map(), objBuf: null, objBG: null, objCap: 0, objData: null, frameBG: null, flush: -1, stamp: 0, format: tgt.format };
       this._chans.set(key, ch);
     }
     // (the same list twice in one send would share its frame and object blocks: the second is drawn the usual way)
-    if (ch.flush === this._flushNo) return list;
-    const elig = [], rest = [];
-    for (const it of list) {
-      const m = it.mesh, mat = m.material, g = m.geometry;
-      if (!m.isInstancedMesh && !mat.transparent && mat.depthTest && mat.depthWrite && g.instanceCount == null && !mat.noBundle) elig.push(it);
-      else rest.push(it);
-    }
-    if (elig.length < 4) return list;
+    if (ch.flush === this._flushNo) return null;
     ch.flush = this._flushNo;
     const frameBG = this._frameBindGroup(), L = camera.layers, wn = this._lastWalk;
     // the frame, copied to the list's own slot
@@ -378,35 +395,46 @@ class Renderer {
     this.frameData.copyWithin(fo / 4, frameOff / 4, frameOff / 4 + FRAME_BYTES / 4);
     this.device.queue.writeBuffer(this.frameBuf, fo, this.frameData, fo / 4, FRAME_BYTES / 4);
     // can the recording be replayed?
-    let ok = !!ch.bundle && ch.frameBG === frameBG;
+    let ok = !!ch.bundle, why = ch.bundle ? '' : 'first';
     if (ok) {
       const st = ++ch.stamp;
-      for (const it of elig) { const r = ch.index.get(it.mesh); if (!r) { ok = false; break; } r.seen = st; }
+      for (const it of elig) { const r = ch.index.get(it.mesh); if (!r) { ok = false; why = 'new'; break; } r.seen = st; }
       if (ok) {
         let extra = 0;
         for (const r of ch.items) {
           const m = r.mesh;
           if (r.seen !== st) {
-            if (m._wv !== wn || !m.layers.test(L) || (f && !f(m)) || (m._wn !== wn && ++extra * 5 > ch.items.length)) { ok = false; break; }
+            if (m._wv !== wn || !m.layers.test(L) || (f && !f(m)) || (m._wn !== wn && ++extra * 5 > ch.items.length)) { ok = false; why = 'gone'; break; }
           }
-          if (!this._bundleSame(r, m, tgt.format, clip)) { ok = false; break; }
+          // (a mesh that changed is drawn the usual way for a while, so one changing every frame doesn't make the
+          // whole list be recorded again every frame)
+          if (!this._bundleSame(r, m, tgt.format, clip)) { ok = false; why = 'changed'; m._bunSkip = now + 4000; break; }
         }
       }
     }
+    if (!ok) { const W = this.info.why || (this.info.why = {}); W[why] = (W[why] || 0) + 1; }
     if (ok) {
       const d = ch.objData;
       for (const r of ch.items) this._objData(d, r.k * OBJ_BYTES / 4, r.mesh, r.mat);
       this.device.queue.writeBuffer(ch.objBuf, 0, d, 0, ch.items.length * OBJ_BYTES / 4);
-      pass.executeBundles([ch.bundle]);
-      this.info.replayed++; this.info.draws += ch.items.length;
-      return rest;
+      this.info.draws += ch.items.length;
+      // (the frame's bind group takes turns between a few (the probe light's two sets): the same list is kept recorded
+      // with each, and one not seen yet is recorded from the same list)
+      let b = ch.bgs.get(frameBG);
+      if (!b) { b = this._encodeItems(ch, frameBG, fo, tgt.format); if (ch.bgs.size >= 4) ch.bgs.clear(); ch.bgs.set(frameBG, b); const W = this.info.why || (this.info.why = {}); W.frame = (W.frame || 0) + 1; this.info.recorded++; }
+      else this.info.replayed++;
+      ch.bundle = b;
+      return { pre, bundle: b, rest };
     }
     // record it afresh: what's to be drawn, and what's just out of view on these layers and through the filter (see _walk)
+    // (less a mesh just found changing: drawn the usual way, after the bundle)
+    for (let j = elig.length - 1; j >= 0; j--) if (elig[j].mesh._bunSkip > now) rest.unshift(elig.splice(j, 1)[0]);
     const dev = this.device, todo = elig.map(it => it.mesh);
     { const inList = new Set(todo);
       for (const m of this._lastNear) {
         const mat = m.material;
-        if (!inList.has(m) && m.layers.test(L) && (!f || f(m)) && !m.isInstancedMesh && mat.depthTest && mat.depthWrite && m.geometry.instanceCount == null && !mat.noBundle) todo.push(m);
+        if (!inList.has(m) && m.layers.test(L) && (!f || f(m)) && !m.isInstancedMesh && this._orderSafe(mat) && m.geometry.instanceCount == null && !mat.noBundle
+          && !(m._bunSkip > now) && m.renderOrder - (mat.drawFirst ? 0.5 : 0) < cutOrder) todo.push(m);
       } }
     if (ch.objCap < todo.length) {
       if (ch.objBuf) this._trash.push(ch.objBuf);
@@ -443,15 +471,33 @@ class Renderer {
     }
     // (an item skipped above leaves its block to the next: the blocks run 0 to items.length - 1)
     ch.bundle = be.finish(); ch.items = items; ch.index = index; ch.frameBG = frameBG;
+    ch.bgs = new Map([[frameBG, ch.bundle]]);
     if (items.length) dev.queue.writeBuffer(ch.objBuf, 0, d, 0, items.length * OBJ_BYTES / 4);
-    pass.executeBundles([ch.bundle]);
     this.info.recorded++;
-    return rest;
+    return { pre, bundle: ch.bundle, rest };
+  }
+  // (v770) a recorded list's items (already checked as they stand) encoded again into a bundle with frame bind group bg
+  _encodeItems(ch, bg, fo, format) {
+    const be = this.device.createRenderBundleEncoder({ colorFormats: [format], depthStencilFormat: DEPTH, sampleCount: 1 });
+    be.setBindGroup(0, bg, [fo]);
+    let last = null;
+    for (const r of ch.items) {
+      if (r.pipe !== last) { be.setPipeline(r.pipe); last = r.pipe; }
+      be.setBindGroup(1, ch.objBG, [r.k * OBJ_BYTES]);
+      if (r.mbg) be.setBindGroup(2, r.mbg);
+      this._bindGeometry(be, r.geo, r.kind === 'shader' ? r.mat : null, r.hasColor);
+      if (r.geo.index) be.drawIndexed(r.geo.index.count, 1); else be.draw(r.geo.attributes.position.count, 1);
+    }
+    return be.finish();
   }
   // (v769) the shadow map's casters as a recorded draw list, as _bundled does for a render: plain casters (no
   // instancing, no shadow code of their own) recorded once and replayed while the same ones cast. Returns the rest.
   _bundledShadow(pass, casters, frameOff, swn, SL, near) {
     const key = 'shadow|' + SL.mask;
+    const elig = [], rest = [];
+    const now = performance.now();
+    for (const m of casters) (!m.isInstancedMesh && !m.material.shadowCode && !(m._bunSkip > now) ? elig : rest).push(m);
+    if (elig.length < 4) return casters;
     let ch = this._chans.get(key);
     if (!ch) {
       if (this._chans.size >= BUNDLE_SLOTS) { for (const c of this._chans.values()) if (c.objBuf) this._trash.push(c.objBuf); this._chans.clear(); }
@@ -461,29 +507,27 @@ class Renderer {
       this._chans.set(key, ch);
     }
     if (ch.flush === this._flushNo) return casters;
-    const elig = [], rest = [];
-    for (const m of casters) (!m.isInstancedMesh && !m.material.shadowCode ? elig : rest).push(m);
-    if (elig.length < 4) return casters;
     ch.flush = this._flushNo;
     const fo = (FRAME_SLOTS + ch.slot) * FRAME_BYTES;
     this.frameData.copyWithin(fo / 4, frameOff / 4, frameOff / 4 + FRAME_BYTES / 4);
     this.device.queue.writeBuffer(this.frameBuf, fo, this.frameData, fo / 4, FRAME_BYTES / 4);
-    let ok = !!ch.bundle;
+    let ok = !!ch.bundle, why = ch.bundle ? '' : 'first';
     if (ok) {
       const st = ++ch.stamp;
-      for (const m of elig) { const r = ch.index.get(m); if (!r) { ok = false; break; } r.seen = st; }
+      for (const m of elig) { const r = ch.index.get(m); if (!r) { ok = false; why = 'new'; break; } r.seen = st; }
       if (ok) {
         let extra = 0;
         for (const r of ch.items) {
           const m = r.mesh, mat = m.material;
-          if (r.seen !== st && (m._sv !== swn || (m._sn !== swn && ++extra * 5 > ch.items.length))) { ok = false; break; }
-          if (mat !== r.mat || m.geometry !== r.geo || m.isInstancedMesh || mat.shadowCode || this._shadowPipeline(mat.shadowSide ?? mat.side, false) !== r.pipe) { ok = false; break; }
+          if (r.seen !== st && (m._sv !== swn || (m._sn !== swn && ++extra * 5 > ch.items.length))) { ok = false; why = 'gone'; break; }
+          let same = !(mat !== r.mat || m.geometry !== r.geo || m.isInstancedMesh || mat.shadowCode || this._shadowPipeline(mat.shadowSide ?? mat.side, false) !== r.pipe);
           const A = r.attrs;
-          for (let j = 0; j < A.length; j++) { const a = A[j]; if (a._gb !== r.gbs[j] || a.version !== r.vers[j] || a.array.length !== r.lens[j]) { ok = false; break; } }
-          if (!ok) break;
+          for (let j = 0; same && j < A.length; j++) { const a = A[j]; if (a._gb !== r.gbs[j] || a.version !== r.vers[j] || a.array.length !== r.lens[j]) same = false; }
+          if (!same) { ok = false; why = 'changed'; m._bunSkip = now + 4000; break; }
         }
       }
     }
+    if (!ok) { const W = this.info.why || (this.info.why = {}); W[why] = (W[why] || 0) + 1; }
     if (ok) {
       const d = ch.objData;
       for (const r of ch.items) this._objData(d, r.k * OBJ_BYTES / 4, r.mesh, r.mat);
@@ -493,8 +537,9 @@ class Renderer {
       return rest;
     }
     const dev = this.device;
+    for (let j = elig.length - 1; j >= 0; j--) if (elig[j]._bunSkip > now) rest.push(elig.splice(j, 1)[0]);
     // (and the casters just out of the sun's view: see _renderShadow)
-    for (const m of near) if (!m.material.shadowCode) elig.push(m);
+    for (const m of near) if (!m.material.shadowCode && !(m._bunSkip > now)) elig.push(m);
     if (ch.objCap < elig.length) {
       if (ch.objBuf) this._trash.push(ch.objBuf);
       ch.objCap = Math.ceil(elig.length * 1.25 / 64) * 64;
@@ -527,10 +572,15 @@ class Renderer {
     this.info.recorded++;
     return rest;
   }
+  // (v769) a material whose draws look the same whatever was drawn before them: solid, writing depth and keeping
+  // the nearest (less or less-equal)
+  _orderSafe(mat) {
+    return !mat.transparent && mat.depthTest && mat.depthWrite && (mat.depthFunc === M.LessEqualDepth || mat.depthFunc === M.LessDepth || mat.depthFunc === undefined);
+  }
   // is recorded item r still what mesh m would draw now?
   _bundleSame(r, m, format, clip) {
     const mat = m.material;
-    if (mat !== r.mat || m.geometry !== r.geo || !mat.visible || !mat.depthWrite || !mat.depthTest || mat.transparent) return false;
+    if (mat !== r.mat || m.geometry !== r.geo || !mat.visible || !this._orderSafe(mat)) return false;
     const hasColor = mat.vertexColors && !!r.geo.attributes.color;
     if (hasColor !== r.hasColor) return false;
     if (this._pipeline(r.kind, mat, hasColor, format, false, clip && (r.kind === 'basic' || r.kind === 'std')) !== r.pipe) return false;
