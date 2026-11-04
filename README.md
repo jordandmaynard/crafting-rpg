@@ -472,6 +472,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v748:** (Jordan) A potion you drag keeps sloshing after you let it go: the liquid carries on in the square it lands in (or goes back to) until it settles, then it's the still icon again. With the pack open, the potions in it slosh while you walk, as if they were dragged the opposite way to your walk on screen, with a little bob on each step, and settle once you stop. T > Potion bottles: walkPush (screen px a tile walked, 60) and walkBob (px a step, 4). Jordan's tuning: slosh 1.8 (was 2.2), maxTilt 0.63 (0.7), spring 124 (70), damp 6.5 (6), wave 1.8 (1).
 
+**v749:** (Jordan) T > Pixels anti-aliasing has an auto setting, 0, now the default: 2 samples each way once the mosaic is 4 (zoomed in from 2.25), off below. 1 is off, 2 to 4 fixed as before. A readout shows what it's using now.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

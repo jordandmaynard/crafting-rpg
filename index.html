@@ -28981,7 +28981,7 @@ let texel = 0.03, pxScale = 3;
 // (v737, Jordan) desktop auto: autoMin (2) zoomed out, one size bigger from zoom up1 in, two bigger from up2 in (v739,
 // Jordan's tuning: 1.25 and 2.25); the farthest zoom out (a boat's wheel included) stays autoMin, never below 2. (v735-736 grew it with the
 // zoom, then spread it evenly over the zoom range.) Phones still size it from the screen (autoDiv), at half the size
-const PIXEL = { size: 0, autoMin: 2, up1: 1.25, up2: 2.25, autoDiv: 520, antiAlias: 1 };
+const PIXEL = { size: 0, autoMin: 2, up1: 1.25, up2: 2.25, autoDiv: 520, antiAlias: 0 };
 let ssNow = 1, spanW = 1, spanH = 1;   // the orthographic view's width and height in world units
 const pixelBase = () => PIXEL.size >= 1 ? Math.round(PIXEL.size) : Math.max(2, Math.round(Math.min(innerWidth, innerHeight) / PIXEL.autoDiv));
 // the mosaic's pixel size at zoom z
@@ -28992,11 +28992,15 @@ const pixelAt = z => {
   return Math.max(Math.min(2, b), Math.min(b, Math.round(b * z)));
 };
 const pixelSize = () => pixelAt(zoom);
+// (v749, Jordan) anti-aliasing for a mosaic pixel size px: PIXEL.antiAlias 0 is auto (2 × finer once the mosaic is 4
+// or bigger, off below), 1 off, 2-4 that many samples each way
+const ssFor = px => PIXEL.antiAlias < 0.5 ? (px >= 4 ? 2 : 1) : Math.max(1, Math.min(4, Math.round(PIXEL.antiAlias)));
 // (v732, Jordan) what the mosaic is doing now, for T > Pixels: its pixel size at this zoom and at standard zoom, and the zoom
 const PIXEL_READ = {
   get now() { return pxScale; },
   get standard() { return pixelAt(1); },
   get zoom() { return zoom; },
+  get aa() { return ssNow; },
 };
 // the Wanderer's Kit groups are laid out at 1920 x 1080 and scaled once to fit (a touch screen, which the skin
 // doesn't cover yet, fits the inventory's width instead)
@@ -29009,7 +29013,7 @@ function resize() {
   document.documentElement.style.setProperty('--ui', uiScale().toFixed(4));
   const px = pxScale = pixelSize();
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
-  ssNow = Math.max(1, Math.min(4, Math.round(PIXEL.antiAlias)));
+  ssNow = ssFor(px);
   renderer.setSize(rw, rh, false);
   outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); proxyRT.setSize(rw * ssNow, rh * ssNow); maskRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
   { const sw = rw * px + 'px', sh = rh * px + 'px'; if (cv.style.width !== sw) cv.style.width = sw; if (cv.style.height !== sh) cv.style.height = sh; }
@@ -30233,10 +30237,11 @@ const TUNING = [
     [PIXEL, 'up1', 'Auto: one size bigger (3) from this zoom in', 0.9, 2.5, 0.05],
     [PIXEL, 'up2', 'Auto: two sizes bigger (4) from this zoom in', 0.9, 2.5, 0.05],
     [PIXEL, 'autoDiv', 'Auto on phones: screen px per mosaic px', 120, 520, 10],
-    [PIXEL, 'antiAlias', 'Anti-aliasing: samples each way per mosaic pixel (1 off)', 1, 4, 1],
+    [PIXEL, 'antiAlias', 'Anti-aliasing: samples each way per mosaic pixel (0 auto: 2 when the mosaic is 4 or bigger, else off; 1 off)', 0, 4, 1],
     [PIXEL_READ, 'now', 'Mosaic pixel size now, at this zoom', 'readout', 0, 1],
     [PIXEL_READ, 'standard', 'Mosaic pixel size at standard zoom (1)', 'readout', 0, 1],
     [PIXEL_READ, 'zoom', 'Zoom now (1 standard, smaller is farther out)', 'readout', 0, 0.01],
+    [PIXEL_READ, 'aa', 'Anti-aliasing now (samples each way, 1 off)', 'readout', 0, 1],
   ]],
   ['Camera', [
     [VIEW, 'perspective', 'Perspective (0 orthographic, 1 perspective)', 0, 1, 1],
@@ -31834,7 +31839,7 @@ function frameBody(now) {
   prof.lap('chunk streaming');
   drawMini(dt);
   prof.lap('minimap');
-  if (pixelSize() !== pxScale || Math.round(PIXEL.antiAlias) !== ssNow) resize();
+  { const px = pixelSize(); if (px !== pxScale || ssFor(px) !== ssNow) resize(); }
   updateGI();
   prof.lap('GI probes (CPU)');
   updateGroundHaze(dt);
@@ -31860,7 +31865,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 748, crashSeen = new Map();
+const GAME_VERSION = 749, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
