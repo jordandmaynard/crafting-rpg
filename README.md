@@ -532,6 +532,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v778:** (Jordan's G: Moving objects hero 1,766) Most of the hero's movers were gear worn by nobody: each part's hidden piece with its silhouette and shadow copy, made anew every frame as the hero moves. The scene's matrix pass (Scene.updateMatrixWorld) now leaves a hidden mesh with nothing under it and marks it (_mwH); the renderer's walks make its matrices if it's shown before the next pass. Hidden meshes that still cast (castHidden, an upper story) are still made. A call on an object of its own (a rig being built) still makes every one.
 
+**v779:** (Jordan: so we know we're looking at the right version) The version is on the G panel's title line (after fps and ms/frame) and the T panel's heading. GAME_VERSION is set at the top of the game's script now.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

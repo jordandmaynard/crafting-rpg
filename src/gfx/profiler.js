@@ -11,6 +11,7 @@ export class GpuProfiler {
     this.device = device;
     this.info = adapterInfo;
     this.mode = ''; // set by the game: what's being drawn (resolution, mosaic, post)
+    this.version = null; // (v779) set by the game: its version, shown on the title line
     // (v775) the panel's sections folded shut, by heading: a click on a heading ([data-fold]) toggles it (fold());
     // onFold, if set, is told after (the game keeps them)
     this.folded = new Set();
@@ -208,7 +209,7 @@ export class GpuProfiler {
     }
     const NOTES = { 'Each frame': "Work the pass timers can't see: each send to the GPU and each canvas drawn has its own cost in the browser's GPU process, and uploads cross to the GPU before the passes can run." };
     panel.innerHTML =
-      `<div class="ptitle">${(1000 / this.frameMs).toFixed(0)} fps · ${this.frameMs.toFixed(1)} ms/frame</div>` +
+      `<div class="ptitle">${(1000 / this.frameMs).toFixed(0)} fps · ${this.frameMs.toFixed(1)} ms/frame${this.version != null ? ` <span class="pver">v${this.version}</span>` : ''}</div>` +
       `<div class="gpu-name">GPU: ${gpuName}${i.isFallbackAdapter ? ' (software fallback)' : ''}</div>` +
       `<div class="gpu-name">Drawing: ${this.mode}</div>` +
       (this.hasTimestamps
