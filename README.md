@@ -418,6 +418,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v721:** (Jordan) Every inventory count (the backpack's 0 / 20 and the crate, foot locker, iron chest and vault counts) gets the window titles' treatment (cream ink, black stroke, letter spacing, drop shadow), at one smaller size: WIN_TITLE.countSize 20, tunable in T > Window titles.
 
+**v722:** (Jordan) The crate, foot locker and iron chest counts end 8 px left of their close X and sit level with its middle, like the backpack's; the vault's stays centred in its painted recess.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
