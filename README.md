@@ -556,6 +556,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v790:** (Jordan's G with early sends: 136-149 fps from 125-132, gaps 1.3-2.4 ms from 2.96, but the gap before the first send still 0.7-1.8 ms) A first early send sooner, after the shadow map and the pre-passes (with the ground pre-pass on): the GPU starts on ~1.4 ms of work before the ground and world are encoded.
 
+**v791:** (Jordan: v790 seemed worse, though the shots were in a busier spot: 5,142 meshes, encode 3.3 ms, passes 4.8-5.6 ms) G > Tests > Early sends has three settings to compare in one spot: Off, 3 sends (v789, the default again) and 4 sends (v790's extra send after the shadow map and pre-passes).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
