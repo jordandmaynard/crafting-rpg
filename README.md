@@ -396,6 +396,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v709:** (Jordan's Window titles paste) Title ink #feefd7; the rest of WIN_TITLE unchanged.
 
+**v711:** (Jordan: make the crates in buildings lootable, with loot tables of low-level items and materials suited to the building) Every crate standing in a world building opens with F like your own: the crate props in trade houses, guard houses and the mill's upper floor, and the crates the carter, jeweller, merchant and cartographer keep as their workbench. The prompt reads SEARCH THE CRATE (OPEN THE CRATE once it's been opened) and it opens in the crate window, titled for its building (Guard House Crate, Smithy Crate, Mill Crate, Merchant's Crate...). The first time a crate is opened it's filled from its building's table (CRATE_LOOT, one per trade, the guard house, mill, tavern, bank, clergy house, farm, cabin and plain homes): one to four stacks of low-level materials (logs, planks, stone, ores and copper/iron ingots, hide, leather, wheat, flour, bread, sand, glass, bottles, bone) and sometimes one piece of low-level gear (wood, bone or copper weapons, cloth, leather or copper chain pieces), likelier in a guard house (about half) than a home. The roll is seeded by where the crate stands, so a world's crates always hold the same things. What you take stays taken and what you put in stays (no restocking or saves yet). Crates you build aren't touched. Hook GAME.crateLoot() lists every world crate with its table and roll.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

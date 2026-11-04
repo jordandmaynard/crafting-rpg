@@ -4514,7 +4514,7 @@ function townYards(t, n) {
 }
 // a farmhouse or a cabin: one room, no beds of the town's (v683: but for the farmer's, beds 1, with its door)
 function furnishLone(tiles, inside, kind, wood, n, o = {}) {
-  const h = { tiles, inside, door: o.door || null, clear: new Set(), beds: [], up: null };
+  const h = { tiles, inside, door: o.door || null, clear: new Set(), beds: [], up: null, lone: kind };   // (lone: its crates' loot table, v711)
   if (o.beds) { houseBedsDown(h, o.beds, -1); for (const b of h.beds) b.wood = wood; }
   furnish(h, PROP_KITS[kind], { wood, n });
   return h;
@@ -19909,7 +19909,7 @@ function renderInv() {
     const box = $('store');
     box.innerHTML = '';
     openSt.box.forEach((id, i) => cell(box, ['box', i], id ? ICON[ITEMS[id].icon] + (stackOf(id) > 1 ? `<span class="n">${openSt.boxN[i]}</span>` : '') : ''));
-    $('storeTitle').textContent = titleCase(STATION_KIND[openSt.kind].name);
+    $('storeTitle').textContent = openSt.title || titleCase(STATION_KIND[openSt.kind].name);   // (v711: a world crate's, by its building)
     $('storeCount').textContent = openSt.box.filter(Boolean).length + ' / ' + openSt.box.length;
     // a crate has its own painted window (Wanderer's Kit crate v1, v368); a chest keeps the plain framed one
     const crate = openSt.kind === 'crate', sc = $('storeCol');
@@ -23718,7 +23718,8 @@ function actionHere() {
   for (const st of stationsNear()) { const [x, z] = stMid(st); opts.push({ kind: 'station', st, x, z }); }
   for (const [d, x, z] of doorsNear()) opts.push({ kind: 'door', door: d, x, z });
   { const b = boardNear(); if (b) opts.push({ kind: 'quest', board: b, x: b.q.x, z: b.q.z }); }
-  { const v = vaultNear(); if (v) opts.push({ kind: 'vault', q: v, x: v.x, z: v.z }); }   // (v584: a bank's vault door)   // (v578: a town's quest board)
+  { const v = vaultNear(); if (v) opts.push({ kind: 'vault', q: v, x: v.x, z: v.z }); }
+  { const lc = lootCrateNear(); if (lc) opts.push({ kind: 'lootcrate', lc, x: lc.x, z: lc.z }); }   // (v711: a crate in a building)   // (v584: a bank's vault door)   // (v578: a town's quest board)
   { const sq = seatHere(); if (sq) opts.push({ kind: 'sit', seat: sq, x: H.x, z: H.z }); }
   // (v452) someone to talk to (not while they're still answering you)
   const fp = folkNear();
@@ -23741,6 +23742,7 @@ function actBoxes(a) {
   if (a.kind === 'helm') return [[a.x, a.z, H.y, H.y + 1.6, 0.5]];
   if (a.kind === 'quest') return [[a.board.q.x, a.board.q.z, a.board.q.y, a.board.q.y + 1.6, 0.5]];
   if (a.kind === 'vault') return [[a.q.x, a.q.z, a.q.y, a.q.y + 2.0, 0.9]];
+  if (a.kind === 'lootcrate') return [[a.lc.x, a.lc.z, a.lc.y, a.lc.y + 0.8, 0.45]];
   if (a.kind === 'door') {
     const d = a.door, mx = d.w ? d.c : d.c + 0.5, mz = d.w ? d.r + 0.5 : d.r;
     const y = Math.max(LV[T(d.c, d.r)], LV[d.w ? T(d.c - 1, d.r) : T(d.c, d.r - 1)]) * STEP + d.k * WALL_H;
@@ -23776,6 +23778,7 @@ function useAction() {
   else if (a.kind === 'stand') standUp();
   else if (a.kind === 'quest') openQuest(a.board.n);
   else if (a.kind === 'vault') { if (openSt === VAULT && invOpen) toggleInv(false); else openStation(VAULT); }
+  else if (a.kind === 'lootcrate') { const st = lootCrateStore(a.lc); if (openSt === st && invOpen) toggleInv(false); else openStation(st); }
   else useDoor(a.door);
 }
 // ---------- Quest boards (v578, Jordan) ----------
@@ -23905,6 +23908,128 @@ function vaultNear(reach = VAULT_UI.reach) {
     const d = Math.hypot(q.x - H.x, q.z - H.z);
     if (d < bd) { bd = d; best = q; }
   }
+  return best;
+}
+// ----- lootable crates (v711, Jordan) -----
+// Every crate standing in a building of the world (a crate prop in a trade house, guard house or mill, and the crate
+// some trades keep as their workbench: TOWN_PROP 'crate') can be opened with F like your own: a 10-square crate
+// window. The first time one's opened it's filled from its building's loot table (CRATE_LOOT): a few stacks of
+// low-level materials, and now and then a piece of low-level gear, the roll seeded by where it stands, so a world's
+// crates always hold the same. Take what you like; anything put back stays (no restocking, no saves yet). Your own
+// built crates are stations and aren't touched by this.
+// Each table: title (the window's), mats [id, weight, least, most], gear [id, weight], gearP (the chance of one
+// piece of gear), n [least, most] (stacks of materials)
+const CRATE_LOOT = {
+  home: { title: 'Crate', n: [1, 3], mats: [['bread', 3, 1, 3], ['flour', 2, 1, 4], ['wheat', 2, 2, 6], ['wood', 2, 2, 6], ['planks', 1, 2, 5], ['emptyBottle', 1, 1, 2]],
+    gearP: 0.15, gear: [['clothShirt', 2], ['clothPants', 2], ['clothBoots', 2]] },
+  guard: { title: 'Guard House Crate', n: [2, 3], mats: [['bread', 3, 1, 4], ['leather', 2, 1, 3], ['hide', 2, 1, 3], ['copperIngot', 2, 1, 2], ['ironOre', 1, 1, 3], ['planks', 1, 2, 5], ['bone', 1, 1, 3]],
+    gearP: 0.5, gear: [['sword_wood', 3], ['spear_wood', 3], ['bow_wood', 3], ['sword_bone', 2], ['spear_bone', 2], ['sword_copper', 1], ['spear_copper', 1],
+      ['leatherHelmet', 2], ['leatherBoots', 2], ['leatherPants', 1], ['chainHelmet', 1]] },
+  smith: { title: 'Smithy Crate', n: [2, 3], mats: [['copperOre', 3, 2, 5], ['ironOre', 2, 1, 4], ['copperIngot', 2, 1, 3], ['ironIngot', 1, 1, 2], ['wood', 2, 3, 8], ['stone', 1, 2, 6]],
+    gearP: 0.35, gear: [['hammer_wood', 2], ['hammer_copper', 1], ['axe_copper', 1], ['sword_copper', 1], ['chainBoots', 1], ['chainHelmet', 1]] },
+  tanner: { title: 'Tannery Crate', n: [2, 3], mats: [['hide', 4, 2, 5], ['leather', 3, 1, 3], ['bone', 1, 1, 3], ['wood', 1, 2, 5]],
+    gearP: 0.35, gear: [['leatherHelmet', 2], ['leatherBoots', 2], ['leatherPants', 1], ['leatherArmor', 1]] },
+  woodcutter: { title: "Woodcutter's Crate", n: [2, 3], mats: [['wood', 4, 4, 12], ['planks', 3, 3, 8], ['bread', 1, 1, 2]],
+    gearP: 0.3, gear: [['axe_wood', 3], ['axe_bone', 1], ['axe_copper', 1]] },
+  goodfolk: { title: 'Goods Crate', n: [2, 4], mats: [['wheat', 3, 3, 8], ['flour', 3, 2, 5], ['bread', 2, 1, 3], ['stone', 1, 2, 6], ['wood', 1, 2, 6], ['emptyBottle', 1, 1, 2]],
+    gearP: 0.25, gear: [['clothShirt', 2], ['clothPants', 2], ['clothBoots', 2]] },
+  ironmonger: { title: "Ironmonger's Crate", n: [2, 3], mats: [['ironOre', 3, 2, 5], ['copperOre', 3, 2, 5], ['copperIngot', 2, 1, 3], ['ironIngot', 1, 1, 2]],
+    gearP: 0.3, gear: [['hammer_copper', 1], ['axe_copper', 1], ['spear_copper', 1], ['chainBoots', 1]] },
+  herbalist: { title: "Herbalist's Crate", n: [2, 3], mats: [['emptyBottle', 3, 1, 3], ['glassPane', 2, 1, 2], ['boneDust', 2, 2, 5], ['wheat', 2, 2, 5], ['bone', 1, 1, 3]],
+    gearP: 0.1, gear: [['clothShirt', 1], ['clothBoots', 1]] },
+  glazier: { title: "Glazier's Crate", n: [2, 3], mats: [['sand', 4, 3, 8], ['glassPane', 3, 1, 4], ['emptyBottle', 2, 1, 3], ['wood', 1, 2, 6]],
+    gearP: 0, gear: [] },
+  mason: { title: "Mason's Crate", n: [2, 3], mats: [['stone', 4, 4, 10], ['stoneBlock', 3, 2, 6], ['roughSandstone', 2, 2, 6], ['sand', 1, 2, 5]],
+    gearP: 0.2, gear: [['hammer_wood', 2], ['hammer_bone', 1], ['hammer_copper', 1]] },
+  carter: { title: "Carter's Crate", n: [2, 3], mats: [['planks', 3, 3, 8], ['wood', 3, 3, 8], ['leather', 2, 1, 3], ['copperIngot', 1, 1, 2], ['bread', 1, 1, 2]],
+    gearP: 0.2, gear: [['axe_wood', 2], ['hammer_wood', 2], ['leatherBoots', 1]] },
+  jeweller: { title: "Jeweller's Crate", n: [2, 3], mats: [['copperIngot', 3, 1, 3], ['ironIngot', 2, 1, 2], ['glassPane', 2, 1, 2], ['copperOre', 1, 2, 4]],
+    gearP: 0.15, gear: [['chainHelmet', 1], ['sword_copper', 1]] },
+  merchant: { title: "Merchant's Crate", n: [2, 4], mats: [['bread', 3, 1, 3], ['flour', 2, 2, 5], ['leather', 2, 1, 3], ['planks', 2, 2, 6], ['glassPane', 1, 1, 2], ['emptyBottle', 1, 1, 2], ['copperIngot', 1, 1, 2]],
+    gearP: 0.3, gear: [['clothShirt', 2], ['clothPants', 2], ['clothBoots', 2], ['leatherBoots', 1], ['bow_wood', 1]] },
+  cartographer: { title: "Cartographer's Crate", n: [2, 3], mats: [['planks', 3, 2, 5], ['leather', 2, 1, 3], ['glassPane', 1, 1, 2], ['bread', 2, 1, 3], ['emptyBottle', 1, 1, 2]],
+    gearP: 0.15, gear: [['bow_wood', 1], ['leatherBoots', 1]] },
+  tavern: { title: 'Tavern Crate', n: [2, 3], mats: [['bread', 4, 2, 5], ['flour', 2, 2, 5], ['wheat', 2, 3, 8], ['emptyBottle', 2, 1, 3], ['wood', 1, 3, 8]],
+    gearP: 0.1, gear: [['clothShirt', 1], ['clothBoots', 1]] },
+  bank: { title: 'Bank Crate', n: [1, 2], mats: [['copperIngot', 3, 1, 3], ['ironIngot', 2, 1, 2], ['copperOre', 1, 2, 4]],
+    gearP: 0.1, gear: [['chainHelmet', 1]] },
+  clergy: { title: 'Crate', n: [1, 3], mats: [['bread', 3, 1, 3], ['emptyBottle', 2, 1, 2], ['boneDust', 1, 1, 3], ['wheat', 1, 2, 5]],
+    gearP: 0.1, gear: [['clothShirt', 1], ['clothPants', 1]] },
+  mill: { title: 'Mill Crate', n: [2, 3], mats: [['flour', 4, 3, 8], ['wheat', 4, 4, 10], ['bread', 2, 1, 4], ['planks', 1, 2, 5]],
+    gearP: 0.1, gear: [['clothShirt', 1], ['clothBoots', 1]] },
+  farm: { title: 'Farm Crate', n: [2, 3], mats: [['wheat', 4, 4, 10], ['flour', 2, 2, 5], ['bread', 2, 1, 3], ['hide', 1, 1, 3], ['wood', 1, 2, 6]],
+    gearP: 0.15, gear: [['clothShirt', 1], ['clothPants', 1], ['axe_wood', 1]] },
+  cabin: { title: 'Cabin Crate', n: [2, 3], mats: [['wood', 3, 4, 10], ['hide', 3, 1, 4], ['leather', 2, 1, 3], ['bread', 2, 1, 3], ['bone', 1, 1, 3]],
+    gearP: 0.3, gear: [['bow_wood', 2], ['spear_wood', 2], ['axe_wood', 2], ['leatherBoots', 1], ['leatherHelmet', 1]] },
+};
+// (the smithy's keeper is a smith, an armorer or a master smith by town size: one table)
+const CRATE_LOOT_TRADE = { armorer: 'smith', masterSmith: 'smith', innkeeper: 'tavern', banker: 'bank' };
+// which table a building's crate draws from
+function crateLootKind(h) {
+  if (!h) return 'home';
+  if (h.lone) return h.lone;
+  if (h.mill) return 'mill';
+  if (h.role === 'guard') return 'guard';
+  if (h.clergy) return 'clergy';
+  const t = h.trade && (CRATE_LOOT_TRADE[h.trade] || h.trade);
+  return t && CRATE_LOOT[t] ? t : h.role && CRATE_LOOT[h.role] ? h.role : 'home';
+}
+// roll a crate's loot into a 10-square box, seeded by its tile and story
+function rollCrateLoot(kind, c, r, k) {
+  const L = CRATE_LOOT[kind] || CRATE_LOOT.home, box = new Array(STATION_KIND.crate.store).fill(null), boxN = new Array(box.length).fill(0);
+  let u = 0;
+  const rnd = () => hs(c * 3 + k, r * 5 + 11, 7110 + (u++) * 13.7);
+  const pick = list => { let w = 0; for (const e of list) w += e[1]; let x = rnd() * w; for (const e of list) if ((x -= e[1]) < 0) return e; return list[list.length - 1]; };
+  const put = (id, n) => {
+    if (!ITEMS[id]) return;
+    let i = box.indexOf(id);
+    if (i >= 0 && stackOf(id) > 1) { boxN[i] = Math.min(stackOf(id), boxN[i] + n); return; }
+    i = box.indexOf(null);
+    if (i >= 0) { box[i] = id; boxN[i] = stackOf(id) > 1 ? Math.min(stackOf(id), n) : 1; }
+  };
+  const stacks = L.n[0] + Math.floor(rnd() * (L.n[1] - L.n[0] + 1));
+  for (let s = 0; s < stacks; s++) { const [id, , lo, hi] = pick(L.mats); put(id, lo + Math.floor(rnd() * (hi - lo + 1))); }
+  if (L.gear.length && rnd() < L.gearP) put(pick(L.gear)[0], 1);
+  // (the stacks spread over the squares a little, not all at the front)
+  const order = box.map((id, i) => [id, boxN[i], rnd()]).sort((a, b) => a[2] - b[2]);
+  return { box: order.map(e => e[0]), boxN: order.map(e => e[1]) };
+}
+// a world crate's store (made and filled the first time it's opened): a pseudo-station like the bank's VAULT, kind
+// 'crate' so it opens in the crate window
+const LOOT_CRATES = new Map();   // k * SNN + its tile -> its store
+function lootCrateStore(lc) {
+  let st = LOOT_CRATES.get(lc.key);
+  if (!st) {
+    const kind = crateLootKind(lc.house);
+    st = { kind: 'crate', loot: kind, title: (CRATE_LOOT[kind] || CRATE_LOOT.home).title, x: lc.x, z: lc.z, y: lc.y, k: lc.k, inp: [], inN: [], out: [], outN: [], ...rollCrateLoot(kind, lc.c, lc.r, lc.k) };
+    LOOT_CRATES.set(lc.key, st);
+  }
+  return st;
+}
+// the world crate by you (a crate prop on your story, or a trade's crate workbench), if any:
+// { key, c, r, k, x, y, z (its foot), house, searched (opened before) }
+const LOOT_CRATE_UI = { reach: 1.8 };
+function lootCrateNear(reach = LOOT_CRATE_UI.reach) {
+  if (H.boat || H.stair) return null;
+  const c0 = Math.floor(H.x), r0 = Math.floor(H.z), k = H.story || 0;
+  let best = null, bd = reach;
+  for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) {
+    const c = c0 + dc, r = r0 + dr, i = T(c, r), q = PROP_AT.get(k * SNN + i);
+    let o = null;
+    if (q && q.id === 'crate' && Math.abs(q.y - 0.06 - H.y) < 0.9) o = { key: q.tiles[0], c, r, k, x: q.x, y: q.y - 0.06, z: q.z, house: q.house };
+    else if (!k && TOWN_PROP.get(i) === 'crate' && Math.abs(LV[i] * STEP - H.y) < 0.6) {
+      const [x, z] = crateAt(c, r);
+      o = { key: i, c, r, k: 0, x, y: LV[i] * STEP, z, work: true };
+    }
+    if (!o) continue;
+    const d = Math.hypot(o.x - H.x, o.z - H.z);
+    if (d < bd) { bd = d; best = o; }
+  }
+  if (best && best.work && !LOOT_CRATES.has(best.key)) {
+    // (a workbench crate's house: the one whose keeper works at it)
+    for (const t of towns) { const h = t.houses?.find(h => h.work === best.key); if (h) { best.house = h; break; } }
+  }
+  if (best) best.searched = LOOT_CRATES.has(best.key);
   return best;
 }
 // the notice board by you, if any: { q (the prop), n (its town) }
@@ -25181,7 +25306,7 @@ function updateStations(dt) {
   updateQuestMarks();
   if (invOpen) litActs();
   if (openSt) {
-    if (openSt.vault ? !vaultNear(3.2) : !stations.has(T(openSt.c, openSt.r)) || Math.hypot(stMid(openSt)[0] - H.x, stMid(openSt)[1] - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
+    if (openSt.loot ? (H.story || 0) !== openSt.k || Math.hypot(openSt.x - H.x, openSt.z - H.z) > 3.2 : openSt.vault ? !vaultNear(3.2) : !stations.has(T(openSt.c, openSt.r)) || Math.hypot(stMid(openSt)[0] - H.x, stMid(openSt)[1] - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
     else stationProgress();
   }
 }
@@ -27309,6 +27434,10 @@ function update(dt) {
     } else if (act.kind === 'vault') {
       pr.innerHTML = key + (openSt === VAULT && invOpen ? 'CLOSE THE VAULT' : 'OPEN THE BANK VAULT');
       v3.set(act.q.x, act.q.y + 2.1, act.q.z);
+    } else if (act.kind === 'lootcrate') {
+      const open = invOpen && openSt && openSt.loot && LOOT_CRATES.get(act.lc.key) === openSt;
+      pr.innerHTML = key + (open ? 'PUT AWAY' : act.lc.searched ? 'OPEN THE CRATE' : 'SEARCH THE CRATE');
+      v3.set(act.lc.x, act.lc.y + 1.0, act.lc.z);
     } else if (act.kind === 'quest') {
       pr.innerHTML = key + 'READ THE QUEST BOARD';
       v3.set(act.board.q.x, act.board.q.y + 1.75, act.board.q.z);
@@ -31041,7 +31170,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 710, crashSeen = new Map();
+const GAME_VERSION = 711, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -31077,6 +31206,15 @@ let genMs = 0;
 
 // test hook
 window.GAME = {
+  // (v711, tests) the world's crates: every crate prop and crate workbench with its building's loot table and what it
+  // would roll; lootNear: the crate F would search here
+  crateLoot: () => {
+    const out = [];
+    for (const [key, q] of PROP_AT) if (q.id === 'crate' && q.tiles[0] === key) { const i = key % SNN, k = Math.floor(key / SNN), kind = crateLootKind(q.house); out.push({ c: i % N, r: Math.floor(i / N), k, kind, ...rollCrateLoot(kind, i % N, Math.floor(i / N), k) }); }
+    for (const [i, kind0] of TOWN_PROP) if (kind0 === 'crate') { let h = null; for (const t of towns) { h = t.houses?.find(h => h.work === i); if (h) break; } const kind = crateLootKind(h); out.push({ c: i % N, r: Math.floor(i / N), k: 0, work: true, kind, ...rollCrateLoot(kind, i % N, Math.floor(i / N), 0) }); }
+    return out;
+  },
+  lootNear: () => lootCrateNear(),
   // (tests) the town props: per house its role, props down and whether it's still walkable (door to the stair's
   // foot and every free tile; landing to every upstairs door), and the farms' and cabins' rooms
   // (v683) the mills' millers and the farms' farmers: each home's person, bed, work and places, and whether every place
