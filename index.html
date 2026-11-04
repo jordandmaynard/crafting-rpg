@@ -1715,6 +1715,21 @@ function tileDist(from, cap) {
   }
   return D;
 }
+// the k-th smallest value (from 0) of a typed array, as a sort would put it; reorders the array (Hoare's quickselect)
+function kthSmallest(A, k) {
+  let lo = 0, hi = A.length - 1;
+  while (hi > lo) {
+    const p = A[(lo + hi) >> 1];
+    let i = lo, j = hi;
+    while (i <= j) {
+      while (A[i] < p) i++;
+      while (A[j] > p) j--;
+      if (i <= j) { const t = A[i]; A[i] = A[j]; A[j] = t; i++; j--; }
+    }
+    if (k <= j) hi = j; else if (k >= i) lo = i; else return A[k];
+  }
+  return A[k];
+}
 // the land mask: 1 on land; and how far inland each tile is (0 at sea)
 function landMask() {
   const rand = mulberry32(SEED ^ 0x1a4d5), nA = simplex(rand), nB = simplex(rand), nK = simplex(rand), NN = N * N;
@@ -1823,29 +1838,78 @@ function landMask() {
     WX[y * WG + x] = LANDS.warp * fbm(nA, x * WS / 280, y * WS / 280, 3);
     WZ[y * WG + x] = LANDS.warp * fbm(nB, x * WS / 280 + 40, y * WS / 280 - 40, 3);
   }
-  const F = new Float32Array(NN);
+  const F = new Float32Array(NN), FB = new Float64Array(NN);
+  // (v692) which blobs and bays can matter in each 32-tile cell: from the box the cell's warped tiles fall in, each
+  // blob's nearest and furthest reach (in its own radii) there. A blob that can't beat what another is sure to give
+  // anywhere in the cell, or a bay that can't cut under the best any blob gives, is left out; the rest are tried in
+  // their old order, so every tile comes out exactly as it did testing them all
+  const CS = 32, NCC = N / CS, cellBlobs = [], cellBays = [];
+  const reach = (o, x0, x1, z0, z1) => {
+    const near = Math.hypot(Math.max(0, x0 - o.x, o.x - x1), Math.max(0, z0 - o.z, o.z - z1));
+    const far = Math.hypot(Math.max(Math.abs(x0 - o.x), Math.abs(x1 - o.x)), Math.max(Math.abs(z0 - o.z), Math.abs(z1 - o.z)));
+    return [near / Math.max(o.a, o.b), far / Math.min(o.a, o.b)];
+  };
+  for (let cy = 0; cy < NCC; cy++) for (let cx = 0; cx < NCC; cx++) {
+    const c0 = cx * CS, c1 = c0 + CS - 1, r0 = cy * CS, r1 = r0 + CS - 1;
+    const gx0 = Math.min(WG - 2, Math.floor(c0 / WS)), gx1 = Math.min(WG - 2, Math.floor(c1 / WS)) + 1;
+    const gy0 = Math.min(WG - 2, Math.floor(r0 / WS)), gy1 = Math.min(WG - 2, Math.floor(r1 / WS)) + 1;
+    let xa = Infinity, xb = -Infinity, za = Infinity, zb = -Infinity;
+    for (let y = gy0; y <= gy1; y++) for (let x = gx0; x <= gx1; x++) {
+      const g = y * WG + x;
+      xa = Math.min(xa, WX[g]); xb = Math.max(xb, WX[g]); za = Math.min(za, WZ[g]); zb = Math.max(zb, WZ[g]);
+    }
+    const x0 = c0 + xa - 1, x1 = c1 + xb + 1, z0 = r0 + za - 1, z1 = r1 + zb + 1;
+    const rb = blobs.map(o => reach(o, x0, x1, z0, z1));
+    let sure = -Infinity;
+    for (const [, far] of rb) sure = Math.max(sure, 1 - far);
+    const keep = blobs.filter((o, k) => 1 - rb[k][0] >= sure - 1e-6);
+    let best = -9;
+    for (const o of keep) best = Math.max(best, 1 - reach(o, x0, x1, z0, z1)[0]);
+    cellBlobs.push(keep);
+    cellBays.push(bays.filter(o => reach(o, x0, x1, z0, z1)[0] - 1 <= best + 1e-6));
+  }
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
     const fx = c / WS, fy = r / WS, x = Math.min(WG - 2, Math.floor(fx)), y = Math.min(WG - 2, Math.floor(fy)), u = fx - x, v = fy - y, g = y * WG + x;
     const wx = c + (WX[g] * (1 - u) + WX[g + 1] * u) * (1 - v) + (WX[g + WG] * (1 - u) + WX[g + WG + 1] * u) * v;
     const wz = r + (WZ[g] * (1 - u) + WZ[g + 1] * u) * (1 - v) + (WZ[g + WG] * (1 - u) + WZ[g + WG + 1] * u) * v;
     let f = -9;
     let top = null;
-    for (const b of blobs) { const q = 1 - inBlob(b, wx, wz); if (q > f) { f = q; top = b; } }
-    for (const b of bays) { const q = inBlob(b, wx, wz) - 1; if (q < f) f = q; }
+    const cell = ((r / CS) | 0) * NCC + ((c / CS) | 0);
+    for (const b of cellBlobs[cell]) { const q = 1 - inBlob(b, wx, wz); if (q > f) { f = q; top = b; } }
+    for (const b of cellBays[cell]) { const q = inBlob(b, wx, wz) - 1; if (q < f) f = q; }
     // a strait along the line halfway between the two nearest continents, so they never run together
     if (top && top.kind === 'continent' && nc > 1) {
       let k1 = -1, k2 = -1, d1 = 1e18, d2 = 1e18;
       for (let k = 0; k < nc; k++) { const d = (wx - P[k][0]) ** 2 + (wz - P[k][1]) ** 2; if (d < d1) { d2 = d1; k2 = k1; d1 = d; k1 = k; } else if (d < d2) { d2 = d; k2 = k; } }
       const bis = (d2 - d1) / (2 * Math.hypot(P[k1][0] - P[k2][0], P[k1][1] - P[k2][1]));
-      const w = LANDS.strait[0] + (LANDS.strait[1] - LANDS.strait[0]) * (0.5 + 0.5 * fbm(nB, c / 90 + 300, r / 90, 2));
-      if (bis < w) f = Math.min(f, -0.3);
+      // (the width never reaches strait[1], the noise staying inside +-1: past that, no need to ask it)
+      if (bis < LANDS.strait[1]) {
+        const w = LANDS.strait[0] + (LANDS.strait[1] - LANDS.strait[0]) * (0.5 + 0.5 * fbm(nB, c / 90 + 300, r / 90, 2));
+        if (bis < w) f = Math.min(f, -0.3);
+      }
     }
-    f += LANDS.rough * fbm(nK, c / LANDS.detail, r / LANDS.detail, 4);
-    const ex = c / N * 2 - 1, ez = r / N * 2 - 1, e = Math.pow(ex ** 4 + ez ** 4, 0.25);
-    if (e > LANDS.border) f -= (e - LANDS.border) * 6;
-    F[T(c, r)] = f;
+    FB[T(c, r)] = f;
   }
-  const sorted = F.slice().sort(), cut = sorted[Math.floor((1 - LANDS.share) * NN)];
+  // (v692) the coast's roughness noise moves a tile by at most LANDS.rough (the noise stays inside +-1; 1.5 to be
+  // safe). The cut is no lower than where it would fall with every tile pushed down that far, so a tile that stays
+  // under that even pushed up can't be land: it only counts toward the cut's place, and its noise is never worked out
+  const B4 = LANDS.border ** 4 * (1 - 1e-9);   // (no Math.pow where the tile is surely inside the border: pow is slow)
+  const pen = (c, r) => { const ex = c / N * 2 - 1, ez = r / N * 2 - 1, x2 = ex * ex, z2 = ez * ez; if (x2 * x2 + z2 * z2 < B4) return 0; const e = Math.pow(ex ** 4 + ez ** 4, 0.25); return e > LANDS.border ? (e - LANDS.border) * 6 : 0; };
+  const RW = LANDS.rough * 1.5, K = Math.floor((1 - LANDS.share) * NN), LB = new Float32Array(NN);
+  const PN = new Float64Array(NN);
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) { const i = T(c, r); PN[i] = pen(c, r); LB[i] = FB[i] - RW - PN[i]; }
+  const low = kthSmallest(LB, K);
+  let under = 0, nx = 0;
+  const X = new Float32Array(NN);
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = T(c, r), p = PN[i];
+    if (FB[i] + RW - p < low) { F[i] = -1e9; under++; continue; }
+    let f = FB[i];
+    f += LANDS.rough * fbm(nK, c / LANDS.detail, r / LANDS.detail, 4);
+    if (p) f -= p;
+    X[nx++] = F[i] = f;
+  }
+  const cut = kthSmallest(X.subarray(0, nx), K - under);   // (v692: was a full sort of every tile for this one value)
   const M = new Uint8Array(NN);
   for (let i = 0; i < NN; i++) M[i] = F[i] > cut ? 1 : 0;
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (c < 16 || r < 16 || c >= N - 16 || r >= N - 16) M[T(c, r)] = 0;
@@ -2194,7 +2258,15 @@ async function generate(progress) {
     const distTo = (b0, cap) => {
       const d = new Uint8Array(N * N).fill(255), q = new Int32Array(N * N); let qh = 0, qt = 0;
       for (let i = 0; i < N * N; i++) if (BI[i] === b0 && LV[i]) { d[i] = 0; q[qt++] = i; }
-      while (qh < qt) { const i = q[qh++], c = i % N, e = d[i] + 1; if (e > cap) continue; for (const j of [c > 0 ? i - 1 : -1, c < N - 1 ? i + 1 : -1, i - N, i + N]) if (j >= 0 && j < N * N && d[j] > e) { d[j] = e; q[qt++] = j; } }
+      while (qh < qt) {
+        const i = q[qh++], c = i % N, e = d[i] + 1;
+        if (e > cap) continue;
+        // (v692: the four neighbours written out, no list a tile)
+        if (c > 0 && d[i - 1] > e) { d[i - 1] = e; q[qt++] = i - 1; }
+        if (c < N - 1 && d[i + 1] > e) { d[i + 1] = e; q[qt++] = i + 1; }
+        if (i >= N && d[i - N] > e) { d[i - N] = e; q[qt++] = i - N; }
+        if (i + N < N * N && d[i + N] > e) { d[i + N] = e; q[qt++] = i + N; }
+      }
       return d;
     };
     const dSnow = distTo(SNOW, 4), dSwamp = distTo(SWAMP, 3);
@@ -2539,10 +2611,16 @@ function markShelf() {
 function nameRegions(dry = false) {
   const rand = mulberry32(SEED ^ 0x7a3e5), used = new Set([...TOWN_NAMES, ...towns.map(t => t.name)]), NN = N * N;
   const comp = new Int32Array(NN).fill(-1), dist = new Int32Array(NN), q = new Int32Array(NN);
-  const nbrs = (i, f) => { const c = i % N; if (i >= N) f(i - N); if (i < NN - N) f(i + N); if (c) f(i - 1); if (c < N - 1) f(i + 1); };
   // breadth first from the tiles in q[0..n) through the tiles ok() lets in, each taking its source's mark
   const spread = (n, ok, mark) => {
-    for (let h = 0; h < n; h++) { const i = q[h]; nbrs(i, j => { if (ok(j)) { mark(j, i); q[n++] = j; } }); }
+    // (v692: the neighbours up, down, left, right written out: no function made a tile)
+    for (let h = 0; h < n; h++) {
+      const i = q[h], c = i % N;
+      if (i >= N && ok(i - N)) { mark(i - N, i); q[n++] = i - N; }
+      if (i < NN - N && ok(i + N)) { mark(i + N, i); q[n++] = i + N; }
+      if (c && ok(i - 1)) { mark(i - 1, i); q[n++] = i - 1; }
+      if (c < N - 1 && ok(i + 1)) { mark(i + 1, i); q[n++] = i + 1; }
+    }
     return n;
   };
   REG.fill(-1); regions.length = 0;
@@ -2639,7 +2717,12 @@ function labelSpots(ID, list) {
   }
   for (let h = 0; h < n; h++) {
     const i = q[h];
-    for (const j of [i - N, i + N, i - 1, i + 1]) if (j >= 0 && j < NN && ID[j] === ID[i] && !dist[j]) { dist[j] = dist[i] + 1; q[n++] = j; }
+    // (v692: the four neighbours one by one, as the list they were in did, without making the list each tile)
+    const g = ID[i], d = dist[i] + 1;
+    let j = i - N; if (j >= 0 && ID[j] === g && !dist[j]) { dist[j] = d; q[n++] = j; }
+    j = i + N; if (j < NN && ID[j] === g && !dist[j]) { dist[j] = d; q[n++] = j; }
+    j = i - 1; if (j >= 0 && ID[j] === g && !dist[j]) { dist[j] = d; q[n++] = j; }
+    j = i + 1; if (j < NN && ID[j] === g && !dist[j]) { dist[j] = d; q[n++] = j; }
   }
   const deepest = new Int32Array(list.length);
   for (const g of list) { g.n = 0; g.spots = []; }
@@ -2780,7 +2863,7 @@ function nameSeas(rand, used) {
     if (kind[i] !== 1) continue;
     const c = i % N, r = (i - c) / N;
     let b = 0, bd = 1e18;
-    seeds.forEach(([sc, sr], k) => { const d = (c - sc) ** 2 + (r - sr) ** 2; if (d < bd) { bd = d; b = k; } });
+    for (let k = 0; k < seeds.length; k++) { const d = (c - seeds[k][0]) ** 2 + (r - seeds[k][1]) ** 2; if (d < bd) { bd = d; b = k; } }
     cell[i] = b;
   }
   // 4. each joined patch of one sort (and one piece of open water) is a body; big enough ones get a name
@@ -2810,7 +2893,11 @@ function nameSeas(rand, used) {
   for (let i = 0; i < NN; i++) if (kind[i] && FEAT[i] >= before) q[t++] = i;
   for (let h = 0; h < t; h++) {
     const i = q[h], c = i % N;
-    for (const j of [c ? i - 1 : -1, c < N - 1 ? i + 1 : -1, i - N, i + N]) if (j >= 0 && j < NN && kind[j] && FEAT[j] < 0) { FEAT[j] = FEAT[i]; q[t++] = j; }
+    const f = FEAT[i];   // (v692: no list made a tile)
+    if (c && kind[i - 1] && FEAT[i - 1] < 0) { FEAT[i - 1] = f; q[t++] = i - 1; }
+    if (c < N - 1 && kind[i + 1] && FEAT[i + 1] < 0) { FEAT[i + 1] = f; q[t++] = i + 1; }
+    if (i >= N && kind[i - N] && FEAT[i - N] < 0) { FEAT[i - N] = f; q[t++] = i - N; }
+    if (i + N < NN && kind[i + N] && FEAT[i + N] < 0) { FEAT[i + N] = f; q[t++] = i + N; }
   }
 }
 // any new lake, sea, river or road near you
@@ -6013,6 +6100,8 @@ function placeFarms() {
 // ripples it); GROT marks it and the rock.
 const grottos = [];
 const GROTTO_COUNT = n => n < 500 ? 0 : n < 4000 ? 1 : n < 10000 ? 2 : 3;   // (and never two in one named region: poiRegs, v398)
+// (a grotto's along-the-cliff step for each of its four ways round; out from the cliff is the next way's)
+const GROT_AX = [1, 0, -1, 0], GROT_AZ = [0, 1, 0, -1];
 function placeGrottos() {
   const seen = new Uint8Array(N * N), W = 6, D = 4;
   const open = i => !SH[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !CY[i] && !BR[i] && !TN[i] && !FARM[i] && !WN[i] && !WW[i] && !OBJ[OB[i]].tile && OB[i] !== O.SHRINE;
@@ -6036,23 +6125,27 @@ function placeGrottos() {
       for (let d = 0; d < 4 && got < want; d++) {
         // a along the cliff, b out from it into the pool; the cliff's top at b = -1 and -2
         const at = (a, b) => d === 0 ? [c0 + a, r0 + b] : d === 1 ? [c0 - b, r0 + a] : d === 2 ? [c0 - a, r0 - b] : [c0 + b, r0 - a];
+        // (v692: the tests read tiles straight from (a, b), no arrays made, and the cheapest one first: the tile right
+        // behind must be a cliff up. Same picks as before, about a tenth of the time)
+        const ax = GROT_AX[d], az = GROT_AZ[d], bx = GROT_AX[(d + 1) & 3], bz = GROT_AZ[(d + 1) & 3];
+        const ix = (a, b) => (r0 + a * az + b * bz) * N + c0 + a * ax + b * bx;
         let ok = true;
-        for (let b = -3; b <= D + 2 && ok; b++) for (let a = -2; a <= W + 1 && ok; a++) {
-          const [c, r] = at(a, b);
+        for (let k = 0; k < 4; k++) {
+          const a = k & 1 ? W + 1 : -2, b = k & 2 ? D + 2 : -3, c = c0 + a * ax + b * bx, r = r0 + a * az + b * bz;
           if (c < 4 || r < 4 || c >= N - 4 || r >= N - 4) ok = false;
         }
-        if (!ok) continue;
+        if (!ok || LV[ix(0, -1)] <= L) continue;
         // the pool and the ground round it: one level of open deep forest
-        for (let b = 0; b <= D + 1 && ok; b++) for (let a = -1; a <= W && ok; a++) { const i = T(...at(a, b)); if (LV[i] !== L || BI[i] !== DEEP || !open(i) || GROT[i]) ok = false; }
+        for (let b = 0; b <= D + 1 && ok; b++) for (let a = -1; a <= W && ok; a++) { const i = ix(a, b); if (LV[i] !== L || BI[i] !== DEEP || !open(i) || GROT[i]) ok = false; }
         // the cliff behind, a level or more up, its top open for the rock
         let top = 0;
         for (let a = 0; a < W && ok; a++) {
-          const i = T(...at(a, -1)), j = T(...at(a, -2));
+          const i = ix(a, -1), j = ix(a, -2);
           if (LV[i] <= L || !open(i) || LV[j] < LV[i] || !open(j) || GROT[i]) ok = false;
           top = Math.max(top, LV[i]);
         }
         // no lake, river or swamp pool within three tiles
-        for (let b = -3; b <= D + 2 && ok; b++) for (let a = -2; a <= W + 1 && ok; a++) { const i = T(...at(a, b)); if (WT[i] || LAVA[i]) ok = false; }
+        for (let b = -3; b <= D + 2 && ok; b++) for (let a = -2; a <= W + 1 && ok; a++) { const i = ix(a, b); if (WT[i] || LAVA[i]) ok = false; }
         if (!ok) continue;
         const [mc, mr] = at(W >> 1, 2);
         if (grottos.some(g => Math.hypot(g.c - mc, g.r - mr) < 40)) continue;
@@ -6793,7 +6886,7 @@ async function layRoads(rand, progress) {
   portNames();
   // roads run dry through the bog
   for (let i = 0; i < N * N; i++) if (PATH[i] && WT[i] === 1) WT[i] = 0;
-  computeRim();
+  // (v692: no computeRim here; nothing reads the rims before pourLava, next, works them out again)
 }
 // Docks (v400, ready for boats): a plank deck about 6 x 3 standing out over the sea (v570: never a lake) on piles, at the
 // shore's level (BR tiles, so the water runs under it as under a bridge). A coastal town gets one just outside a
@@ -6955,25 +7048,31 @@ function placeDocksAll() {
 
 // where higher ground's slope spills half a tile into a lower tile
 function computeRim() {
+  // (v692: every tile's four corner heights worked out once, into CORN in sixths of a level (ramps rise in halves and
+  // thirds), not sixteen times a tile; same rims)
+  const NN = N * N, K = CORN;
+  for (let i = 0; i < NN; i++) { const l = LV[i] * 6, f = LIFT6[SH[i]]; K[i * 4] = l + f[0]; K[i * 4 + 1] = l + f[1]; K[i * 4 + 2] = l + f[2]; K[i * 4 + 3] = l + f[3]; }
   for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
-    const i = T(c, r);
+    const i = T(c, r), i4 = i * 4;
     let m = 0;
     for (let d = 0; d < 4; d++) {
       const nc = c + DC[d], nr = r + DR[d];
       if (nc < 0 || nr < 0 || nc >= N || nr >= N) continue;
-      const n = i + DI[d], ek = EDGE_K[d], ok = OPP_K[d];
-      if (cornerL(n, ok[0]) > cornerL(i, ek[0]) || cornerL(n, ok[1]) > cornerL(i, ek[1])) m |= 1 << d;
-      else if (cornerL(n, ok[0]) < cornerL(i, ek[0]) || cornerL(n, ok[1]) < cornerL(i, ek[1])) m |= 256 << d;
+      const n4 = (i + DI[d]) * 4, ek = EDGE_K[d], ok = OPP_K[d];
+      const a0 = K[n4 + ok[0]], a1 = K[n4 + ok[1]], b0 = K[i4 + ek[0]], b1 = K[i4 + ek[1]];
+      if (a0 > b0 || a1 > b1) m |= 1 << d;
+      else if (a0 < b0 || a1 < b1) m |= 256 << d;
     }
     for (let k = 0; k < 4; k++) {
       if (m & (1 << k | 1 << ((k + 3) & 3))) continue;
       const dc = CX[k] ? c + 1 : c - 1, dr = CZ[k] ? r + 1 : r - 1;
       if (dc < 0 || dr < 0 || dc >= N || dr >= N) continue;
-      if (cornerL(T(dc, dr), (k + 2) & 3) > cornerL(i, k)) m |= 16 << k;
+      if (K[T(dc, dr) * 4 + ((k + 2) & 3)] > K[i4 + k]) m |= 16 << k;
     }
     RIM[i] = m;
   }
 }
+const CORN = new Uint8Array(N * N * 4), LIFT6 = LIFT.map(l => l.map(v => Math.round(v * 6)));
 
 function smoothLevels(passes) {
   const tmp = new Uint8Array(N * N);
@@ -7013,22 +7112,44 @@ function slopeLimit() {
 const TERRACE = 3;
 function terraceLimit() {
   const R = TERRACE - 1, E = new Uint8Array(N * N), tmp = new Uint8Array(N * N);
-  for (let it = 0; it < 16; it++) {
-    for (let i = 0; i < N * N; i++) E[i] = WT[i] >= 2 ? WL[i] - 1 : LV[i];
-    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
-      let m = 255;
-      for (let k = Math.max(0, c - R); k <= Math.min(N - 1, c + R); k++) m = Math.min(m, E[r * N + k]);
-      tmp[r * N + c] = m;
+  // the first sweep over everything; after that (v692) only the tiles within R of one that changed can change, so
+  // only they are looked at again, each against the levels as the sweep before left them (as when every tile was)
+  for (let i = 0; i < N * N; i++) E[i] = WT[i] >= 2 ? WL[i] - 1 : LV[i];
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    let m = 255;
+    for (let k = Math.max(0, c - R); k <= Math.min(N - 1, c + R); k++) m = Math.min(m, E[r * N + k]);
+    tmp[r * N + c] = m;
+  }
+  let moved = [];
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    const i = r * N + c;
+    if (!LV[i] || WT[i] >= 2 || TN[i]) continue;
+    let m = 255;
+    for (let k = Math.max(0, r - R); k <= Math.min(N - 1, r + R); k++) m = Math.min(m, tmp[k * N + c]);
+    if (LV[i] > m + 1) { LV[i] = Math.max(1, m + 1); moved.push(i); }
+  }
+  const mark = new Uint8Array(N * N);
+  for (let it = 1; it < 16 && moved.length; it++) {
+    for (const i of moved) E[i] = LV[i];
+    const look = [];
+    for (const i of moved) {
+      const c = i % N, r = (i - c) / N;
+      for (let rr = Math.max(0, r - R); rr <= Math.min(N - 1, r + R); rr++) for (let cc = Math.max(0, c - R); cc <= Math.min(N - 1, c + R); cc++) {
+        const j = rr * N + cc;
+        if (!mark[j]) { mark[j] = 1; look.push(j); }
+      }
     }
-    let changed = 0;
-    for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
-      const i = r * N + c;
-      if (!LV[i] || WT[i] >= 2 || TN[i]) continue;
+    const next = [], to = [];
+    for (const j of look) {
+      mark[j] = 0;
+      if (!LV[j] || WT[j] >= 2 || TN[j]) continue;
+      const c = j % N, r = (j - c) / N;
       let m = 255;
-      for (let k = Math.max(0, r - R); k <= Math.min(N - 1, r + R); k++) m = Math.min(m, tmp[k * N + c]);
-      if (LV[i] > m + 1) { LV[i] = Math.max(1, m + 1); changed++; }
+      for (let rr = Math.max(0, r - R); rr <= Math.min(N - 1, r + R); rr++) for (let cc = Math.max(0, c - R); cc <= Math.min(N - 1, c + R); cc++) m = Math.min(m, E[rr * N + cc]);
+      if (LV[j] > m + 1) { next.push(j); to.push(Math.max(1, m + 1)); }
     }
-    if (!changed) break;
+    for (let k = 0; k < next.length; k++) LV[next[k]] = to[k];
+    moved = next;
   }
 }
 // Small knolls and hollows (a patch of one level with only lower, or only higher, ground all round it) are
@@ -7607,7 +7728,11 @@ function computeBands() {
   for (let i = 0; i < NN; i++) if (bandWin[LANDID[i]]) { own[i] = LANDID[i]; q[t++] = i; }
   for (let h = 0; h < t; h++) {
     const i = q[h], c = i % N;
-    for (const j of [c ? i - 1 : -1, c < N - 1 ? i + 1 : -1, i - N, i + N]) if (j >= 0 && j < NN && !own[j]) { own[j] = own[i]; q[t++] = j; }
+    const o = own[i];   // (v692: the four neighbours written out, no list a tile)
+    if (c && !own[i - 1]) { own[i - 1] = o; q[t++] = i - 1; }
+    if (c < N - 1 && !own[i + 1]) { own[i + 1] = o; q[t++] = i + 1; }
+    if (i >= N && !own[i - N]) { own[i - N] = o; q[t++] = i - N; }
+    if (i + N < NN && !own[i + N]) { own[i + N] = o; q[t++] = i + N; }
   }
   for (const m of landmasses) if (!bandWin[m.id]) { const w = bandWin[own[T(m.c, m.r)]] || bandWin[homeId]; const b = Math.min(BAND_N, w[1] + 1); bandWin[m.id] = [b, b]; }
   // each landmass's land in equal shares by distance to its towns
@@ -30641,7 +30766,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 695, crashSeen = new Map();
+const GAME_VERSION = 696, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
