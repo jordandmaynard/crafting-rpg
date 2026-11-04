@@ -456,6 +456,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v740:** (Jordan: the dust puffs from broken rocks showed only a lower quarter of each round puff, but looked right in shadow) The same thing as the chimney smoke before v616: a dust puff is lit as a ball, and the sun's share was stepped into 3 hard bands (T > Spell effects: 'Smoke and dust lit in bands'), so the bright sunlit cap and the shaded crescent opposite it met along a hard arc and the puff read as a cut-off quarter. In shadow there's no sun term, so no bands. The default is now 0, smooth light over the ball; the slider brings the bands back. (v612/v615 had chased depth for this; v616's flat-lit SMOKE sprites fixed the chimneys by not banding.)
 
+**v741:** (Jordan) The potion icons really redraw now when you let go of a value in T > Potion bottles, and there's a Redraw button there too. Before, the new pictures were encoded in the background, which the browser only got round to while the game wasn't drawing, so they changed when the window lost focus. Now they're encoded straight away and handed to the icons on screen as new image files. A redraw takes a moment (a short hitch).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

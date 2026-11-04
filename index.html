@@ -19572,8 +19572,6 @@ const POTION_TINT = { red: '#d0263a', magenta: '#c4209a', green: '#38b043', blue
 const POTION_ITEMS = Object.fromEntries(Object.keys(POTION_TINT).map(c => ['potion_' + c, {
   name: c[0].toUpperCase() + c.slice(1) + ' Potion', icon: 'potion_' + c, potion: c, stack: 20, loot: 'material',
   about: 'A sample of the filled bottle look. It does nothing yet.' }]));
-for (const [k, it] of Object.entries(POTION_ITEMS))
-  ICON[k] = `<img class="paint" data-potion="${it.potion}" src="${CLEAR_PX}" alt="" draggable="false">`;
 // The bottle's inside, measured once from the empty bottle's painting (RGBA, w x h): how far each pixel is from the
 // glass's outside edge (a chamfer distance, in pixels of the 256 painting), its brightness, and where the bulb runs.
 function potionGeom(px, w, h) {
@@ -19659,15 +19657,18 @@ function potionPaint(g, out, F, tint, st = {}) {
   }
   return { ys: ys / s, cx: cx / s, W: W / s, H: H / s };
 }
-// The icons: the painting's 128 and 256 measured once, each colour painted into both, handed to the page as blob
-// images on a style rule (image-set picks the sheet by pixel ratio, like the atlases). Until they're made a potion
-// shows the empty bottle. Repainted when a tunable or colour changes in T (once a frame at most).
+// The icons: the painting's 128 and 256 measured once, each colour painted into both and handed to its <img> as a
+// srcset of blob images, like the single paintings (the browser picks the sheet). Until they're made a potion shows the
+// empty bottle. Made again when a value or colour is let go in T > Potion bottles, or by its Redraw button.
+// (v741, Jordan: v729-731 made them with canvas.toBlob, which the browser only got round to while the game wasn't
+// drawing, so they changed on alt-tab: now each is encoded at once with toDataURL, and every potion <img> on screen
+// gets its new src, which the browser always redraws)
 const POTION_GEOM = {};
-const potionCss = document.head.appendChild(document.createElement('style'));
 const potionEmpty = n => `icons/paint/emptyBottle-${n}.webp?v=${PAINT_REV}`;
-const potionSet = (u1, u2) => `-webkit-image-set(url('${u1}') 1x, url('${u2}') 2x)`;
-potionCss.textContent = `img.paint[data-potion] { background: no-repeat center / 100% 100%; background-image: ${potionSet(potionEmpty(128), potionEmpty(256))}; }`;
-let potionUrls = [], potionGen = 0, potionQueued = false;
+const POTION_SIZES = 'max(34px, 5.12vh)';
+const potionImgHtml = (c, u1, u2) => `<img class="paint" data-potion="${c}" src="${u1}" srcset="${u1} 128w, ${u2} 256w" sizes="${POTION_SIZES}" alt="" draggable="false">`;
+for (const [k, it] of Object.entries(POTION_ITEMS)) ICON[k] = potionImgHtml(it.potion, potionEmpty(128), potionEmpty(256));
+let potionUrls = [];
 for (const n of [128, 256]) {
   const im = new Image();
   im.onload = () => {
@@ -19680,44 +19681,41 @@ for (const n of [128, 256]) {
   };
   im.src = potionEmpty(n);
 }
-async function potionIcons() {
-  if (!POTION_GEOM[128] || !POTION_GEOM[256]) return;
-  const gen = ++potionGen, urls = [], rules = [];
+// a canvas as a blob url, encoded now (not whenever the browser finds the time)
+function potionBlobUrl(cv) {
+  const b64 = cv.toDataURL('image/png').split(',')[1], bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+}
+function potionIcons() {
+  if (!POTION_GEOM[128] || !POTION_GEOM[256]) return false;
+  const urls = [], by = {};
   for (const [c, tint] of Object.entries(POTION_TINT)) {
     const u = [];
     for (const n of [128, 256]) {
       const g = POTION_GEOM[n], cv = document.createElement('canvas'); cv.width = cv.height = n;
       const cx = cv.getContext('2d'), img = cx.createImageData(n, n);
       img.data.set(g.src); potionPaint(g, img.data, POTION_FX, tint); cx.putImageData(img, 0, 0);
-      const blob = await new Promise(ok => cv.toBlob(ok, 'image/png'));
-      if (!blob) return;
-      u.push(URL.createObjectURL(blob));
+      u.push(potionBlobUrl(cv));
     }
     urls.push(...u);
-    rules.push([c, potionSet(u[0], u[1])]);
+    by[c] = u;
   }
-  if (gen !== potionGen) { urls.forEach(u => URL.revokeObjectURL(u)); return; }
-  potionCss.textContent = potionCss.textContent.split('\n')[0] + '\n' + rules.map(([c, set]) => `img.paint[data-potion="${c}"] { background-image: ${set}; }`).join('\n');
-  // (Jordan saw a new rule not repaint the icons already on screen until the window lost focus: each one gets the new
-  // picture on its own element too, so it's redrawn at once)
-  const by = Object.fromEntries(rules);
-  for (const el of document.querySelectorAll('img[data-potion]')) if (by[el.dataset.potion]) el.style.backgroundImage = by[el.dataset.potion];
-  for (const k of Object.keys(ICON)) {
-    const c = POTION_ITEMS[k]?.potion;
-    if (c && by[c]) ICON[k] = `<img class="paint" data-potion="${c}" src="${CLEAR_PX}" style="background-image: ${by[c].replace(/"/g, "'")}" alt="" draggable="false">`;
+  for (const [k, it] of Object.entries(POTION_ITEMS)) if (by[it.potion]) ICON[k] = potionImgHtml(it.potion, ...by[it.potion]);
+  for (const el of document.querySelectorAll('img[data-potion]')) {
+    const u = by[el.dataset.potion];
+    if (u) { el.srcset = `${u[0]} 128w, ${u[1]} 256w`; el.src = u[0]; }
   }
-  // (and the pack and hotbar drawn afresh, new elements, in case the browser still holds the old picture)
-  if (gen > 1) { if (invOpen) renderInv(); else renderHot(); }
   const old = potionUrls; potionUrls = urls;
-  setTimeout(() => old.forEach(u => URL.revokeObjectURL(u)), 1000);
+  setTimeout(() => old.forEach(u => URL.revokeObjectURL(u)), 10000);
+  return true;
 }
 function potionRedo() {
-  if (potionQueued) return;
-  potionQueued = true;
-  requestAnimationFrame(() => { potionQueued = false; potionIcons(); });
+  if (!potionIcons()) return;
+  if (typeof invOpen !== 'undefined' && invOpen) renderInv(); else renderHot();
 }
 // What a dragged item shows: its icon, or for a potion a live canvas that sloshes as it's dragged.
-const potionDrag = { cv: null, raf: 0 }, potionMats = {}, POTION_ACT = { give: 0 };
+const potionDrag = { cv: null, raf: 0 }, potionMats = {}, POTION_ACT = { give: 0, redraw: 0 };
 function setDragIcon(drag, id) {
   const it = ITEMS[id], g = it.potion && POTION_GEOM[(devicePixelRatio || 1) > 1.2 ? 256 : 128];
   if (!g) { drag.innerHTML = ICON[it.icon]; return; }
@@ -30544,6 +30542,9 @@ const TUNING = [
       for (const k of Object.keys(POTION_ITEMS)) addItem(k, 3);
       toast('Sample potions put in your pack.', 'good');
     }],
+    [POTION_ACT, 'redraw', 'Redraw the potion icons now (they also redraw when you let go of a value)', 'action', () => {
+      potionRedo(); toast('Potion icons redrawn.', 'good');
+    }],
     [POTION_FX, 'fill', 'How full (0 the floor, 1 the neck)', 0, 1, 0.01, potionRedo],
     [POTION_FX, 'inset', 'Glass left clear round the liquid (px of 256)', 0, 14, 0.5, potionRedo],
     [POTION_FX, 'soft', 'Soft edge against the glass (px of 256)', 0.5, 8, 0.5, potionRedo],
@@ -31743,7 +31744,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 740, crashSeen = new Map();
+const GAME_VERSION = 741, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
