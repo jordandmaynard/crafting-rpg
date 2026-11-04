@@ -138,11 +138,11 @@ body:not(.building) #bar .name { display: none; }
 img.paint, .cell img.paint, .flyIcon img.paint, #dragIcon img.paint { display: block; image-rendering: auto; pointer-events: none; -webkit-user-drag: none; }
 .cell img.paint { width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); }
 .cell.held img.paint { opacity: 0.3; }
-#dragIcon img.paint { width: 96px; height: 96px; }
+#dragIcon img.paint, #dragIcon canvas.paint { width: 96px; height: 96px; display: block; pointer-events: none; }
 /* every item icon (pack, gear, crates, stations, recipes, hotbar, dragged and flying) has a 1px outline round its
    shape, black, white while it's pressed or dragged: four hard shadows, each taken from the last, make a 3x3 dilate */
 :root { --itemEdge: #000; }
-.cell.full > img, .cell.full > svg, .hslot .ic > img, .hslot .ic > svg, #dragIcon > img, #dragIcon > svg, .flyIcon > img, .flyIcon > svg {
+.cell.full > img, .cell.full > svg, .hslot .ic > img, .hslot .ic > svg, #dragIcon > img, #dragIcon > svg, #dragIcon > canvas, .flyIcon > img, .flyIcon > svg {
   filter: drop-shadow(1px 0 0 var(--itemEdge)) drop-shadow(-1px 0 0 var(--itemEdge)) drop-shadow(0 1px 0 var(--itemEdge)) drop-shadow(0 -1px 0 var(--itemEdge)); }
 .cell.press, .cell.held, .hslot.press, #dragIcon { --itemEdge: #fff; }
 .slot img.px, .tbtn img.px { --s: calc(max(var(--n, 48px), round(down, calc(var(--t) * var(--dpr, 1)), var(--n, 48px))) / var(--dpr, 1)); width: var(--s); height: var(--s); }
@@ -19580,6 +19580,213 @@ function setDpr() { document.documentElement.style.setProperty('--dpr', devicePi
 setDpr();
 addEventListener('resize', setDpr);
 
+// ---------- Filled potion bottles (v729) ----------
+// (Jordan: procedural filled bottles from the empty bottle's painting) A potion's icon is the empty bottle with its
+// liquid painted in as the game loads, one painting for every colour: the bulb's inside (the glass's silhouette, inset
+// from its edge) below a level is the liquid, and an ellipse at the level is its top, the round bottle seen from a
+// little above. Both take the painting's own brushwork: each pixel's brightness, desaturated, picks a colour on a ramp
+// from the potion's shade through its tint to its light, deeper liquid darker, the top lifted toward the light with a
+// bright far rim and meniscus, and the glass's brightest streaks left on top. Nothing is stored per potion: a new colour
+// is one line in POTION_TINT. While you drag one, its icon is drawn live on a canvas: the surface tilts against the
+// drag's acceleration on a damped spring, a standing wave bounces on it and bubbles rise when it's shaken.
+// T > Potion bottles.
+const POTION_FX = { fill: 0.62, inset: 4.5, soft: 2, persp: 0.3, mid: 0.76, contrast: 1.8, shade: 0.28, light: 0.6, depth: 0.3,
+  surface: 0.55, rim: 0.8, front: 0.6, gleam: 0.9, slosh: 1, spring: 70, damp: 6, maxTilt: 0.42, wave: 1, bubbles: 1 };
+const POTION_TINT = { red: '#d0263a', magenta: '#c4209a', green: '#38b043', blue: '#2a6ae0', amber: '#e8a020', violet: '#8a3ad0' };
+// (sample potions for now: they do nothing, T > Potion bottles puts some in your pack)
+const POTION_ITEMS = Object.fromEntries(Object.keys(POTION_TINT).map(c => ['potion_' + c, {
+  name: c[0].toUpperCase() + c.slice(1) + ' Potion', icon: 'potion_' + c, potion: c, stack: 20, loot: 'material',
+  about: 'A sample of the filled bottle look. It does nothing yet.' }]));
+for (const [k, it] of Object.entries(POTION_ITEMS))
+  ICON[k] = `<img class="paint" data-potion="${it.potion}" src="${CLEAR_PX}" alt="" draggable="false">`;
+// The bottle's inside, measured once from the empty bottle's painting (RGBA, w x h): how far each pixel is from the
+// glass's outside edge (a chamfer distance, in pixels of the 256 painting), its brightness, and where the bulb runs.
+function potionGeom(px, w, h) {
+  const s = w / 256, n = w * h, BIG = 1e6;
+  const d = new Float32Array(n), lum = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    d[i] = px[i * 4 + 3] > 127 ? BIG : 0;
+    lum[i] = (px[i * 4] * 0.3 + px[i * 4 + 1] * 0.59 + px[i * 4 + 2] * 0.11) / 255;
+  }
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : d[y * w + x]);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x; if (!d[i]) continue;
+    d[i] = Math.min(d[i], at(x - 1, y) + 1, at(x, y - 1) + 1, at(x - 1, y - 1) + 1.4142, at(x + 1, y - 1) + 1.4142);
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x; if (!d[i]) continue;
+    d[i] = Math.min(d[i], at(x + 1, y) + 1, at(x, y + 1) + 1, at(x + 1, y + 1) + 1.4142, at(x - 1, y + 1) + 1.4142);
+  }
+  for (let i = 0; i < n; i++) d[i] /= s;
+  // the bulb runs from where the neck opens (row 100 of 256) down to the lowest row of glass
+  const neck = Math.round(100 * s);
+  let bot = neck;
+  for (let y = neck; y < h; y++) for (let x = 0; x < w; x++) if (d[y * w + x] > 0) { bot = y; break; }
+  return { w, h, s, d, lum, neck, bot, src: px };
+}
+// a row's inner chord: the bulb's inside (inset from the glass's edge) runs from xl to xr
+function potionChord(g, y, inset) {
+  y = Math.max(0, Math.min(g.h - 1, Math.round(y)));
+  let xl = -1, xr = -1;
+  for (let x = 0; x < g.w; x++) if (g.d[y * g.w + x] >= inset) { if (xl < 0) xl = x; xr = x; }
+  return xl < 0 ? null : [xl, xr];
+}
+const potionRgb = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255);
+// Paint the liquid into out (RGBA, the painting copied in first). F the tunables, tint '#rrggbb', st the slosh: tilt
+// (radians, the surface's turn on screen, + raises its left side), wave (the standing wave's height, px of 256) and
+// phase, bubbles [{x, y, r, a}] in px of 256, y0 the first row to paint. Returns the surface's level and size.
+function potionPaint(g, out, F, tint, st = {}) {
+  const { w, h, s, d, lum, src } = g, T = potionRgb(tint);
+  const inset = F.inset, soft = Math.max(0.5, F.soft);
+  const ys = g.bot - (g.bot - g.neck) * F.fill;   // the level: fill 0 the bulb's floor, 1 the neck
+  const ch = potionChord(g, ys, inset) || [w / 2 - 1, w / 2 + 1];
+  const cx = (ch[0] + ch[1]) / 2, W = Math.max(2, (ch[1] - ch[0]) / 2 + 2 * s), H = W * F.persp;
+  const tilt = st.tilt || 0, ct = Math.cos(tilt), sn = Math.sin(tilt), wave = (st.wave || 0) * s * Math.sin(st.phase || 0);
+  const dark = T.map(c => c * F.shade), lite = T.map(c => c + (1 - c) * F.light), foam = lite.map(c => c + (1 - c) * 0.5);
+  const bub = st.bubbles || [];
+  for (let y = Math.max(0, Math.floor(st.y0 || 0)); y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, dd = d[i];
+    if (dd < inset - soft) continue;
+    // in the surface's turned frame: u across it, v down from it (the standing wave lifts its middle, drops its sides)
+    const dx = x + 0.5 - cx, dy = y + 0.5 - ys;
+    const u = dx * ct + dy * sn;
+    const v = -dx * sn + dy * ct + wave * Math.cos(Math.PI * Math.max(-1, Math.min(1, u / W)));
+    const q = Math.sqrt((u / W) ** 2 + (v / H) ** 2), fe = (q - 1) * Math.min(H, W);
+    const cSurf = Math.max(0, Math.min(1, 0.5 - fe));
+    const cLiq = Math.max(cSurf, Math.max(0, Math.min(1, 0.5 + v))) * Math.max(0, Math.min(1, (dd - inset + soft) / soft));
+    if (cLiq <= 0) continue;
+    const L = lum[i], t = Math.max(0, Math.min(1, (L - F.mid) * F.contrast + 0.5));
+    let r, gg, b;
+    if (t < 0.5) { const k = t * 2; r = dark[0] + (T[0] - dark[0]) * k; gg = dark[1] + (T[1] - dark[1]) * k; b = dark[2] + (T[2] - dark[2]) * k; }
+    else { const k = t * 2 - 1; r = T[0] + (lite[0] - T[0]) * k; gg = T[1] + (lite[1] - T[1]) * k; b = T[2] + (lite[2] - T[2]) * k; }
+    // deeper liquid darker (the share of the way from the level to the floor)
+    const dk = 1 - F.depth * Math.max(0, Math.min(1, (y - ys) / Math.max(1, g.bot - ys)));
+    r *= dk; gg *= dk; b *= dk;
+    if (cSurf > 0) {
+      // the top, lifted toward the light, its far rim brightest and a thinner meniscus along its front
+      const m = Math.min(1, Math.max(0, 1 - Math.abs(fe) / (1.6 * s)) * F.rim * (v < 0 ? 1 : F.front)) * 0.7, k = cSurf * F.surface;
+      r += (lite[0] - r) * k; gg += (lite[1] - gg) * k; b += (lite[2] - b) * k;
+      r += (1 - r) * m; gg += (1 - gg) * m; b += (1 - b) * m;
+    }
+    for (const o of bub) {
+      const bd = Math.hypot(x + 0.5 - o.x * s, y + 0.5 - o.y * s) / (o.r * s);
+      if (bd < 1.2) {
+        const k = Math.max(0, Math.min(1, (1.2 - bd) / 0.4)) * (bd > 0.55 ? 0.85 : 0.3) * (o.a ?? 1);
+        r += (foam[0] - r) * k; gg += (foam[1] - gg) * k; b += (foam[2] - b) * k;
+      }
+    }
+    // the glass's brightest streaks stay on top, catching the light in front of the liquid
+    const sp = Math.max(0, Math.min(1, (L - F.gleam) / Math.max(0.01, 1 - F.gleam))), o = i * 4;
+    r += (src[o] / 255 - r) * sp; gg += (src[o + 1] / 255 - gg) * sp; b += (src[o + 2] / 255 - b) * sp;
+    out[o] = src[o] + (r * 255 - src[o]) * cLiq;
+    out[o + 1] = src[o + 1] + (gg * 255 - src[o + 1]) * cLiq;
+    out[o + 2] = src[o + 2] + (b * 255 - src[o + 2]) * cLiq;
+  }
+  return { ys: ys / s, cx: cx / s, W: W / s, H: H / s };
+}
+// The icons: the painting's 128 and 256 measured once, each colour painted into both, handed to the page as blob
+// images on a style rule (image-set picks the sheet by pixel ratio, like the atlases). Until they're made a potion
+// shows the empty bottle. Repainted when a tunable or colour changes in T (once a frame at most).
+const POTION_GEOM = {};
+const potionCss = document.head.appendChild(document.createElement('style'));
+const potionEmpty = n => `icons/paint/emptyBottle-${n}.webp?v=${PAINT_REV}`;
+const potionSet = (u1, u2) => `-webkit-image-set(url('${u1}') 1x, url('${u2}') 2x)`;
+potionCss.textContent = `img.paint[data-potion] { background: no-repeat center / 100% 100%; background-image: ${potionSet(potionEmpty(128), potionEmpty(256))}; }`;
+let potionUrls = [], potionGen = 0, potionQueued = false;
+for (const n of [128, 256]) {
+  const im = new Image();
+  im.onload = () => {
+    try {
+      const cv = document.createElement('canvas'); cv.width = cv.height = n;
+      const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(im, 0, 0, n, n);
+      POTION_GEOM[n] = potionGeom(cx.getImageData(0, 0, n, n).data, n, n);
+      if (POTION_GEOM[128] && POTION_GEOM[256]) potionIcons();
+    } catch (e) { console.warn('potion bottles', e); }
+  };
+  im.src = potionEmpty(n);
+}
+async function potionIcons() {
+  if (!POTION_GEOM[128] || !POTION_GEOM[256]) return;
+  const gen = ++potionGen, urls = [], rules = [];
+  for (const [c, tint] of Object.entries(POTION_TINT)) {
+    const u = [];
+    for (const n of [128, 256]) {
+      const g = POTION_GEOM[n], cv = document.createElement('canvas'); cv.width = cv.height = n;
+      const cx = cv.getContext('2d'), img = cx.createImageData(n, n);
+      img.data.set(g.src); potionPaint(g, img.data, POTION_FX, tint); cx.putImageData(img, 0, 0);
+      const blob = await new Promise(ok => cv.toBlob(ok, 'image/png'));
+      if (!blob) return;
+      u.push(URL.createObjectURL(blob));
+    }
+    urls.push(...u);
+    rules.push(`img.paint[data-potion="${c}"] { background-image: ${potionSet(u[0], u[1])}; }`);
+  }
+  if (gen !== potionGen) { urls.forEach(u => URL.revokeObjectURL(u)); return; }
+  potionCss.textContent = potionCss.textContent.split('\n')[0] + '\n' + rules.join('\n');
+  const old = potionUrls; potionUrls = urls;
+  setTimeout(() => old.forEach(u => URL.revokeObjectURL(u)), 1000);
+}
+function potionRedo() {
+  if (potionQueued) return;
+  potionQueued = true;
+  requestAnimationFrame(() => { potionQueued = false; potionIcons(); });
+}
+potionRedo.live = true;
+// What a dragged item shows: its icon, or for a potion a live canvas that sloshes as it's dragged.
+const potionDrag = { cv: null, raf: 0 }, potionMats = {}, POTION_ACT = { give: 0 };
+function setDragIcon(drag, id) {
+  const it = ITEMS[id], g = it.potion && POTION_GEOM[(devicePixelRatio || 1) > 1.2 ? 256 : 128];
+  if (!g) { drag.innerHTML = ICON[it.icon]; return; }
+  drag.innerHTML = `<canvas class="paint" width="${g.w}" height="${g.h}"></canvas>`;
+  const cv = drag.firstChild, P = potionDrag;
+  Object.assign(P, { cv, drag, g, ctx: cv.getContext('2d'), tint: POTION_TINT[it.potion], img: null, last: 0, x: null, y: null,
+    vx: 0, vy: 0, ax: 0, ay: 0, tilt: 0, tv: 0, amp: 0, phase: 0, bub: [], calm: false });
+  P.img = P.ctx.createImageData(g.w, g.h);
+  P.lv = potionDrawLive(P);
+  if (!P.raf) P.raf = requestAnimationFrame(potionDragTick);
+}
+function potionDrawLive(P) {
+  const F = POTION_FX;
+  P.img.data.set(P.g.src);
+  const lv = potionPaint(P.g, P.img.data, F, P.tint, { tilt: P.tilt, wave: P.amp, phase: P.phase, bubbles: P.bub, y0: P.g.neck * 0.6 });
+  P.ctx.putImageData(P.img, 0, 0);
+  return lv;
+}
+function potionDragTick(now) {
+  const P = potionDrag, F = POTION_FX;
+  if (!P.cv || !P.cv.isConnected || P.drag.hidden) { P.raf = 0; P.cv = null; return; }
+  P.raf = requestAnimationFrame(potionDragTick);
+  const dt = P.last ? Math.min(0.05, Math.max(0.001, (now - P.last) / 1000)) : 1 / 60;
+  P.last = now;
+  const x = parseFloat(P.drag.style.left) || 0, y = parseFloat(P.drag.style.top) || 0;
+  if (P.x === null) { P.x = x; P.y = y; }
+  // the pointer's speed and its change, smoothed (pointer moves come in steps)
+  const sm = 1 - Math.exp(-dt / 0.04);
+  const vx = P.vx + ((x - P.x) / dt - P.vx) * sm, vy = P.vy + ((y - P.y) / dt - P.vy) * sm;
+  P.ax += ((vx - P.vx) / dt - P.ax) * sm; P.ay += ((vy - P.vy) / dt - P.ay) * sm;
+  P.vx = vx; P.vy = vy; P.x = x; P.y = y;
+  // the surface leans against the push (left side up when it speeds up to the right) on a damped spring
+  const want = Math.max(-F.maxTilt, Math.min(F.maxTilt, Math.atan(P.ax * F.slosh / 6000)));
+  P.tv += (F.spring * (want - P.tilt) - F.damp * P.tv) * dt;
+  P.tilt = Math.max(-F.maxTilt * 1.2, Math.min(F.maxTilt * 1.2, P.tilt + P.tv * dt));
+  // a standing wave, kicked by the lean's swing and by up-and-down shakes, dying away
+  P.amp = Math.min(6, P.amp * Math.exp(-dt * 2.2) + (Math.abs(P.tv) * 1.5 + Math.abs(P.ay) / 4000) * F.wave * dt * 8);
+  P.phase += dt * 11;
+  // bubbles from the floor when it's shaken, rising and wobbling until they reach the level
+  const shake = Math.abs(P.tv) + Math.abs(P.ay) / 3000;
+  if (F.bubbles > 0 && P.bub.length < 8 * F.bubbles && Math.random() < shake * F.bubbles * dt * 3) {
+    const lv = P.lv || { cx: 128, W: 60, ys: 150 }, bot = P.g.bot / P.g.s;
+    P.bub.push({ x: lv.cx + (Math.random() - 0.5) * lv.W * 1.1, y: bot - 14 - Math.random() * Math.max(1, (bot - lv.ys) * 0.4),
+      r: 3 + Math.random() * 3.5, a: 1, t: Math.random() * 6 });
+  }
+  for (const b of P.bub) { b.t += dt; b.y -= dt * (28 + b.r * 6); b.x += Math.sin(b.t * 7) * dt * 12; }
+  if (P.lv) P.bub = P.bub.filter(b => b.y > P.lv.ys + b.r);
+  const calm = Math.abs(P.tilt) < 0.002 && Math.abs(P.tv) < 0.004 && P.amp < 0.03 && !P.bub.length;
+  if (calm && P.calm) return;
+  P.calm = calm;
+  P.lv = potionDrawLive(P);
+}
+
 // ---------- Gear and the pack ----------
 // What you wear goes on the paper doll, one item to a slot; everything else rides in the pack, where
 // materials stack (up to `stack` to a square). Your weapon decides your attack (LMB) and the abilities on Q
@@ -19613,6 +19820,7 @@ const ITEMS = {
   glassPane: { name: 'Glass Pane', icon: 'glassPane', stack: 100, pile: true, loot: 'material', about: 'Melted from sand in a smelter. An alchemy table makes bottles of it.' },
   emptyBottle: { name: 'Empty Bottle', icon: 'emptyBottle', stack: 50, loot: 'material', about: 'Blown from glass at an alchemy table. Potions will go in it.' },
   boneDust: { name: 'Bone Dust', icon: 'boneDust', stack: 100, pile: true, loot: 'material', about: 'Ground from bones in a grinder.' },
+  ...POTION_ITEMS,
   flour: { name: 'Flour', icon: 'flour', stack: 100, pile: true, loot: 'material', about: 'Ground from wheat at a grinder. A smelter bakes it into bread.' },
   bread: { name: 'Sourdough Bread', icon: 'bread', stack: 50, pile: true, loot: 'material', about: 'Baked from flour in a smelter.' },
   bone: { name: 'Bone', icon: 'bone', stack: 100, loot: 'material', about: 'Taken from skeletons, and from wolves, boars and hellhounds half the time. Bone weapons and bone armor are made of it.' },
@@ -19986,7 +20194,7 @@ function renderHot() {
   addEventListener('pointermove', e => {
     if (!press) return;
     if (!press.dragging && HOT[press.n] && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 5) {
-      press.dragging = true; drag.innerHTML = ICON[ITEMS[HOT[press.n]].icon]; drag.hidden = false;
+      press.dragging = true; drag.hidden = false; setDragIcon(drag, HOT[press.n]);
     }
     if (press.dragging) {
       drag.style.left = e.clientX + 'px'; drag.style.top = e.clientY + 'px';
@@ -20316,7 +20524,7 @@ function navInv(dx, dy) {
     if (!invPress) return;
     if (!invPress.dragging && Math.hypot(e.clientX - invPress.x, e.clientY - invPress.y) > 5 && cellGet(invPress.c)) {
       invPress.dragging = true;
-      drag.innerHTML = ICON[ITEMS[cellGet(invPress.c)].icon]; drag.hidden = false;
+      drag.hidden = false; setDragIcon(drag, cellGet(invPress.c));
       inv.querySelector(`[data-cell="${cellKey(invPress.c)}"]`)?.classList.add('held');
     }
     if (invPress.dragging) {
@@ -21887,6 +22095,11 @@ function dropModel(id) {
       const b = new GFX.Mesh(bottleGeo, glassMat); b.position.set(x, lie ? 0.045 : 0.08, zz); if (lie) b.rotation.z = Math.PI / 2; g.add(b);
       const n = new GFX.Mesh(neckGeo, glassMat); n.position.set(x + (lie ? 0.11 : 0), lie ? 0.045 : 0.19, zz); if (lie) n.rotation.z = Math.PI / 2; g.add(n);
     }
+  } else if (ITEMS[id]?.potion) {
+    // (v729) a corked bottle of it, standing
+    const mat = potionMats[id] || (potionMats[id] = flatMat({ color: POTION_TINT[ITEMS[id].potion] }));
+    const b = new GFX.Mesh(bottleGeo, mat); b.position.set(0, 0.08, 0); g.add(b);
+    const n = new GFX.Mesh(neckGeo, glassMat); n.position.set(0, 0.19, 0); g.add(n);
   } else if (id === 'boneDust') {
     add(sandGeo, flourMat, 0, 0.065, 0, 0, 0.8);
   } else if (oreMats[id]) {
@@ -30320,6 +30533,32 @@ const TUNING = [
     [QUEST_MARK, 'bob', 'Bob up and down (m)', 0, 0.5, 0.01],
     [QUEST_MARK, 'range', 'Shown within (m)', 10, 120, 1],
   ]],
+  ['Potion bottles', [
+    [POTION_ACT, 'give', 'Put three of each sample potion in your pack', 'action', () => {
+      for (const k of Object.keys(POTION_ITEMS)) addItem(k, 3);
+      toast('Sample potions put in your pack.', 'good');
+    }],
+    [POTION_FX, 'fill', 'How full (0 the floor, 1 the neck)', 0, 1, 0.01, potionRedo],
+    [POTION_FX, 'inset', 'Glass left clear round the liquid (px of 256)', 0, 14, 0.5, potionRedo],
+    [POTION_FX, 'soft', 'Soft edge against the glass (px of 256)', 0.5, 8, 0.5, potionRedo],
+    [POTION_FX, 'persp', 'Top of the liquid: depth of its ellipse (share of its width)', 0.05, 0.6, 0.01, potionRedo],
+    [POTION_FX, 'mid', 'Painting brightness that takes the pure tint', 0.3, 1, 0.01, potionRedo],
+    [POTION_FX, 'contrast', 'Contrast of the brushwork in the liquid', 0.2, 4, 0.05, potionRedo],
+    [POTION_FX, 'shade', 'Shadow colour (share of the tint)', 0, 1, 0.01, potionRedo],
+    [POTION_FX, 'light', 'Light colour (tint mixed toward white)', 0, 1, 0.01, potionRedo],
+    [POTION_FX, 'depth', 'Darker toward the bottom', 0, 1, 0.01, potionRedo],
+    [POTION_FX, 'surface', 'Top of the liquid lifted toward the light', 0, 1, 0.01, potionRedo],
+    [POTION_FX, 'rim', 'Bright rim round the top', 0, 2, 0.05, potionRedo],
+    [POTION_FX, 'front', 'Front meniscus (share of the far rim)', 0, 1, 0.01, potionRedo],
+    [POTION_FX, 'gleam', 'Glass streaks kept over the liquid above this brightness', 0.5, 1, 0.01, potionRedo],
+    ...Object.keys(POTION_TINT).map(c => [POTION_TINT, c, c[0].toUpperCase() + c.slice(1) + ' potion: colour', 'color', 0, 0, potionRedo]),
+    [POTION_FX, 'slosh', 'Dragging: how far the liquid leans', 0, 3, 0.05],
+    [POTION_FX, 'maxTilt', 'Dragging: steepest lean (radians)', 0, 1, 0.01],
+    [POTION_FX, 'spring', 'Dragging: spring (higher swings faster)', 5, 200, 1],
+    [POTION_FX, 'damp', 'Dragging: damping (higher settles sooner)', 0, 30, 0.5],
+    [POTION_FX, 'wave', 'Dragging: bounce of the wave on top', 0, 3, 0.05],
+    [POTION_FX, 'bubbles', 'Dragging: bubbles when shaken (0 off)', 0, 3, 0.05],
+  ]],
   ['Empty gear squares', [
     [EMPTY_SLOT, 'fill', 'Inside darkness', 0, 1, 0.01, applyEmptySlot],
     [EMPTY_SLOT, 'dark', 'Shaded edge (top-left)', 0, 1, 0.01, applyEmptySlot],
@@ -31498,7 +31737,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 728, crashSeen = new Map();
+const GAME_VERSION = 729, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
