@@ -8831,7 +8831,7 @@ function renderWorld() {
   camera.layers.set(0);
   // (v436: G > Split world: the world drawn in parts, a profiler row each, to see what it costs)
   if (prof.on && PROF_SPLIT.world) {
-    for (const part of WORLD_PARTS) { renderer.passName = 'world: ' + part; renderer.drawFilter = m => !m.material.transparent && worldPart(m) === part; renderer.render(scene, camera); renderer.shadowMap.autoUpdate = false; }
+    for (const part of WORLD_PARTS) { renderer.passName = 'world: ' + part; renderer.drawFilter = WORLD_SPLIT_F[part] || (WORLD_SPLIT_F[part] = m => !m.material.transparent && worldPart(m) === part); renderer.render(scene, camera); renderer.shadowMap.autoUpdate = false; }
   } else { renderer.passName = 'world'; renderer.drawFilter = worldOpaque; renderer.render(scene, camera); }
   renderer.shadowMap.autoUpdate = false;
   renderer.drawFilter = null;
@@ -32741,6 +32741,8 @@ prof.spikes = spikes;
 spikes.sources = () => [[renderer, 'renderer'], [gi, 'gi probes'], [haze, 'lit haze'], [eye, 'eye'], [bloom, 'bloom'], [groundHaze, 'ground haze'], [caustics, 'caustics']];
 // (v436) G > Split world: the world pass drawn in parts by what they're made of, a row each (costs a little itself)
 const PROF_SPLIT = { world: false };
+// (v769: each part's filter made once, so the renderer's recorded draw list for it is kept from frame to frame)
+const WORLD_SPLIT_F = {};
 // (v438) G > Built pieces test, to find what their cost is: shade 0 full, 1 no lighting (bevels kept), 2 flat colour;
 // cull: drop back faces (pieces wound the wrong way vanish too, so it's only a test)
 function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; buildMat.shadowSide = GFX.DoubleSide; }
@@ -32758,9 +32760,10 @@ function worldPart(m) {
 }
 const profPanel = $('gpuPanel'), profLive = profPanel.querySelector('.plive'), spikePanel = profPanel.querySelector('.pspike');
 const clockText = ([day, c]) => { const m = Math.floor(c * 1440); return `day ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
-const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div>` + spikes.html(clockText); };
+const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div>` + spikes.html(clockText); };
 spikePanel.addEventListener('click', e => {
   if (e.target.closest('[data-split]')) { PROF_SPLIT.world = !PROF_SPLIT.world; showSpikes(); return; }
+  if (e.target.closest('[data-bundles]')) { renderer.bundles = !renderer.bundles; showSpikes(); return; }
   const bt = e.target.closest('[data-btest]'); if (bt) { setBuildTest(+bt.dataset.btest, BUILD_TEST.cull); showSpikes(); return; }
   if (e.target.closest('[data-bcull]')) { setBuildTest(BUILD_TEST.shade, !BUILD_TEST.cull); showSpikes(); return; }
   const b = e.target.closest('[data-spike]');
@@ -32908,14 +32911,19 @@ function frameBody(now) {
   // (v768) since the last frame, the potions' own loop's work included: sends to the GPU, canvases drawn, uploads
   { const I = renderer.info;
     prof.count('sends to the GPU (submits)', I.submits); prof.count('canvases drawn', I.canvases); prof.count('uploaded to the GPU (KB)', I.upKB);
-    I.submits = 0; I.canvases = 0; I.upKB = 0; }
+    // (v769) inside render (encode): walking the scene, the shadow map's casters and draws, the rest of the renders'
+    // draws (ms); and the recorded draw lists replayed and recorded again
+    prof.count('encode: walking the scene (ms)', I.tWalk); prof.count('encode: shadow map (ms)', I.tShadow);
+    prof.count('encode: drawing (ms)', Math.max(0, I.tRender - I.tWalk - I.tShadow));
+    prof.count('recorded draw lists replayed', I.replayed); prof.count('draw lists recorded again', I.recorded);
+    I.submits = 0; I.canvases = 0; I.upKB = 0; I.tWalk = 0; I.tShadow = 0; I.tRender = 0; I.replayed = 0; I.recorded = 0; }
   prof.frame(frameStart, now, profLive, `World built in ${(genMs / 1000).toFixed(1)} s. GPU rows are each pass's time; "scene" rows by what's drawn.`);
   spikes.end(performance.now() - frameStart, now, [dayNum, clock]);
   if (spikes.changed && !profPanel.hidden) showSpikes();
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 768, crashSeen = new Map();
+const GAME_VERSION = 769, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
