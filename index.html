@@ -539,9 +539,15 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 /* (v700, Jordan: make the titles read better) the Character and Backpack titles' size from T > Window titles; their
    treatment, shared with the other windows' titles, at the end of this sheet */
 .wk .folio-title, .wk .backpack-title { font-size: calc(var(--wtS, 28) * 1px); }
-/* (v716, Jordan: option C) the stats sit in the corner left of the boots, a column centred on the boots' square so more
-   lines (max HP, DPS...) can join the Armor line; the painted divider under the title stays as it is */
-.folio .armor { position: absolute; left: 40px; top: 480px; width: 120px; height: 84px; display: flex; flex-direction: column; justify-content: center; text-align: center; font-size: 17px; line-height: 22px; font-weight: 600; color: #6a4526; }
+/* (v716-717, Jordan's boxes) the readouts in the corner left of the boots, left aligned (Armor, Max HP, DPS), and the
+   purse in the corner right of them: a Gold line level with Armor, under it a pile of gold and the amount beside it
+   (the pile is drawn here until Jordan's icon comes). The painted divider under the title stays as it is. */
+.folio .stats, .folio .purse { position: absolute; top: 499px; font-size: 17px; line-height: 22px; font-weight: 600; color: #6a4526; white-space: nowrap; }
+.folio .stats { left: 62px; width: 100px; text-align: left; }
+.folio .purse { left: 280px; width: 100px; text-align: left; }
+.folio .purse .gold-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.folio .purse .gold-pile { width: 46px; height: 34px; flex: none; filter: drop-shadow(0 1px 1px #3a200c66); }
+.folio .purse #goldVal { font-variant-numeric: tabular-nums; }
 .character-preview { position: absolute; left: 118px; top: 198px; width: 200px; height: 292px; pointer-events: none; image-rendering: pixelated; }
 #doll { position: absolute; inset: 0; display: block; }
 .gear-item { position: absolute; width: 84px; text-align: center; }
@@ -1087,7 +1093,8 @@ body.mapOpen #miniWrap.minimap { display: none; }
     <div class="folio">
       <img class="shell" src="ui/inventory-character.webp" alt="" draggable="false">
       <h1 class="live-title folio-title invDrag" id="invBar">Character</h1>
-      <div class="armor" id="armorVal"></div>
+      <div class="stats"><div id="armorVal"></div><div id="maxHpVal"></div><div id="dpsVal"></div></div>
+      <div class="purse"><div>Gold</div><div class="gold-row"><svg class="gold-pile" viewBox="0 0 46 34" aria-hidden="true"></svg><span id="goldVal">000</span></div></div>
       <canvas class="character-preview" id="dollView" width="200" height="292"></canvas>
       <div id="doll"></div>
     </div>
@@ -19991,8 +19998,37 @@ function renderInv() {
   renderHot();
   $('armorVal').textContent = 'Armor ' + armor();
   $('armorVal').title = `Takes ${Math.round(armorCut(H.level || 1) * 100)}% off blows from a level ${H.level || 1} foe (armor ÷ (armor + ${LEVEL_DIFF.armorK} × its level))`;
+  $('maxHpVal').textContent = 'Max HP ' + MAX_HP;
+  $('dpsVal').textContent = 'DPS ' + heroDps();
+  $('dpsVal').title = 'Damage a second from the main attack (its whole combo), at the weapon\'s tier, on a foe of your level';
   showInfo();
 }
+// (v717) the folio's DPS line: the main attack's damage over its time (a striking weapon's whole combo, the bow's shot,
+// the spear's thrust, a punch), times the weapon's tier, on a foe of your level
+function heroDps() {
+  const w = GEAR.weapon && ITEMS[GEAR.weapon], k = w ? w.strike : 'punch';
+  let d, t;
+  if (SWINGS[k]) { const S = SWINGS[k]; d = S.dmg.reduce((a, b) => a + b, 0); t = S.t.slice(0, S.dmg.length).reduce((a, b) => a + b, 0); }
+  else if (k === 'shoot') { d = BOW.dmg; t = BOW.time; }
+  else if (k === 'poke') { d = SPEAR.dmg; t = SPEAR.time; }
+  else { d = PUNCH.dmg * 2; t = PUNCH.time * 2; }
+  return Math.round(d * (w ? WEAPON_TIER[w.tier] || 1 : 1) / t);
+}
+// (v717) the purse's pile of gold, drawn until Jordan's icon comes: coins heaped in rows, each a rim, a face and a glint
+function drawGoldPile() {
+  const rows = [[5, 29], [4, 24.5], [3, 20], [2, 15.5], [1, 11]];
+  let g = '<defs><linearGradient id="gpFace" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff0a8"/><stop offset="0.55" stop-color="#f2c14e"/><stop offset="1" stop-color="#c88a22"/></linearGradient></defs>';
+  rows.forEach(([n, y], r) => {
+    for (let i = 0; i < n; i++) {
+      const x = 23 + (i - (n - 1) / 2) * 8.2 + ((i * 7 + r * 3) % 5 - 2) * 0.35, yy = y + ((i * 5 + r) % 3 - 1) * 0.6;
+      g += `<ellipse cx="${x}" cy="${yy + 1.6}" rx="5.4" ry="2.5" fill="#8a5414" stroke="#4a2a08" stroke-width="0.8"/>`
+        + `<ellipse cx="${x}" cy="${yy}" rx="5.4" ry="2.5" fill="url(#gpFace)" stroke="#5a3608" stroke-width="0.8"/>`
+        + `<ellipse cx="${x - 1.4}" cy="${yy - 0.7}" rx="1.8" ry="0.6" fill="#fffbe0" opacity="0.85"/>`;
+    }
+  });
+  for (const pile of document.querySelectorAll('.gold-pile')) pile.innerHTML = g;
+}
+drawGoldPile();
 function showInfo() {
   // (a station's square under the mouse when its window closes: forgotten, there's nothing to say about it: v356 fix)
   const gone = c => c && (c[0] === 'in' || c[0] === 'out' || c[0] === 'box') && !openSt;
@@ -31250,7 +31286,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 716, crashSeen = new Map();
+const GAME_VERSION = 717, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

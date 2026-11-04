@@ -408,6 +408,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v716:** (Jordan) The Armor line moved off the Character title's painted divider to the corner left of the boots: a column centred on the boots' square, with room for more stat lines (max HP, DPS). The hero moved up 36 px (head just under the Helmet label), the boots up the same (top 480), and the torso/amulet and weapon/pants rows were balanced between helmet and boots (tops 240 and 375). Foot locker items now draw at the pack's 78 px, and their stack numbers use the pack's 20 px size and 7/3 px inset, so the numbers sit the same way in both.
 
+**v717:** (Jordan's boxes) The Character folio's readouts sit left aligned in the corner left of the boots: Armor, Max HP and DPS (the main attack's whole combo damage over its time, at the weapon's tier; the wooden sword is 40). In the corner right of the boots, a Gold line level with Armor, and under it a drawn pile of coins with the amount (000 for now) beside it; Jordan's icon will replace the drawn pile.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
