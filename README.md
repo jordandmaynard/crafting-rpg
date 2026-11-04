@@ -410,6 +410,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v717:** (Jordan's boxes) The Character folio's readouts sit left aligned in the corner left of the boots: Armor, Max HP and DPS (the main attack's whole combo damage over its time, at the weapon's tier; the wooden sword is 40). In the corner right of the boots, a Gold line level with Armor, and under it a drawn pile of coins with the amount (000 for now) beside it; Jordan's icon will replace the drawn pile.
 
+**v718:** Iron chests (built ones and the guard house's) open in their own painted window from Jordan's open iron chest art (art/deliveries/iron-chest-window-v1.png). The painting's 3 x 5 wells got a fourth row so chests keep 20 squares (art/src/iron-chest-rows.py: a copy of row 2 in the grid, the side walls stretched to keep one straight slant). Sized like the foot locker: each painted well (145 x 141) scaled to the pack's 90 px square (CHEST_UI.scale 0.62), the pack's 78 px items and stack numbers, tinted through the foot locker's square mask. Title and count sit on the lid's inner band, and the close X is the vault's (smelter) X.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
