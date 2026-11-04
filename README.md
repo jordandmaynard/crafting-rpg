@@ -558,6 +558,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v791:** (Jordan: v790 seemed worse, though the shots were in a busier spot: 5,142 meshes, encode 3.3 ms, passes 4.8-5.6 ms) G > Tests > Early sends has three settings to compare in one spot: Off, 3 sends (v789, the default again) and 4 sends (v790's extra send after the shadow map and pre-passes).
 
+**v792:** (Jordan's same-spot compare: Off 128 fps, 3 sends 151, 4 sends 134) the 4-sends setting is taken out: its extra send shrank the first gap (1.30 to 0.92 ms) but the passes after it took longer (4.16 to 4.52 ms). Early sends stay at 3 (Off / 3 sends in G > Tests).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
