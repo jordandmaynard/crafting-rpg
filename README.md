@@ -554,6 +554,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v789:** (Jordan's G in town: 2.58 ms of the 2.96 ms of gaps came before fx particles, the first pass of the frame's main send: the GPU sat waiting while the CPU encoded the whole frame, sent in one go at the end, so CPU and GPU took turns) Early sends: the passes so far go to the GPU after the world render and after the water (renderer.sendEarly: a send that carries on the same frame, so the scene isn't walked again and once-a-frame uploads aren't redone), and the GPU works on them while the rest is encoded. G > Tests > Early sends turns it off to compare.
 
+**v790:** (Jordan's G with early sends: 136-149 fps from 125-132, gaps 1.3-2.4 ms from 2.96, but the gap before the first send still 0.7-1.8 ms) A first early send sooner, after the shadow map and the pre-passes (with the ground pre-pass on): the GPU starts on ~1.4 ms of work before the ground and world are encoded.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
