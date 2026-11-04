@@ -213,13 +213,12 @@ const WILD_LIST = Object.keys(WILDS).map(k => [k, 1]);
 Object.assign(JOBS, WILDS);
 // (v695, Jordan: skeletons and zombies on the hostile folk's rig, to walk, strike and fall as they do) never rolled for
 // the wilds (after WILD_LIST, so every kept seed is as it was): the game asks for them by name, design(seed, 'wilds',
-// 'skeleton'); tier 'undead' keeps them out of the viewer's lists. A skeleton is built bone by bone on the same joints
-// (buildSkeleton), now and then in a rusted helm, a rag at the hips or an old shield on its back; a zombie is a person
+// 'skeleton'); tier 'undead' keeps them out of the viewer's lists. A skeleton is the old crowd skeleton on the same
+// joints (buildSkeleton, v705), always with the old sword; a zombie is a person
 // gone grey-green, in faded, torn clothes, ribs showing through a rent in the shirt, eyes glowing pale.
 Object.assign(JOBS, {
-  skeleton: wj('Skeleton', 'undead', { undead: 'skeleton', ages: [['adult', 1]], head: [['none', 5], ['kettleHat', 2], ['nasalHelm', 2]], torso: [['shirt', 1]], legs: [['trousers', 1]], feet: [['wraps', 1]],
-    dye: { torso: ['umber', 'grey', 'madder', 'wool', 'moss'], legs: ['grey'], head: ['grey'], shield: ['umber', 'madder', 'woad', 'charcoal', 'grey'] },
-    x: { belt: 0.5, shield: 0.25 }, prop: [['rustySword', 4], ['rustyAxe', 2], ['spear', 2], ['shortbow', 1]] }),
+  skeleton: wj('Skeleton', 'undead', { undead: 'skeleton', ages: [['adult', 1]], head: [['none', 1]], torso: [['shirt', 1]], legs: [['trousers', 1]], feet: [['wraps', 1]],
+    dye: { torso: ['grey'], legs: ['grey'], head: ['grey'] }, x: {}, prop: [['rustySword', 1]] }),
   zombie: wj('Zombie', 'undead', { undead: 'zombie', head: [['none', 6], ['hood', 1], ['cap', 1]], torso: [['shirt', 3], ['tunic', 3], ['shortSleeve', 2], ['vest', 1]], legs: [['trousers', 4], ['breeches', 2]], feet: [['wraps', 2], ['shoes', 1], ['boots', 1]],
     dye: { torso: ['moss', 'umber', 'grey', 'oat', 'wool', 'brown', 'russet'], under: ['oat', 'grey', 'wool'], legs: ['umber', 'charcoal', 'grey', 'brown'], head: ['umber', 'grey', 'moss'] },
     x: { belt: 0.3 }, prop: 'none' }),
@@ -369,11 +368,8 @@ export function design(seed, pool = 'town', want = null) {
     d.mask = d.furs = d.sigil = d.warpaint = d.gloves = d.chain = d.satchel = d.stole = d.cloak = d.shawl = d.neckerchief = d.apron = null;
     d.quiver = d.prop === 'shortbow' ? '#3e3028' : null;
     if (d.undead === 'skeleton') {
-      d.bone = jitter(r, '#e2d9be', 0.04);
-      d.eyes = '*' + pick(r, [['#ff4a3a', 4], ['#7ae0ff', 1], ['#9aff6a', 1]]);
-      d.build = 1; d.height = 0.97 + r() * 0.06;
-      if (d.head.item !== 'none') d.head.color = jitter(r, '#7a604c', 0.05);
-      d.rag = shade(d.torso.color, -0.25);
+      // (v705) the old skeleton's own colours, every one alike
+      d.bone = '#e8e0c8'; d.eyes = '*#ff4a3a'; d.build = 1; d.height = 1;
     } else {
       d.skin = jitter(r, oneOf(r, UNDEAD_SKIN), 0.03);
       d.eyes = '*#e8f0a0';
@@ -680,110 +676,62 @@ export function makeFolkKit(GFX) {
       return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff, shadow,
         headY: 0.795, headHalf: [0.19, 0.145, 0.16] };
     }
-    // (v695) a skeleton, bone by bone on the person's own joints (hips, knees, ankles, the waist, shoulders, elbows,
-    // wrists, the neck) so it walks, strikes and falls as they do: thin limb bones with knobs at the joints, a pelvis, a
-    // spine and a cage of ribs, the shoulder girdle, a skull with dark sockets, eyes glowing in them and a jaw on a
-    // hinge of its own (the rig's `jaw`, for its chatter); sometimes a rusted helm, a rag at the hips (on the skirts'
-    // front and back pivots, which swing out of the legs' way) or an old shield on its back
+    // (v705, Jordan: the old skeleton's look) the old crowd skeleton (makeSkeleton) box for box, cut where the
+    // person's joints are so it walks, strikes and falls as they do: square bone legs and arms (each one box cut at
+    // the knee and ankle, the elbow and wrist), a pelvis, a spine, three ribs, a collarbone, a big skull with plain
+    // glowing eyes and a dark nose hole, the jaw below it on a hinge of its own (the rig's `jaw`, for its chatter),
+    // and the old steel sword with its brown crossguard. Built at the old size over SKEL_K (1.2: its legs the person's
+    // 0.36), then shrunk back by 1.15 / 1.2 so it stands as tall as the old one did.
     function buildSkeleton() {
-      const Bc = d.bone, Bd = shade(Bc, -0.2), HOLE = '#1a1210', TOOTH = shade(Bc, 0.3), CH = 0.42;
+      const K = 1.2, Bc = d.bone, CH = 0.42, W = 0.05 * K;
       const body = pivot(g, 0, 0, 0), flaps = [], fronts = [], backs = [];
-      const legL = pivot(body, 0.07, 0.36, 0), legR = pivot(body, -0.07, 0.36, 0), KNEE = -0.14, ANKLE = -0.3;
+      const legL = pivot(body, 0.07 * K, 0.36, 0), legR = pivot(body, -0.07 * K, 0.36, 0), KNEE = -0.14, ANKLE = -0.3;
       const knees = [], ankles = [];
       for (const leg of [legL, legR]) {
-        box(leg, 0.042, 0.13, 0.042, 0, -0.07, 0, Bc);
-        box(leg, 0.054, 0.04, 0.054, 0, -0.005, 0, Bd);
+        box(leg, 0.07 * K, 0.145, 0.07 * K, 0, -0.0675, 0, Bc);
         const shin = pivot(leg, 0, KNEE, 0); knees.push(shin);
-        box(shin, 0.05, 0.036, 0.05, 0, -0.004, 0.006, Bd);
-        box(shin, 0.036, 0.14, 0.036, 0, -0.085, 0, Bc);
+        box(shin, 0.07 * K - 0.003, 0.165, 0.07 * K - 0.003, 0, -0.0775, 0, Bc);
         const foot = pivot(shin, 0, ANKLE - KNEE, 0); ankles.push(foot);
-        box(foot, 0.044, 0.03, 0.044, 0, -0.012, 0, Bd);
-        box(foot, 0.058, 0.032, 0.11, 0, -0.044, 0.02, Bc);
-        box(foot, 0.052, 0.02, 0.036, 0, -0.05, 0.09, Bd);
+        box(foot, 0.07 * K - 0.006, 0.065, 0.07 * K - 0.006, 0, -0.0275, 0, Bc);
       }
-      // the pelvis, its two wings, and the spine's foot
-      box(body, 0.19, 0.055, 0.085, 0, 0.37, 0, Bc);
-      for (const s of [1, -1]) box(body, 0.07, 0.075, 0.075, s * 0.075, 0.395, -0.005, Bc, 0, s * 0.35);
-      box(body, 0.042, 0.075, 0.042, 0, 0.42, -0.03, Bd);
-      if (d.belt) {
-        // a rag hung from a cord round the hips, before and behind
-        box(body, 0.205, 0.024, 0.1, 0, 0.405, 0, shade(d.rag, -0.3));
-        for (const side of [1, -1]) {
-          const pv = pivot(body, 0, 0.42, 0); (side > 0 ? fronts : backs).push(pv);
-          taper(pv, -0.24, -0.02, [0.13, 0.012, 0.01, side * 0.058], [0.11, 0.012, 0, side * 0.054], d.rag);
-          box(pv, 0.03, 0.05, 0.013, 0.045, -0.255, side * 0.059, d.rag, 0, 0.2);
-        }
-      }
-      // the spine up the back, the ribs (widest under the shoulders) with the breastbone down their front, the
-      // collarbones and shoulder blades across the top, the neck
+      // the pelvis
+      box(body, 0.22 * K, 0.06 * K, 0.1 * K, 0, 0.32 * K, 0, Bc);
+      // the spine, three ribs and the collarbone
       const chest = pivot(body, 0, CH, 0);
-      box(chest, 0.044, 0.27, 0.044, 0, 0.555 - CH, -0.038, Bd);
-      for (let i = 0; i < 4; i++) box(chest, 0.17 + i * 0.022, 0.028, 0.115 + i * 0.006, 0, 0.47 + i * 0.048 - CH, -0.004, Bc);
-      box(chest, 0.034, 0.16, 0.02, 0, 0.545 - CH, 0.066, Bd);
-      box(chest, 0.33, 0.038, 0.07, 0, 0.64 - CH, -0.006, Bc);
-      for (const s of [1, -1]) box(chest, 0.08, 0.09, 0.02, s * 0.07, 0.6 - CH, -0.06, Bd, 0, s * 0.15);
-      box(chest, 0.04, 0.07, 0.04, 0, 0.69 - CH, -0.012, Bd);
-      if (d.shield) {
-        // an old round shield on its back, its paint worn and a piece split off
-        const sh = pivot(chest, 0.02, 0.53 - CH, -0.098); sh.rotation.z = 0.25;
-        box(sh, 0.24, 0.24, 0.025, 0, 0, 0, shade(d.shield.color, -0.2));
-        box(sh, 0.2, 0.2, 0.02, 0.012, -0.012, 0, shade(d.shield.color, -0.35), 0, Math.PI / 4);
-        box(sh, 0.06, 0.06, 0.04, 0, 0, -0.008, '#5e4030');
-      }
-      if (d.quiver) {
-        const q = pivot(chest, -0.06, 0.5 - CH, -0.11); q.rotation.z = 0.35;
-        box(q, 0.07, 0.3, 0.07, 0, 0, 0, d.quiver);
-        box(q, 0.078, 0.03, 0.078, 0, -0.13, 0, shade(d.quiver, -0.3));
-        [[-0.016, -0.012], [0.016, 0.0], [0, 0.016]].forEach(([x, z]) => { box(q, 0.008, 0.06, 0.008, x, 0.17, z, '#6a5440'); box(q, 0.004, 0.05, 0.022, x, 0.21, z, '#8e8a82'); });
-      }
-      // the skull: the crown, the cheeks and upper teeth, the jaw on its hinge below
-      const head = pivot(chest, 0, 0.7 - CH, 0);
-      box(head, 0.19, 0.14, 0.18, 0, 0.13, -0.008, Bc);
-      box(head, 0.16, 0.04, 0.15, 0, 0.06, 0.006, Bc);
-      for (const s of [1, -1]) {
-        box(head, 0.052, 0.046, 0.012, s * 0.046, 0.12, 0.084, HOLE);
-        box(head, 0.022, 0.02, 0.006, s * 0.046, 0.118, 0.092, d.eyes);
-        box(head, 0.03, 0.03, 0.12, s * 0.085, 0.065, 0.005, Bd);
-      }
-      box(head, 0.026, 0.032, 0.012, 0, 0.074, 0.087, HOLE);
-      box(head, 0.11, 0.014, 0.01, 0, 0.046, 0.084, TOOTH);
-      const jaw = pivot(head, 0, 0.04, -0.03);
-      box(jaw, 0.14, 0.032, 0.11, 0, -0.02, 0.06, Bc);
-      box(jaw, 0.1, 0.012, 0.01, 0, -0.006, 0.112, TOOTH);
-      const hat = d.head.item, HC = d.head.color;
-      if (hat === 'kettleHat') {
-        taper(head, 0.19, 0.29, [0.215, 0.215, 0, -0.008], [0.14, 0.14, 0, -0.008], HC);
-        taper(head, 0.16, 0.19, [0.33, 0.33, 0, -0.008], [0.23, 0.23, 0, -0.008], shade(HC, -0.15));
-      } else if (hat === 'nasalHelm') {
-        taper(head, 0.19, 0.29, [0.205, 0.2, 0, -0.008], [0.1, 0.1, 0, -0.008], HC);
-        box(head, 0.214, 0.026, 0.206, 0, 0.19, -0.008, shade(HC, -0.2));
-        box(head, 0.022, 0.07, 0.012, 0, 0.145, 0.098, shade(HC, -0.1));
-      }
-      // the arms: upper arm, forearm, a bony hand
-      const armL = pivot(chest, 0.175, 0.64 - CH, 0), armR = pivot(chest, -0.175, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
+      box(chest, 0.05 * K, 0.26 * K, 0.05 * K, 0, 0.46 * K - CH, -0.02 * K, Bc);
+      for (let i = 0; i < 3; i++) box(chest, (0.24 - i * 0.02) * K, 0.035 * K, 0.14 * K, 0, (0.41 + i * 0.065) * K - CH, 0, Bc);
+      box(chest, 0.32 * K, 0.045 * K, 0.07 * K, 0, 0.6 * K - CH, 0, Bc);
+      // the skull, its eyes and nose hole, and the jaw hinged at its back
+      const NECK = 0.6 * K;
+      const head = pivot(chest, 0, NECK - CH, 0);
+      box(head, 0.2 * K, 0.18 * K, 0.19 * K, 0, 0.74 * K - NECK, 0, Bc);
+      for (const s of [1, -1]) box(head, 0.05 * K, 0.045 * K, 0.02 * K, s * 0.045 * K, 0.75 * K - NECK, 0.096 * K, d.eyes);
+      box(head, 0.03 * K, 0.03 * K, 0.02 * K, 0, 0.7 * K - NECK, 0.096 * K, '#141018');
+      const jaw = pivot(head, 0, 0.65 * K - NECK, -0.045 * K);
+      box(jaw, 0.15 * K, 0.05 * K, 0.13 * K, 0, -0.025 * K, 0.065 * K, Bc);
+      // the arms: one long bone each (0.27 at the old size), cut at the elbow and the wrist
+      const armL = pivot(chest, 0.18 * K, 0.595 * K - CH, 0.03 * K), armR = pivot(chest, -0.18 * K, 0.595 * K - CH, 0.03 * K), ELBOW = -0.1, WRIST = -0.2, ARM = 0.27 * K;
       armL.rotation.order = armR.rotation.order = 'YXZ';
       const elbows = [], wrists = [];
       for (const arm of [armL, armR]) {
-        box(arm, 0.05, 0.045, 0.05, 0, -0.004, 0, Bd);
-        box(arm, 0.034, 0.09, 0.034, 0, -0.05, 0, Bc);
+        box(arm, W, -ELBOW + 0.005, W, 0, (ELBOW - 0.005) / 2 + 0.005, 0, Bc);
         const fore = pivot(arm, 0, ELBOW, 0); elbows.push(fore);
-        box(fore, 0.04, 0.03, 0.04, 0, -0.002, 0, Bd);
-        box(fore, 0.03, 0.095, 0.03, 0, -0.05, 0, Bc);
+        box(fore, W - 0.003, ELBOW - WRIST + 0.005, W - 0.003, 0, (WRIST - ELBOW) / 2, 0, Bc);
         const hand = pivot(fore, 0, WRIST - ELBOW, 0); wrists.push(hand);
         hand.rotation.order = 'XZY';
-        box(hand, 0.04, 0.045, 0.05, 0, -0.024, 0, Bc);
-        box(hand, 0.034, 0.03, 0.044, 0, -0.06, 0.004, Bd);
+        box(hand, W - 0.006, ARM + WRIST + 0.005, W - 0.006, 0, -(ARM + WRIST) / 2 + 0.0025, 0, Bc);
       }
       // (the rest of the person's pieces the poses look for, empty)
       const broom = pivot(body, 0, 0, 0), crate = pivot(chest, 0, 0, 0), hoe = pivot(body, 0, 0, 0);
       broom.visible = crate.visible = hoe.visible = false;
-      const hand = ['shortbow', 'crossbow'].includes(d.prop) ? 0 : 1;
-      const tool = pivot(wrists[hand], 0, -0.045, 0.0);
-      holdProp(tool, d.prop);
-      const staff = d.prop === 'spear';
+      // the old sword at the bone's end: the crossguard, then the blade
+      const hand = 1, tool = pivot(wrists[hand], 0, -(ARM + WRIST), 0);
+      box(tool, 0.12 * K, 0.03 * K, 0.04 * K, 0, -0.015 * K, 0, '#5a3a22');
+      box(tool, 0.04 * K, 0.38 * K, 0.015 * K, 0, -0.03 * K - 0.19 * K, 0, '#8a8f99');
       const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
-      g.scale.set(1.12 * d.build, 1.12 * d.height, 1.12 * d.build);
-      return { g, parts, d, body, chest, head, jaw, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff, shadow };
+      g.scale.setScalar(1.15 / K);
+      return { g, parts, d, body, chest, head, jaw, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff: false, shadow,
+        headY: 0.74 * K, headHalf: [0.1 * K, 0.09 * K, 0.095 * K] };
     }
     const fem = d.body === 'fem', T = d.torso, L = d.legs, skin = d.skin;
     // the build: shoulders, waist and hips across, the chest's depth, a limb's thickness

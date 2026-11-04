@@ -386,6 +386,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v704:** (Jordan: the health bar looked a little off in its bottom right corner) The belt's red health fill now draws under the frame: a copy of the frame with its glass cut out (ui/belt/hp-frame-ring.webp, made by art/src/hp-frame-ring.py from hp-frame.webp, the frame's outline shrunk 9 px at 2x so the brass and its dark inner rule stay) sits over the fill and the part just lost, with the numbers on top. The full frame stays underneath for the empty glass.
 
+**v705:** (Jordan: skeletons back to their old look; zombies stay as they are) The skeleton is the old crowd skeleton again, box for box at its old size, on the people's joints so it still walks, strikes, chatters its jaw and bursts apart: square bone legs and arms cut at the knee, ankle, elbow and wrist, a pelvis, a spine, three ribs, a collarbone, a big skull with plain red glowing eyes and a dark nose hole, the jaw on its hinge below, and the old steel sword with the brown crossguard. All alike, as before: no helms, hip rags, shields, axes, spears or bows (so no skeleton archers).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
