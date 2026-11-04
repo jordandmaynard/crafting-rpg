@@ -498,6 +498,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v761:** (Jordan) Barrels can be built: Build > Stations > Barrel (key 8, before the crate; the chest moves to 0, which now picks a row's tenth), 6 logs and no planks, so storage can go up before a saw table. A built barrel stands on one tile, pushed flush to a wall beside it like the crate, drawn as the towns' barrel in the hamlets' pine (BARREL_R 0.32), holds 4 squares and opens in the barrel window (2 x 2). Its build icon is Jordan's Amber-Oak barrel painting (icons/paint/barrel-{128,256}.webp, made by art/src/barrel-build-icon.py; master icons/paint/src/build-barrel-amber-oak.png). O.BARREL 65.
 
+**v762:** (Jordan) Empty bottles stack to 20, as potions do, so one dip always fills the whole stack (a bigger stack from an older save still fills 20 a dip).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
