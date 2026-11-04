@@ -434,6 +434,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v729:** (Jordan) Filled potion bottles, made from the empty bottle's painting as the game loads instead of painted one by one. Below a level the bulb's inside (the glass's silhouette, a few pixels in from its edge) is the liquid, and an ellipse at the level is its top. Both keep the painting's brushwork: each pixel's brightness picks a colour on a ramp from the potion's shadow through its tint to its light, deeper liquid darker, the top lifted toward the light with a bright far rim and a thinner meniscus in front, and the glass's brightest streaks left over the liquid. A new potion colour is one line in `POTION_TINT`, with no files. While you drag a potion its icon is drawn live: the liquid leans against the drag on a damped spring, a wave bounces on top and bubbles rise when it's shaken. Six sample potions (red, magenta, green, blue, amber, violet) do nothing yet; T > Potion bottles puts three of each in your pack, and every look and slosh value and the six colours are tunable there.
 
+**v730:** (Jordan) The crafting windows drop "Table" from their titles so they fit better: Weapon Crafting, Armor Crafting and Alchemy. The tables' names elsewhere (the use prompt, the build bar) are unchanged.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
