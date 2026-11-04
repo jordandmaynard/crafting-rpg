@@ -442,6 +442,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v733:** (Jordan's photo: a palm in the desert planters instead of the fiddle leaf fig) The basket planters now hold a feathery potted palm: a short stout stem out of the soil with green sheaths at its top, six or seven long bare green stalks rising from it in a vase and running on into ribs that arch over, each hung both sides with long narrow leaflets swept forward and drooping (pairs every half piece, shortening toward the tip), plus two young fronds standing up in the middle. About 1.65 tall from the ground and 1.6 across. The fig's leaf geometry (G.figLeafA/B/U) is gone; the basket and soil are unchanged.
 
+**v734:** (Jordan) The refining windows' status line ("Grinding… 6%", "Sawing… 15%") no longer jumps sideways when the percent goes from 1 to 2 digits. The verb and the percent are now separate: the percent sits in a box as wide as "00%", left aligned, so the line is always centred as it would be at 2 digits and the verb holds its place. "Idle" is still centred on its own.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
