@@ -406,11 +406,14 @@ body:not(.noUI) #showUI { display: none; }
 #beltCenter .bc-hpf { left: 119.4px; top: 43.9px; width: 379px; height: 34.5px; transform: translateY(var(--hpY, 0px)); }
 #beltCenter .bc-xpf { left: 172.4px; top: 84.7px; width: 326px; height: 25px; transform: translateY(var(--xpY, 0px)); }
 #beltCenter .bc-hp { position: absolute; left: 122px; top: 46.5px; width: 374px; height: 29px; transform: translateY(var(--hpY, 0px)); }
-#beltCenter .bc-xp { position: absolute; left: 175px; top: 87.4px; width: 320px; height: 19px; pointer-events: auto; transform: translateY(var(--xpY, 0px)); }
+/* (v691, Jordan: the XP fill looked sliced, over the frame) the fill sits in the frame's glass (inside its dark rule, 4 / 3.5
+   in from the frame's corner), cut to the glass's round ends by xp-mask.webp (the frame's interior, drawn at the frame's
+   size and place), its leading edge rounded like the ends */
+#beltCenter .bc-xp { position: absolute; left: 176.4px; top: 88.2px; width: 318px; height: 18px; pointer-events: auto; transform: translateY(var(--xpY, 0px)); }
 #beltCenter .bc-clip { position: absolute; left: 0; top: 0; height: 100%; width: 0; overflow: hidden; }
 #beltCenter .bc-hp img { width: 374px; height: 29px; }
-#beltCenter .bc-xp img { width: 320px; height: 19px; }
-#beltCenter .bc-xp .bc-clip { transition: width 0.25s; }
+#beltCenter .bc-xp img { width: 318px; height: 18px; }
+#beltCenter .bc-xp .bc-clip { transition: width 0.25s; border-radius: 0 8px 8px 0; mask: url("ui/belt/xp-mask.webp") -4px -3.5px / 326px 25px no-repeat; -webkit-mask: url("ui/belt/xp-mask.webp") -4px -3.5px / 326px 25px no-repeat; }
 #beltCenter .bc-clip.lag { filter: brightness(1.7) saturate(0.35); opacity: 0.7; }
 #beltCenter #bcHpText { position: absolute; inset: 0; text-align: center; font-size: var(--bcHpPx, 22px); line-height: 29px; text-shadow: 1px 1px 0 #21130d, -1px 0 0 #21130d, 1px 0 0 #21130d, 0 -1px 0 #21130d, 0 1px 0 #21130d; }
 #beltCenter .bc-xpl { position: absolute; left: 119.8px; top: 86px; transform: translateY(var(--xpY, 0px)); width: 40px; height: 22px; font-size: 17px; line-height: 22px; text-align: center; }
@@ -2426,8 +2429,73 @@ function markShoals() {
     for (let dr = -1; dr <= 1 && !SHORE[i]; dr++) for (let dc = -1; dc <= 1; dc++) if (BDIRT[T(c + dc, r + dr)]) { SHORE[i] = 1; break; }
   }
   beachStats.shoals = rows[0].length; beachStats.shoals2 = rows[1].length;
+  markMouths();
   computeRim();
   markShelf();
+}
+// River mouths (v691, Jordan): where a river runs out over the shoals into a lake or the sea it has carved its way
+// through them, a channel at the river's depth fanning out from the mouth, its sides sloping up to the shoals and its
+// floor rising, past MOUTH.len tiles, into the shelf. Each mouth is a river tile beside a shoal; MOUTH_AT lists for
+// each tile the mouths that reach it, and carveH the channel's floor there (the ground is the lower of it and the
+// tile's own). A shoal tile the channel cuts deep through is shoal no more, but water.
+// len: tiles of flat floor, spread: widening a tile, side: rise of its sides a tile, end: rise of its floor a tile past
+// len, reach: tiles a mouth looks out to, wade: depth under a shoal's own floor that makes it water
+const MOUTH = { len: 5, spread: 0.3, side: 1.1, end: 0.1, reach: 16, wade: 0.35 };
+const MOUTHS = [], MOUTH_AT = new Map();
+function carveH(i, x, z) {
+  const ms = MOUTH_AT.get(i);
+  let h = 1e9;
+  if (ms) for (const m of ms) {
+    const rx = x - m.x, rz = z - m.z, a = rx * m.dx + rz * m.dz;
+    if (a < -0.5) continue;
+    const s = Math.abs(rx * m.dz - rz * m.dx), w = 0.5 + Math.max(0, a) * MOUTH.spread;
+    const y = m.hb + Math.max(0, s - w) * MOUTH.side + Math.max(0, a - MOUTH.len) * MOUTH.end;
+    if (y < h) h = y;
+  }
+  return h;
+}
+function markMouths() {
+  MOUTHS.length = 0; MOUTH_AT.clear();
+  const open = n => SHOAL[n] || (!LV[n] && !BR[n] && WL[n] && !LAVA[n] && !CY[n] && (!WT[n] || WT[n] === 2));
+  for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) {
+    const i = T(c, r);
+    if (WT[i] !== 3 || LV[i] || BR[i] || LAVA[i] || CY[i]) continue;
+    let by = false, gx = 0, gz = 0;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const n = T(c + dc, r + dr);
+      if ((dc || dr) && open(n) && WL[n] === WL[i]) { gx += dc; gz += dr; if (SHOAL[n]) by = true; }
+    }
+    if (!by) continue;
+    // (out the way the river runs, toward the open water)
+    let fx = FX[i] / 127, fz = FZ[i] / 127;
+    if (fx * gx + fz * gz < 0) { fx = -fx; fz = -fz; }
+    let dx = gx / (Math.hypot(gx, gz) || 1) + fx * 0.5, dz = gz / (Math.hypot(gx, gz) || 1) + fz * 0.5;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-3) continue;
+    MOUTHS.push({ x: c + 0.5, z: r + 0.5, dx: dx / l, dz: dz / l, hb: GL[i] * STEP });
+  }
+  const R = MOUTH.reach;
+  for (const m of MOUTHS) {
+    const c0 = Math.floor(m.x), r0 = Math.floor(m.z);
+    for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+      const c = c0 + dc, r = r0 + dr;
+      if (c < 0 || r < 0 || c >= N || r >= N) continue;
+      const i = T(c, r);
+      if (!SHOAL[i] && (LV[i] || BR[i] || !WL[i] || LAVA[i] || CY[i] || WT[i] === 1 || WT[i] === 3)) continue;
+      if ((c + 0.5 - m.x) * m.dx + (r + 0.5 - m.z) * m.dz < -1) continue;
+      let l = MOUTH_AT.get(i);
+      if (!l) MOUTH_AT.set(i, l = []);
+      l.push(m);
+    }
+  }
+  // (a shoal tile cut deep through: water now)
+  let cut = 0;
+  for (const [i] of MOUTH_AT) {
+    if (!SHOAL[i]) continue;
+    const c = i % N, r = (i - c) / N;
+    if (carveH(i, c + 0.5, r + 0.5) < LV[i] * STEP - BEACH_DROP * (SHOAL[i] & 512 ? 2.5 : 1.5) - MOUTH.wade) { SHOAL[i] = 0; LV[i] = 0; cut++; }
+  }
+  beachStats.mouths = MOUTHS.length; beachStats.mouthCut = cut;
 }
 // The shelf (Jordan, v678): past the shoals the sea or lake bed no longer drops off a cliff but slopes on down, SHELF_SLOPE
 // a tile, from the second shoal row's foot until it meets the bed as it was (so the deep sea is as deep as ever), making
@@ -8835,11 +8903,14 @@ function groundColor(c, r, i, j) {
 // so the lower tile's outer half rises to meet its higher neighbour, and corners fill in by themselves.
 const tileSurf = (c, r, u, v) => {
   const i = T(c, r), l = LIFT[SH[i]];
-  if (SHOAL[i]) { const m = SHOAL[i] & 255; return LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5)); }
+  if (SHOAL[i]) {
+    const m = SHOAL[i] & 255, h = LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5));
+    return MOUTH_AT.size && MOUTH_AT.has(i) ? Math.min(h, carveH(i, c + u, r + v)) : h;   // (cut by a river's mouth)
+  }
   if (!LV[i] || BR[i]) {   // a lake or river bed, the sea floor, a canyon's floor
     // (the shelf off the shoals: the bed sloping on down from them until it meets the bed as it was: see markShelf)
-    if (SHELFT[i]) return Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v));
-    return GL[i] * STEP;
+    const h = SHELFT[i] ? Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v)) : GL[i] * STEP;
+    return MOUTH_AT.size && MOUTH_AT.has(i) ? Math.min(h, carveH(i, c + u, r + v)) : h;
   }
   if (WT[i] === 1) return LV[i] * STEP - BOG_BED;   // a swamp pool's bed (its banks are its neighbours' edges)
   if (BEACH[i]) return LV[i] * STEP - beachDrop(i) * (1 - beachH(BEACH[i], u, v));   // a beach, sloping into the water
@@ -17149,7 +17220,7 @@ function makeGoblin() {
   g.scale.setScalar(1.3);
   return { g, parts, topH: 0.62 };
 }
-// (v691) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
+// (v693) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
 // hindquarters, the hind legs and the tail hang from it), the head turns and nods on a neck pivot, and each leg
 // hangs from a pivot at the shoulder or hip with a second one part way down: the front leg's wrist, which folds
 // the paw back as it lifts, and the hind leg's hock, which folds it forward. The body and each leg are their old
@@ -20210,7 +20281,7 @@ function renderXp() {
   $('xpBar').title = 'Level ' + H.level + ': ' + H.xp + ' / ' + need + ' experience';
   $('xpBar').setAttribute('aria-label', 'Experience ' + H.xp + ' of ' + need);
   $('heroLvl').textContent = H.level;
-  $('bcXpFill').style.width = (share * 320).toFixed(1) + 'px';
+  $('bcXpFill').style.width = (share * 318).toFixed(1) + 'px';
   $('bcXp').title = $('xpBar').title; $('bcXp').setAttribute('aria-label', 'Experience ' + H.xp + ' of ' + need);
   $('bcLvl').textContent = H.level;
 }
@@ -27491,7 +27562,7 @@ function helmHands() {
   }
 }
 
-// (v691) How wolves, frost wolves and hellhounds move on their joints (canineRig). Wandering or walking home they
+// (v693) How wolves, frost wolves and hellhounds move on their joints (canineRig). Wandering or walking home they
 // trot, diagonal pairs of legs together; chasing (over runFrom of their top speed) they gallop, the hind legs
 // then the front ones, the back flexing as the hind legs reach under and stretching as the front ones reach out,
 // a little leap between strides. The legs' phase runs on the ground covered (stride tiles a stride), so the paws
@@ -30475,7 +30546,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 691, crashSeen = new Map();
+const GAME_VERSION = 693, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -30722,7 +30793,7 @@ window.GAME = {
   mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, cut: k.cut, why: k.why, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   beaches: () => ({ ...beachStats, n: BEACH.reduce((a, v) => a + (v ? 1 : 0), 0) }),
-  raw: () => ({ BEACH, SHOAL, BDIRT, SHORE, beachH, TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
+  raw: () => ({ BEACH, SHOAL, BDIRT, SHORE, MOUTHS, beachH, TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
