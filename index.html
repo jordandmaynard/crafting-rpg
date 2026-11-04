@@ -139,10 +139,11 @@ img.paint, .cell img.paint, .flyIcon img.paint, #dragIcon img.paint { display: b
 .cell img.paint { width: calc(var(--cell) - 2px); height: calc(var(--cell) - 2px); }
 .cell.held img.paint { opacity: 0.3; }
 #dragIcon img.paint, #dragIcon canvas.paint { width: 96px; height: 96px; display: block; pointer-events: none; }
+canvas.paint { display: block; pointer-events: none; }
 /* every item icon (pack, gear, crates, stations, recipes, hotbar, dragged and flying) has a 1px outline round its
    shape, black, white while it's pressed or dragged: four hard shadows, each taken from the last, make a 3x3 dilate */
 :root { --itemEdge: #000; }
-.cell.full > img, .cell.full > svg, .hslot .ic > img, .hslot .ic > svg, #dragIcon > img, #dragIcon > svg, #dragIcon > canvas, .flyIcon > img, .flyIcon > svg {
+.cell.full > img, .cell.full > svg, .cell.full > canvas, .hslot .ic > img, .hslot .ic > svg, .hslot .ic > canvas, #dragIcon > img, #dragIcon > svg, #dragIcon > canvas, .flyIcon > img, .flyIcon > svg {
   filter: drop-shadow(1px 0 0 var(--itemEdge)) drop-shadow(-1px 0 0 var(--itemEdge)) drop-shadow(0 1px 0 var(--itemEdge)) drop-shadow(0 -1px 0 var(--itemEdge)); }
 .cell.press, .cell.held, .hslot.press, #dragIcon { --itemEdge: #fff; }
 .slot img.px, .tbtn img.px { --s: calc(max(var(--n, 48px), round(down, calc(var(--t) * var(--dpr, 1)), var(--n, 48px))) / var(--dpr, 1)); width: var(--s); height: var(--s); }
@@ -19566,7 +19567,8 @@ addEventListener('resize', setDpr);
 // drag's acceleration on a damped spring, a standing wave bounces on it and bubbles rise when it's shaken.
 // T > Potion bottles.
 const POTION_FX = { fill: 0.8, inset: 10, soft: 0.5, persp: 0.25, mid: 0.79, contrast: 2.7, shade: 0.57, light: 0.39, depth: 0.32,
-  surface: 0.7, rim: 2, front: 0.8, gleam: 0.94, slosh: 2.2, spring: 70, damp: 6, maxTilt: 0.7, wave: 1, bubbles: 2 };   // (v744, Jordan's tuning)
+  surface: 0.7, rim: 2, front: 0.8, gleam: 0.94, slosh: 1.8, spring: 124, damp: 6.5, maxTilt: 0.63, wave: 1.8, bubbles: 2,
+  walkPush: 60, walkBob: 4 };   // (v748, Jordan's tuning)
 const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue: '#0951e1', amber: '#fdb435', clear: '#a8ddf5' };   // (v744, Jordan's colours and names)
 // (sample potions for now: they do nothing, T > Potion bottles puts some in your pack)
 const POTION_ITEMS = Object.fromEntries(Object.keys(POTION_TINT).map(c => ['potion_' + c, {
@@ -19714,35 +19716,36 @@ function potionRedo() {
   if (!potionIcons()) return;
   if (typeof invOpen !== 'undefined' && invOpen) renderInv(); else renderHot();
 }
-// What a dragged item shows: its icon, or for a potion a live canvas that sloshes as it's dragged.
-const potionDrag = { cv: null, raf: 0 }, potionMats = {}, POTION_ACT = { give: 0, redraw: 0 };
-function setDragIcon(drag, id) {
-  const it = ITEMS[id], g = it.potion && POTION_GEOM[(devicePixelRatio || 1) > 1.2 ? 256 : 128];
-  if (!g) { drag.innerHTML = ICON[it.icon]; return; }
-  drag.innerHTML = `<canvas class="paint" width="${g.w}" height="${g.h}"></canvas>`;
-  const cv = drag.firstChild, P = potionDrag;
-  Object.assign(P, { cv, drag, g, ctx: cv.getContext('2d'), tint: POTION_TINT[it.potion], img: null, last: 0, x: null, y: null,
-    vx: 0, vy: 0, ax: 0, ay: 0, tilt: 0, tv: 0, amp: 0, phase: 0, bub: [], calm: false });
-  P.img = P.ctx.createImageData(g.w, g.h);
-  P.lv = potionDrawLive(P);
-  if (!P.raf) P.raf = requestAnimationFrame(potionDragTick);
+// Sloshing: a potion whose liquid is moving is drawn live on a canvas standing in for its icon, until it settles. Each
+// has its own state (lean, its swing, the wave, bubbles) driven by where it is: the pointer while it's dragged; after it's
+// let go, the square it landed in (the drag's sudden stop sets it swinging, and it carries on there until it settles,
+// v748); and with the pack open, every potion in the pack is pushed as if dragged the opposite way to your walk, with a
+// bob on each step (POTION_FX.walkPush, walkBob). One frame loop runs them all.
+const potionMats = {}, POTION_ACT = { give: 0, redraw: 0 };
+const POTION_LIVE = new Set();
+const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0 };
+let potionDragS = null;
+const potionState = () => ({ x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0, tilt: 0, tv: 0, amp: 0, phase: 0, bub: [], calm: false, lv: null });
+// a live canvas for kind, its sheet picked by the box's size on screen
+function potionCanvas(kind, cssPx) {
+  const g = POTION_GEOM[cssPx * (devicePixelRatio || 1) > 140 ? 256 : 128];
+  if (!g) return null;
+  const cv = document.createElement('canvas');
+  cv.className = 'paint'; cv.width = g.w; cv.height = g.h; cv.dataset.potionLive = kind;
+  const ctx = cv.getContext('2d');
+  return { cv, ctx, g, img: ctx.createImageData(g.w, g.h), tint: POTION_TINT[kind], kind };
 }
-function potionDrawLive(P) {
-  const F = POTION_FX;
-  P.img.data.set(P.g.src);
-  const lv = potionPaint(P.g, P.img.data, F, P.tint, { tilt: P.tilt, wave: P.amp, phase: P.phase, bubbles: P.bub, y0: P.g.neck * 0.6 });
-  P.ctx.putImageData(P.img, 0, 0);
-  return lv;
+function potionDraw(S) {
+  const P = S.st;
+  S.img.data.set(S.g.src);
+  P.lv = potionPaint(S.g, S.img.data, POTION_FX, S.tint, { tilt: P.tilt, wave: P.amp, phase: P.phase, bubbles: P.bub, y0: S.g.neck * 0.6 });
+  S.ctx.putImageData(S.img, 0, 0);
 }
-function potionDragTick(now) {
-  const P = potionDrag, F = POTION_FX;
-  if (!P.cv || !P.cv.isConnected || P.drag.hidden) { P.raf = 0; P.cv = null; return; }
-  P.raf = requestAnimationFrame(potionDragTick);
-  const dt = P.last ? Math.min(0.05, Math.max(0.001, (now - P.last) / 1000)) : 1 / 60;
-  P.last = now;
-  const x = parseFloat(P.drag.style.left) || 0, y = parseFloat(P.drag.style.top) || 0;
+// one step of a potion's liquid, pushed to (x, y) (screen px); returns whether it has settled
+function potionStep(S, x, y, dt) {
+  const P = S.st, F = POTION_FX;
   if (P.x === null) { P.x = x; P.y = y; }
-  // the pointer's speed and its change, smoothed (pointer moves come in steps)
+  // the push's speed and its change, smoothed (pointer moves come in steps)
   const sm = 1 - Math.exp(-dt / 0.04);
   const vx = P.vx + ((x - P.x) / dt - P.vx) * sm, vy = P.vy + ((y - P.y) / dt - P.vy) * sm;
   P.ax += ((vx - P.vx) / dt - P.ax) * sm; P.ay += ((vy - P.vy) / dt - P.ay) * sm;
@@ -19757,17 +19760,122 @@ function potionDragTick(now) {
   // bubbles from the floor when it's shaken, rising and wobbling until they reach the level
   const shake = Math.abs(P.tv) + Math.abs(P.ay) / 3000;
   if (F.bubbles > 0 && P.bub.length < 8 * F.bubbles && Math.random() < shake * F.bubbles * dt * 3) {
-    const lv = P.lv || { cx: 128, W: 60, ys: 150 }, bot = P.g.bot / P.g.s;
+    const lv = P.lv || { cx: 128, W: 60, ys: 150 }, bot = S.g.bot / S.g.s;
     P.bub.push({ x: lv.cx + (Math.random() - 0.5) * lv.W * 1.1, y: bot - 14 - Math.random() * Math.max(1, (bot - lv.ys) * 0.4),
       r: 3 + Math.random() * 3.5, a: 1, t: Math.random() * 6 });
   }
   for (const b of P.bub) { b.t += dt; b.y -= dt * (28 + b.r * 6); b.x += Math.sin(b.t * 7) * dt * 12; }
   if (P.lv) P.bub = P.bub.filter(b => b.y > P.lv.ys + b.r);
-  const calm = Math.abs(P.tilt) < 0.002 && Math.abs(P.tv) < 0.004 && P.amp < 0.03 && !P.bub.length;
-  if (calm && P.calm) return;
+  const calm = Math.abs(P.tilt) < 0.002 && Math.abs(P.tv) < 0.004 && P.amp < 0.03 && !P.bub.length
+    && Math.abs(P.vx) < 2 && Math.abs(P.vy) < 2;
+  const was = P.calm;
   P.calm = calm;
-  P.lv = potionDrawLive(P);
+  return calm && was;
 }
+// What a dragged item shows: its icon, or for a potion a live canvas that sloshes as it's dragged.
+function setDragIcon(drag, id) {
+  const it = ITEMS[id], S = it.potion && potionCanvas(it.potion, 96);
+  if (!S) { drag.innerHTML = ICON[it.icon]; return; }
+  drag.innerHTML = '';
+  drag.append(S.cv);
+  Object.assign(S, { drag: true, st: potionState(), from: null, at: null });
+  potionDraw(S);
+  if (potionDragS) POTION_LIVE.delete(potionDragS);
+  potionDragS = S;
+  POTION_LIVE.add(S);
+}
+// a potion's icon in a square (the pack's, a crate's, the doll's or the hotbar's) made live with state st, or the
+// live canvas already there
+function potionLiveAt(sel, kind, st, home) {
+  const el = document.querySelector(sel);
+  if (!el) return null;
+  if (el.tagName === 'CANVAS') return [...POTION_LIVE].find(o => o.cv === el) || null;
+  const w = el.offsetWidth, h = el.offsetHeight;
+  if (!w) return null;
+  const S = potionCanvas(kind, w);
+  if (!S) return null;
+  S.cv.style.width = w + 'px'; S.cv.style.height = h + 'px';
+  Object.assign(S, { sel, st: st || potionState(), home });
+  el.replaceWith(S.cv);
+  potionDraw(S);
+  POTION_LIVE.add(S);
+  return S;
+}
+// the selector of the potion icon in the square under (x, y), if it holds this kind
+function potionSquareAt(x, y, kind) {
+  const at = document.elementFromPoint(x, y), sq = at?.closest('#inv .cell[data-cell], .hslot[data-hot]');
+  if (!sq) return null;
+  const sel = sq.dataset.cell ? `#inv .cell[data-cell="${sq.dataset.cell}"]` : `.hslot[data-hot="${sq.dataset.hot}"]`;
+  return document.querySelector(`${sel} [data-potion="${kind}"], ${sel} [data-potion-live="${kind}"]`) ? sel : null;
+}
+const potionSel = (sel, kind) => `${sel} img[data-potion="${kind}"], ${sel} canvas[data-potion-live="${kind}"]`;
+let potionLast = 0;
+function potionTick(now) {
+  requestAnimationFrame(potionTick);
+  const dt = potionLast ? Math.min(0.05, Math.max(0.001, (now - potionLast) / 1000)) : 1 / 60;
+  potionLast = now;
+  const F = POTION_FX, drag = $('dragIcon');
+  // the pack's push: your walk on screen (the camera's right and down), the other way, and a bob on each step
+  const pk = potionPack;
+  if (started && invOpen) {
+    if (pk.hx === null) { pk.hx = H.x; pk.hz = H.z; }
+    let dx = H.x - pk.hx, dz = H.z - pk.hz;
+    if (Math.hypot(dx, dz) > 3) dx = dz = 0;   // (a jump across the map, not a walk)
+    pk.hx = H.x; pk.hz = H.z;
+    const sx = dx * Math.cos(yaw) - dz * Math.sin(yaw), sy = dx * Math.sin(yaw) + dz * Math.cos(yaw);
+    pk.x -= sx * F.walkPush; pk.y -= sy * F.walkPush * 0.5;
+    if (H.moving) { pk.phase = H.walkPhase; pk.busy = 1.5; } else pk.busy = Math.max(0, pk.busy - dt);
+    pk.bob = H.moving ? Math.abs(Math.sin(pk.phase)) * F.walkBob : 0;
+    // every potion showing in the pack sloshes while you walk
+    if (pk.busy > 0 && (F.walkPush > 0 || F.walkBob > 0)) {
+      for (const el of document.querySelectorAll('#inv .cell[data-cell^="pack:"] img[data-potion]')) {
+        const sel = `#inv .cell[data-cell="${el.closest('.cell').dataset.cell}"]`;
+        potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, true);
+      }
+    }
+  } else { pk.hx = null; pk.busy = 0; pk.bob = 0; }
+  for (const S of [...POTION_LIVE]) {
+    if (S.drag) {
+      if (drag.hidden || !S.cv.isConnected) {
+        // let go: the liquid carries on in the square it landed in (or went back to)
+        POTION_LIVE.delete(S);
+        if (potionDragS === S) potionDragS = null;
+        if (S.st.x !== null) {
+          const sel = potionSquareAt(S.st.x, S.st.y, S.kind) || (S.from && potionSquareAt(S.from[0], S.from[1], S.kind));
+          if (sel) {
+            const L = potionLiveAt(potionSel(sel, S.kind), S.kind, S.st, sel.includes('pack:'));
+            // (its anchor takes off the pack's push as it stands now, so the push it starts feeling doesn't jump)
+            if (L) { const push = L.home && invOpen; L.anchor = [S.st.x - (push ? pk.x : 0), S.st.y - (push ? pk.y - (pk.bob || 0) : 0)]; }
+          }
+        }
+        continue;
+      }
+      const x = parseFloat(drag.style.left) || 0, y = parseFloat(drag.style.top) || 0;
+      if (!S.from) S.from = [x, y];
+      if (!potionStep(S, x, y, dt) || !S.st.lv) potionDraw(S);
+      continue;
+    }
+    // a square's: if the pack was drawn afresh, find its potion again and carry on there
+    if (!S.cv.isConnected) {
+      POTION_LIVE.delete(S);
+      const L = potionLiveAt(potionSel(S.sel, S.kind), S.kind, S.st, S.home);
+      if (L) L.anchor = S.anchor;
+      continue;
+    }
+    if (!S.anchor) S.anchor = [0, 0];
+    const push = S.home && invOpen;
+    const settled = potionStep(S, S.anchor[0] + (push ? pk.x : 0), S.anchor[1] + (push ? pk.y - (pk.bob || 0) : 0), dt);
+    if (settled && !(push && pk.busy > 0)) {
+      // settled: back to its icon
+      POTION_LIVE.delete(S);
+      const t = document.createElement('template'); t.innerHTML = ICON['potion_' + S.kind];
+      S.cv.replaceWith(t.content.firstElementChild);
+      continue;
+    }
+    if (!S.st.calm) potionDraw(S);
+  }
+}
+requestAnimationFrame(potionTick);
 
 // ---------- Gear and the pack ----------
 // What you wear goes on the paper doll, one item to a slot; everything else rides in the pack, where
@@ -30569,6 +30677,8 @@ const TUNING = [
     [POTION_FX, 'damp', 'Dragging: damping (higher settles sooner)', 0, 30, 0.5],
     [POTION_FX, 'wave', 'Dragging: bounce of the wave on top', 0, 3, 0.05],
     [POTION_FX, 'bubbles', 'Dragging: bubbles when shaken (0 off)', 0, 3, 0.05],
+    [POTION_FX, 'walkPush', 'Walking with the pack open: push (screen px a tile walked, 0 off)', 0, 300, 1],
+    [POTION_FX, 'walkBob', 'Walking with the pack open: bob on each step (px)', 0, 20, 0.5],
   ]],
   ['Empty gear squares', [
     [EMPTY_SLOT, 'fill', 'Inside darkness', 0, 1, 0.01, applyEmptySlot],
@@ -31750,7 +31860,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 747, crashSeen = new Map();
+const GAME_VERSION = 748, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
