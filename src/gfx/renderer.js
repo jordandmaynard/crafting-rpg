@@ -125,7 +125,7 @@ class Renderer {
     this.passName = '';
     this._trash = [];       // textures and buffers dropped mid-frame, destroyed once the frame that may use them is sent
     this._freed = new FinalizationRegistry(b => b.destroy());
-    this._frameNo = 0; this._enc = null; this._pendingClear = null; this._canvasTex = null; this._flushQueued = false;
+    this._frameNo = 0; this._keepFrame = false; this._enc = null; this._pendingClear = null; this._canvasTex = null; this._flushQueued = false;
 
     const U = GPUBufferUsage, S = GPUShaderStage;
     this.bglFrame = device.createBindGroupLayout({ entries: [
@@ -242,10 +242,26 @@ class Renderer {
   preludeCode() { return PRELUDE; }
   // record compute work into this frame, after what's been drawn so far: cb(encoder, the frame's bind group, the
   // offset of the last render's frame in it). The bind group leaves the haze out, so a pass can write it.
+  // a new command encoder; true when it starts a new frame (_frameNo: the scene walk, lights, material numbers and
+  // recorded lists' checks are once a frame), false when it carries on one sent early (sendEarly)
+  _newEnc() {
+    this._enc = this.device.createCommandEncoder();
+    if (this._keepFrame) { this._keepFrame = false; return false; }
+    this._frameNo++;
+    return true;
+  }
+  // (v789) send what's encoded so far, so the GPU starts on it while the rest of the frame is encoded; the frame
+  // goes on as the same frame (no new scene walk, lights or once-a-frame uploads)
+  sendEarly() {
+    if (!this._enc) return;
+    this._keepFrame = true;
+    this.flush();
+    this.info.early = (this.info.early || 0) + 1;
+  }
   compute(cb) {
     this._runPendingClear();
     this._closePass();
-    if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
+    if (!this._enc) this._newEnc();
     cb(this._timedEncoder(this._enc), this._frameBindGroup(true), this._lastFrameOff);
   }
   // the profiler's timestamps for a pass named name, or undefined when it isn't timing
@@ -263,6 +279,7 @@ class Renderer {
   // the frame's end: send what's left, then the profiler's timestamps
   endFrame() {
     this.flush();
+    this._keepFrame = false;
     this.passName = '';
     const p = this.profiler;
     if (p && p.on) p.watchDone();
@@ -289,7 +306,7 @@ class Renderer {
     }
     this._runPendingClear();
     this._closePass();
-    if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
+    if (!this._enc) this._newEnc();
     if (color) this._enc.copyTextureToTexture({ texture: g.color }, { texture: s.colorT }, [w, h]);
     this._enc.copyTextureToTexture({ texture: g.depth }, { texture: s.depthT }, [w, h]);
     return s;
@@ -299,7 +316,7 @@ class Renderer {
 
   render(scene, camera) {
     const dev = this.device, tR0 = performance.now();
-    if (!this._enc) { this._enc = dev.createCommandEncoder(); this._frameNo++; this.info.draws = 0; this.info.passes = 0; }
+    if (!this._enc && this._newEnc()) { this.info.draws = 0; this.info.passes = 0; }
     if (this.autoClear && !this._pendingClear) this.clear();
     if (scene.matrixAutoUpdate !== false) scene.updateMatrixWorld();
     if (!camera.parent) camera.updateMatrixWorld();
@@ -702,7 +719,7 @@ class Renderer {
     if (!c) return;
     this._pendingClear = null;
     this._closePass();
-    if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
+    if (!this._enc) this._newEnc();
     const tgt = this._targetViews(c.target);
     this._enc.beginRenderPass({
       colorAttachments: [{ view: tgt.color, loadOp: 'clear', storeOp: 'store', clearValue: c.color }],
@@ -765,7 +782,7 @@ class Renderer {
   }
   _frameSlotAlloc() {
     if (this.frameSlot >= FRAME_SLOTS) this.flush();
-    if (!this._enc) { this._enc = this.device.createCommandEncoder(); this._frameNo++; }
+    if (!this._enc) this._newEnc();
     return this.frameSlot++;
   }
   _setMat(d, o, m) { const e = m.elements; for (let i = 0; i < 16; i++) d[o + i] = e[i]; }
