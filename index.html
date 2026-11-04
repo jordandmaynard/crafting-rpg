@@ -3799,7 +3799,8 @@ const PROP_KITS = {
   // (2026-11-03, Jordan: two stories of stone; the captain's desk goes in first as the work prop, the holding cell in
   // a corner, racks and armor stands by the walls, the mess table, the barracks' bunks upstairs: townBeds)
   guard: [null, null,
-    [{ id: 'holdingCell', corner: true }, { id: 'weaponRack' }, { id: 'armorStand', n: 2 }, { id: 'longTable', seats: 'bench' }, { id: 'hearth' }, { id: 'chair', n: 1 },
+    // (v712, Jordan: iron chests in the large guard house, lootable: GUARD_CHEST)
+    [{ id: 'holdingCell', corner: true }, { id: 'ironChest', n: 2 }, { id: 'weaponRack' }, { id: 'armorStand', n: 2 }, { id: 'longTable', seats: 'bench' }, { id: 'hearth' }, { id: 'chair', n: 1 },
       { id: 'barrel' }, { id: 'crate', n: 2 }, { id: 'chest', at: 'bed' }, { id: 'weaponRack', up: true }, { id: 'armorStand', up: true }, { id: 'crate', up: true },
       { hang: 'wallMap' }, { hang: 'shield', n: 2 }, { hang: 'shield', up: true, n: 2 }],
   ],
@@ -23742,7 +23743,7 @@ function actBoxes(a) {
   if (a.kind === 'helm') return [[a.x, a.z, H.y, H.y + 1.6, 0.5]];
   if (a.kind === 'quest') return [[a.board.q.x, a.board.q.z, a.board.q.y, a.board.q.y + 1.6, 0.5]];
   if (a.kind === 'vault') return [[a.q.x, a.q.z, a.q.y, a.q.y + 2.0, 0.9]];
-  if (a.kind === 'lootcrate') return [[a.lc.x, a.lc.z, a.lc.y, a.lc.y + 0.8, 0.45]];
+  if (a.kind === 'lootcrate') return [[a.lc.x, a.lc.z, a.lc.y, a.lc.y + 0.8, a.lc.chest ? 0.8 : 0.45]];
   if (a.kind === 'door') {
     const d = a.door, mx = d.w ? d.c : d.c + 0.5, mz = d.w ? d.r + 0.5 : d.r;
     const y = Math.max(LV[T(d.c, d.r)], LV[d.w ? T(d.c - 1, d.r) : T(d.c, d.r - 1)]) * STEP + d.k * WALL_H;
@@ -23959,6 +23960,10 @@ const CRATE_LOOT = {
     gearP: 0.1, gear: [['clothShirt', 1], ['clothBoots', 1]] },
   farm: { title: 'Farm Crate', n: [2, 3], mats: [['wheat', 4, 4, 10], ['flour', 2, 2, 5], ['bread', 2, 1, 3], ['hide', 1, 1, 3], ['wood', 1, 2, 6]],
     gearP: 0.15, gear: [['clothShirt', 1], ['clothPants', 1], ['axe_wood', 1]] },
+  // (v712) the guard house's iron chests: 20 squares, more in them, and one or two pieces of gear
+  guardChest: { title: 'Guard House Chest', n: [3, 5], mats: [['bread', 3, 2, 5], ['leather', 3, 2, 4], ['hide', 2, 2, 4], ['copperIngot', 3, 2, 4], ['ironIngot', 2, 1, 3], ['ironOre', 2, 2, 5], ['planks', 1, 3, 8], ['bone', 1, 2, 4]],
+    gearP: 0.9, gearN: [1, 2], gear: [['sword_bone', 2], ['spear_bone', 2], ['bow_bone', 2], ['sword_copper', 3], ['spear_copper', 3], ['bow_copper', 2], ['hammer_copper', 1], ['axe_copper', 1],
+      ['leatherArmor', 2], ['leatherPants', 2], ['leatherHelmet', 2], ['leatherBoots', 2], ['chainHelmet', 2], ['chainBoots', 2], ['chainPants', 1], ['chainArmor', 1]] },
   cabin: { title: 'Cabin Crate', n: [2, 3], mats: [['wood', 3, 4, 10], ['hide', 3, 1, 4], ['leather', 2, 1, 3], ['bread', 2, 1, 3], ['bone', 1, 1, 3]],
     gearP: 0.3, gear: [['bow_wood', 2], ['spear_wood', 2], ['axe_wood', 2], ['leatherBoots', 1], ['leatherHelmet', 1]] },
 };
@@ -23974,9 +23979,9 @@ function crateLootKind(h) {
   const t = h.trade && (CRATE_LOOT_TRADE[h.trade] || h.trade);
   return t && CRATE_LOOT[t] ? t : h.role && CRATE_LOOT[h.role] ? h.role : 'home';
 }
-// roll a crate's loot into a 10-square box, seeded by its tile and story
-function rollCrateLoot(kind, c, r, k) {
-  const L = CRATE_LOOT[kind] || CRATE_LOOT.home, box = new Array(STATION_KIND.crate.store).fill(null), boxN = new Array(box.length).fill(0);
+// roll a crate's loot into a 10-square box (an iron chest's 20: size), seeded by its tile and story
+function rollCrateLoot(kind, c, r, k, size = STATION_KIND.crate.store) {
+  const L = CRATE_LOOT[kind] || CRATE_LOOT.home, box = new Array(size).fill(null), boxN = new Array(box.length).fill(0);
   let u = 0;
   const rnd = () => hs(c * 3 + k, r * 5 + 11, 7110 + (u++) * 13.7);
   const pick = list => { let w = 0; for (const e of list) w += e[1]; let x = rnd() * w; for (const e of list) if ((x -= e[1]) < 0) return e; return list[list.length - 1]; };
@@ -23989,7 +23994,7 @@ function rollCrateLoot(kind, c, r, k) {
   };
   const stacks = L.n[0] + Math.floor(rnd() * (L.n[1] - L.n[0] + 1));
   for (let s = 0; s < stacks; s++) { const [id, , lo, hi] = pick(L.mats); put(id, lo + Math.floor(rnd() * (hi - lo + 1))); }
-  if (L.gear.length && rnd() < L.gearP) put(pick(L.gear)[0], 1);
+  if (L.gear.length && rnd() < L.gearP) { const [a, b] = L.gearN || [1, 1], g = a + Math.floor(rnd() * (b - a + 1)); for (let m = 0; m < g; m++) put(pick(L.gear)[0], 1); }
   // (the stacks spread over the squares a little, not all at the front)
   const order = box.map((id, i) => [id, boxN[i], rnd()]).sort((a, b) => a[2] - b[2]);
   return { box: order.map(e => e[0]), boxN: order.map(e => e[1]) };
@@ -24000,14 +24005,19 @@ const LOOT_CRATES = new Map();   // k * SNN + its tile -> its store
 function lootCrateStore(lc) {
   let st = LOOT_CRATES.get(lc.key);
   if (!st) {
-    const kind = crateLootKind(lc.house);
-    st = { kind: 'crate', loot: kind, title: (CRATE_LOOT[kind] || CRATE_LOOT.home).title, x: lc.x, z: lc.z, y: lc.y, k: lc.k, inp: [], inN: [], out: [], outN: [], ...rollCrateLoot(kind, lc.c, lc.r, lc.k) };
+    const kind = lootTableOf(lc), sk = lc.chest ? 'chest' : 'crate';
+    st = { kind: sk, loot: kind, title: (CRATE_LOOT[kind] || CRATE_LOOT.home).title, x: lc.x, z: lc.z, y: lc.y, k: lc.k, inp: [], inN: [], out: [], outN: [], ...rollCrateLoot(kind, lc.c, lc.r, lc.k, STATION_KIND[sk].store) };
     LOOT_CRATES.set(lc.key, st);
   }
   return st;
 }
-// the world crate by you (a crate prop on your story, or a trade's crate workbench), if any:
-// { key, c, r, k, x, y, z (its foot), house, searched (opened before) }
+// (v712) an iron chest (prop ironChest) draws from its building's chest table (guard: guardChest), else its crate table
+function lootTableOf(lc) {
+  const kind = crateLootKind(lc.house);
+  return lc.chest && CRATE_LOOT[kind + 'Chest'] ? kind + 'Chest' : kind;
+}
+// the world crate by you (a crate or iron chest prop on your story, or a trade's crate workbench), if any:
+// { key, c, r, k, x, y, z (its foot), house, chest (an iron chest), searched (opened before) }
 const LOOT_CRATE_UI = { reach: 1.8 };
 function lootCrateNear(reach = LOOT_CRATE_UI.reach) {
   if (H.boat || H.stair) return null;
@@ -24016,7 +24026,10 @@ function lootCrateNear(reach = LOOT_CRATE_UI.reach) {
   for (let dr = -3; dr <= 3; dr++) for (let dc = -3; dc <= 3; dc++) {
     const c = c0 + dc, r = r0 + dr, i = T(c, r), q = PROP_AT.get(k * SNN + i);
     let o = null;
-    if (q && q.id === 'crate' && Math.abs(q.y - 0.06 - H.y) < 0.9) o = { key: q.tiles[0], c, r, k, x: q.x, y: q.y - 0.06, z: q.z, house: q.house };
+    if (q && (q.id === 'crate' || q.id === 'ironChest') && Math.abs(q.y - 0.06 - H.y) < 0.9) {
+      const [qc, qr] = [(q.tiles[0] % SNN) % N, Math.floor((q.tiles[0] % SNN) / N)];
+      o = { key: q.tiles[0], c: qc, r: qr, k, x: q.x, y: q.y - 0.06, z: q.z, house: q.house, chest: q.id === 'ironChest' };
+    }
     else if (!k && TOWN_PROP.get(i) === 'crate' && Math.abs(LV[i] * STEP - H.y) < 0.6) {
       const [x, z] = crateAt(c, r);
       o = { key: i, c, r, k: 0, x, y: LV[i] * STEP, z, work: true };
@@ -27436,7 +27449,8 @@ function update(dt) {
       v3.set(act.q.x, act.q.y + 2.1, act.q.z);
     } else if (act.kind === 'lootcrate') {
       const open = invOpen && openSt && openSt.loot && LOOT_CRATES.get(act.lc.key) === openSt;
-      pr.innerHTML = key + (open ? 'PUT AWAY' : act.lc.searched ? 'OPEN THE CRATE' : 'SEARCH THE CRATE');
+      const what = act.lc.chest ? 'CHEST' : 'CRATE';
+      pr.innerHTML = key + (open ? 'PUT AWAY' : (act.lc.searched ? 'OPEN THE ' : 'SEARCH THE ') + what);
       v3.set(act.lc.x, act.lc.y + 1.0, act.lc.z);
     } else if (act.kind === 'quest') {
       pr.innerHTML = key + 'READ THE QUEST BOARD';
@@ -31170,7 +31184,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 711, crashSeen = new Map();
+const GAME_VERSION = 712, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -31210,7 +31224,10 @@ window.GAME = {
   // would roll; lootNear: the crate F would search here
   crateLoot: () => {
     const out = [];
-    for (const [key, q] of PROP_AT) if (q.id === 'crate' && q.tiles[0] === key) { const i = key % SNN, k = Math.floor(key / SNN), kind = crateLootKind(q.house); out.push({ c: i % N, r: Math.floor(i / N), k, kind, ...rollCrateLoot(kind, i % N, Math.floor(i / N), k) }); }
+    for (const [key, q] of PROP_AT) if ((q.id === 'crate' || q.id === 'ironChest') && q.tiles[0] === key) {
+      const i = key % SNN, k = Math.floor(key / SNN), chest = q.id === 'ironChest', kind = lootTableOf({ house: q.house, chest });
+      out.push({ c: i % N, r: Math.floor(i / N), k, chest, kind, ...rollCrateLoot(kind, i % N, Math.floor(i / N), k, chest ? 20 : 10) });
+    }
     for (const [i, kind0] of TOWN_PROP) if (kind0 === 'crate') { let h = null; for (const t of towns) { h = t.houses?.find(h => h.work === i); if (h) break; } const kind = crateLootKind(h); out.push({ c: i % N, r: Math.floor(i / N), k: 0, work: true, kind, ...rollCrateLoot(kind, i % N, Math.floor(i / N), 0) }); }
     return out;
   },

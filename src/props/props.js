@@ -314,6 +314,27 @@ export const PROPS = {
       for (const sa of [-1, 1]) part(G.box, dark, sa * (S / 2 - 0.005), H2 / 2, z, { sx: S * 0.95, sy: 0.06, sz: 0.02, ry: Math.PI / 2, rz: 0.72 });
       for (let k = -1; k <= 1; k++) part(G.box, k ? wood : '#b88a58', 0, H2 + 0.005, z + k * S * 0.28, { sx: S - 0.1, sy: 0.02, sz: S * 0.27 });
     } },
+  // (v712, Jordan: iron chests in the large town's guard house, lootable) the game's built iron chest, box for box, its
+  // back to the wall, the lock plate toward the room
+  ironChest: { name: 'Iron chest', group: 'Storage', tiles: [2, 1], wall: true, use: 'Loot (guard house); the hero\'s iron chest stores 20', goes: 'Guard house', inGame: true,
+    build(L, C) {
+      const W = 1.5, D = 0.85, Hb = 0.5, iron = '#5a5664', dark = '#34303a', light = '#8c8a96', z = midZ(1, D + 0.06);
+      part(G.box, iron, 0, Hb / 2, z, { sx: W, sy: Hb, sz: D });
+      // the lid: a flat top and a rounded crown along its length
+      part(G.box, iron, 0, Hb + 0.05, z, { sx: W + 0.04, sy: 0.1, sz: D + 0.04 });
+      seg(G.cyl8, iron, [-W / 2 - 0.02, Hb + 0.1, z], [W / 2 + 0.02, Hb + 0.1, z], D * 0.42);
+      // bands over it, studded, and a dark foot
+      for (const a of [-0.55, -0.18, 0.18, 0.55]) {
+        const x = a * W / 1.5;
+        part(G.box, dark, x, Hb / 2 + 0.03, z, { sx: 0.07, sy: Hb + 0.08, sz: D + 0.03 });
+        part(G.box, dark, x, Hb + 0.14, z, { sx: 0.07, sy: 0.2, sz: D * 0.75 });
+        for (const sb of [-1, 1]) part(G.box, light, x, Hb * 0.7, z + sb * (D / 2 + 0.02), { sx: 0.035, sy: 0.035, sz: 0.02 });
+      }
+      part(G.box, dark, 0, 0.03, z, { sx: W + 0.06, sy: 0.06, sz: D + 0.06 });
+      part(G.box, '#c8a040', 0, Hb - 0.04, z + D / 2 + 0.02, { sx: 0.16, sy: 0.18, sz: 0.03 });
+      part(G.box, '#1a1620', 0, Hb - 0.06, z + D / 2 + 0.025, { sx: 0.03, sy: 0.06, sz: 0.035 });
+      for (const sa of [-1, 1]) part(G.box, light, sa * (W / 2 + 0.03), Hb * 0.62, z, { sx: 0.04, sy: 0.05, sz: 0.24 });
+    } },
   barrel: { name: 'Barrel', group: 'Storage', tiles: [1, 1], use: 'Show', goes: 'Tavern, cellars, dock, carter\'s yard',
     build(L, C) { barrel([0, 0, 0], [0, 0.9, 0], 0.26, 0.31, shade(C.light, 1.05)); } },
   barrelRack: { name: 'Barrel rack with taps', group: 'Storage', tiles: [2, 1], wall: true, use: 'Work: the innkeeper draws ale', goes: 'Tavern, innkeeper\'s house',
