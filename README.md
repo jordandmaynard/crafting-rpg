@@ -494,6 +494,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v759:** Jordan's tuning: POTION_LIT strength 0.85, ref 0.6, glint 2.1, gloss 55.
 
+**v760:** (Jordan) Filling bottles. Empty bottles dragged from a window out over the world (elementFromPoint is the game canvas) show as the 2D bottle card (a new 'empty' atlas cell, PCARD_KINDS) at the cursor, hung BOTTLE_FILL.lift tiles over the ground or water under it (bottleHangAt marches the eye's ray against ghGround + lift). Over fresh water (freshWaterAt: lake and river tiles that aren't SEA, lava or swamp pools, and FRESH_SPOTS gathered in buildFountains: fountain basin and bowl, troughs, bird baths, rain barrels, the prayer basin; none frozen) it dips (down, hold, up) with a splash, and the dragged stack becomes clear potions (fillBottles). Potions stack to 20, so a bigger stack fills 20 a dip into the pack and dips again while bottles and room are left. Letting go over the world puts them back as before. T > Thrown potions has the BOTTLE_FILL knobs.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

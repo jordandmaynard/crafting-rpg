@@ -14094,9 +14094,12 @@ function fountainFalls(c, r) {
 }
 // (2026-11-03, Jordan) the bird baths' water too, in the same shader: a disc in each basin
 const BATH_WATER = { y: 0.595, r: 0.255, depth: 0.04 };
+// (v760) the towns' fresh water a bottle can be filled at (not frozen): { x, z, a, b (half-sizes), cs, sn (its turn),
+// round, y (its surface) }, gathered as buildFountains lays each one's water
+const FRESH_SPOTS = [];
 function buildFountains() {
   for (const m of fountMeshes) { scene.remove(m); m.geometry.dispose(); }
-  fountMeshes.length = 0;
+  fountMeshes.length = 0; FRESH_SPOTS.length = 0;
   const pos = [], dep = [], flow = [], fall = [], fpos = [], fuv = [], ipos = [], icol = [], inrm = [];
   const iceA = CC(ICE.col), iceD = CC(ICE.deep), iceT = CC(ICE.tip);
   for (const t of towns) {
@@ -14105,6 +14108,7 @@ function buildFountains() {
     const frozen = !!townLook(t).snow;
     let cx = 0, cz = 0, cR = 1;
     const pool = (x, z, R) => { cx = x; cz = z; cR = R; };
+    const fresh = (x, z, y, a, b = a, ry = 0) => { if (!frozen) FRESH_SPOTS.push({ x, z, y, a, b, cs: Math.cos(ry), sn: Math.sin(ry), round: a === b }); };
     const wp = (pt, d) => {
       if (!frozen) { pos.push(...pt); dep.push(d); flow.push(0, 0); fall.push(0); return; }
       const k = iceD.clone().lerp(iceA, Math.min(1, 0.25 + Math.hypot(pt[0] - cx, pt[2] - cz) / cR * 0.9));
@@ -14126,14 +14130,14 @@ function buildFountains() {
         // (a trough's water: a flat sheet inside its sides, turned as it stands)
         const st = q.look.stone, hw = st ? 0.76 : 0.8, hd = st ? 0.14 : 0.19, y = q.y + (st ? 0.355 : 0.375), cs = Math.cos(q.ry), sn = Math.sin(q.ry);
         const P = (a, b) => [q.x + cs * a + sn * b, y, q.z - sn * a + cs * b];
-        pool(q.x, q.z, hw);
+        pool(q.x, q.z, hw); fresh(q.x, q.z, y, hw, hd, q.ry);
         for (const pt of [P(-hw, -hd), P(-hw, hd), P(hw, hd), P(-hw, -hd), P(hw, hd), P(hw, -hd)]) wp(pt, 0.12);
         continue;
       }
       if (q.id === 'rainBarrel' && q.look?.live) {
         // (2026-11-03, Jordan: the rain barrel too) a disc inside its top hoop; the barrel stands 0.27 off its back
         const cs = Math.cos(q.ry), sn = Math.sin(q.ry), zc = -0.5 + 0.13 + 0.27, cx = q.x + sn * zc, cz = q.z + cs * zc, y = q.y + 0.726, R = 0.178, n = 12;
-        pool(cx, cz, R);
+        pool(cx, cz, R); fresh(cx, cz, y, R);
         for (let k = 0; k < n; k++) {
           const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2;
           for (const pt of [[cx, y, cz], [cx + Math.sin(a0) * R, y, cz + Math.cos(a0) * R], [cx + Math.sin(a1) * R, y, cz + Math.cos(a1) * R]]) wp(pt, 0.3);
@@ -14142,7 +14146,7 @@ function buildFountains() {
       }
       if (q.id !== 'birdBath') continue;
       const n = 16;
-      pool(q.x, q.z, BATH_WATER.r);
+      pool(q.x, q.z, BATH_WATER.r); fresh(q.x, q.z, q.y + BATH_WATER.y, BATH_WATER.r);
       for (let k = 0; k < n; k++) {
         const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2, y = q.y + BATH_WATER.y, R = BATH_WATER.r;
         for (const pt of [[q.x, y, q.z], [q.x + Math.sin(a0) * R, y, q.z + Math.cos(a0) * R], [q.x + Math.sin(a1) * R, y, q.z + Math.cos(a1) * R]]) wp(pt, BATH_WATER.depth);
@@ -14151,7 +14155,7 @@ function buildFountains() {
     if (t.chapel?.prayer && t.chapel.basin) {
       // (v666: the prayer house's ablution basin)
       const [bx, bz] = t.chapel.basin, by = t.chapel.y + 0.405, R = 0.36, n = 8;
-      pool(bx, bz, R);
+      pool(bx, bz, R); fresh(bx, bz, by, R);
       for (let k = 0; k < n; k++) {
         const a0 = (k + 0.5) / n * Math.PI * 2, a1 = (k + 1.5) / n * Math.PI * 2;
         for (const pt of [[bx, by, bz], [bx + Math.sin(a0) * R, by, bz + Math.cos(a0) * R], [bx + Math.sin(a1) * R, by, bz + Math.cos(a1) * R]]) wp(pt, 0.08);
@@ -14168,7 +14172,7 @@ function buildFountains() {
       }
     };
     // (v654: a desert town's basin is an octagon, its corners where its walls' are)
-    pool(x, z, FOUNTAIN.R - 0.17);
+    pool(x, z, FOUNTAIN.R - 0.17); fresh(x, z, y0 + FOUNT.basinY, FOUNTAIN.R - 0.17); fresh(x, z, y0 + FOUNT.bowlY, 0.5);
     if (townLook(t).stone === 'sand') ring(0.33, (FOUNTAIN.R - 0.17) / k8, y0 + FOUNT.basinY, FOUNT.basinD, 8);
     else ring(0.32, FOUNTAIN.R - 0.17, y0 + FOUNT.basinY, FOUNT.basinD);
     pool(x, z, 0.5);
@@ -20695,6 +20699,11 @@ function navInv(dx, dy) {
     if (invPress.dragging) {
       drag.style.left = e.clientX + 'px'; drag.style.top = e.clientY + 'px';
       const at = document.elementFromPoint(e.clientX, e.clientY), over = at?.closest('#inv .cell');
+      // (v760) empty bottles over the world (no window or square in the way) show there as the 2D bottle instead
+      const id = cellGet(invPress.c), bottle = id === 'emptyBottle' || (bottleDrag?.filled && id && ITEMS[id].potion);
+      if (bottle && at === cv && mode === 'play') { bottleDrag = Object.assign(bottleDrag || {}, { sx: e.clientX, sy: e.clientY }); }
+      else if (bottleDrag && !bottleDrag.dip) bottleDrag = bottleDrag.filled ? Object.assign(bottleDrag, { sx: null }) : null;
+      drag.style.visibility = bottleDrag && bottleDrag.sx != null ? 'hidden' : '';
       inv.querySelectorAll('.cell.drop').forEach(c => c.classList.remove('drop'));
       if (over && fits(cellOf(over), cellGet(invPress.c))) over.classList.add('drop');
       $('trash').classList.toggle('drop', !!at?.closest('#trash'));
@@ -20705,7 +20714,7 @@ function navInv(dx, dy) {
   addEventListener('pointerup', e => {
     const p = invPress;
     if (!p) return;
-    invPress = null; drag.hidden = true;
+    invPress = null; drag.hidden = true; drag.style.visibility = ''; bottleDrag = null;
     inv.querySelectorAll('.cell.press').forEach(c => c.classList.remove('press'));
     if (!p.dragging) { clickCell(p.c); return; }
     const at = document.elementFromPoint(e.clientX, e.clientY), over = at?.closest('#inv .cell');
@@ -24908,7 +24917,7 @@ function drawSeals(useD) {
       h2a.project(camera); h2b.project(camera); big = Math.max(big, Math.abs(h2b.y - h2a.y) / 2 * h);
     }
     const want = Math.max(16, Math.min(256, Math.ceil(big / 8) * 8));
-    const sig = POTION_KINDS.map(k => (ICON['potion_' + k].match(/src="([^"]+)"/) || [])[1] || '').join('|');
+    const sig = pcardSrcs().join('|');
     if ((!pcardCell || Math.abs(want - pcardCell) > pcardCell / 6 || sig !== pcardSig) && !buildPotionAtlas(want) && !pcardCell) pcardMesh.visible = false;
     pcardBake();
     if (pcardNormG !== POTION_GEOM[128]) buildPotionNormals();
@@ -25978,6 +25987,9 @@ const pcardMesh = (() => {
 })();
 let pcardN = 0, pcardCell = 0, pcardSig = '';
 const pcardImgs = new Map(), POTION_KINDS = Object.keys(POTION_TINT);
+// (v760) the cards' icon cells: each potion's, then the empty bottle's ('empty')
+const PCARD_KINDS = [...POTION_KINDS, 'empty'];
+const pcardSrcs = () => PCARD_KINDS.map(k => ((ICON[k === 'empty' ? 'emptyBottle' : 'potion_' + k] || '').match(/src="([^"]+)"/) || [])[1] || '');
 // (v757, Jordan) the 2D bottles slosh like the pack's: each one moving has a live canvas (potionCanvas, potionStep), the
 // one in hand pushed by the fist's moves in the world (mapped to the screen as the pack's walk push is, x
 // POTION_DRAW.slosh2d), a flying one by where it is on the screen (x POTION_THROW.slosh; it takes over the liquid of the
@@ -26036,7 +26048,7 @@ function buildPotionNormals() {
 // the atlas: each potion's icon side by side, cell px square, premultiplied, with the items' one-pixel black outline,
 // then PCARD_LIVE cells for the sloshing ones
 function buildPotionAtlas(cell) {
-  const srcs = POTION_KINDS.map(k => (ICON['potion_' + k].match(/src="([^"]+)"/) || [])[1] || '');
+  const srcs = pcardSrcs();
   const ims = srcs.map(src => { let im = pcardImgs.get(src); if (!im) { im = new Image(); im.src = src; pcardImgs.set(src, im); } return im; });
   if (!ims.every(im => im.complete && im.naturalWidth)) return false;
   const n = ims.length, W = cell * (n + PCARD_LIVE), c = document.createElement('canvas'); c.width = W; c.height = cell;
@@ -26067,7 +26079,7 @@ function pcardSlosh(S, x, y, dt) {
 }
 // draw the live bottles whose liquid has moved into their atlas cells (after the atlas is sized, in drawSeals)
 function pcardBake() {
-  const t = PCARD_U.tP.value, cell = pcardCell, nK = POTION_KINDS.length, W = cell * (nK + PCARD_LIVE);
+  const t = PCARD_U.tP.value, cell = pcardCell, nK = PCARD_KINDS.length, W = cell * (nK + PCARD_LIVE);
   if (!cell || !t.image.data || t.image.width !== W) return;
   for (let k = 0; k < PCARD_LIVE; k++) {
     const S = pcardSlots[k];
@@ -26091,7 +26103,7 @@ const h2a = new GFX.Vector3(), h2b = new GFX.Vector3(), h2c = new GFX.Vector3();
 // bias tiles back from the eye, hidden by anything more than soft nearer
 function pcardPut(p, kind, h, neck, rot, bias, soft, S) {
   if (pcardN >= PCARD_MAX) return;
-  const cell = S && S.slot >= 0 ? POTION_KINDS.length + S.slot : Math.max(0, POTION_KINDS.indexOf(kind)), C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  const cell = S && S.slot >= 0 ? PCARD_KINDS.length + S.slot : Math.max(0, PCARD_KINDS.indexOf(kind)), C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
   C.forEach(([a, b], v) => {
     const o = pcardN * 6 + v;
     pcardPos.set(p, o * 3);
@@ -26099,6 +26111,107 @@ function pcardPut(p, kind, h, neck, rot, bias, soft, S) {
     pcardQs[o * 4] = h; pcardQs[o * 4 + 1] = neck; pcardQs[o * 4 + 2] = bias; pcardQs[o * 4 + 3] = soft;
   });
   pcardN++;
+}
+// (v760, Jordan) filling bottles: empty bottles dragged out of a window over the world show as the 2D bottle at the
+// cursor, hung BOTTLE_FILL.lift tiles over the ground (or water) under it; over fresh water (a lake, a river, or a
+// town's fountain, trough, bird bath, rain barrel or basin; not the sea, nor a swamp's pool) it dips in (down, hold,
+// up: seconds), and the stack you're dragging comes up as clear potions. Potions stack to fewer than bottles: from a
+// bigger stack each dip fills a potion stack's worth into the pack, and it dips again while there are bottles left and
+// room. Letting go anywhere in the world puts them back where they came from, as before.
+const BOTTLE_FILL = { lift: 1, down: 0.22, hold: 0.12, up: 0.3, sink: 0.04, splash: 0.45 };
+let bottleDrag = null;   // { sx, sy } the pointer over the world while dragging bottles; dip, filled, S
+// the fresh water's surface at (x, z), or null
+function freshWaterAt(x, z) {
+  let y = null;
+  for (const w of FRESH_SPOTS) {
+    const dx = x - w.x, dz = z - w.z, pad = 0.12;
+    const inside = w.round ? Math.hypot(dx, dz) <= w.a + pad
+      : Math.abs(w.cs * dx - w.sn * dz) <= w.a + pad && Math.abs(w.sn * dx + w.cs * dz) <= w.b + pad;
+    if (inside && (y === null || w.y > y)) y = w.y;
+  }
+  if (y !== null) return y;
+  const c = Math.floor(x), r = Math.floor(z);
+  if (c < 0 || r < 0 || c >= N || r >= N) return null;
+  const i = T(c, r);
+  return !LV[i] && WL[i] && !LAVA[i] && !SEA[i] ? WL[i] * STEP - 0.1 : null;
+}
+// where a bottle at screen point (sx, sy) hangs: the point along the eye's ray there that's lift over the ground (or
+// water) straight under it; gy that ground
+function bottleHangAt(sx, sy) {
+  const rect = cv.getBoundingClientRect(), L = BOTTLE_FILL.lift;
+  viewRay((sx - rect.left) / rect.width * 2 - 1, -(sy - rect.top) / rect.height * 2 + 1);
+  if (rayDir.y > -1e-4) return null;
+  const top = (MAXL + 3) * STEP + L, at = q => [ray.x + rayDir.x * q, ray.y + rayDir.y * q, ray.z + rayDir.z * q];
+  let t = Math.max(0, (ray.y - top) / -rayDir.y), prev = t;
+  for (let k = 0; k < 800; k++) {
+    const [x, y, z] = at(t);
+    if (x >= 0 && z >= 0 && x < N && z < N && y - L <= ghGround(x, z)) {
+      let lo = prev, hi = t;
+      for (let b = 0; b < 8; b++) { const m = (lo + hi) / 2, q = at(m); if (q[1] - L <= ghGround(q[0], q[2])) hi = m; else lo = m; }
+      const q = at(hi);
+      return { x: q[0], y: q[1], z: q[2], gy: q[1] - L };
+    }
+    prev = t; t += 0.1;
+  }
+  return null;
+}
+// room in the pack for n more of id
+function packRoom(id) {
+  const top = stackOf(id);
+  return PACK.reduce((a, p, i) => a + (p === null ? top : p === id ? top - PACK_N[i] : 0), 0);
+}
+// the bottles come up full: the whole stack if it fits a potion stack, else a stack's worth into the pack
+function fillBottles() {
+  const c = invPress && invPress.c;
+  if (!c || cellGet(c) !== 'emptyBottle') return false;
+  const n = cellCount(c), top = stackOf('potion_clear');
+  if (n <= top) cellSet(c, 'potion_clear', n);
+  else {
+    const filled = top - addItem('potion_clear', top);
+    if (filled <= 0) return false;
+    cellSet(c, 'emptyBottle', n - filled);
+  }
+  if (invOpen) renderInv();
+  $('inv').querySelector(`[data-cell="${cellKey(c)}"]`)?.classList.add('held');
+  setDragIcon($('dragIcon'), cellGet(c));
+  return true;
+}
+function updateBottleDrag(now, dt, sw, sh, want, cards) {
+  const B = bottleDrag, F = BOTTLE_FILL, D = POTION_DRAW;
+  if (!B || !invPress || !invPress.dragging || !started) return;
+  const id = cellGet(invPress.c);
+  if (id !== 'emptyBottle' && !(B.filled && id && ITEMS[id].potion)) return;
+  if (!B.dip && B.sx == null) return;
+  let p = B.dip ? B.dip.p : bottleHangAt(B.sx, B.sy);
+  if (!p) return;
+  let y = p.y;
+  if (!B.dip && id === 'emptyBottle') {
+    const wy = freshWaterAt(p.x, p.z);
+    if (wy !== null && (cellCount(invPress.c) <= stackOf('potion_clear') || packRoom('potion_clear') > 0)) B.dip = { p, wy, t: 0, done: false };
+  }
+  if (B.dip) {
+    const d = B.dip, T1 = F.down, T2 = T1 + F.hold, T3 = T2 + F.up, low = d.wy + F.sink;
+    d.t += dt;
+    const e = d.t < T1 ? smoothstep(0, 1, d.t / T1) : d.t < T2 ? 1 : 1 - smoothstep(0, 1, (d.t - T2) / Math.max(0.01, F.up));
+    y = p.y + (low - p.y) * e;
+    if (!d.done && d.t >= T1) {
+      d.done = true;
+      if (Math.hypot(p.x - camTarget.x, p.z - camTarget.z) < 40) { playFx('splash', { x: p.x, y: d.wy, z: p.z, dir: Math.random() * 6.283, scale: F.splash, ground: () => d.wy }); sfx.splash(); }
+      if (fillBottles()) {
+        B.filled = true;
+        const kind = ITEMS[cellGet(invPress.c)].potion;
+        if (kind) { B.S = pcardLiveNew(kind); if (B.S) B.S.st.tv = 3; }
+      }
+    }
+    if (d.t >= T3) B.dip = null;
+  }
+  const pt = [p.x, y, p.z], cur = cellGet(invPress.c), kind = cur === 'emptyBottle' ? 'empty' : ITEMS[cur].potion;
+  let S = kind !== 'empty' && B.S && B.S.kind === kind ? B.S : null;
+  if (S) {
+    h2c.set(pt[0], pt[1], pt[2]).project(camera);
+    if (pcardSlosh(S, h2c.x * 0.5 * sw * POTION_THROW.slosh, -h2c.y * 0.5 * sh * POTION_THROW.slosh, dt)) want.push(S);
+  }
+  cards.push([pt, kind, D.size2d, D.neck2d, 0, 0, D.gripSoft, S]);
 }
 // each frame, after the camera's set: the cards for the bottle in hand and those flying
 function updateHeldPotion() {
@@ -26146,6 +26259,7 @@ function updateHeldPotion() {
     }
     cards.push([f.p, f.kind, P.size, 0.5, f.rot * Math.PI / 180, 0, 0.1, S]);
   }
+  updateBottleDrag(now, dt, sw, sh, want, cards);
   // the live cells: each moving bottle keeps its own if it can, else takes a free one (drawn afresh)
   for (const S of pcardSlots) if (S && !want.includes(S)) S.slot = -1;
   pcardSlots.fill(null);
@@ -31286,6 +31400,12 @@ const TUNING = [
     [POTION_LIT, 'ref', '2D bottles: the light the icon is painted at', 0.2, 3, 0.05],
     [POTION_LIT, 'glint', '2D bottles: sun glint on the glass', 0, 3, 0.05],
     [POTION_LIT, 'gloss', '2D bottles: glint tightness', 2, 200, 1],
+    [BOTTLE_FILL, 'lift', 'Filling bottles: held over the ground (tiles)', 0, 3, 0.05],
+    [BOTTLE_FILL, 'down', 'Filling bottles: dip down (s)', 0.05, 1, 0.01],
+    [BOTTLE_FILL, 'hold', 'Filling bottles: held in (s)', 0, 1, 0.01],
+    [BOTTLE_FILL, 'up', 'Filling bottles: back up (s)', 0.05, 1.5, 0.01],
+    [BOTTLE_FILL, 'sink', 'Filling bottles: neck over the water (tiles)', -0.3, 0.3, 0.01],
+    [BOTTLE_FILL, 'splash', 'Filling bottles: splash size', 0, 1.5, 0.05],
     [POTION_EFFECT.red, 'heal', 'Red: heals (HP, at once)', 0, 100, 1],
     [POTION_EFFECT.red, 'radius', 'Red: reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'linger', 'Green: poison cloud lasts (s)', 1, 20, 0.5],
@@ -32477,7 +32597,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 759, crashSeen = new Map();
+const GAME_VERSION = 760, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
