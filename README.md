@@ -460,6 +460,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v742:** (Jordan: keep the puffs lit, just not in bands, and make them lumpier and more irregular, like a volume) Dust puffs (and the smoke a flame turns into) get a few octaves of 3D noise over their ball, fixed to it in the world and their own by seed, churning slowly over their life. Where the noise is low the edge pulls in (a ragged outline) and the puff thins; in the lumps it's thicker. The noise's slopes bend the ball's normal, so the sun and sky light the lumps, and the hollows between them are a little darker. T > Spell effects: 'Puffs: lumps bend their light' (1), 'ragged edge' (0.35), 'lumps across' (2.2), 'uneven thickness' (0.6); all 0 gives the plain ball. Chimney smoke (the C&C sprites) is unchanged.
 
+**v743:** (Jordan's tuning) Potion bottles: fill 0.8 (was 0.62), inset 10 (4.5), soft 0.5 (2), persp 0.25 (0.3), mid 0.74 (0.76), contrast 2.85 (1.8), shade 0.46 (0.28), light 0.39 (0.6), depth 0.32 (0.3), surface 0.7 (0.55), rim 2 (0.8), front 0.8 (0.6), gleam 0.94 (0.9), slosh 2.2 (1), maxTilt 0.7 (0.42), bubbles 2 (1).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
