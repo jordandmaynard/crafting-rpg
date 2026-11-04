@@ -1298,7 +1298,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
     <label class="opt check"><input type="checkbox" id="optPace"><span>Steady frame pacing: when the GPU can't keep up with the screen, draw on every second (or third) refresh so movement glides evenly, instead of as fast as it can unevenly</span></label>
     <label class="opt check"><input type="checkbox" id="optFps"><span>Show frame rate: frames a second and the frame's time, in the corner (nothing else is measured)</span></label>
     <label class="opt check"><input type="checkbox" id="optMapFont"><span>Map names in the book font: the world map's place names in the game's serif type with a black outline, instead of the pixel font</span></label>
-    <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's or spear's Q or E, or the sword's lunge (E), to aim (its reach glows on the ground) and let go to strike</span></label>
+    <label class="opt check"><input type="checkbox" id="optRelease"><span>Attack on release: hold the bow's or spear's Q or E, or the sword's lunge (E), or LMB with a potion picked on the hotbar, to aim (its reach glows on the ground) and let go to strike</span></label>
     <h1 class="optsSub">WORLD <small>(the map's debug and seed tools)</small></h1>
     <div class="maprow"><span id="mapSeed">SEED</span><button id="plotsBtn">PLOTS: OFF</button><button id="bandsBtn" title="Debug: the danger bands (distance from towns), 1 to 10">BANDS: OFF</button><button id="newWorld">NEW WORLD</button></div>
     <div class="maprow"><button id="revealBtn">REVEAL ALL (N): OFF</button><span class="seedEntry"><input id="seedInput" type="text" inputmode="numeric" maxlength="10" placeholder="SEED" autocomplete="off"><button id="seedGo">LOAD SEED</button></span><button id="seedMode">EACH LOAD: NEW SEED</button></div>
@@ -17231,6 +17231,8 @@ function boxer(g, parts) {
 // it) is tagged in userData.gear, and dressHero shows the pieces for what is worn and colours them in the
 // worn item's materials (HERO_MAT).
 const heroSkin = flatMat({ color: '#e0b48a' }), heroTunic = flatMat({ color: '#3f6a8a' });
+// (v752) the potion bottle in the weapon hand: its liquid takes the colour of the potion held (dressHero)
+const heroPotion = flatMat({ color: '#10e525' }), heroPotionGlass = flatMat({ color: '#cfe6ee' }), heroPotionCork = flatMat({ color: '#9a7048' });
 const HERO_MAT = {
   tunic: heroTunic, hood: flatMat({ color: '#2f5a3a' }), pants: flatMat({ color: '#5a4632' }), boots: flatMat({ color: '#3a2a1e' }),
   leather: flatMat({ color: '#8a5a34' }), leatherDark: flatMat({ color: '#4e3220' }), leatherPants: flatMat({ color: '#9a6a3e' }), leatherBoots: flatMat({ color: '#6e4426' }),
@@ -17615,6 +17617,14 @@ function makeHuman(L = heroLook()) {
   wear('hammer', hammer);
   look(hammerHead, 'hammer');
   hammerHead.rotation.z = -Math.PI / 2;
+  // (v752, Jordan) a potion bottle held in the right hand, pointing out of the fist the way the sword does (along the
+  // hand's z): a squat body of the potion's colour, glass shoulder and neck, a cork
+  const potion = pivot(handR, 0, -0.05, 0.02);
+  wear('potion', potion);
+  box(potion, 0.085, 0.085, 0.11, 0, 0, 0.01, heroPotion);
+  box(potion, 0.065, 0.065, 0.025, 0, 0, 0.075, heroPotionGlass);
+  box(potion, 0.032, 0.032, 0.05, 0, 0, 0.11, heroPotionGlass);
+  box(potion, 0.038, 0.038, 0.03, 0, 0, 0.145, heroPotionCork);
   // (v450) the look's height and build, as the townsfolk's
   g.scale.set(1.12 * L.build * (fem ? 0.98 : 1), 1.12 * L.height * (fem ? 0.97 : 1), 1.12 * L.build);
   return { g, parts, look: L, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer };
@@ -19582,10 +19592,12 @@ const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue:
 // cursor in an arc and breaks there, letting its effect out over the spot. POTION_THROW: the throw (cd: seconds before
 // the next, shared by every potion; range: furthest tiles; reach: how far with a pad or touch, which have no cursor;
 // speed: tiles a second along the ground, plus `hang` seconds; arc: peak height per tile thrown, plus arcMin; spin:
-// degrees a second the bottle tumbles; size: the flying icon's px; ring: 1 shows the landing ring while one's in hand).
+// degrees a second the bottle tumbles; size: the flying icon's px; ring: 1 shows the landing ring while aiming; inHand:
+// 1 shows the bottle in the weapon hand while a potion square's in hand; ringAfter: with Options > Attack on release
+// (and on touch), a press is held this long, in seconds, before the ring shows, so a quick click throws with none).
 // POTION_EFFECT: what each colour does where it breaks (only green so far: the poison cloud, hurting foes inside it).
 // T > Thrown potions.
-const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 44, ring: 1 };
+const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 44, ring: 1, inHand: 1, ringAfter: 0.18 };
 const POTION_EFFECT = {
   green: { fx: 'poisonCloud', about: 'Throw it from the hotbar: it breaks into a cloud of poison gas that hurts foes inside it.',
     linger: 6, radius: 2, every: 0.5, dmg: 3 },
@@ -20092,6 +20104,7 @@ const DRESS = {
   spear: () => !H.still && weapon().kind === 'spear',
   axe: () => !H.still && weapon().kind === 'axe',
   hammer: () => !H.still && weapon().kind === 'hammer',
+  potion: () => !H.still && POTION_THROW.inHand > 0.5 && !!handPotion(),
   ...Object.fromEntries(WEAPON_TIERS.map(t => ['tier_' + t, () => weapon().tier === t])),
 };
 const DRESS_MAT = {
@@ -20111,6 +20124,7 @@ function plated(slot) { const k = setOn(slot); return k === 'plate' || FANTASY_S
 // (the silhouette and shadow copies keep their own materials)
 const DRESSABLE = new Set(Object.values(HERO_MAT));
 function dressHero() {
+  { const hp = handPotion(); if (hp) heroPotion.color.set(POTION_TINT[ITEMS[hp].potion] || '#ffffff'); }
   heroRoot.traverse(o => {
     const t = o.userData.gear;
     if (!t) return;
@@ -23822,9 +23836,11 @@ const AIM_NAMES = ['shot', 'volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boom
 function aimName() {
   if (aimForce >= 0) return AIM_NAMES[aimForce];
   if (mode !== 'play' || !H.alive || invOpen || H.still) return null;   // (v506: none at a boat's wheel)
-  // (v751) with a potion in hand that lets something out, a ring where it would break
+  // (v751) with a potion in hand that lets something out, a ring where it would break, (v752) only while the throw's
+  // being aimed: Attack on release (or touch) and held past POTION_THROW.ringAfter
   const hp = handPotion();
-  if (hp) return POTION_THROW.ring > 0.5 && POTION_EFFECT[ITEMS[hp].potion]?.radius ? 'potion' : null;
+  if (hp) return POTION_THROW.ring > 0.5 && POTION_EFFECT[ITEMS[hp].potion]?.radius && potionOnRelease() && H.potAim >= POTION_THROW.ringAfter
+    && (mouse.down || PAD.attack || TOUCH.attack) ? 'potion' : null;
   const w = weapon();
   for (const key of ['e', 'q']) if ((abilHeld[key] || TOUCH.hold === key) && AIMED.has(w[key])) return w[key];
   if (w.strike === 'shoot' && (mouse.down || PAD.attack || TOUCH.attack)) return 'shot';
@@ -25764,6 +25780,8 @@ function updateFlights(dt) {
 // the refined items flying to storage are), breaks where it lands (or on higher ground it meets on the way: a cliff),
 // and lets out its POTION_EFFECT there. Every potion then waits POTION_THROW.cd seconds.
 const thrown = [], clouds = [], potV = new GFX.Vector3();
+// (v752) does a throw go on letting go of the attack? With Options > Attack on release, and always on touch buttons
+const potionOnRelease = () => OPTIONS.attackOnRelease || (TOUCH.on && !PAD.on);
 // where a throw would land: the ground under the cursor (or ahead along the aim, on a pad or touch), within range
 function potionTarget() {
   const P = POTION_THROW, g = !TOUCH.on && !PAD.on ? pickGround(false) : null;
@@ -25787,7 +25805,7 @@ function throwPotion() {
   thrown.push({ el, id, kind: ITEMS[id].potion, a, b, t: 0, len: d / Math.max(1, P.speed) + P.hang, arc: P.arcMin + d * P.arc, rot: Math.random() * 360 });
   // one fewer in the square (empty, it's bare hands)
   HOT_N[hotSel]--;
-  if (HOT_N[hotSel] <= 0) { HOT[hotSel] = null; HOT_N[hotSel] = 0; }
+  if (HOT_N[hotSel] <= 0) { HOT[hotSel] = null; HOT_N[hotSel] = 0; dressHero(); }
   H.cdPotion = P.cd;
   sfx.swoosh();
   renderBar(); if (invOpen) renderInv(); else renderHot();
@@ -28005,8 +28023,18 @@ function update(dt) {
 
     // attacks
     const atkHeld = mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack);
-    if (handPotion()) { if (atkHeld && !H.atkWas && !H.still) throwPotion(); }   // (v751: each press throws one)
-    else if (atkHeld && H.swing < 0 && !H.bow && !H.spear && !H.still) startSwing();
+    // (v751: each press throws one; v752, Jordan: with Options > Attack on release, and on touch, a press aims, with
+    // the ring once it's held POTION_THROW.ringAfter, and letting go throws)
+    if (handPotion()) {
+      if (potionOnRelease()) {
+        // (only a press begun with the potion in hand throws on letting go)
+        if (atkHeld) { if (!H.atkWas) { H.potArmed = true; H.potAim = 0; } else H.potAim = (H.potAim || 0) + dt; }
+        else { if (H.atkWas && H.potArmed && !H.still) throwPotion(); H.potAim = 0; H.potArmed = false; }
+      } else if (atkHeld && !H.atkWas && !H.still) throwPotion();
+    } else {
+      H.potAim = 0; H.potArmed = false;
+      if (atkHeld && H.swing < 0 && !H.bow && !H.spear && !H.still) startSwing();
+    }
     H.atkWas = atkHeld;
     if (H.bow) updateBow(dt);
     if (H.spear) updateSpear(dt);
@@ -30853,7 +30881,9 @@ const TUNING = [
     [POTION_THROW, 'arcMin', 'Arc height, least', 0, 3, 0.05],
     [POTION_THROW, 'spin', 'Tumble (degrees a second)', 0, 1500, 10],
     [POTION_THROW, 'size', 'Flying icon size (px)', 16, 96, 1],
-    [POTION_THROW, 'ring', 'Landing ring while a potion is in hand (0 off)', 0, 1, 1],
+    [POTION_THROW, 'ring', 'Landing ring while aiming (0 off)', 0, 1, 1],
+    [POTION_THROW, 'ringAfter', 'Attack on release: hold this long before the ring shows (s)', 0, 1, 0.01],
+    [POTION_THROW, 'inHand', 'Bottle in the weapon hand while a potion is picked (0 off)', 0, 1, 1, () => dressHero()],
     [POTION_EFFECT.green, 'linger', 'Green: poison cloud lasts (s)', 1, 20, 0.5],
     [POTION_EFFECT.green, 'radius', 'Green: cloud reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'every', 'Green: hurts every (s)', 0.1, 3, 0.05],
@@ -32042,7 +32072,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 751, crashSeen = new Map();
+const GAME_VERSION = 752, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
