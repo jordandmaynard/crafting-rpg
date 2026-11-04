@@ -21126,6 +21126,24 @@ function shatter(f, dir) {
       ax: (Math.random() - 0.5) * 14, az: (Math.random() - 0.5) * 14, life: 0 });
   }
 }
+// (v697) a skeleton's death: every bone of it (and its weapon, helm and rags) flies off on its own, as a crowd foe's
+// parts do, from where its pose had it
+function shatterHuman(f, dir) {
+  const P = f.folk, q = new GFX.Quaternion(), s = new GFX.Vector3();
+  f.rig.g.updateMatrixWorld();
+  for (const pc of P.pieces) {
+    const o = P.bones[pc.bone];
+    if (!o || !P.chains[pc.bone].every(j => j.visible)) continue;
+    const mat = pc.mat.clone(); mat.transparent = true;
+    const m = new GFX.Mesh(pc.geo, mat); m.castShadow = m.receiveShadow = true;
+    shatterM.multiplyMatrices(o.matrixWorld, pc.local).decompose(v3, q, s);
+    m.position.copy(v3); m.quaternion.copy(q); m.scale.copy(s);
+    scene.add(m);
+    debris.push({ m, own: true, vx: dir.x * 1.5 + (Math.random() - 0.5) * 2.4, vz: dir.z * 1.5 + (Math.random() - 0.5) * 2.4, vy: 1.5 + Math.random() * 2.2,
+      ax: (Math.random() - 0.5) * 14, az: (Math.random() - 0.5) * 14, life: 0 });
+  }
+  P.pieces = null;
+}
 // (v546, Jordan: the experience drops a round orb, to tell them from the health diamonds, in the XP bar's light blue)
 const orbMat = new GFX.MeshBasicMaterial({ color: '#ff6a5a' }), xpOrbMat = new GFX.MeshBasicMaterial({ color: '#4ab8ff' });
 const healGeo = new GFX.OctahedronGeometry(0.11, 0), xpGeo = new GFX.IcosahedronGeometry(0.1, 1);
@@ -21704,7 +21722,9 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
   if (f.hp <= 0) {
     sfx.kill();
     // (v477: a person falls down dead, where a monster flies apart)
-    if (f.rig) fellHuman(f, dx / l, dz / l);
+    // (v697, Jordan: a skeleton bursts into its bones as it used to; zombies still fall)
+    if (f.rig && f.folk.pieces) { shatterHuman(f, new GFX.Vector3(dx / l, 0, dz / l)); freeHuman(f); }
+    else if (f.rig) fellHuman(f, dx / l, dz / l);
     else shatter(f, new GFX.Vector3(dx / l, 0, dz / l));
     foes.splice(foes.indexOf(f), 1);
     H.kills++; renderStats();
@@ -25783,6 +25803,8 @@ function bakeFolk(p) {
     if (b === undefined) { b = bones.length; bones.push(o.parent); idxOf.set(o.parent, b); }
     parts.push([o, b, new GFX.Matrix4().multiplyMatrices(inv.copy(o.parent.matrixWorld).invert(), o.matrixWorld)]);
   });
+  // (v697) a skeleton keeps its parts, each with the joint it hangs from and where on it, to fly apart when it dies
+  if (p.keepParts) p.pieces = parts.map(([o, b, m]) => ({ geo: o.geometry, mat: o.material, bone: b, local: m }));
   let nv = 0, ni = 0;
   for (const [o] of parts) { const pa = o.geometry.attributes.position; nv += pa.count; ni += o.geometry.index ? o.geometry.index.count : pa.count; }
   const pos = new Float32Array(nv * 3), col = new Float32Array(nv * 3), bone = new Float32Array(nv), idx = new Uint32Array(ni), v = new GFX.Vector3();
@@ -26415,12 +26437,12 @@ const HUMAN = { cap: 5, every: 10, near: 18, far: 30, lie: 5, sink: 1.5 };
 // fights as the people do with what it holds (a rusted sword or axe the sword's combo, a spear the poke, a bow from
 // range) and its jaw chatters; a zombie shambles (poseZombie), dragging a leg, hunched, its head lolling, its arms out
 // for you once it's seen you, and strikes with its hands: a clawing blow from overhead, one hand then the other, then a
-// lunge with both arms to grab and bite. Killed, both ragdoll as the people do; a skeleton's skull comes off more often.
+// lunge with both arms to grab and bite. Killed, a zombie ragdolls as the people do; (v697, Jordan) a skeleton bursts
+// into its bones as it used to (shatterHuman).
 // They're still spawned by the biomes (spawnTick), not humanTick, and aren't counted in HUMAN.cap.
 // hunch, loll: a zombie's stoop and head tilt (radians); drag: its bad leg's share of the stride; rock: its sway as
-// it walks; reach: its arms raised ahead when it's after you; chatter: a skeleton's jaw; skullPop: the chance its skull
-// comes off when it falls
-const UNDEAD = { hunch: 0.2, loll: 0.35, drag: 0.55, rock: 0.07, reach: 1.35, chatter: 1, skullPop: 0.3 };
+// it walks; reach: its arms raised ahead when it's after you; chatter: a skeleton's jaw
+const UNDEAD = { hunch: 0.2, loll: 0.35, drag: 0.55, rock: 0.07, reach: 1.35, chatter: 1 };
 // (each person's own material, sized for one person's joints: a batch's holds FOLK_BONES, 48 KB sent every frame)
 const HUMAN_BONES = 48, humanMats = [];
 const humanMat = () => humanMats.pop() || new GFX.ShaderMaterial({ uniforms: { bones: { value: new Float32Array(HUMAN_BONES * 16) } }, vertexColors: true, attributes: { bone: 'f32' }, lit: true,
@@ -26450,6 +26472,7 @@ function humanRig(kind) {
   if (FOE[kind].undead) d = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds', kind);
   for (let a = 0; a < 2000 && !d; a++) { const e = folkKit.design(1 + Math.floor(Math.random() * 4294967294), 'wilds'); if (e.job === kind) d = e; }
   const p = { d: d || folkKit.design(1, 'wilds') };
+  p.keepParts = p.d.undead === 'skeleton';
   bakeFolk(p);
   const M = p.mesh, geo = new GFX.BufferGeometry();
   geo.setAttribute('position', new GFX.BufferAttribute(M.pos, 3));
@@ -26540,7 +26563,7 @@ function fellHuman(f, dx, dz) {
     held.push({ centre: [co * cx - si * cz, c.y - f.y, si * cx + co * cz], half: sc(tb.half), q: rq, mid: tb.mid });
   }
   const weapon = GEAR.weapon ? ITEMS[GEAR.weapon].kind : 'fist';
-  const rd = new Ragdoll(ragWorld, shape, { pos: [f.x, f.y, f.z], yaw: face, from: [f.x - dx, f.y, f.z - dz], weapon, headPop: r.d.undead === 'skeleton' ? UNDEAD.skullPop : undefined }, held);
+  const rd = new Ragdoll(ragWorld, shape, { pos: [f.x, f.y, f.z], yaw: face, from: [f.x - dx, f.y, f.z - dz], weapon }, held);
   const b = { f, t: 0, rd, sinkT: 0, held: held[0], nod: [(Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 1.2] };
   // (a thud on landing, near the hero)
   const thud = hit => { if (Math.hypot(rd.body.pos[0] - H.x, rd.body.pos[2] - H.z) < 14) sfx.thud(Math.min(1, hit / 4)); };
@@ -26571,7 +26594,6 @@ function updateFallen(dt) {
     r.body.position.set(0, 0, 0); r.body.rotation.set(0, 0, 0); r.chest.rotation.set(0, 0, 0);
     if (!rd.popped) r.head.rotation.set(b.nod[0], b.nod[1], 0);
     else { r.head.position.set(0, -0.1, 0); r.head.rotation.set(0, 0, 0); }
-    if (r.jaw) r.jaw.rotation.x = 0.4;   // (a skeleton's jaw hangs open)
     if (b.ig) { const m = b.held.mid; r.tool.position.set(-m[0], -m[1], -m[2]); r.tool.rotation.set(0, 0, 0); r.tool.visible = true; }
     const L = rd.limbs, legs = [r.legL, r.legR], arms = [r.armL, r.armR];
     for (const q of [0, 1]) {
@@ -27043,7 +27065,7 @@ function update(dt) {
     if (d.m.position.y < fl) { d.m.position.y = fl; d.vy *= -0.3; d.vx *= 0.55; d.vz *= 0.55; d.ax *= 0.5; d.az *= 0.5; }
     d.m.rotation.x += d.ax * dt; d.m.rotation.z += d.az * dt;
     if (d.life > 1.8) { const k = Math.max(0, 1 - (d.life - 1.8) / 0.6); if (d.bit) d.m.scale.setScalar(d.bit * k); else d.m.material.opacity = k; }
-    if (d.life > 2.4) { scene.remove(d.m); if (!d.bit) d.m.material.dispose(); debris.splice(i, 1); }
+    if (d.life > 2.4) { scene.remove(d.m); if (!d.bit) d.m.material.dispose(); if (d.own) d.m.geometry.dispose(); debris.splice(i, 1); }
   }
   for (let i = dust.length - 1; i >= 0; i--) {
     const d = dust[i]; d.life += dt;
@@ -29473,7 +29495,6 @@ const TUNING = [
     [RAGDOLL, 'scatter', 'Dropped weapon: flung about at', 0, 6, 0.1],
     [RAGDOLL, 'itemFriction', 'Dropped weapon: friction', 0, 1.5, 0.01],
     [HUMAN, 'lie', 'Seconds they lie there before sinking', 0, 60, 0.5],
-    [UNDEAD, 'skullPop', 'Skeletons: chance the skull comes off', 0, 1, 0.01],
   ]],
   // (v695) skeletons and zombies on the people's rig
   ['Undead moves', [
@@ -30766,7 +30787,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 696, crashSeen = new Map();
+const GAME_VERSION = 697, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
