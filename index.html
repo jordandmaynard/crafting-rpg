@@ -19713,9 +19713,22 @@ function potionPaint(g, out, F, tint, st = {}) {
   const tilt = st.tilt || 0, ct = Math.cos(tilt), sn = Math.sin(tilt), wave = (st.wave || 0) * s * Math.sin(st.phase || 0);
   const dark = T.map(c => c * F.shade), lite = T.map(c => c + (1 - c) * F.light), foam = lite.map(c => c + (1 - c) * 0.5);
   const bub = st.bubbles || [];
-  for (let y = Math.max(0, Math.floor(st.y0 || 0)); y < h; y++) for (let x = 0; x < w; x++) {
+  // (v764: Jordan's frame rate fell walking with potions about, each painted every frame) only the span of each row
+  // that has any glass deep enough (measured once for this inset), and only the bubbles that reach the row
+  const cut = inset - soft;
+  if (!g.rx || g.rx.cut !== cut) {
+    const xl = new Int16Array(h).fill(-1), xr = new Int16Array(h).fill(-2);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[y * w + x] >= cut) { if (xl[y] < 0) xl[y] = x; xr[y] = x; }
+    g.rx = { cut, xl, xr };
+  }
+  const XL = g.rx.xl, XR = g.rx.xr;
+  let rb = [];
+  for (let y = Math.max(0, Math.floor(st.y0 || 0)); y < h; y++) {
+    if (XL[y] < 0) continue;
+    if (bub.length) { rb = []; for (const o of bub) if (Math.abs(y + 0.5 - o.y * s) < 1.2 * o.r * s) rb.push(o); }
+    for (let x = XL[y]; x <= XR[y]; x++) {
     const i = y * w + x, dd = d[i];
-    if (dd < inset - soft) continue;
+    if (dd < cut) continue;
     // in the surface's turned frame: u across it, v down from it (the standing wave lifts its middle, drops its sides)
     const dx = x + 0.5 - cx, dy = y + 0.5 - ys;
     const u = dx * ct + dy * sn;
@@ -19737,7 +19750,7 @@ function potionPaint(g, out, F, tint, st = {}) {
       r += (lite[0] - r) * k; gg += (lite[1] - gg) * k; b += (lite[2] - b) * k;
       r += (1 - r) * m; gg += (1 - gg) * m; b += (1 - b) * m;
     }
-    for (const o of bub) {
+    for (const o of rb) {
       const bd = Math.hypot(x + 0.5 - o.x * s, y + 0.5 - o.y * s) / (o.r * s);
       if (bd < 1.2) {
         const k = Math.max(0, Math.min(1, (1.2 - bd) / 0.4)) * (bd > 0.55 ? 0.85 : 0.3) * (o.a ?? 1);
@@ -19750,6 +19763,7 @@ function potionPaint(g, out, F, tint, st = {}) {
     out[o] = src[o] + (r * 255 - src[o]) * cLiq;
     out[o + 1] = src[o + 1] + (gg * 255 - src[o + 1]) * cLiq;
     out[o + 2] = src[o + 2] + (b * 255 - src[o + 2]) * cLiq;
+    }
   }
   return { ys: ys / s, cx: cx / s, W: W / s, H: H / s };
 }
@@ -19808,6 +19822,7 @@ function potionIcons() {
 }
 function potionRedo() {
   if (!potionIcons()) return;
+  potionPack.shared.clear();
   if (typeof invOpen !== 'undefined' && invOpen) renderInv(); else renderHot();
 }
 // Sloshing: a potion whose liquid is moving is drawn live on a canvas standing in for its icon, until it settles. Each
@@ -19818,7 +19833,24 @@ function potionRedo() {
 // 'hot'). One frame loop runs them all.
 const potionMats = {}, POTION_ACT = { give: 0, redraw: 0, greens: 0 };
 const POTION_LIVE = new Set();
-const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0 };
+const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0, shared: new Map() };
+// (v764: Jordan's frame rate fell walking with potions in the pack and on the hotbar) the squares the walk sets
+// sloshing all feel the same push, so those of one colour (and size) share one state, stepped and painted once a frame,
+// and each square just copies the picture
+function potionShare(S, home) {
+  const key = home + ':' + S.kind + ':' + S.g.w;
+  let Sh = potionPack.shared.get(key);
+  if (!Sh) {
+    const cv = document.createElement('canvas'); cv.width = S.g.w; cv.height = S.g.h;
+    const ctx = cv.getContext('2d');
+    Sh = { cv, ctx, g: S.g, img: ctx.createImageData(S.g.w, S.g.h), tint: S.tint, kind: S.kind, st: potionState(), key, frame: -1 };
+    potionDraw(Sh);
+    potionPack.shared.set(key, Sh);
+  }
+  S.share = Sh; S.st = Sh.st;
+  S.ctx.drawImage(Sh.cv, 0, 0);
+  return S;
+}
 let potionDragS = null;
 const potionState = () => ({ x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0, tilt: 0, tv: 0, amp: 0, phase: 0, bub: [], calm: false, lv: null });
 // a live canvas for kind, its sheet picked by the box's size on screen
@@ -19907,6 +19939,11 @@ const potionSel = (sel, kind) => `${sel} img[data-potion="${kind}"], ${sel} canv
 let potionLast = 0;
 function potionTick(now) {
   requestAnimationFrame(potionTick);
+  potionFrame++;
+  const t0 = performance.now();
+  try { potionTickBody(now); } finally { potionProf?.outside('potion slosh (its own loop)', performance.now() - t0); }
+}
+function potionTickBody(now) {
   const dt = potionLast ? Math.min(0.05, Math.max(0.001, (now - potionLast) / 1000)) : 1 / 60;
   potionLast = now;
   const F = POTION_FX, drag = $('dragIcon');
@@ -19928,11 +19965,13 @@ function potionTick(now) {
     if (pk.busy > 0 && (F.walkPush > 0 || F.walkBob > 0)) {
       if (invOpen) for (const el of document.querySelectorAll('#inv .cell[data-cell^="pack:"] img[data-potion]')) {
         const sel = `#inv .cell[data-cell="${el.closest('.cell').dataset.cell}"]`;
-        potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, true);
+        const L = potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, true);
+        if (L) potionShare(L, 'pack');
       }
       if (hotOn) for (const el of document.querySelectorAll('#hotbar .hslot[data-hot] img[data-potion]')) {
         const sel = `.hslot[data-hot="${el.closest('.hslot').dataset.hot}"]`;
-        potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, 'hot');
+        const L = potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, 'hot');
+        if (L) potionShare(L, 'hot');
       }
     }
   } else { pk.hx = null; pk.busy = 0; pk.bob = 0; }
@@ -19961,12 +20000,24 @@ function potionTick(now) {
     if (!S.cv.isConnected) {
       POTION_LIVE.delete(S);
       const L = potionLiveAt(potionSel(S.sel, S.kind), S.kind, S.st, S.home);
-      if (L) L.anchor = S.anchor;
+      if (L) { L.anchor = S.anchor; if (S.share) potionShare(L, S.home === 'hot' ? 'hot' : 'pack'); }
       continue;
     }
     if (!S.anchor) S.anchor = [0, 0];
     const push = pushed(S.home);
-    const settled = potionStep(S, S.anchor[0] + (push ? pk.x : 0), S.anchor[1] + (push ? pk.y - (pk.bob || 0) : 0), dt);
+    let settled;
+    if (S.share) {
+      // (one step and one painting a frame for all that share it; the rest copy it)
+      const Sh = S.share;
+      if (Sh.frame !== potionFrame) {
+        Sh.frame = potionFrame;
+        Sh.settled = potionStep(Sh, push ? pk.x : 0, push ? pk.y - (pk.bob || 0) : 0, dt);
+        Sh.drew = !Sh.st.calm;
+        if (Sh.drew) potionDraw(Sh);
+      }
+      settled = Sh.settled;
+      if (!(settled && !(push && pk.busy > 0)) && Sh.drew) { S.ctx.clearRect(0, 0, S.cv.width, S.cv.height); S.ctx.drawImage(Sh.cv, 0, 0); }
+    } else settled = potionStep(S, S.anchor[0] + (push ? pk.x : 0), S.anchor[1] + (push ? pk.y - (pk.bob || 0) : 0), dt);
     if (settled && !(push && pk.busy > 0)) {
       // settled: back to its icon
       POTION_LIVE.delete(S);
@@ -19974,9 +20025,10 @@ function potionTick(now) {
       S.cv.replaceWith(t.content.firstElementChild);
       continue;
     }
-    if (!S.st.calm) potionDraw(S);
+    if (!S.share && !S.st.calm) potionDraw(S);
   }
 }
+let potionFrame = 0, potionProf = null;   // (the G profiler, once it's made)
 requestAnimationFrame(potionTick);
 
 // ---------- Gear and the pack ----------
@@ -32494,6 +32546,7 @@ $('tuneBtn').addEventListener('click', e => { tuning.toggle(); e.currentTarget.b
 // time of each part of the frame. Under it, spike capture (src/gfx/spikes.js): a frame whose CPU time passes
 // SPIKE_TUNING.ms is kept as a tree of every timed call, and can stop the game on it.
 const prof = new GFX.GpuProfiler(renderer.device, renderer.adapterInfo);
+potionProf = prof;
 renderer.profiler = prof; gi.profiler = prof;
 const spikes = new GFX.SpikeRecorder();
 prof.spikes = spikes;
@@ -32671,7 +32724,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 765, crashSeen = new Map();
+const GAME_VERSION = 766, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

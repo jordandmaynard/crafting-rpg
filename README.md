@@ -506,6 +506,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v765:** (Jordan: the hero and the paperdoll flipped over every frame) idleDollPose puts the joints back by their angles (rotation x/y/z and order), not their quaternions. A quaternion read back into angles can come out as another set for the same turn (x and z a half turn, y mirrored), and the game then set only heroRoot's y, so the hero turned upside down and back each frame.
 
+**v766:** (Jordan: the frame rate fell walking with potions in the pack or on the hotbar) The sloshing potions were painted each frame, every one on its own, and potionPaint tested every bubble at every pixel (about 0.4 ms a bottle with no bubbles, 2.8 ms with 16). Now potionPaint walks only each row's span of glass (measured once) and only the bubbles that reach the row (same picture, 16 bubbles 0.6 ms), and the squares the walk sets sloshing share one state per colour and size (potionShare: stepped and painted once a frame, each square copies it). The G profiler's Between frames table has a 'potion slosh (its own loop)' row (GpuProfiler.outside).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

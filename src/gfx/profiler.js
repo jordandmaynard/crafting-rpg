@@ -131,10 +131,20 @@ export class GpuProfiler {
     this.spikes?.lap(name); // (spike capture's rows: see spikes.js)
   }
 
+  // (v764) CPU time spent outside the frame (another requestAnimationFrame loop, such as the potions' slosh): a row
+  // of its own in the "Between frames" table, smoothed like the laps
+  outside(name, ms) {
+    if (!this.on) return;
+    this.out = this.out || new Map();
+    const p = this.out.get(name);
+    this.out.set(name, p === undefined ? ms : p + (ms - p) * SMOOTH);
+  }
+
   toggle() {
     this.on = !this.on;
     this.ema.clear();
     this.cpu.clear();
+    if (this.out) this.out.clear();
     this.order = [];
     this.shown = 0;
     this.doneSeen = false;
@@ -168,7 +178,8 @@ export class GpuProfiler {
         : `<div class="gnote">This browser doesn't expose GPU timestamps (timestamp-query), so only frame timing is shown.</div>`) +
       table('CPU (JavaScript)', 'CPU ms', [...this.cpu], 'All CPU', this.cpuMs) +
       `<table><tr><th>Between frames</th><th>ms</th></tr>` +
-      `<tr><td>idle (main thread waiting)</td><td><b>${Math.max(0, this.frameMs - this.cpuMs).toFixed(2)}</b></td></tr>` +
+      [...(this.out || [])].map(([nm, ms]) => `<tr><td>${nm}</td><td><b>${ms.toFixed(2)}</b></td></tr>`).join('') +
+      `<tr><td>idle (main thread waiting)</td><td><b>${Math.max(0, this.frameMs - this.cpuMs - [...(this.out || new Map()).values()].reduce((a, v) => a + v, 0)).toFixed(2)}</b></td></tr>` +
       `<tr><td>GPU done, after last submit</td><td><b>${this.doneSeen ? this.doneMs.toFixed(2) : '…'}</b></td></tr></table>` +
       `<div class="gnote">GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck.</div>` +
       `<div class="gnote">${extra}` +
