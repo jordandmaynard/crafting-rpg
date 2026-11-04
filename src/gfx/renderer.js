@@ -13,6 +13,24 @@
 // Projections are kept as the scene graph makes them (z from -1 to 1) and squeezed to WebGPU's 0 to 1 here.
 import { Matrix4, Vector3, Frustum, Color } from './math.js';
 import { PRELUDE, builtinCode, MAX_POINTS, FRAME_BYTES, OBJ_BYTES } from './shaders.js';
+
+// (v774) the overdraw view's: one added per draw, whatever was there
+const OD_BLEND = { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } };
+// a material's code with its fragment function fs kept (as fs_body, run for its cuts and discards) and a new fs that
+// gives 1/64 in red for each pixel it's run on
+export function overdrawCode(code) {
+  const m = /@fragment\s+fn\s+fs\s*\(/.exec(code);
+  if (!m) return code;
+  let k = m.index + m[0].length, depth = 1;
+  while (k < code.length && depth > 0) { if (code[k] === '(') depth++; else if (code[k] === ')') depth--; k++; }
+  const params = code.slice(m.index + m[0].length, k - 1);
+  const names = params.split(',').map(p => (/(\w+)\s*:\s*[^:]*$/.exec(p) || [])[1]).filter(Boolean);
+  // (only an entry point's parameters and result may carry @location / @builtin: taken off fs_body's)
+  const bare = t => t.replace(/@(location|builtin|interpolate|invariant)(\([^)]*\))?\s*/g, '');
+  const open = code.indexOf('{', k);
+  return code.slice(0, m.index) + 'fn fs_body(' + bare(params) + ')' + bare(code.slice(k, open)) + code.slice(open) +
+    `\n@fragment fn fs(${params}) -> @location(0) vec4f { _ = fs_body(${names.join(', ')}); return vec4f(1.0 / 64.0, 0.0, 0.0, 0.0); }\n`;
+}
 import * as M from './materials.js';
 
 const DEPTH = 'depth32float';
@@ -89,6 +107,10 @@ class Renderer {
     // later frames while the same meshes stay in view, instead of every draw being encoded anew each frame (see
     // _bundled). Off: every draw is encoded each frame, as before.
     this.bundles = true;
+    // (v774) overdraw view: while set, every draw with colour adds 1/64 to the red of its target (additive, depth tested
+    // as usual) instead of its colour, through its own fragment code (so cuts and discards still apply): the red, times
+    // 64, is how many times each pixel was lit. Recorded lists are left alone meanwhile
+    this.overdraw = false;
     this.bundleMargin = 4;   // (world units: how far out of view a mesh is still recorded, see _walk)
     this._chans = new Map(); this._chanIds = new WeakMap(); this._chanN = 0; this._flushNo = 0; this._walkNo = 0;
     this._time0 = performance.now();
@@ -333,7 +355,7 @@ class Renderer {
       }
     };
     // (v769) with recorded draw lists, what comes before the list is drawn first, then the list (a bundle), then the rest
-    const B = this.bundles && !override && !this.target?.isCanvasTarget ? this._bundled(list, tgt, frameOff, clip, camera) : null;
+    const B = this.bundles && !this.overdraw && !override && !this.target?.isCanvasTarget ? this._bundled(list, tgt, frameOff, clip, camera) : null;
     if (B) {
       drawList(B.pre);
       pass.executeBundles([B.bundle]);
@@ -1087,7 +1109,7 @@ class Renderer {
     const memo = mat._pipeMemo || (mat._pipeMemo = new Map());
     let byFmt = memo.get(format);
     if (!byFmt) memo.set(format, byFmt = []);
-    const k = (kind === 'shader' ? 0 : kind === 'std' ? 1 : kind === 'basic' ? 2 : 3) | (hasColor ? 4 : 0) | (inst ? 8 : 0) | (clip ? 16 : 0);
+    const k = (kind === 'shader' ? 0 : kind === 'std' ? 1 : kind === 'basic' ? 2 : 3) | (hasColor ? 4 : 0) | (inst ? 8 : 0) | (clip ? 16 : 0) | (this.overdraw ? 32 : 0);
     const e = byFmt[k];
     if (e && e.blending === mat.blending && e.blendSrc === mat.blendSrc && e.blendDst === mat.blendDst && e.keepAlpha === mat.keepAlpha
       && e.transparent === mat.transparent && e.side === mat.side && e.depthTest === mat.depthTest && e.depthFunc === mat.depthFunc
@@ -1104,7 +1126,8 @@ class Renderer {
     const depthWrite = kind === 'normal' ? true : !!mat.depthWrite;
     const writeMask = kind === 'normal' || mat.colorWrite ? GPUColorWrite.ALL : 0;
     const prog = kind === 'shader' ? 'shader' + mat.id : kind;
-    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format, clip].join('|');
+    const od = this.overdraw && kind !== 'normal' && writeMask !== 0;
+    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format, clip, od].join('|');
     let p = this._pipelines.get(key);
     if (p !== undefined) return p;
     const buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }];
@@ -1117,13 +1140,14 @@ class Renderer {
       let loc = 2;
       for (const name in mat.attributes) { const [f, s] = ATTR_FORMAT[mat.attributes[name]]; buffers.push({ arrayStride: s, attributes: [{ shaderLocation: loc++, offset: 0, format: f }] }); }
     } else code = builtinCode(kind, hasColor, inst, clip);
+    if (od) code = overdrawCode(code);
     if (inst) buffers.push(INSTANCE_LAYOUT);
     const module = this._module(code);
     try {
       p = this.device.createRenderPipeline({
         layout,
         vertex: { module, entryPoint: 'vs', buffers },
-        fragment: { module, entryPoint: 'fs', targets: [{ format, blend, writeMask }] },
+        fragment: { module, entryPoint: 'fs', targets: [{ format, blend: od ? OD_BLEND : blend, writeMask }] },
         primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
         depthStencil: { format: DEPTH, depthCompare, depthWriteEnabled: depthWrite },
       });

@@ -8252,7 +8252,7 @@ const outlineMat = new GFX.ShaderMaterial({
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
     gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 },
-    tHeat: { value: heatRT.texture }, useHeat: { value: 0 } },
+    tHeat: { value: heatRT.texture }, useHeat: { value: 0 }, odView: { value: 0 } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -8290,7 +8290,20 @@ fn edgeFog(px: vec2f) -> f32 {
   de += (0.65 * edgeNoise(q) + 0.35 * edgeNoise(q * 2.3 + vec2f(5.2, 1.3)) - 0.5) * U.edgeC.y;
   return 1.0 - smoothstep(U.edgeA.y, max(U.edgeA.x, U.edgeA.y + 0.01), de);
 }
+// (v774) G > Overdraw view: how many times a pixel was lit (the red, times 64), as a colour: none dark, then blue,
+// green, yellow, orange, red, white
+fn odHeat(n: f32) -> vec3f {
+  let k = i32(round(n));
+  if (k <= 0) { return vec3f(0.04, 0.035, 0.06); }
+  if (k == 1) { return vec3f(0.29, 0.49, 1.0); }
+  if (k == 2) { return vec3f(0.24, 0.77, 0.35); }
+  if (k == 3) { return vec3f(0.91, 0.83, 0.23); }
+  if (k == 4) { return vec3f(1.0, 0.6, 0.16); }
+  if (k == 5) { return vec3f(1.0, 0.23, 0.23); }
+  return vec3f(1.0);
+}
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
+  if (U.odView > 0.5) { return vec4f(odHeat(textureLoad(tColor, mid(floor(i.pos.xy)), 0).r * 64.0), 1.0); }
   // (where hot air rises, the whole picture, strokes and all, is read a few pixels off: see HEAT)
   var px = floor(i.pos.xy);
   if (U.useHeat > 0.5) {
@@ -8807,22 +8820,82 @@ function chunkGIWatch(cx, cz) {
 const shadowLayers = new GFX.Layers(); shadowLayers.enable(5);
 renderer.shadowLayers = shadowLayers;
 const worldOpaque = m => !m.material.transparent, worldClear = m => !!m.material.transparent;
+// (v774, Jordan: how much would lighting each pixel only once save?) G > Overdraw view: the solid passes drawn with
+// renderer.overdraw (each draw adds 1/64 to the red), shown as a heat map by the outline pass, and counted on the GPU
+// every few frames (every second pixel each way): pixels lit, lightings, pixels lit twice or more, four times or more
+const OVERDRAW = { on: false, pipe: null, buf: null, read: null, wait: false, mapped: false, n: [0, 0, 0, 0] };
+const OVERDRAW_WGSL = /* wgsl */ `
+@group(0) @binding(0) var tC: texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> acc: array<atomic<u32>, 4>;
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let d = textureDimensions(tC);
+  let p = id.xy * 2u;
+  if (p.x >= d.x || p.y >= d.y) { return; }
+  let n = u32(round(textureLoad(tC, vec2i(p), 0).r * 64.0));
+  if (n == 0u) { return; }
+  atomicAdd(&acc[0], 1u);
+  atomicAdd(&acc[1], n);
+  if (n >= 2u) { atomicAdd(&acc[2], 1u); }
+  if (n >= 4u) { atomicAdd(&acc[3], 1u); }
+}`;
+function overdrawCount() {
+  const O = OVERDRAW, dev = renderer.device;
+  if (O.wait || O.mapped) return;
+  if (!O.pipe) {
+    O.pipe = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ label: 'overdraw count', code: OVERDRAW_WGSL }), entryPoint: 'main' } });
+    O.buf = dev.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    O.read = dev.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  }
+  const view = renderer.textureView(outlineRT.texture).view, w = outlineRT.width, h = outlineRT.height;
+  dev.queue.writeBuffer(O.buf, 0, new Uint32Array(4));
+  const bg = dev.createBindGroup({ layout: O.pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: view }, { binding: 1, resource: { buffer: O.buf } }] });
+  renderer.compute(enc => {
+    const pass = enc.beginComputePass({ label: 'overdraw count' });
+    pass.setPipeline(O.pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(Math.ceil(w / 16), Math.ceil(h / 16)); pass.end();
+    enc.copyBufferToBuffer(O.buf, 0, O.read, 0, 16);
+  });
+  O.wait = true;   // (read once the frame is sent: overdrawRead)
+}
+// after the frame's sent: the count read back, when the GPU has it
+function overdrawRead() {
+  const O = OVERDRAW;
+  if (!O.wait) return;
+  O.wait = false; O.mapped = true;
+  O.read.mapAsync(GPUMapMode.READ).then(() => { O.n = Array.from(new Uint32Array(O.read.getMappedRange())); O.read.unmap(); O.mapped = false; }, () => { O.mapped = false; });
+}
+// (v774) G panel: the render (encode) lap's own JavaScript by part, the renderer's renders (its walk, shadow map and
+// drawing rows) taken out: ms, summed over the frame
+const ENC_T = {};
+let encT0 = 0, encR0 = 0;
+function encMark(k) {
+  const n = performance.now(), r = renderer.info.tRender;
+  if (k) ENC_T[k] = (ENC_T[k] || 0) + (n - encT0) - (r - encR0);
+  encT0 = n; encR0 = r;
+}
 function renderWorld() {
+  encMark(null);
   // (the ground casts too unless SHADOWS.ground is off: phones, where its ~350k triangles were half the shadow map)
   if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
   drawCrowds();
   drawFolk();
   drawHumans();
+  encMark('posing foes, folk and people');
+  const od = OVERDRAW.on;
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
-  const on = depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
+  const on = od || depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
   renderer.setRenderTarget(on ? outlineRT : null);
+  if (od) renderer.setClearColor(0x000000, 0);
   renderer.clear();
+  if (od) renderer.setClearColor('#0b0912', 1);
   // the renderer draws the sun's shadow map anew in every render, keeping only casters on the camera's
   // layers: draw it once, in the world pass (the hero casts there through a stand-in), and reuse it after
   renderer.shadowMap.autoUpdate = true;
   updateTrunkCut();
   updateWillows();
+  encMark('trunk cut, willows');
   scene.updateMatrixWorld();
+  encMark('scene matrices (every object)');
+  renderer.overdraw = od;
   // the ground on its own (layer 5), so the profiler shows it apart from what stands on it; the shadow map is
   // drawn in the first render, from the ground's and the world's casters both (shadowLayers)
   // (v439: the world's opaque things first, roofs first of all (drawFirst), then the ground, then the world's
@@ -8846,42 +8919,50 @@ function renderWorld() {
   // the grass tufts on their own (layer 4: they cast no shadow), so the profiler shows what they cost
   renderer.passName = 'grass';
   camera.layers.set(4); renderer.render(scene, camera);
-  // (v581) is any water on screen (lakes, rivers, the sea, fountains: layer 2)? With none, the caustics, the docks'
-  // mirrored picture and the copy of the world for the water are all skipped: inland they were made every frame
-  // for nothing. (The scene walk is the frame's own, kept from the renders above, so this costs a filter.)
-  camera.layers.set(2);
-  const waterSeen = renderer._collect(scene, camera).length > 0;
-  if (waterSeen) updateCaustics();
-  // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
-  const bend = waterSeen && on && (WATER.refraction > 0 || SSR.on > 0.5 || SSR.proxy > 0.5);   // (v509: the reflections read the copy too)
-  // (v525) the docks' and boats' mirrored picture, for the water
-  WATER_U.ssrC.value.z = bend && SSR.proxy > 0.5 && renderProxies() ? 1 : 0;
-  // (v590) the spray, chimney smoke, lamp halos and effects fade softly into what's behind them by this same depth copy
-  // (their refr): with them on screen it's still taken with no water in view, depth only
-  const soft = on && !waterSeen && ((haloMesh && haloMesh.visible) || (smokeMesh && smokeMesh.visible) || (sprayMesh && sprayMesh.visible) || fxParts.clearMesh.visible);
-  if (bend || soft) { const s = renderer.snapshot(outlineRT, bend); WATER_U.tRefr.value = bend ? s.color : noBend.color; WATER_U.tRefrD.value = s.depth; }
-  else { WATER_U.tRefr.value = noBend.color; WATER_U.tRefrD.value = noBend.depth; }
-  WATER_U.refr.value = bend || soft ? 1 : 0;
-  renderer.passName = 'water';
-  camera.layers.set(2); renderer.render(scene, camera);
-  renderer.passName = 'hero';
-  camera.layers.set(1); renderer.render(scene, camera);
-  if (fxParts.solidMesh.visible || fxParts.domeMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
-  renderer.passName = 'swamp water, ground haze';
-  camera.layers.set(3); renderer.render(scene, camera);
-  if (fxParts.clearMesh.visible) { renderer.passName = 'effects'; camera.layers.set(FX_CLEAR_LAYER); renderer.render(scene, camera); }
-  // the aim decal, over a copy of the depth so far
-  if (on && aimMesh.visible) {
-    AIM_U.tD.value = renderer.snapshot(outlineRT).depth;
-    renderer.passName = 'aim decal';
-    camera.layers.set(7); renderer.render(scene, camera);
+  renderer.overdraw = false;
+  encMark('world, snow, ground, grass (game side)');
+  // (the overdraw view: only the solid passes above, counted; the rest isn't drawn)
+  if (od) overdrawCount();
+  else {
+    // (v581) is any water on screen (lakes, rivers, the sea, fountains: layer 2)? With none, the caustics, the docks'
+    // mirrored picture and the copy of the world for the water are all skipped: inland they were made every frame
+    // for nothing. (The scene walk is the frame's own, kept from the renders above, so this costs a filter.)
+    camera.layers.set(2);
+    const waterSeen = renderer._collect(scene, camera).length > 0;
+    if (waterSeen) updateCaustics();
+    // the water, over a copy of the world under it (into the screen there's nothing to copy: no bending then)
+    const bend = waterSeen && on && (WATER.refraction > 0 || SSR.on > 0.5 || SSR.proxy > 0.5);   // (v509: the reflections read the copy too)
+    // (v525) the docks' and boats' mirrored picture, for the water
+    WATER_U.ssrC.value.z = bend && SSR.proxy > 0.5 && renderProxies() ? 1 : 0;
+    // (v590) the spray, chimney smoke, lamp halos and effects fade softly into what's behind them by this same depth copy
+    // (their refr): with them on screen it's still taken with no water in view, depth only
+    const soft = on && !waterSeen && ((haloMesh && haloMesh.visible) || (smokeMesh && smokeMesh.visible) || (sprayMesh && sprayMesh.visible) || fxParts.clearMesh.visible);
+    if (bend || soft) { const s = renderer.snapshot(outlineRT, bend); WATER_U.tRefr.value = bend ? s.color : noBend.color; WATER_U.tRefrD.value = s.depth; }
+    else { WATER_U.tRefr.value = noBend.color; WATER_U.tRefrD.value = noBend.depth; }
+    WATER_U.refr.value = bend || soft ? 1 : 0;
+    renderer.passName = 'water';
+    camera.layers.set(2); renderer.render(scene, camera);
+    renderer.passName = 'hero';
+    camera.layers.set(1); renderer.render(scene, camera);
+    if (fxParts.solidMesh.visible || fxParts.domeMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
+    renderer.passName = 'swamp water, ground haze';
+    camera.layers.set(3); renderer.render(scene, camera);
+    if (fxParts.clearMesh.visible) { renderer.passName = 'effects'; camera.layers.set(FX_CLEAR_LAYER); renderer.render(scene, camera); }
+    // the aim decal, over a copy of the depth so far
+    if (on && aimMesh.visible) {
+      AIM_U.tD.value = renderer.snapshot(outlineRT).depth;
+      renderer.passName = 'aim decal';
+      camera.layers.set(7); renderer.render(scene, camera);
+    }
+    encMark('water, hero, effects (game side)');
+    updateHaze();
+    updateEye();
+    updateBloom();
+    encMark('haze, eye, bloom');
   }
-  updateHaze();
-  updateEye();
-  updateBloom();
   if (!on) return;
   // the heat shimmer's offsets, over the finished world's depth, for the outline pass
-  const heatOn = !!(heatMesh && heatMesh.visible);
+  const heatOn = !od && !!(heatMesh && heatMesh.visible);
   outlineMat.uniforms.useHeat.value = heatOn ? 1 : 0;
   if (heatOn) {
     HEAT_U.res.value.copy(outlineMat.uniforms.res.value); HEAT_U.ss.value = ssNow;
@@ -8895,7 +8976,7 @@ function renderWorld() {
   u.useDepth.value = depthOn ? 1 : 0; u.grassLine.value = GRASS.outline; u.driftLine.value = DRIFT.outline;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
-  u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color);
+  u.strength.value = OUTLINE.strength; u.color.value.set(OUTLINE.color); u.odView.value = od ? 1 : 0;
   // (v506) the world's edge fog: the camera's way back from the screen to the world, the sea's level at the edge
   {
     const E = WORLD_EDGE, fc = scene.fog.color, b = E.bright;
@@ -8910,6 +8991,7 @@ function renderWorld() {
   renderer.render(outlineScene, outlineCam);
   // (v591) the quest boards' seals, over the picture at the screen's own resolution
   drawSeals(on);
+  encMark('outline, post, seals');
 }
 
 const hemi = new GFX.HemisphereLight('#b4bce8', '#3a2a44', 0.72);
@@ -32761,10 +32843,11 @@ function worldPart(m) {
 }
 const profPanel = $('gpuPanel'), profLive = profPanel.querySelector('.plive'), spikePanel = profPanel.querySelector('.pspike');
 const clockText = ([day, c]) => { const m = Math.floor(c * 1440); return `day ${day} ${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
-const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div>` + spikes.html(clockText); };
+const showSpikes = () => { spikePanel.innerHTML = `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>` + spikes.html(clockText); };
 spikePanel.addEventListener('click', e => {
   if (e.target.closest('[data-split]')) { PROF_SPLIT.world = !PROF_SPLIT.world; showSpikes(); return; }
   if (e.target.closest('[data-bundles]')) { renderer.bundles = !renderer.bundles; showSpikes(); return; }
+  if (e.target.closest('[data-overdraw]')) { OVERDRAW.on = !OVERDRAW.on; showSpikes(); return; }
   const bt = e.target.closest('[data-btest]'); if (bt) { setBuildTest(+bt.dataset.btest, BUILD_TEST.cull); showSpikes(); return; }
   if (e.target.closest('[data-bcull]')) { setBuildTest(BUILD_TEST.shade, !BUILD_TEST.cull); showSpikes(); return; }
   const b = e.target.closest('[data-spike]');
@@ -32897,8 +32980,10 @@ function frameBody(now) {
   renderer.info.texWait = 0;
   renderWorld();
   renderDoll();
+  encMark('paperdoll');
   prof.lapSplit('render (encode)', 'waiting for screen image', renderer.info.texWait);
   renderer.endFrame();
+  overdrawRead();
   prof.lap('submit');
   updateVeil(real);
   updateXpFly(Math.min(real, 0.1));
@@ -32916,6 +33001,14 @@ function frameBody(now) {
     // draws (ms); and the recorded draw lists replayed and recorded again
     prof.count('encode: walking the scene (ms)', I.tWalk); prof.count('encode: shadow map (ms)', I.tShadow);
     prof.count('encode: drawing (ms)', Math.max(0, I.tRender - I.tWalk - I.tShadow));
+    // (v774) the rest of render (encode): the game's own JavaScript in it, by part
+    for (const k of ['posing foes, folk and people', 'trunk cut, willows', 'scene matrices (every object)', 'world, snow, ground, grass (game side)', 'water, hero, effects (game side)', 'haze, eye, bloom', 'outline, post, seals', 'paperdoll']) prof.count('encode: ' + k + ' (ms)', ENC_T[k] || 0);
+    for (const k in ENC_T) ENC_T[k] = 0;
+    // (v774) the overdraw view's count: times each lit pixel was lit, and the share of lightings a depth pre-pass
+    // (each pixel lit once) would save
+    if (OVERDRAW.on) { const [px, lit, two, four] = OVERDRAW.n;
+      prof.count('overdraw: times a pixel is lit (average)', px ? lit / px : 0); prof.count('overdraw: pixels lit 2+ times (%)', px ? 100 * two / px : 0);
+      prof.count('overdraw: pixels lit 4+ times (%)', px ? 100 * four / px : 0); prof.count('overdraw: lightings a pre-pass would save (%)', lit ? 100 * (lit - px) / lit : 0); }
     prof.count('recorded draw lists replayed', I.replayed); prof.count('draw lists recorded again', I.recorded);
     // (v770) why they were: the first time, something new in view, a recorded mesh changed, hidden or gone, the frame's
     // set of textures (only that list encoded again)
@@ -32928,7 +33021,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 773, crashSeen = new Map();
+const GAME_VERSION = 774, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
