@@ -253,7 +253,7 @@ struct VOut {
   o.glow = q.g.z * U.look.y; o.cover = cover; o.extra = extra;
   return o;
 }
-// (v741) smooth value noise and a few octaves of it, for a puff's lumps
+// (v742) smooth value noise and a few octaves of it, for a puff's lumps
 fn pHash(p: vec3f) -> f32 {
   var q = fract(p * 0.1031);
   q += dot(q, q.zyx + 31.32);
@@ -316,7 +316,7 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
       let up = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
       let back = vec3f(F.view[0][2], F.view[1][2], F.view[2][2]);
       var n = normalize(right * uv.x + up * uv.y + back * sqrt(1.0 - r2));
-      // (v741, Jordan: lit, not in bands, but lumpy and uneven, more like a volume) a few octaves of noise over the
+      // (v742, Jordan: lit, not in bands, but lumpy and uneven, more like a volume) a few octaves of noise over the
       // ball, fixed to it in the world (so it doesn't swim as the camera turns), its own for each puff by its seed and
       // slowly churning over its life: the edge pulled in where it's low (a ragged outline), thinner there and thicker
       // in the lumps, the lumps' slopes bending its normal, and the hollows between them a little darker
