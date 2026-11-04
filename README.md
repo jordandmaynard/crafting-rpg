@@ -490,6 +490,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v757:** (Jordan) Potions on the hotbar slosh while you walk, the same push as the pack's (their home is 'hot'). The 2D bottles in the world slosh too: the one in hand is pushed by the fist's moves in the world (mapped to the screen like the pack's walk push, x POTION_DRAW.slosh2d), a flying one by where it is on the screen (x POTION_THROW.slosh), and a thrown bottle carries on the liquid of the one that was in hand. A moving bottle is drawn live into one of PCARD_LIVE atlas cells after the icons (pcardBake, region uploads); a settled one goes back to its icon cell. Jordan's tuning: POTION_HOLD raise -0.5, elbow 1.58, out 0.4, swing 0.62; neck2d 0.32, gripBias 0.055.
 
+**v758:** (Jordan) The 2D bottles in the world (in hand and thrown) are lit by the scene. buildPotionNormals works a normal map out of the bottle's outline (each row round like a turned vase, the shoulders and base tipped by how the glass widens); the card shader turns it with the card into the world and lights each pixel at its own spot with the sky and ground, the inside fill, the sun (with its shadow map and cloud shade) and the point lights, then postExpose. The icon is taken as the bottle at POTION_LIT.ref of light, and strength (0.8) blends toward the lit colour; glint and gloss add the sun's highlight. drawSeals hands the world's lights to the seal render through renderer.lightsOverride. T > Thrown potions has the four knobs.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

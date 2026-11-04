@@ -24911,7 +24911,10 @@ function drawSeals(useD) {
     const sig = POTION_KINDS.map(k => (ICON['potion_' + k].match(/src="([^"]+)"/) || [])[1] || '').join('|');
     if ((!pcardCell || Math.abs(want - pcardCell) > pcardCell / 6 || sig !== pcardSig) && !buildPotionAtlas(want) && !pcardCell) pcardMesh.visible = false;
     pcardBake();
+    if (pcardNormG !== POTION_GEOM[128]) buildPotionNormals();
     PCARD_U.screen.value.set(w, h); PCARD_U.useD.value = useD ? 1 : 0;
+    const PL = POTION_LIT;
+    PCARD_U.litK.value = PL.strength; PCARD_U.litRef.value = PL.ref; PCARD_U.glint.value = PL.glint; PCARD_U.gloss.value = PL.gloss;
   }
   if (!sealsUp) { st.display = ''; sealsUp = true; }
   SEAL_U.cell.value = cell; SEAL_U.screen.value.set(w, h); SEAL_U.lift.value = QUEST_MARK.lift; SEAL_U.bob.value = QUEST_MARK.bob; SEAL_U.useD.value = useD ? 1 : 0;
@@ -24921,7 +24924,10 @@ function drawSeals(useD) {
   renderer.passName = 'quest seals';
   camera.layers.set(0);
   if (pcardMesh.parent !== sealScene) sealScene.add(pcardMesh);
+  // (v758: the potion cards are lit by the world's lights: the sky, the sun and its shadow map, the lamps)
+  if (cards) renderer.lightsOverride = { hemi: hemi.visible ? hemi : null, sun: sun.visible ? sun : null, points: lights.filter(l => l.isPointLight && l.visible).slice(0, 16) };
   renderer.render(sealScene, camera);
+  renderer.lightsOverride = null;
   camera.layers.mask = lay; renderer.shadowMap.autoUpdate = auto;
   renderer.setRenderTarget(null); renderer.setClearColor('#0b0912', 1);
 }
@@ -25869,13 +25875,22 @@ function potionDrawPose(tucked) {
 // seals (drawSeals) and hidden wherever something stands in front of it (the mosaic's depth). The one in hand sits
 // POTION_DRAW.gripBias behind the fist, so the fist covers its neck. Sized in the world, so they zoom with it.
 const PCARD_MAX = 16;
+// (v758, Jordan) lit by the scene: a normal map worked out from the bottle's shape (buildPotionNormals: round across each
+// row, the shoulders and base tipped up or down by how the glass widens), turned with the card to face the eye, then the
+// sun (its shadow map and the clouds' shade), the sky and ground, the inside fill and the point lights at each pixel's
+// spot in the world, as the scene's surfaces are. The painted icon is taken as the bottle at POTION_LIT.ref of light;
+// strength blends it toward its lit colour, glint adds the sun's highlight on the glass (gloss: how tight).
+const POTION_LIT = { strength: 0.8, ref: 1.2, glint: 0.6, gloss: 40 };
 const PCARD_U = { tP: { value: new GFX.DataTexture(new Uint8Array(4), 1, 1) }, tD: { value: outlineRT.depthTexture },
-  screen: { value: new GFX.Vector2(1, 1) }, cells: { value: 6 }, useD: { value: 1 } };
+  tN: { value: new GFX.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1) },
+  screen: { value: new GFX.Vector2(1, 1) }, cells: { value: 6 }, useD: { value: 1 }, cellPx: { value: 16 },
+  litK: { value: POTION_LIT.strength }, litRef: { value: POTION_LIT.ref }, glint: { value: POTION_LIT.glint }, gloss: { value: POTION_LIT.gloss } };
 const pcardMat = new GFX.ShaderMaterial({
   uniforms: PCARD_U, attributes: { qm: 'vec4f', qs: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
   blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
   code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32, @location(2) @interpolate(flat) soft: f32 }
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32, @location(2) @interpolate(flat) soft: f32,
+  @location(3) nuv: vec2f, @location(4) wp: vec3f, @location(5) @interpolate(flat) rc: vec2f }
 @vertex fn vs(v: VIn) -> VOut {
   let c = F.viewProj * vec4f(v.position, 1.0);
   var o: VOut;
@@ -25887,12 +25902,43 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
   let lx = v.qm.x * 0.5 * px;
   let ly = select(-(1.0 - v.qs.y), v.qs.y, v.qm.y > 0.0) * px;
   let cs = cos(v.qm.w); let sn = sin(v.qm.w);
-  let cp = (c.xy / cw * 0.5 + 0.5) * U.screen + vec2f(lx * cs - ly * sn, lx * sn + ly * cs);
+  let off = vec2f(lx * cs - ly * sn, lx * sn + ly * cs);
+  let cp = (c.xy / cw * 0.5 + 0.5) * U.screen + off;
   o.pos = vec4f(cp / U.screen * 2.0 - 1.0, 0.5, 1.0);
   if (c.w <= 0.0 || v.qs.x <= 0.0) { o.pos = vec4f(2.0, 2.0, 0.5, 1.0); }
   o.uv = vec2f((v.qm.z + v.qm.x * 0.5 + 0.5) / U.cells, 0.5 - v.qm.y * 0.5);
   o.soft = v.qs.w;
+  // (v758) where it is in the normal map (the icon sits a pixel in from its cell's edges), the corner's spot in the
+  // world (along the camera's right and up, a pixel being qs.x / px tiles there) and the card's turn
+  o.nuv = (vec2f(v.qm.x * 0.5 + 0.5, 0.5 - v.qm.y * 0.5) * U.cellPx - 1.0) / max(U.cellPx - 2.0, 1.0);
+  let Rw = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]); let Uw = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
+  o.wp = v.position + (Rw * off.x + Uw * off.y) * (v.qs.x / max(px, 1e-3));
+  o.rc = vec2f(cs, sn);
   return o;
+}
+// the light at world point w on normal N (Ng the card's own, facing the eye), as the scene's surfaces take it, and
+// the sun's glint in .w
+fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
+  var l = vec3f(0.0); var g = 0.0;
+  if (F.hemiSky.w > 0.5) { l += mix(F.hemiGround.rgb, F.hemiSky.rgb, 0.5 * N.y + 0.5); }
+  l += insideFill(w, N);
+  if (F.sunDir.w > 0.5) {
+    let L = F.sunDir.xyz;
+    var lc = F.sunColor.rgb * cloudShade(w.xz);
+    if (F.cloud2.z > 0.001) { lc *= mix(1.0, sunShadow(w, Ng), F.cloud2.z); }
+    l += sat(dot(N, L)) * lc;
+    let Hv = normalize(L + toEye(w));
+    g = pow(sat(dot(N, Hv)), max(U.gloss, 1.0)) * dot(lc, vec3f(0.3, 0.59, 0.11)) * sat(dot(N, L) * 4.0);
+  }
+  let np = i32(F.cloud2.w);
+  for (var i = 0; i < np; i++) {
+    let p = F.points[i];
+    let d = p.pos.xyz - w; let dist = length(d);
+    var att = 1.0;
+    if (p.pos.w > 0.0 && p.color.w > 0.0) { att = pow(sat(1.0 - dist / p.pos.w), p.color.w); }
+    l += sat(dot(N, d / max(dist, 1e-5))) * p.color.rgb * att;
+  }
+  return vec4f(postExpose(l), g);
 }
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let col = textureSample(tP, tPS, i.uv);
@@ -25905,7 +25951,19 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
     k = 1.0 - smoothstep(i.soft, i.soft * 2.0 + 0.03, vb - i.vz);
   }
   if (k <= 0.0 || col.a <= 0.0) { discard; }
-  return col * k;
+  var rgb = col.rgb;
+  if (U.litK > 0.0 || U.glint > 0.0) {
+    // the bottle's normal on the card (x right, y up, z out of it), turned with the card, into the world
+    let nt = textureSampleLevel(tN, tNS, clamp(i.nuv, vec2f(0.0), vec2f(1.0)), 0.0).xyz * 2.0 - 1.0;
+    let sx = nt.x * i.rc.x - nt.y * i.rc.y; let sy = nt.x * i.rc.y + nt.y * i.rc.x;
+    let Rw = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]); let Uw = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
+    let Bw = vec3f(F.view[0][2], F.view[1][2], F.view[2][2]);
+    let N = normalize(Rw * sx + Uw * sy + Bw * (max(nt.z, 0.0) + 1e-3));
+    let li = pcardLight(i.wp, N, Bw);
+    let f = min(li.rgb / max(U.litRef, 1e-3), vec3f(3.0));
+    rgb = rgb * mix(vec3f(1.0), f, U.litK) + vec3f(li.w * U.glint * col.a);
+  }
+  return vec4f(rgb, col.a) * k;
 }`,
 });
 const pcardPos = new Float32Array(PCARD_MAX * 18), pcardQm = new Float32Array(PCARD_MAX * 24), pcardQs = new Float32Array(PCARD_MAX * 24);
@@ -25942,6 +26000,39 @@ function pcardInk(d, W, h, cell) {
     d[o + 3] = Math.round(A[k] + m * (1 - a));
   }
 }
+// (v758) the bottles' normal map (they all share a shape): from the glass's outline, each row round like a turned
+// vase (a body of revolution: its half-width and middle per row), tipped up where the glass widens going down (the
+// shoulders) and down where it narrows (the base); x right, y up, z toward the eye, packed into RGB
+let pcardNormG = null;
+function buildPotionNormals() {
+  const g = POTION_GEOM[128];
+  if (!g || pcardNormG === g) return;
+  pcardNormG = g;
+  const { w, h, src } = g, R = new Float32Array(h), C = new Float32Array(h);
+  for (let y = 0; y < h; y++) {
+    let xl = -1, xr = -1;
+    for (let x = 0; x < w; x++) if (src[(y * w + x) * 4 + 3] > 127) { if (xl < 0) xl = x; xr = x; }
+    R[y] = xl < 0 ? 0 : (xr - xl + 1) / 2; C[y] = xl < 0 ? w / 2 : (xl + xr + 1) / 2;
+  }
+  // the widening, smoothed over a few rows (rows without glass count as narrowing to nothing)
+  const Rs = (y) => { let a = 0, n = 0; for (let k = -2; k <= 2; k++) { const yy = y + k; if (yy >= 0 && yy < h) { a += R[yy]; n++; } } return a / n; };
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const dr = clamp((Rs(Math.min(h - 1, y + 2)) - Rs(Math.max(0, y - 2))) / 4, -2, 2);
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      let nx = 0, ny = 0, nz = 1;
+      if (R[y] > 0 && src[o + 3] > 0) {
+        const u = clamp((x + 0.5 - C[y]) / R[y], -0.97, 0.97), c = Math.sqrt(1 - u * u), m = Math.hypot(u, dr, c);
+        nx = u / m; ny = dr / m; nz = c / m;
+      }
+      out[o] = Math.round((nx * 0.5 + 0.5) * 255); out[o + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      out[o + 2] = Math.round((nz * 0.5 + 0.5) * 255); out[o + 3] = 255;
+    }
+  }
+  const t = PCARD_U.tN.value;
+  t.image = { data: out, width: w, height: h }; t.needsUpdate = true;
+}
 // the atlas: each potion's icon side by side, cell px square, premultiplied, with the items' one-pixel black outline,
 // then PCARD_LIVE cells for the sloshing ones
 function buildPotionAtlas(cell) {
@@ -25956,7 +26047,7 @@ function buildPotionAtlas(cell) {
   pcardInk(d, W, cell, cell);
   const t = PCARD_U.tP.value;
   t.image = { data: new Uint8Array(d.buffer), width: W, height: cell }; t.regions = []; t.needsUpdate = true;
-  PCARD_U.cells.value = n + PCARD_LIVE; pcardCell = cell; pcardSig = srcs.join('|');
+  PCARD_U.cells.value = n + PCARD_LIVE; PCARD_U.cellPx.value = cell; pcardCell = cell; pcardSig = srcs.join('|');
   for (const S of pcardSlots) if (S) S.dirty = true;
   return true;
 }
@@ -31191,6 +31282,10 @@ const TUNING = [
     [POTION_DRAW, 'gripBias', '2D bottle: held behind the fist by (tiles: the fist covers its neck)', 0, 0.3, 0.005],
     [POTION_DRAW, 'gripSoft', '2D bottle: hidden by anything nearer than this (tiles)', 0, 0.3, 0.005],
     [POTION_DRAW, 'slosh2d', '2D bottle in hand: slosh (x the pack\'s walk push, 0 off)', 0, 4, 0.05],
+    [POTION_LIT, 'strength', '2D bottles: lit by the scene (0 the flat icon)', 0, 1, 0.05],
+    [POTION_LIT, 'ref', '2D bottles: the light the icon is painted at', 0.2, 3, 0.05],
+    [POTION_LIT, 'glint', '2D bottles: sun glint on the glass', 0, 3, 0.05],
+    [POTION_LIT, 'gloss', '2D bottles: glint tightness', 2, 200, 1],
     [POTION_EFFECT.red, 'heal', 'Red: heals (HP, at once)', 0, 100, 1],
     [POTION_EFFECT.red, 'radius', 'Red: reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'linger', 'Green: poison cloud lasts (s)', 1, 20, 0.5],
@@ -32382,7 +32477,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 757, crashSeen = new Map();
+const GAME_VERSION = 758, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
