@@ -16,6 +16,7 @@ let objectId = 0;
 // (v776) updateMatrixWorld's tally, for the profiler: objects looked at, and those whose world matrix was made anew
 export const MATRIX_STATS = { seen: 0, made: 0 };
 const _q = new Quaternion(), _v = new Vector3(), _m = new Matrix4(), _target = new Vector3(), _pos = new Vector3();
+const _was = new Float64Array(16);   // (v781: _updateUp's world matrix before)
 export class Object3D {
   constructor() {
     this.id = objectId++;
@@ -99,12 +100,19 @@ export class Object3D {
   }
   // this object's world matrix brought up to date along with every parent's, but not its children's (counted as a
   // change, so updateMatrixWorld redoes them)
+  // (v781: counted as a change only if it is one; before, every getWorldPosition counted one all the way up to the
+  // scene, so the next pass made every world matrix in it again)
   _updateUp() {
     if (this.parent) this.parent._updateUp();
     if (this.matrixAutoUpdate) this.updateMatrix();
+    const w = this.matrixWorld.elements;
+    for (let i = 0; i < 16; i++) _was[i] = w[i];
     if (this.parent) this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
     else this.matrixWorld.copy(this.matrix);
-    this._mwP = this.parent; this._mwPV = this.parent ? this.parent._mwV : 0; this._mwV++;
+    let same = this._mwV !== 0;
+    for (let i = 0; i < 16 && same; i++) if (_was[i] !== w[i]) same = false;
+    this._mwP = this.parent; this._mwPV = this.parent ? this.parent._mwV : 0;
+    if (!same) this._mwV++;
   }
   getWorldPosition(out) { this._updateUp(); return out.setFromMatrixPosition(this.matrixWorld); }
   getWorldQuaternion(out) { this._updateUp(); this.matrixWorld.decompose(_pos, out, _v); return out; }

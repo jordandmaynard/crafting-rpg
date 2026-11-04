@@ -1350,7 +1350,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 780;
+const GAME_VERSION = 781;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -19212,10 +19212,10 @@ function idleDollPose() {
   const keep = o => parts.push([o, o.position.x, o.position.y, o.position.z, o.rotation.x, o.rotation.y, o.rotation.z, o.rotation.order, o.scale.x, o.scale.y, o.scale.z, o.visible]);
   keep(heroRoot);
   hero.g.traverse(keep);
-  const keys = ['moving', 'dash', 'flip', 'swing', 'whirl', 'lunge', 'bow', 'spear', 'sitK', 'helm', 'axeWind', 'cdPotion'];
+  const keys = ['moving', 'dash', 'flip', 'swing', 'whirl', 'lunge', 'bow', 'spear', 'sitK', 'helm', 'axeWind', 'cdPotion', 'toss'];
   const was = keys.map(k => H[k]);
   const g = { bowUp, bowFollow, spearHeld, spearPlan, hamPlan, axPlan, mode, down: mouse.down, pad: PAD.attack, touch: TOUCH.attack };
-  Object.assign(H, { moving: false, dash: -1, flip: null, swing: -1, whirl: -1, lunge: -1, bow: null, spear: null, sitK: 0, helm: false, axeWind: -1, cdPotion: 0 });
+  Object.assign(H, { moving: false, dash: -1, flip: null, swing: -1, whirl: -1, lunge: -1, bow: null, spear: null, sitK: 0, helm: false, axeWind: -1, cdPotion: 0, toss: null });
   mode = 'play'; mouse.down = false; PAD.attack = false; TOUCH.attack = false; bowUp = 0;
   try { animateHero(10); heroRoot.position.set(H.x, H.y, H.z); heroRoot.visible = true; }   // (a long step, so every eased part settles at rest)
   catch (err) { /* (left as it was) */ }
@@ -19269,7 +19269,7 @@ const H = {
   kills: 0, level: 1, xp: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
-  cdQ: 0, cdE: 0, cdDash: 0, cdPotion: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
+  cdQ: 0, cdE: 0, cdDash: 0, cdPotion: 0, toss: null, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
   kx: 0, kz: 0, bow: null, spear: null,
 };
 const CD = { Q: 8, E: 7 };
@@ -19834,6 +19834,11 @@ const POTION_DRAW = { time: 0.55, at: 0.45, hoist: 3.3, out: 0.35, elbow: 1.3, s
 // (v756, Jordan) holding a potion: the upper arm a little forward (raise), the elbow bent (radians) so the hand's out in
 // front, a little out to the side (out), the walk's swing kept only by `swing` of it; the bottle stays upright
 const POTION_HOLD = { raise: -0.5, elbow: 1.58, out: 0.4, swing: 0.62 };
+// (v781, Jordan) the throw: an overhand toss. The arm swings up and back behind the shoulder (back, radians, the elbow
+// bent by elbow) over the first `cock` seconds, then whips over and forward (to `through`, the elbow opening), the
+// bottle leaving the hand `windup` seconds after the click, and eases back by `time`. twist: the chest's turn with it
+// (radians, back to the right as it's raised, round to the left as it comes over); out: the arm out to the side.
+const POTION_TOSS = { time: 0.45, cock: 0.08, windup: 0.14, back: 2.8, through: 1.1, elbow: 1.7, out: 0.25, twist: 0.35 };
 const POTION_EFFECT = {
   // (v753, Jordan) red heals every friend in reach the moment it breaks (only you, for now: townsfolk take no harm), with
   // no wind-up; it can't touch foes. No splash (red would look like blood): the glass breaks, and each one healed gets
@@ -26317,7 +26322,7 @@ const thrown = [], clouds = [];
 // (v754) how far through drawing a new bottle from the pack (0 none, 0-1 the reach) and whether a bottle's in hand now
 function potionDrawAt() {
   const D = POTION_DRAW, cd = H.cdPotion;
-  if (cd <= 0) return { u: 0, held: true };
+  if (cd <= 0 || (H.toss && !H.toss.gone)) return { u: 0, held: true };   // (v781: still in hand as the arm winds up)
   const u = 1 - cd / Math.max(0.01, Math.min(D.time, POTION_THROW.cd));
   return u < 0 ? { u: 0, held: false } : { u: Math.min(1, u), held: u >= D.at };
 }
@@ -26331,20 +26336,32 @@ function potionReachW() {
 function potionDrawPose(tucked) {
   const D = POTION_DRAW, hp = handPotion(), d = potionDrawAt();
   hero.potion.visible = !!DRESS.potion() && d.held;
-  if (!hp || tucked || H.still) return;
+  if (tucked || H.still) return;
   const a = hero.armR.rotation, e = hero.elbows[1].rotation;
   // (v756) the hold: elbow bent, hand out in front, the walk's swing cut down (the 3D bottle, along the hand, stands up)
-  if (Math.round(POTION_THROW.inHand) > 0) {
+  if (hp && Math.round(POTION_THROW.inHand) > 0) {
     const P = POTION_HOLD;
     a.set(-P.raise + a.x * P.swing, a.y * P.swing, -0.08 - P.out);
     e.x = -P.elbow;
     hero.wrists[1].rotation.set(0, 0, 0);
   }
-  if (d.u <= 0) return;
+  if (H.toss) potionTossPose(a, e);
+  if (!hp || d.u <= 0) return;
   const w = potionReachW();
   if (w <= 0) return;
   a.set(a.x + (-D.hoist - a.x) * w, a.y * (1 - w), a.z + (-0.08 - D.out - a.z) * w);
   e.x += (-D.elbow - e.x) * w;
+}
+// (v781) the overhand toss (POTION_TOSS), laid over the arm's pose: eased in as the arm's raised behind, the whip over
+// and forward, eased out after the follow-through
+function potionTossPose(a, e) {
+  const P = POTION_TOSS, t = H.toss.t, cock = Math.max(0.01, P.cock), rel = Math.max(cock + 0.01, P.windup);
+  const over = smooth(cock, rel + 0.06, t), w = smooth(0, cock, t) * (1 - smooth(rel + 0.12, Math.max(rel + 0.13, P.time), t));
+  if (w <= 0) return;
+  const ax = -P.back + (P.back - P.through) * over, ex = -P.elbow + (P.elbow - 0.1) * over;
+  a.set(a.x + (ax - a.x) * w, a.y * (1 - w), a.z + (-0.08 - P.out - a.z) * w);
+  e.x += (ex - e.x) * w;
+  hero.chest.rotation.y += P.twist * (1 - 2 * over) * w;
 }
 // (v754, v755) the 2D bottles: the potion's icon as a card in the world (the one in the right fist, held by its neck
 // and turned with the hand, and every one flying), drawn over the picture at the screen's own pixels with the quest
@@ -26769,20 +26786,38 @@ function potionTarget() {
 function throwPotion() {
   const id = handPotion(), P = POTION_THROW;
   if (!id || mode !== 'play' || !H.alive || H.still || H.dash >= 0 || H.flip || H.lunge >= 0 || H.whirl >= 0) return false;
-  if (H.cdPotion > 0) { sfx.nope(); return false; }
+  if (H.cdPotion > 0 || H.toss) { sfx.nope(); return false; }
   const [tx, tz] = potionTarget(), dx = tx - H.x, dz = tz - H.z, d = Math.hypot(dx, dz);
   if (d > 0.3) H.face = Math.atan2(dx, dz);
-  const fx = Math.sin(H.face), fz = Math.cos(H.face);
-  const a = [H.x + fx * 0.3, H.y + 1.05, H.z + fz * 0.3], b = [tx, surfaceY(tx, tz), tz];
-  // (v755: drawn as a card in the world, potionCards, hidden by whatever stands in front of it)
-  thrown.push({ id, kind: ITEMS[id].potion, a, b, t: 0, len: d / Math.max(1, P.speed) + P.hang, arc: P.arcMin + d * P.arc, rot: Math.random() * 360, p: a.slice() });
-  // one fewer in the square (empty, it's bare hands)
-  HOT_N[hotSel]--;
-  if (HOT_N[hotSel] <= 0) { HOT[hotSel] = null; HOT_N[hotSel] = 0; dressHero(); }
+  // (v781) the toss begins (potionTossPose); the bottle leaves the hand POTION_TOSS.windup seconds on (tossTick)
+  H.toss = { t: 0, id, slot: hotSel, tx, tz, gone: false };
   H.cdPotion = P.cd;
-  sfx.swoosh();
-  renderBar(); if (invOpen) renderInv(); else renderHot();
+  if (POTION_TOSS.windup <= 0) tossTick(0);
   return true;
+}
+// (v781) the throw's clock: at the windup's end the bottle leaves the hand (from the fist, toward where was clicked) and
+// one fewer is in its square; after the toss's time it's over. Cut short (no bottle thrown) by death or leaving play
+function tossTick(dt) {
+  const k = H.toss;
+  if (!k) return;
+  k.t += dt;
+  if (!k.gone && (!H.alive || mode !== 'play')) { H.toss = null; return; }
+  if (!k.gone && k.t >= POTION_TOSS.windup) {
+    k.gone = true;
+    const P = POTION_THROW, slot = HOT[k.slot] === k.id ? k.slot : HOT.indexOf(k.id);
+    if (slot < 0) { H.toss = null; return; }
+    const tx = k.tx, tz = k.tz, hp = hero.potion2d.getWorldPosition(new GFX.Vector3());
+    const a = Math.hypot(hp.x - H.x, hp.z - H.z) < 1.5 ? [hp.x, hp.y, hp.z] : [H.x + Math.sin(H.face) * 0.3, H.y + 1.05, H.z + Math.cos(H.face) * 0.3];
+    const b = [tx, surfaceY(tx, tz), tz], d = Math.hypot(tx - a[0], tz - a[2]);
+    // (v755: drawn as a card in the world, potionCards, hidden by whatever stands in front of it)
+    thrown.push({ id: k.id, kind: ITEMS[k.id].potion, a, b, t: 0, len: d / Math.max(1, P.speed) + P.hang, arc: P.arcMin + d * P.arc, rot: Math.random() * 360, p: a.slice() });
+    // one fewer in the square (empty, it's bare hands)
+    HOT_N[slot]--;
+    if (HOT_N[slot] <= 0) { HOT[slot] = null; HOT_N[slot] = 0; dressHero(); }
+    sfx.swoosh();
+    renderBar(); if (invOpen) renderInv(); else renderHot();
+  }
+  if (k.gone && k.t >= POTION_TOSS.time) H.toss = null;
 }
 // a point along a throw's arc (t 0-1): straight across, lifted by a parabola
 function potionAt(f, t, out) {
@@ -28932,7 +28967,7 @@ function heroSpeed() { const i = T(Math.floor(H.x), Math.floor(H.z)); return (mo
 function update(dt) {
   time += dt;
   advanceClock(dt);
-  H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt); H.cdPotion = Math.max(0, H.cdPotion - dt);
+  H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt); H.cdPotion = Math.max(0, H.cdPotion - dt); tossTick(dt);
   H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt; H.boost = Math.max(0, (H.boost || 0) - dt);
   updateAim();
   updateBoats(dt);
@@ -29125,8 +29160,15 @@ function update(dt) {
     if (d.fallT > 1.4) d.g.position.y -= dt * 1.4;
     if (d.fallT > 2.2) { scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1); }
   }
+  // (v781, Jordan's G: doors and gates the top movers) a door at rest is left alone: its swing eases toward open or shut
+  // and is set there once it's within a hair, where before it crept on for a minute or more after closing (each step a
+  // smaller share of what was left, down through the tiniest numbers), so the door and every board, band and stud on
+  // it had its matrices made again every frame
   for (const d of doors.values()) {
-    d.t += ((d.open ? 1 : 0) - d.t) * (1 - Math.exp(-dt * 10));
+    const goal = d.open ? 1 : 0;
+    if (d.t === goal) continue;
+    d.t += (goal - d.t) * (1 - Math.exp(-dt * 10));
+    if (Math.abs(goal - d.t) < 1e-3) d.t = goal;
     d.pivot.children[0].rotation.y = d.t * 1.75 * d.side * (d.flip ? -1 : 1);
   }
   for (let k = orbs.length - 1; k >= 0; k--) {
@@ -31873,6 +31915,14 @@ const TUNING = [
     [POTION_THROW, 'ringAfter', 'Attack on release: hold this long before the ring shows (s)', 0, 1, 0.01],
     [POTION_THROW, 'inHand', 'Bottle in the weapon hand while a potion is picked (0 off, 1 the 3D bottle, 2 the 2D icon held by the neck)', 0, 2, 1, () => dressHero()],
     [POTION_HOLD, 'raise', 'Holding: upper arm forward (radians)', -0.5, 1.5, 0.01],
+    [POTION_TOSS, 'time', 'Throw: whole move (s)', 0.1, 1.5, 0.01],
+    [POTION_TOSS, 'cock', 'Throw: arm raised behind by (s)', 0.01, 0.5, 0.01],
+    [POTION_TOSS, 'windup', 'Throw: bottle leaves the hand at (s after the click, 0 at once)', 0, 0.6, 0.01],
+    [POTION_TOSS, 'back', 'Throw: arm raised up and back (radians)', 0.5, 4, 0.01],
+    [POTION_TOSS, 'through', 'Throw: arm forward at the follow-through (radians)', 0, 2.5, 0.01],
+    [POTION_TOSS, 'elbow', 'Throw: elbow bent while raised (radians)', 0, 2.5, 0.01],
+    [POTION_TOSS, 'out', 'Throw: arm out to the side', 0, 1, 0.01],
+    [POTION_TOSS, 'twist', 'Throw: chest turn with it (radians, negative the other way)', -1, 1, 0.01],
     [POTION_HOLD, 'elbow', 'Holding: elbow bent (radians)', 0, 2.5, 0.01],
     [POTION_HOLD, 'out', 'Holding: arm out to the side', 0, 0.8, 0.01],
     [POTION_HOLD, 'swing', 'Holding: walk swing kept (share)', 0, 1, 0.01],
