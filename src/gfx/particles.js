@@ -25,7 +25,7 @@ import { Color } from './math.js';
 export const RAMP_N = 8, MAX_RAMPS = 64;
 const FLOATS = 32;   // a particle's record: 8 vec4f
 // how each particle is drawn
-export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13 };
+export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14 };
 const SOLID_FROM = 8, SOLID_TO = 13;   // (the solid styles: SOLID_FROM up to, not with, SOLID_TO)
 
 // the particle record, shared by the compute pass and both draws
@@ -191,7 +191,7 @@ struct VOut {
     let tw = 0.55 + 0.45 * sin(k * 18.0 + q.g.y * 40.0);
     w = at + (right * corner.x + up * corner.y) * size * tw;
     extra = tw; cover = 0.0;
-  } else if (st == ${FX.GLOW}) {
+  } else if (st == ${FX.GLOW} || st == ${FX.PLUS}) {
     cover = 0.0;
   } else if (st == ${FX.SMOKE}) {
     // (v616, Jordan: smoke as Crafting and Conquest draws it) a soft smoke sprite (one of four, by its seed) on a card
@@ -341,6 +341,15 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
     m = spr * smoothstep(1.0, 0.6, sqrt(r2));
     let cs = cos(i.nz.z); let sn = sin(i.nz.z);
     lit = i.col * fxLight(i.wpos, puffNormal(vec2f(uv.x * cs - uv.y * sn, uv.x * sn + uv.y * cs), i.nz)) + i.col * i.glow;
+  } else if (st == ${FX.PLUS}) {
+    // (v753) a plus sign facing us, crisp, its middle brighter (a heal's)
+    let ax = abs(uv.x); let ay = abs(uv.y);
+    let arm = 0.3; let len = 0.9;
+    let inA = (1.0 - smoothstep(arm - 0.06, arm, ax)) * (1.0 - smoothstep(len - 0.08, len, ay));
+    let inB = (1.0 - smoothstep(arm - 0.06, arm, ay)) * (1.0 - smoothstep(len - 0.08, len, ax));
+    m = max(inA, inB);
+    if (m <= 0.0) { discard; }
+    lit = mix(i.col, vec3f(1.0), exp(-r2 * 12.0) * 0.45) * max(i.glow, 1.0);
   } else if (st == ${FX.RING}) {
     let d = sqrt(r2);
     if (d > 1.0) { discard; }
@@ -677,7 +686,7 @@ export class FxParticles {
 // Special emitters: { bolt: { from, to, jag, segments, forks, width, life, every } } draws jagged beams, re-rolled
 // `every` seconds through the phase.
 const STYLE = { glow: FX.GLOW, spark: FX.SPARK, glint: FX.GLINT, puff: FX.PUFF, flame: FX.FLAME, ring: FX.RING, disc: FX.DISC,
-  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE };
+  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS };
 const pick = v => Array.isArray(v) ? v[0] + Math.random() * (v[1] - v[0]) : v;
 
 // A phase can also move: { move: { from, to, arc } } carries its 'head' point from one to the other across the phase

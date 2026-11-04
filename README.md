@@ -480,6 +480,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v752:** (Jordan) With a potion picked on the hotbar, its bottle shows in the weapon hand, the liquid in the potion's colour (T > Thrown potions: inHand, 0 off). Throws respect Options > Attack on release (always on touch): pressing LMB aims, letting go throws, and the landing ring only shows once LMB has been held 0.18 s (ringAfter), so a quick click throws with no ring. With the option off a press throws at once and no ring shows.
 
+**v753:** (Jordan) The red potion heals: the moment it breaks it heals every friend within 2 tiles by 30 HP (only you for now, as townsfolk take no harm), with no wind-up, and it can't touch foes. It has no splash (red would look like blood), only the glass breaking, and whoever it heals gets green plus signs swirling up round them: a new PLUS particle style (src/gfx/particles.js), FX_LIB potionHeal. T > Thrown potions: red heal and reach.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

@@ -19599,6 +19599,10 @@ const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue:
 // T > Thrown potions.
 const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 44, ring: 1, inHand: 1, ringAfter: 0.18 };
 const POTION_EFFECT = {
+  // (v753, Jordan) red heals every friend in reach the moment it breaks (only you, for now: townsfolk take no harm), with
+  // no wind-up; it can't touch foes. No splash (red would look like blood): the glass breaks, and each one healed gets
+  // green plus signs swirling up round them (FX_LIB potionHeal)
+  red: { heal: 30, radius: 2, splash: false, about: 'Throw it from the hotbar: it breaks and heals you, and any friend within reach, at once. It can\'t touch foes.' },
   green: { fx: 'poisonCloud', about: 'Throw it from the hotbar: it breaks into a cloud of poison gas that hurts foes inside it.',
     linger: 6, radius: 2, every: 0.5, dmg: 3 },
 };
@@ -21481,6 +21485,17 @@ const FX_LIB = {
       { style: 'puff', count: 6, shape: { disc: 0.3, y: 0.1 }, out: [0.3, 0.8], up: [0.5, 1], drag: 2, life: [0.5, 0.8], size: [[0.15, 0.25], [0.4, 0.6]], ramp: 'water', tone: [0.95, 0.9], alpha: 0.4 },
     ] },
     { name: 'settle', dur: 1 },
+  ] },
+  // (v753) a heal potion's touch on whoever it heals: no wind-up, green plus signs swirling up round them at once
+  potionHeal: { phases: [
+    { name: 'burst', dur: 0.05, flash: { at: [0, 1, 0], color: '#9cff9a', k: 2.5, range: 4, life: 0.6 }, emit: [
+      { style: 'plus', count: 16, onGround: true, shape: { ring: [0.35, 0.6], y: [0, 0.5] }, up: [1, 1.8], swirl: 3, turb: 0.15, life: [0.8, 1.1], size: [0.1, 0.05], ramp: 'heal', tone: [0.85, 1], glow: 2 },
+      { style: 'ring', count: 1, onGround: true, size: [0.3, 1.2], life: 0.5, ramp: 'heal', tone: [1, 0.8], glow: 1.5, stretch: 0.12, cover: 0 },
+    ] },
+    { name: 'rise', dur: 0.5, emit: [
+      { style: 'plus', rate: [40, 0], onGround: true, shape: { ring: [0.35, 0.6], y: [0, 0.4] }, up: [0.9, 1.5], swirl: 3, turb: 0.15, life: [0.7, 1], size: [0.09, 0.04], ramp: 'heal', tone: [0.85, 1], glow: 2 },
+    ] },
+    { name: 'fade', dur: 1 },
   ] },
   // (v751) a thrown potion breaking: shards of glass flying apart and glinting, then lying where they land
   potionGlass: { phases: [
@@ -25850,10 +25865,21 @@ function breakPotion(kind, x, y, z) {
   const tint = POTION_TINT[kind] || '#ffffff';
   fxParts.tint(tint);
   playFx('potionGlass', { x, y, z, dir: Math.random() * 6.283 });
-  playFx('potionSplash', { x, y, z, dir: Math.random() * 6.283, ramp: 'tint:' + tint });
-  sfx.shatter();
   const E = POTION_EFFECT[kind];
+  if (!E || E.splash !== false) playFx('potionSplash', { x, y, z, dir: Math.random() * 6.283, ramp: 'tint:' + tint });
+  sfx.shatter();
   if (!E) return;
+  // (v753) a heal: at once, on every friend within reach (you; townsfolk can't be hurt, so don't need it)
+  if (E.heal) {
+    if (H.alive && Math.hypot(H.x - x, H.z - z) <= E.radius + 0.3 && Math.abs(H.y - y) < 2) {
+      const before = H.hp;
+      H.hp = Math.min(MAX_HP, H.hp + E.heal); renderHp();
+      floatText('+' + Math.round(H.hp - before), H.x, H.y + 1.3, H.z, '#8de8a0');
+      playFx('potionHeal', { x: H.x, y: H.y, z: H.z, dir: 0, follow: () => ({ x: H.x, y: H.y, z: H.z, dir: 0 }) });
+      sfx.heal();
+    }
+    return;
+  }
   const h = E.fx ? playFx(E.fx, { x, y, z, dir: 0, target: { x, y, z } }) : null;
   if (E.linger) clouds.push({ e: E, h, x, y, z, t: 0, tick: 0.2 });
   else if (h) setTimeout(() => h.stop(), 1000);
@@ -30884,6 +30910,8 @@ const TUNING = [
     [POTION_THROW, 'ring', 'Landing ring while aiming (0 off)', 0, 1, 1],
     [POTION_THROW, 'ringAfter', 'Attack on release: hold this long before the ring shows (s)', 0, 1, 0.01],
     [POTION_THROW, 'inHand', 'Bottle in the weapon hand while a potion is picked (0 off)', 0, 1, 1, () => dressHero()],
+    [POTION_EFFECT.red, 'heal', 'Red: heals (HP, at once)', 0, 100, 1],
+    [POTION_EFFECT.red, 'radius', 'Red: reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'linger', 'Green: poison cloud lasts (s)', 1, 20, 0.5],
     [POTION_EFFECT.green, 'radius', 'Green: cloud reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'every', 'Green: hurts every (s)', 0.1, 3, 0.05],
@@ -32072,7 +32100,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 752, crashSeen = new Map();
+const GAME_VERSION = 753, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
