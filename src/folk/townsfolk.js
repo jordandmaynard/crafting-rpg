@@ -211,6 +211,20 @@ export const WILD_WHERE = {
 };
 const WILD_LIST = Object.keys(WILDS).map(k => [k, 1]);
 Object.assign(JOBS, WILDS);
+// (v692, Jordan: skeletons and zombies on the hostile folk's rig, to walk, strike and fall as they do) never rolled for
+// the wilds (after WILD_LIST, so every kept seed is as it was): the game asks for them by name, design(seed, 'wilds',
+// 'skeleton'); tier 'undead' keeps them out of the viewer's lists. A skeleton is built bone by bone on the same joints
+// (buildSkeleton), now and then in a rusted helm, a rag at the hips or an old shield on its back; a zombie is a person
+// gone grey-green, in faded, torn clothes, ribs showing through a rent in the shirt, eyes glowing pale.
+Object.assign(JOBS, {
+  skeleton: wj('Skeleton', 'undead', { undead: 'skeleton', ages: [['adult', 1]], head: [['none', 5], ['kettleHat', 2], ['nasalHelm', 2]], torso: [['shirt', 1]], legs: [['trousers', 1]], feet: [['wraps', 1]],
+    dye: { torso: ['umber', 'grey', 'madder', 'wool', 'moss'], legs: ['grey'], head: ['grey'], shield: ['umber', 'madder', 'woad', 'charcoal', 'grey'] },
+    x: { belt: 0.5, shield: 0.25 }, prop: [['rustySword', 4], ['rustyAxe', 2], ['spear', 2], ['shortbow', 1]] }),
+  zombie: wj('Zombie', 'undead', { undead: 'zombie', head: [['none', 6], ['hood', 1], ['cap', 1]], torso: [['shirt', 3], ['tunic', 3], ['shortSleeve', 2], ['vest', 1]], legs: [['trousers', 4], ['breeches', 2]], feet: [['wraps', 2], ['shoes', 1], ['boots', 1]],
+    dye: { torso: ['moss', 'umber', 'grey', 'oat', 'wool', 'brown', 'russet'], under: ['oat', 'grey', 'wool'], legs: ['umber', 'charcoal', 'grey', 'brown'], head: ['umber', 'grey', 'moss'] },
+    x: { belt: 0.3 }, prop: 'none' }),
+});
+const UNDEAD_SKIN = ['#8aa27a', '#7e9672', '#96a486', '#8a9a70', '#9aa894', '#7a8a78'];
 export const TIERS = { hamlet: 'Hamlet', medium: 'Medium town', large: 'Large town', road: 'On the road', wilds: 'In the wilds', cult: 'Cults' };
 export const POOLS = { town: ['hamlet', 'medium', 'large'], wilds: ['road', 'wilds', 'cult'] };
 export const jobTitle = d => (d.body === 'fem' && JOBS[d.job].femTitle) || JOBS[d.job].title;
@@ -320,6 +334,28 @@ export function design(seed, pool = 'town', want = null) {
     d.sigil = roll(X.sigil) ? (D.trim ? tint(D.trim).color : '#b8282a') : null;
     d.warpaint = roll(X.warpaint) ? tint(['woad', 'ochre', 'black', 'crimson', 'white']).color : null;
     if (hat === 'cultHood') d.head.glow = pick(r, [['#ff5a2a', 3], ['#ffd24a', 1], ['#7ae0ff', 1], ['#c070ff', 1]]);
+  }
+  // (v692) the dead: nameless, eyes aglow ('*' marks a glowing colour), a skeleton's bones yellowed and its helm rusted,
+  // a zombie's skin gone grey-green, its hair dulled and its clothes faded
+  if (J.undead) {
+    d.undead = J.undead;
+    d.name = { first: J.title, last: '', full: J.title };
+    d.mask = d.furs = d.sigil = d.warpaint = d.gloves = d.chain = d.satchel = d.stole = d.cloak = d.shawl = d.neckerchief = d.apron = null;
+    d.quiver = d.prop === 'shortbow' ? '#3e3028' : null;
+    if (d.undead === 'skeleton') {
+      d.bone = jitter(r, '#e2d9be', 0.04);
+      d.eyes = '*' + pick(r, [['#ff4a3a', 4], ['#7ae0ff', 1], ['#9aff6a', 1]]);
+      d.build = 1; d.height = 0.97 + r() * 0.06;
+      if (d.head.item !== 'none') d.head.color = jitter(r, '#7a604c', 0.05);
+      d.rag = shade(d.torso.color, -0.25);
+    } else {
+      d.skin = jitter(r, oneOf(r, UNDEAD_SKIN), 0.03);
+      d.eyes = '*#e8f0a0';
+      d.hair = shade(d.hair, -0.3);
+      d.torso.color = shade(d.torso.color, -0.15);
+      d.legs.color = shade(d.legs.color, -0.15);
+      d.wound = r() < 0.5 ? 1 : -1;     // (the side the ribs show through)
+    }
   }
   return d;
 }
@@ -490,6 +526,12 @@ export function describe(d) {
 export function makeFolkKit(GFX) {
   const mats = new Map();
   const mat = c => { let m = mats.get(c); if (!m) { m = new GFX.MeshStandardMaterial({ color: c, flatShading: true, roughness: 1, metalness: 0 }); mats.set(c, m); } return m; };
+  // (v692) a colour written '*#rrggbb' glows (unlit): the undead's eyes. The game's bake marks it (bakeFolk) so its shader
+  // lights it from within.
+  const matOf = c => {
+    if (c[0] !== '*') return mat(c);
+    let m = mats.get(c); if (!m) { m = new GFX.MeshBasicMaterial({ color: c.slice(1) }); mats.set(c, m); } return m;
+  };
   const shadowMat = new GFX.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.32, depthWrite: false });
   const shadowGeo = new GFX.CircleGeometry(0.28, 10).rotateX(-Math.PI / 2);
 
@@ -502,7 +544,7 @@ export function makeFolkKit(GFX) {
     let nBox = 0;
     const box = (parent, w, h, dd, x, y, z, c, rx = 0, rz = 0, ry = 0) => {
       const e = 0.00037 * (nBox++ % 7);
-      const m = new GFX.Mesh(new GFX.BoxGeometry(w + e, h + e, dd + e), mat(c)); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); parts.push(m); return m;
+      const m = new GFX.Mesh(new GFX.BoxGeometry(w + e, h + e, dd + e), matOf(c)); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); parts.push(m); return m;
     };
     // (v4, Jordan: angled shapes for the feminine build) a tapered block: its bottom face at y0 (width wb, depth db,
     // centred on xb, zb) and its top at y1 (wt, dt, at xt, zt), straight sides between: a box whose top is a different
@@ -513,7 +555,7 @@ export function makeFolkKit(GFX) {
         const top = v.y > 0, w = (top ? wt : wb) + e, dd = (top ? dt : db) + e;
         v.set(v.x * w + (top ? xt : xb), top ? y1 + e / 2 : y0 - e / 2, v.z * dd + (top ? zt : zb));
       });
-      const m = new GFX.Mesh(geo, mat(c)); parent.add(m); parts.push(m); return m;
+      const m = new GFX.Mesh(geo, matOf(c)); parent.add(m); parts.push(m); return m;
     };
     // (v6) a solid lofted through rings, bottom to top: each ring [y, width, depth, x, z], straight sides between
     // them and a cap at each end. One mesh, so the rings' joins are true edges: tapers stacked as separate pieces
@@ -531,9 +573,115 @@ export function makeFolkKit(GFX) {
       tri(t[0], t[2], t[1]); tri(t[0], t[3], t[2]);
       const geo = new GFX.BufferGeometry();
       geo.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
-      const m = new GFX.Mesh(geo, mat(c)); parent.add(m); parts.push(m); return m;
+      const m = new GFX.Mesh(geo, matOf(c)); parent.add(m); parts.push(m); return m;
     };
     const pivot = (parent, x, y, z) => { const p = new GFX.Group(); p.position.set(x, y, z); parent.add(p); return p; };
+    if (d.undead === 'skeleton') return buildSkeleton();
+    // (v692) a skeleton, bone by bone on the person's own joints (hips, knees, ankles, the waist, shoulders, elbows,
+    // wrists, the neck) so it walks, strikes and falls as they do: thin limb bones with knobs at the joints, a pelvis, a
+    // spine and a cage of ribs, the shoulder girdle, a skull with dark sockets, eyes glowing in them and a jaw on a
+    // hinge of its own (the rig's `jaw`, for its chatter); sometimes a rusted helm, a rag at the hips (on the skirts'
+    // front and back pivots, which swing out of the legs' way) or an old shield on its back
+    function buildSkeleton() {
+      const Bc = d.bone, Bd = shade(Bc, -0.2), HOLE = '#1a1210', TOOTH = shade(Bc, 0.3), CH = 0.42;
+      const body = pivot(g, 0, 0, 0), flaps = [], fronts = [], backs = [];
+      const legL = pivot(body, 0.07, 0.36, 0), legR = pivot(body, -0.07, 0.36, 0), KNEE = -0.14, ANKLE = -0.3;
+      const knees = [], ankles = [];
+      for (const leg of [legL, legR]) {
+        box(leg, 0.042, 0.13, 0.042, 0, -0.07, 0, Bc);
+        box(leg, 0.054, 0.04, 0.054, 0, -0.005, 0, Bd);
+        const shin = pivot(leg, 0, KNEE, 0); knees.push(shin);
+        box(shin, 0.05, 0.036, 0.05, 0, -0.004, 0.006, Bd);
+        box(shin, 0.036, 0.14, 0.036, 0, -0.085, 0, Bc);
+        const foot = pivot(shin, 0, ANKLE - KNEE, 0); ankles.push(foot);
+        box(foot, 0.044, 0.03, 0.044, 0, -0.012, 0, Bd);
+        box(foot, 0.058, 0.032, 0.11, 0, -0.044, 0.02, Bc);
+        box(foot, 0.052, 0.02, 0.036, 0, -0.05, 0.09, Bd);
+      }
+      // the pelvis, its two wings, and the spine's foot
+      box(body, 0.19, 0.055, 0.085, 0, 0.37, 0, Bc);
+      for (const s of [1, -1]) box(body, 0.07, 0.075, 0.075, s * 0.075, 0.395, -0.005, Bc, 0, s * 0.35);
+      box(body, 0.042, 0.075, 0.042, 0, 0.42, -0.03, Bd);
+      if (d.belt) {
+        // a rag hung from a cord round the hips, before and behind
+        box(body, 0.205, 0.024, 0.1, 0, 0.405, 0, shade(d.rag, -0.3));
+        for (const side of [1, -1]) {
+          const pv = pivot(body, 0, 0.42, 0); (side > 0 ? fronts : backs).push(pv);
+          taper(pv, -0.24, -0.02, [0.13, 0.012, 0.01, side * 0.058], [0.11, 0.012, 0, side * 0.054], d.rag);
+          box(pv, 0.03, 0.05, 0.013, 0.045, -0.255, side * 0.059, d.rag, 0, 0.2);
+        }
+      }
+      // the spine up the back, the ribs (widest under the shoulders) with the breastbone down their front, the
+      // collarbones and shoulder blades across the top, the neck
+      const chest = pivot(body, 0, CH, 0);
+      box(chest, 0.044, 0.27, 0.044, 0, 0.555 - CH, -0.038, Bd);
+      for (let i = 0; i < 4; i++) box(chest, 0.17 + i * 0.022, 0.028, 0.115 + i * 0.006, 0, 0.47 + i * 0.048 - CH, -0.004, Bc);
+      box(chest, 0.034, 0.16, 0.02, 0, 0.545 - CH, 0.066, Bd);
+      box(chest, 0.33, 0.038, 0.07, 0, 0.64 - CH, -0.006, Bc);
+      for (const s of [1, -1]) box(chest, 0.08, 0.09, 0.02, s * 0.07, 0.6 - CH, -0.06, Bd, 0, s * 0.15);
+      box(chest, 0.04, 0.07, 0.04, 0, 0.69 - CH, -0.012, Bd);
+      if (d.shield) {
+        // an old round shield on its back, its paint worn and a piece split off
+        const sh = pivot(chest, 0.02, 0.53 - CH, -0.098); sh.rotation.z = 0.25;
+        box(sh, 0.24, 0.24, 0.025, 0, 0, 0, shade(d.shield.color, -0.2));
+        box(sh, 0.2, 0.2, 0.02, 0.012, -0.012, 0, shade(d.shield.color, -0.35), 0, Math.PI / 4);
+        box(sh, 0.06, 0.06, 0.04, 0, 0, -0.008, '#5e4030');
+      }
+      if (d.quiver) {
+        const q = pivot(chest, -0.06, 0.5 - CH, -0.11); q.rotation.z = 0.35;
+        box(q, 0.07, 0.3, 0.07, 0, 0, 0, d.quiver);
+        box(q, 0.078, 0.03, 0.078, 0, -0.13, 0, shade(d.quiver, -0.3));
+        [[-0.016, -0.012], [0.016, 0.0], [0, 0.016]].forEach(([x, z]) => { box(q, 0.008, 0.06, 0.008, x, 0.17, z, '#6a5440'); box(q, 0.004, 0.05, 0.022, x, 0.21, z, '#8e8a82'); });
+      }
+      // the skull: the crown, the cheeks and upper teeth, the jaw on its hinge below
+      const head = pivot(chest, 0, 0.7 - CH, 0);
+      box(head, 0.19, 0.14, 0.18, 0, 0.13, -0.008, Bc);
+      box(head, 0.16, 0.04, 0.15, 0, 0.06, 0.006, Bc);
+      for (const s of [1, -1]) {
+        box(head, 0.052, 0.046, 0.012, s * 0.046, 0.12, 0.084, HOLE);
+        box(head, 0.022, 0.02, 0.006, s * 0.046, 0.118, 0.092, d.eyes);
+        box(head, 0.03, 0.03, 0.12, s * 0.085, 0.065, 0.005, Bd);
+      }
+      box(head, 0.026, 0.032, 0.012, 0, 0.074, 0.087, HOLE);
+      box(head, 0.11, 0.014, 0.01, 0, 0.046, 0.084, TOOTH);
+      const jaw = pivot(head, 0, 0.04, -0.03);
+      box(jaw, 0.14, 0.032, 0.11, 0, -0.02, 0.06, Bc);
+      box(jaw, 0.1, 0.012, 0.01, 0, -0.006, 0.112, TOOTH);
+      const hat = d.head.item, HC = d.head.color;
+      if (hat === 'kettleHat') {
+        taper(head, 0.19, 0.29, [0.215, 0.215, 0, -0.008], [0.14, 0.14, 0, -0.008], HC);
+        taper(head, 0.16, 0.19, [0.33, 0.33, 0, -0.008], [0.23, 0.23, 0, -0.008], shade(HC, -0.15));
+      } else if (hat === 'nasalHelm') {
+        taper(head, 0.19, 0.29, [0.205, 0.2, 0, -0.008], [0.1, 0.1, 0, -0.008], HC);
+        box(head, 0.214, 0.026, 0.206, 0, 0.19, -0.008, shade(HC, -0.2));
+        box(head, 0.022, 0.07, 0.012, 0, 0.145, 0.098, shade(HC, -0.1));
+      }
+      // the arms: upper arm, forearm, a bony hand
+      const armL = pivot(chest, 0.175, 0.64 - CH, 0), armR = pivot(chest, -0.175, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
+      armL.rotation.order = armR.rotation.order = 'YXZ';
+      const elbows = [], wrists = [];
+      for (const arm of [armL, armR]) {
+        box(arm, 0.05, 0.045, 0.05, 0, -0.004, 0, Bd);
+        box(arm, 0.034, 0.09, 0.034, 0, -0.05, 0, Bc);
+        const fore = pivot(arm, 0, ELBOW, 0); elbows.push(fore);
+        box(fore, 0.04, 0.03, 0.04, 0, -0.002, 0, Bd);
+        box(fore, 0.03, 0.095, 0.03, 0, -0.05, 0, Bc);
+        const hand = pivot(fore, 0, WRIST - ELBOW, 0); wrists.push(hand);
+        hand.rotation.order = 'XZY';
+        box(hand, 0.04, 0.045, 0.05, 0, -0.024, 0, Bc);
+        box(hand, 0.034, 0.03, 0.044, 0, -0.06, 0.004, Bd);
+      }
+      // (the rest of the person's pieces the poses look for, empty)
+      const broom = pivot(body, 0, 0, 0), crate = pivot(chest, 0, 0, 0), hoe = pivot(body, 0, 0, 0);
+      broom.visible = crate.visible = hoe.visible = false;
+      const hand = ['shortbow', 'crossbow'].includes(d.prop) ? 0 : 1;
+      const tool = pivot(wrists[hand], 0, -0.045, 0.0);
+      holdProp(tool, d.prop);
+      const staff = d.prop === 'spear';
+      const shadow = new GFX.Mesh(shadowGeo, shadowMat); shadow.position.y = 0.004; g.add(shadow);
+      g.scale.set(1.12 * d.build, 1.12 * d.height, 1.12 * d.build);
+      return { g, parts, d, body, chest, head, jaw, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff, shadow };
+    }
     const fem = d.body === 'fem', T = d.torso, L = d.legs, skin = d.skin;
     // the build: shoulders, waist and hips across, the chest's depth, a limb's thickness
     const B = fem ? { sh: 0.24, wa: 0.21, hip: 0.27, dep: 0.15, legX: 0.064, leg: 0.088, arm: 0.068, shoulder: 0.152 }
@@ -570,6 +718,12 @@ export function makeFolkKit(GFX) {
         for (const y of [0.0, 0.035]) box(foot, B.leg + 0.008, 0.014, B.leg + 0.014, 0, y, 0, shade(F.color, -0.35));
         box(foot, B.leg + 0.006, 0.014, 0.145, 0, -0.045, 0.015, shade(F.color, -0.35));
       }
+    }
+    // (v692) a zombie's trouser leg torn open over the shin, the skin showing
+    if (d.undead === 'zombie' && !skirted) {
+      const shin = knees[d.wound > 0 ? 1 : 0];
+      box(shin, B.leg + 0.008, 0.05, B.leg + 0.018, 0, -0.075, 0, skin);
+      box(shin, B.leg + 0.012, 0.014, B.leg + 0.022, 0, -0.045, 0, shade(L.color, -0.3));
     }
     // ---- hips and waist ----
     const hipC = skirted ? L.color : T.item === 'tunic' || T.item === 'gambeson' ? T.color : L.color;
@@ -835,8 +989,21 @@ export function makeFolkKit(GFX) {
       box(sw, 0.03, 0.02, 0.12, 0, 0.02, 0, '#c8a048');
       box(sw, 0.026, 0.09, 0.026, 0, 0.07, 0, '#4e3220');
     }
+    // (v692) a zombie's rents: the ribs showing through a tear in the shirt on one side, and dark stains front and back
+    if (d.undead === 'zombie') {
+      const s = d.wound, y = 0.52, lift = ['vest', 'jerkin', 'gambeson'].includes(T.item) ? 0.012 : 0.005, zf = chestFront(y) + lift;
+      box(chest, 0.085, 0.1, 0.006, s * 0.06, y - CH, zf, '#3a2420');
+      for (const k of [-1, 0, 1]) box(chest, 0.07, 0.014, 0.006, s * 0.06, y + k * 0.03 - CH, zf + 0.004, '#d8ceb0');
+      box(chest, 0.05, 0.035, 0.006, -s * 0.05, 0.45 - CH, frontAt(0.45) + lift, shade(torsoC, -0.4));
+      box(chest, 0.06, 0.04, 0.006, s * 0.03, 0.6 - CH, -(frontAt(0.6) + lift), shade(torsoC, -0.4));
+    }
     // ---- the head (a neck pivot) ----
     const head = pivot(chest, 0, 0.7 - CH, 0);
+    // (v692) a zombie's sunken eyes and slack, dark mouth
+    if (d.undead === 'zombie') {
+      for (const s of [1, -1]) box(head, 0.05, 0.05, 0.004, s * 0.045, 0.108, 0.0905, shade(skin, -0.35));
+      box(head, 0.08, 0.022, 0.008, 0.01, 0.048, 0.093, '#2a1418');
+    }
     box(head, 0.19, 0.19, 0.18, 0, 0.1, 0, skin);
     for (const s of [1, -1]) {
       box(head, 0.035, 0.035, 0.01, s * 0.045, 0.11, 0.092, d.eyes);
@@ -1098,127 +1265,146 @@ export function makeFolkKit(GFX) {
     // does (a bow or crossbow stays in the left, as the hero's bow does), so the game can give them the hero's strokes.
     const hand = d.hostile && !['shortbow', 'crossbow'].includes(d.prop) ? 1 : 0;
     const tool = pivot(wrists[hand], 0, -0.045, 0.0);
-    const WOOD = '#8a6440', DARK = '#4e3220', STEEL = '#b8bec8', GOLD = '#c8a048', WICKER = '#a8844e';
-    const basket = fill => {
-      box(tool, 0.16, 0.09, 0.12, 0, -0.14, 0.03, WICKER);
-      box(tool, 0.166, 0.02, 0.126, 0, -0.1, 0.03, shade(WICKER, -0.25));
-      for (const sx of [1, -1]) box(tool, 0.012, 0.1, 0.012, sx * 0.07, -0.05, 0.03, shade(WICKER, -0.2));
-      box(tool, 0.152, 0.012, 0.02, 0, 0.0, 0.03, shade(WICKER, -0.2));
-      fill();
-    };
     const P = d.prop;
-    if (P === 'torch') {
-      // (v9, kept upright like a staff) a pitch torch, burning
-      box(tool, 0.035, 0.42, 0.035, 0, 0.1, 0, WOOD);
-      box(tool, 0.05, 0.07, 0.05, 0, 0.3, 0, '#4a3a2e');
-      box(tool, 0.06, 0.09, 0.06, 0, 0.375, 0, '#ff8a2a');
-      box(tool, 0.034, 0.08, 0.034, 0, 0.44, 0, '#ffd24a');
-    } else if (P === 'shovel') {
-      box(tool, 0.03, 1.0, 0.03, 0, 0.12, 0, WOOD);
-      box(tool, 0.09, 0.025, 0.04, 0, 0.62, 0, DARK);
-      taper(tool, -0.56, -0.37, [0.1, 0.014], [0.13, 0.018], '#6a6e78');
-    } else if (P === 'cultStaff') {
-      box(tool, 0.03, 1.25, 0.03, 0, 0.23, 0, '#2a2226');
-      box(tool, 0.08, 0.075, 0.085, 0, 0.9, 0, '#d8ceb0');
-      box(tool, 0.06, 0.03, 0.06, 0, 0.85, 0.008, '#c4b898');
-      for (const s of [1, -1]) {
-        box(tool, 0.022, 0.02, 0.008, s * 0.018, 0.905, 0.044, '#1a1010');
-        box(tool, 0.015, 0.07, 0.015, s * 0.045, 0.95, 0, '#3a3030', 0, -s * 0.4);
+    holdProp(tool, P);
+    // (v692: one function, so the skeletons' build hands them theirs too) the tool or weapon `P` on the hand's frame
+    function holdProp(tool, P) {
+      const WOOD = '#8a6440', DARK = '#4e3220', STEEL = '#b8bec8', GOLD = '#c8a048', WICKER = '#a8844e', RUST = '#8a5e44', RUST_DARK = '#5e4030';
+      const basket = fill => {
+        box(tool, 0.16, 0.09, 0.12, 0, -0.14, 0.03, WICKER);
+        box(tool, 0.166, 0.02, 0.126, 0, -0.1, 0.03, shade(WICKER, -0.25));
+        for (const sx of [1, -1]) box(tool, 0.012, 0.1, 0.012, sx * 0.07, -0.05, 0.03, shade(WICKER, -0.2));
+        box(tool, 0.152, 0.012, 0.02, 0, 0.0, 0.03, shade(WICKER, -0.2));
+        fill();
+      };
+      if (P === 'torch') {
+        // (v9, kept upright like a staff) a pitch torch, burning
+        box(tool, 0.035, 0.42, 0.035, 0, 0.1, 0, WOOD);
+        box(tool, 0.05, 0.07, 0.05, 0, 0.3, 0, '#4a3a2e');
+        box(tool, 0.06, 0.09, 0.06, 0, 0.375, 0, '#ff8a2a');
+        box(tool, 0.034, 0.08, 0.034, 0, 0.44, 0, '#ffd24a');
+      } else if (P === 'shovel') {
+        box(tool, 0.03, 1.0, 0.03, 0, 0.12, 0, WOOD);
+        box(tool, 0.09, 0.025, 0.04, 0, 0.62, 0, DARK);
+        taper(tool, -0.56, -0.37, [0.1, 0.014], [0.13, 0.018], '#6a6e78');
+      } else if (P === 'cultStaff') {
+        box(tool, 0.03, 1.25, 0.03, 0, 0.23, 0, '#2a2226');
+        box(tool, 0.08, 0.075, 0.085, 0, 0.9, 0, '#d8ceb0');
+        box(tool, 0.06, 0.03, 0.06, 0, 0.85, 0.008, '#c4b898');
+        for (const s of [1, -1]) {
+          box(tool, 0.022, 0.02, 0.008, s * 0.018, 0.905, 0.044, '#1a1010');
+          box(tool, 0.015, 0.07, 0.015, s * 0.045, 0.95, 0, '#3a3030', 0, -s * 0.4);
+        }
+      } else if (P === 'club') {
+        box(tool, 0.03, 0.14, 0.03, 0, -0.03, 0.027, DARK);
+        taper(tool, -0.3, -0.08, [0.075, 0.075, 0, 0.02], [0.045, 0.045, 0, 0.02], '#7a5a3a');
+        for (const [x, y, z] of [[0.04, -0.24, 0.02], [-0.04, -0.2, 0.02], [0, -0.26, 0.062]]) box(tool, 0.016, 0.016, 0.016, x, y, z, '#6a6e78');
+      } else if (P === 'dagger' || P === 'ritualKnife') {
+        const rit = P === 'ritualKnife';
+        box(tool, 0.024, 0.07, 0.024, 0, 0.0, 0.02, rit ? '#5a1418' : DARK);
+        box(tool, 0.034, 0.022, 0.034, 0, 0.05, 0.022, rit ? GOLD : STEEL);
+        box(tool, 0.07, 0.014, 0.028, 0, -0.042, 0.02, rit ? GOLD : STEEL);
+        taper(tool, -0.19, -0.049, [0.006, 0.006, 0, 0.02], [0.026, 0.008, 0, 0.02], rit ? '#2a2430' : STEEL);
+      } else if (P === 'swordDrawn') {
+        box(tool, 0.026, 0.09, 0.026, 0, 0.0, 0.02, DARK);
+        box(tool, 0.036, 0.026, 0.036, 0, 0.056, 0.02, STEEL);
+        box(tool, 0.12, 0.02, 0.032, 0, -0.054, 0.02, STEEL);
+        box(tool, 0.036, 0.38, 0.012, 0, -0.254, 0.02, STEEL);
+        taper(tool, -0.5, -0.444, [0.004, 0.004, 0, 0.02], [0.036, 0.012, 0, 0.02], STEEL);
+      } else if (P === 'sickle') {
+        box(tool, 0.026, 0.11, 0.026, 0, -0.02, 0.02, WOOD);
+        box(tool, 0.012, 0.07, 0.018, 0, -0.1, 0.035, '#9aa0a8', -0.35);
+        box(tool, 0.012, 0.07, 0.018, 0, -0.148, 0.07, '#9aa0a8', -1.05);
+        box(tool, 0.012, 0.06, 0.018, 0, -0.16, 0.122, '#9aa0a8', -1.8);
+      } else if (P === 'shortbow') {
+        // held at the grip, the limbs bending back at the tips, the string between them
+        box(tool, 0.03, 0.08, 0.03, 0, 0, 0.042, DARK);
+        taper(tool, 0.03, 0.3, [0.022, 0.022, 0, 0.05], [0.012, 0.012, 0, 0.012], '#8a6440');
+        taper(tool, -0.3, -0.03, [0.012, 0.012, 0, 0.012], [0.022, 0.022, 0, 0.05], '#8a6440');
+        box(tool, 0.004, 0.58, 0.004, 0, 0, 0.01, '#e8e2d4');
+      } else if (P === 'crossbow') {
+        box(tool, 0.04, 0.04, 0.32, 0, -0.03, 0.1, WOOD);
+        box(tool, 0.34, 0.026, 0.03, 0, -0.012, 0.23, DARK);
+        box(tool, 0.3, 0.006, 0.006, 0, -0.012, 0.2, '#e8e2d4');
+        box(tool, 0.012, 0.012, 0.2, 0, -0.005, 0.15, '#6a4a2a');
+      } else if (['staff', 'lampPole', 'crozier', 'spear', 'broomHeld'].includes(P)) {
+        box(tool, 0.03, 1.25, 0.03, 0, 0.23, 0, P === 'crozier' ? GOLD : P === 'spear' ? DARK : WOOD);
+        if (P === 'staff') box(tool, 0.05, 0.06, 0.05, 0, 0.85, 0, DARK);
+        if (P === 'lampPole') {
+          box(tool, 0.16, 0.025, 0.025, 0.06, 0.84, 0, DARK);
+          box(tool, 0.006, 0.06, 0.006, 0.13, 0.8, 0, DARK);
+          box(tool, 0.07, 0.09, 0.07, 0.13, 0.73, 0, '#ffd27a');
+          box(tool, 0.08, 0.02, 0.08, 0.13, 0.785, 0, DARK);
+        }
+        if (P === 'crozier') { box(tool, 0.03, 0.03, 0.12, 0, 0.87, 0.045, GOLD); box(tool, 0.03, 0.09, 0.03, 0, 0.83, 0.1, GOLD); box(tool, 0.04, 0.04, 0.04, 0, 0.84, 0, '#e0e0f0'); }
+        if (P === 'spear') { taper(tool, 0.85, 1.0, [0.05, 0.016], [0.004, 0.004], STEEL); box(tool, 0.04, 0.03, 0.04, 0, 0.845, 0, STEEL); }
+        if (P === 'broomHeld') { box(tool, 0.07, 0.035, 0.05, 0, -0.37, 0, DARK); box(tool, 0.16, 0.14, 0.05, 0, -0.45, 0, STRAW); }
+      } else if (P === 'hoe') {
+        // (v683) carried upright like a staff, the blade at the top standing out ahead
+        box(tool, 0.03, 1.0, 0.03, 0, 0.15, 0, WOOD);
+        box(tool, 0.036, 0.05, 0.05, 0, 0.64, 0.012, '#4e4a44');
+        box(tool, 0.15, 0.014, 0.12, 0, 0.65, 0.07, '#6a6e78');
+      } else if (P === 'flourSack') {
+        // (v683) a small sack of flour, tied at the neck
+        box(tool, 0.13, 0.16, 0.1, 0, -0.13, 0.02, '#e4dac0');
+        box(tool, 0.1, 0.03, 0.08, 0, -0.04, 0.02, '#d6caa8');
+        box(tool, 0.05, 0.03, 0.05, 0, -0.015, 0.02, '#a88a58');
+      } else if (P === 'hammer' || P === 'mallet') {
+        box(tool, 0.025, 0.26, 0.025, 0, -0.1, 0.02, WOOD);
+        box(tool, P === 'mallet' ? 0.07 : 0.05, P === 'mallet' ? 0.07 : 0.05, P === 'mallet' ? 0.12 : 0.11, 0, -0.23, 0.03, P === 'mallet' ? '#a07a50' : '#6a6e78');
+      } else if (P === 'axe') {
+        box(tool, 0.026, 0.34, 0.026, 0, -0.12, 0.02, WOOD);
+        box(tool, 0.016, 0.1, 0.1, 0, -0.26, 0.07, STEEL);
+        box(tool, 0.034, 0.05, 0.044, 0, -0.26, 0.02, '#6a6e78');
+      } else if (P === 'scraper') {
+        box(tool, 0.03, 0.08, 0.03, 0, -0.03, 0, WOOD);
+        box(tool, 0.12, 0.012, 0.03, 0, -0.08, 0, STEEL);
+      } else if (P === 'bell') {
+        box(tool, 0.025, 0.08, 0.025, 0, -0.03, 0, DARK);
+        taper(tool, -0.18, -0.07, [0.1, 0.1], [0.045, 0.045], GOLD);
+      } else if (P === 'book' || P === 'ledger') {
+        box(tool, 0.045, 0.17, 0.13, 0.0, -0.06, 0.036, P === 'ledger' ? '#3a2a22' : '#5a1e22');
+        box(tool, 0.033, 0.16, 0.12, 0.003, -0.06, 0.036, '#ece2c8');
+        if (P === 'book') box(tool, 0.052, 0.03, 0.03, 0, -0.06, 0.036, GOLD);
+      } else if (P === 'scroll') {
+        box(tool, 0.045, 0.045, 0.24, 0, -0.03, 0.04, '#e8dcb8');
+        for (const sz of [1, -1]) box(tool, 0.05, 0.05, 0.02, 0, -0.03, 0.04 + sz * 0.125, DARK);
+      } else if (P === 'mug') {
+        // (held by the rim: the froth sits under the fingers, not inside them, where it z-fought the hand)
+        box(tool, 0.06, 0.08, 0.06, 0, -0.07, 0.03, '#8e949e');
+        box(tool, 0.068, 0.014, 0.068, 0, -0.03, 0.03, '#f0e8d0');
+      } else if (P === 'purse') {
+        box(tool, 0.076, 0.08, 0.05, 0, -0.08, 0.01, '#6a2a3a');
+        box(tool, 0.05, 0.015, 0.035, 0, -0.035, 0.01, GOLD);
+      } else if (P === 'ingot') {
+        box(tool, 0.05, 0.04, 0.14, 0, -0.03, 0.03, '#7a7e88');
+      } else if (P === 'pane') {
+        box(tool, 0.012, 0.2, 0.24, -0.01, -0.06, 0.04, '#a8d0dc');
+        box(tool, 0.02, 0.21, 0.02, -0.01, -0.06, 0.16, DARK);
+      } else if (P === 'whip') {
+        box(tool, 0.025, 0.2, 0.025, 0, -0.06, 0.02, DARK);
+        box(tool, 0.008, 0.008, 0.3, 0, 0.04, -0.1, '#3a2a1e', 0.6);
+      } else if (P === 'breadBasket') basket(() => { for (const sx of [-0.04, 0.035]) box(tool, 0.07, 0.04, 0.1, sx, -0.08, 0.03, '#b8783a'); });
+      else if (P === 'herbBasket') basket(() => { for (const [sx, sz] of [[-0.04, 0], [0.03, 0.05], [0.04, -0.02]]) box(tool, 0.05, 0.06, 0.05, sx, -0.07, 0.03 + sz, '#4a7a34'); });
+      else if (P === 'flowerBasket') basket(() => {
+        [['#d84a5a', -0.05, 0.0], ['#f0d04a', 0.0, 0.05], ['#9a6ad8', 0.05, 0.0], ['#f0f0f0', -0.02, -0.03], ['#e88a3a', 0.04, 0.06]].forEach(([c, sx, sz]) => box(tool, 0.035, 0.035, 0.035, sx, -0.075, 0.03 + sz, c));
+      });
+      else if (P === 'rustySword') {
+        // (v692) a skeleton's old sword, rusted and notched
+        box(tool, 0.026, 0.09, 0.026, 0, 0.0, 0.02, DARK);
+        box(tool, 0.034, 0.024, 0.034, 0, 0.056, 0.02, RUST_DARK);
+        box(tool, 0.11, 0.02, 0.03, 0, -0.054, 0.02, RUST_DARK, 0, 0.08);
+        box(tool, 0.034, 0.36, 0.012, 0, -0.244, 0.02, RUST);
+        box(tool, 0.012, 0.05, 0.014, 0.014, -0.2, 0.02, RUST_DARK);
+        box(tool, 0.012, 0.04, 0.014, -0.014, -0.32, 0.02, RUST_DARK);
+        taper(tool, -0.48, -0.424, [0.006, 0.006, 0.006, 0.02], [0.034, 0.012, 0, 0.02], RUST);
+      } else if (P === 'rustyAxe') {
+        box(tool, 0.026, 0.34, 0.026, 0, -0.12, 0.02, '#5a4632');
+        box(tool, 0.016, 0.09, 0.09, 0, -0.26, 0.065, RUST);
+        box(tool, 0.018, 0.03, 0.03, 0, -0.235, 0.1, RUST_DARK);
+        box(tool, 0.034, 0.05, 0.044, 0, -0.26, 0.02, RUST_DARK);
       }
-    } else if (P === 'club') {
-      box(tool, 0.03, 0.14, 0.03, 0, -0.03, 0.027, DARK);
-      taper(tool, -0.3, -0.08, [0.075, 0.075, 0, 0.02], [0.045, 0.045, 0, 0.02], '#7a5a3a');
-      for (const [x, y, z] of [[0.04, -0.24, 0.02], [-0.04, -0.2, 0.02], [0, -0.26, 0.062]]) box(tool, 0.016, 0.016, 0.016, x, y, z, '#6a6e78');
-    } else if (P === 'dagger' || P === 'ritualKnife') {
-      const rit = P === 'ritualKnife';
-      box(tool, 0.024, 0.07, 0.024, 0, 0.0, 0.02, rit ? '#5a1418' : DARK);
-      box(tool, 0.034, 0.022, 0.034, 0, 0.05, 0.022, rit ? GOLD : STEEL);
-      box(tool, 0.07, 0.014, 0.028, 0, -0.042, 0.02, rit ? GOLD : STEEL);
-      taper(tool, -0.19, -0.049, [0.006, 0.006, 0, 0.02], [0.026, 0.008, 0, 0.02], rit ? '#2a2430' : STEEL);
-    } else if (P === 'swordDrawn') {
-      box(tool, 0.026, 0.09, 0.026, 0, 0.0, 0.02, DARK);
-      box(tool, 0.036, 0.026, 0.036, 0, 0.056, 0.02, STEEL);
-      box(tool, 0.12, 0.02, 0.032, 0, -0.054, 0.02, STEEL);
-      box(tool, 0.036, 0.38, 0.012, 0, -0.254, 0.02, STEEL);
-      taper(tool, -0.5, -0.444, [0.004, 0.004, 0, 0.02], [0.036, 0.012, 0, 0.02], STEEL);
-    } else if (P === 'sickle') {
-      box(tool, 0.026, 0.11, 0.026, 0, -0.02, 0.02, WOOD);
-      box(tool, 0.012, 0.07, 0.018, 0, -0.1, 0.035, '#9aa0a8', -0.35);
-      box(tool, 0.012, 0.07, 0.018, 0, -0.148, 0.07, '#9aa0a8', -1.05);
-      box(tool, 0.012, 0.06, 0.018, 0, -0.16, 0.122, '#9aa0a8', -1.8);
-    } else if (P === 'shortbow') {
-      // held at the grip, the limbs bending back at the tips, the string between them
-      box(tool, 0.03, 0.08, 0.03, 0, 0, 0.042, DARK);
-      taper(tool, 0.03, 0.3, [0.022, 0.022, 0, 0.05], [0.012, 0.012, 0, 0.012], '#8a6440');
-      taper(tool, -0.3, -0.03, [0.012, 0.012, 0, 0.012], [0.022, 0.022, 0, 0.05], '#8a6440');
-      box(tool, 0.004, 0.58, 0.004, 0, 0, 0.01, '#e8e2d4');
-    } else if (P === 'crossbow') {
-      box(tool, 0.04, 0.04, 0.32, 0, -0.03, 0.1, WOOD);
-      box(tool, 0.34, 0.026, 0.03, 0, -0.012, 0.23, DARK);
-      box(tool, 0.3, 0.006, 0.006, 0, -0.012, 0.2, '#e8e2d4');
-      box(tool, 0.012, 0.012, 0.2, 0, -0.005, 0.15, '#6a4a2a');
-    } else if (['staff', 'lampPole', 'crozier', 'spear', 'broomHeld'].includes(P)) {
-      box(tool, 0.03, 1.25, 0.03, 0, 0.23, 0, P === 'crozier' ? GOLD : P === 'spear' ? DARK : WOOD);
-      if (P === 'staff') box(tool, 0.05, 0.06, 0.05, 0, 0.85, 0, DARK);
-      if (P === 'lampPole') {
-        box(tool, 0.16, 0.025, 0.025, 0.06, 0.84, 0, DARK);
-        box(tool, 0.006, 0.06, 0.006, 0.13, 0.8, 0, DARK);
-        box(tool, 0.07, 0.09, 0.07, 0.13, 0.73, 0, '#ffd27a');
-        box(tool, 0.08, 0.02, 0.08, 0.13, 0.785, 0, DARK);
-      }
-      if (P === 'crozier') { box(tool, 0.03, 0.03, 0.12, 0, 0.87, 0.045, GOLD); box(tool, 0.03, 0.09, 0.03, 0, 0.83, 0.1, GOLD); box(tool, 0.04, 0.04, 0.04, 0, 0.84, 0, '#e0e0f0'); }
-      if (P === 'spear') { taper(tool, 0.85, 1.0, [0.05, 0.016], [0.004, 0.004], STEEL); box(tool, 0.04, 0.03, 0.04, 0, 0.845, 0, STEEL); }
-      if (P === 'broomHeld') { box(tool, 0.07, 0.035, 0.05, 0, -0.37, 0, DARK); box(tool, 0.16, 0.14, 0.05, 0, -0.45, 0, STRAW); }
-    } else if (P === 'hoe') {
-      // (v683) carried upright like a staff, the blade at the top standing out ahead
-      box(tool, 0.03, 1.0, 0.03, 0, 0.15, 0, WOOD);
-      box(tool, 0.036, 0.05, 0.05, 0, 0.64, 0.012, '#4e4a44');
-      box(tool, 0.15, 0.014, 0.12, 0, 0.65, 0.07, '#6a6e78');
-    } else if (P === 'flourSack') {
-      // (v683) a small sack of flour, tied at the neck
-      box(tool, 0.13, 0.16, 0.1, 0, -0.13, 0.02, '#e4dac0');
-      box(tool, 0.1, 0.03, 0.08, 0, -0.04, 0.02, '#d6caa8');
-      box(tool, 0.05, 0.03, 0.05, 0, -0.015, 0.02, '#a88a58');
-    } else if (P === 'hammer' || P === 'mallet') {
-      box(tool, 0.025, 0.26, 0.025, 0, -0.1, 0.02, WOOD);
-      box(tool, P === 'mallet' ? 0.07 : 0.05, P === 'mallet' ? 0.07 : 0.05, P === 'mallet' ? 0.12 : 0.11, 0, -0.23, 0.03, P === 'mallet' ? '#a07a50' : '#6a6e78');
-    } else if (P === 'axe') {
-      box(tool, 0.026, 0.34, 0.026, 0, -0.12, 0.02, WOOD);
-      box(tool, 0.016, 0.1, 0.1, 0, -0.26, 0.07, STEEL);
-      box(tool, 0.034, 0.05, 0.044, 0, -0.26, 0.02, '#6a6e78');
-    } else if (P === 'scraper') {
-      box(tool, 0.03, 0.08, 0.03, 0, -0.03, 0, WOOD);
-      box(tool, 0.12, 0.012, 0.03, 0, -0.08, 0, STEEL);
-    } else if (P === 'bell') {
-      box(tool, 0.025, 0.08, 0.025, 0, -0.03, 0, DARK);
-      taper(tool, -0.18, -0.07, [0.1, 0.1], [0.045, 0.045], GOLD);
-    } else if (P === 'book' || P === 'ledger') {
-      box(tool, 0.045, 0.17, 0.13, 0.0, -0.06, 0.036, P === 'ledger' ? '#3a2a22' : '#5a1e22');
-      box(tool, 0.033, 0.16, 0.12, 0.003, -0.06, 0.036, '#ece2c8');
-      if (P === 'book') box(tool, 0.052, 0.03, 0.03, 0, -0.06, 0.036, GOLD);
-    } else if (P === 'scroll') {
-      box(tool, 0.045, 0.045, 0.24, 0, -0.03, 0.04, '#e8dcb8');
-      for (const sz of [1, -1]) box(tool, 0.05, 0.05, 0.02, 0, -0.03, 0.04 + sz * 0.125, DARK);
-    } else if (P === 'mug') {
-      // (held by the rim: the froth sits under the fingers, not inside them, where it z-fought the hand)
-      box(tool, 0.06, 0.08, 0.06, 0, -0.07, 0.03, '#8e949e');
-      box(tool, 0.068, 0.014, 0.068, 0, -0.03, 0.03, '#f0e8d0');
-    } else if (P === 'purse') {
-      box(tool, 0.076, 0.08, 0.05, 0, -0.08, 0.01, '#6a2a3a');
-      box(tool, 0.05, 0.015, 0.035, 0, -0.035, 0.01, GOLD);
-    } else if (P === 'ingot') {
-      box(tool, 0.05, 0.04, 0.14, 0, -0.03, 0.03, '#7a7e88');
-    } else if (P === 'pane') {
-      box(tool, 0.012, 0.2, 0.24, -0.01, -0.06, 0.04, '#a8d0dc');
-      box(tool, 0.02, 0.21, 0.02, -0.01, -0.06, 0.16, DARK);
-    } else if (P === 'whip') {
-      box(tool, 0.025, 0.2, 0.025, 0, -0.06, 0.02, DARK);
-      box(tool, 0.008, 0.008, 0.3, 0, 0.04, -0.1, '#3a2a1e', 0.6);
-    } else if (P === 'breadBasket') basket(() => { for (const sx of [-0.04, 0.035]) box(tool, 0.07, 0.04, 0.1, sx, -0.08, 0.03, '#b8783a'); });
-    else if (P === 'herbBasket') basket(() => { for (const [sx, sz] of [[-0.04, 0], [0.03, 0.05], [0.04, -0.02]]) box(tool, 0.05, 0.06, 0.05, sx, -0.07, 0.03 + sz, '#4a7a34'); });
-    else if (P === 'flowerBasket') basket(() => {
-      [['#d84a5a', -0.05, 0.0], ['#f0d04a', 0.0, 0.05], ['#9a6ad8', 0.05, 0.0], ['#f0f0f0', -0.02, -0.03], ['#e88a3a', 0.04, 0.06]].forEach(([c, sx, sz]) => box(tool, 0.035, 0.035, 0.035, sx, -0.075, 0.03 + sz, c));
-    });
+    }
     if (P === 'lute') {
       // on the back, slung across, neck up over the right shoulder
       var lute = pivot(chest, 0, 0.53 - CH, -(frontAt(0.53) + 0.04)); lute.rotation.z = 0.6;

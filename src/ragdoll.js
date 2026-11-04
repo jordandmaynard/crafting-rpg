@@ -215,7 +215,7 @@ export class Ragdoll {
   //   limbs: [{ pivot: [x, y, z], len, lo, hi, rlo, rhi, upper, bend: [lo, hi, rest], dir }]: each limb's ball joint,
   //     its reach, swing and roll limits, how far down it the knee or elbow is, that hinge's limits and resting bend,
   //     and the way it pointed (in the body's frame) as the blow fell, with `bendNow` its bend then.
-  // at: { pos (the feet), yaw, from (where the blow came from), weapon }. held: [{ centre, half, q }] what's in the
+  // at: { pos (the feet), yaw, from (where the blow came from), weapon, headPop (optional: the chance the head comes off, over RAGDOLL.headPop) }. held: [{ centre, half, q }] what's in the
   // hands to drop: its box's centre (in the body's frame from the feet), half size, and turn (in the body's frame).
   constructor(world, shape, at, held = []) {
     const T = RAGDOLL;
@@ -223,7 +223,7 @@ export class Ragdoll {
     this.shape = shape;
     const q = [0, Math.sin(at.yaw / 2), 0, Math.cos(at.yaw / 2)];
     const feet = at.pos[1];
-    this.popped = Math.random() < T.headPop;
+    this.popped = Math.random() < (at.headPop ?? T.headPop);   // (at.headPop: the caller's own chance, a skeleton's)
     const points = boxPoints(shape.bodyHalf);
     if (!this.popped) points.push(...boxPoints(shape.headHalf, [0, shape.headY - shape.bodyY, 0]));
     const b = this.body = new Body(world, [at.pos[0], feet + shape.bodyY, at.pos[2]], q, shape.bodyHalf, points);
