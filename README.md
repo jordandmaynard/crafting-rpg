@@ -364,6 +364,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v690:** (Jordan) Lakes: no mist on the water; the bed is the shore's dirt all the way across (a little darker in the deeps), sloping down on the shelf from the shoals; and the lake's dirt shoals now swirl and blend in rounded patches like the rest of the ground (they had been left out).
 **v691:** (Jordan) The belt's XP fill no longer spills over its frame: it was drawn 320 x 19 from the kit's old track spot, over the new frame's gold rim and square at its rounded ends. It now sits 318 x 18 inside the frame's glass, cut to the glass's round ends by ui/belt/xp-mask.webp (the frame's interior, made by art/src/xp-mask.py), with its leading edge rounded the same way rather than sliced flat.
 
+**v691:** (Jordan) River mouths: where a river runs out over the shoals into a lake or the sea it has carved a channel through them at its own depth, fanning out a little, its sides sloping up to the shoals and its floor easing up into the shelf; shoal tiles it cuts deep through are water now.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

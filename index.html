@@ -2429,8 +2429,73 @@ function markShoals() {
     for (let dr = -1; dr <= 1 && !SHORE[i]; dr++) for (let dc = -1; dc <= 1; dc++) if (BDIRT[T(c + dc, r + dr)]) { SHORE[i] = 1; break; }
   }
   beachStats.shoals = rows[0].length; beachStats.shoals2 = rows[1].length;
+  markMouths();
   computeRim();
   markShelf();
+}
+// River mouths (v691, Jordan): where a river runs out over the shoals into a lake or the sea it has carved its way
+// through them, a channel at the river's depth fanning out from the mouth, its sides sloping up to the shoals and its
+// floor rising, past MOUTH.len tiles, into the shelf. Each mouth is a river tile beside a shoal; MOUTH_AT lists for
+// each tile the mouths that reach it, and carveH the channel's floor there (the ground is the lower of it and the
+// tile's own). A shoal tile the channel cuts deep through is shoal no more, but water.
+// len: tiles of flat floor, spread: widening a tile, side: rise of its sides a tile, end: rise of its floor a tile past
+// len, reach: tiles a mouth looks out to, wade: depth under a shoal's own floor that makes it water
+const MOUTH = { len: 5, spread: 0.3, side: 1.1, end: 0.1, reach: 16, wade: 0.35 };
+const MOUTHS = [], MOUTH_AT = new Map();
+function carveH(i, x, z) {
+  const ms = MOUTH_AT.get(i);
+  let h = 1e9;
+  if (ms) for (const m of ms) {
+    const rx = x - m.x, rz = z - m.z, a = rx * m.dx + rz * m.dz;
+    if (a < -0.5) continue;
+    const s = Math.abs(rx * m.dz - rz * m.dx), w = 0.5 + Math.max(0, a) * MOUTH.spread;
+    const y = m.hb + Math.max(0, s - w) * MOUTH.side + Math.max(0, a - MOUTH.len) * MOUTH.end;
+    if (y < h) h = y;
+  }
+  return h;
+}
+function markMouths() {
+  MOUTHS.length = 0; MOUTH_AT.clear();
+  const open = n => SHOAL[n] || (!LV[n] && !BR[n] && WL[n] && !LAVA[n] && !CY[n] && (!WT[n] || WT[n] === 2));
+  for (let r = 2; r < N - 2; r++) for (let c = 2; c < N - 2; c++) {
+    const i = T(c, r);
+    if (WT[i] !== 3 || LV[i] || BR[i] || LAVA[i] || CY[i]) continue;
+    let by = false, gx = 0, gz = 0;
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      const n = T(c + dc, r + dr);
+      if ((dc || dr) && open(n) && WL[n] === WL[i]) { gx += dc; gz += dr; if (SHOAL[n]) by = true; }
+    }
+    if (!by) continue;
+    // (out the way the river runs, toward the open water)
+    let fx = FX[i] / 127, fz = FZ[i] / 127;
+    if (fx * gx + fz * gz < 0) { fx = -fx; fz = -fz; }
+    let dx = gx / (Math.hypot(gx, gz) || 1) + fx * 0.5, dz = gz / (Math.hypot(gx, gz) || 1) + fz * 0.5;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-3) continue;
+    MOUTHS.push({ x: c + 0.5, z: r + 0.5, dx: dx / l, dz: dz / l, hb: GL[i] * STEP });
+  }
+  const R = MOUTH.reach;
+  for (const m of MOUTHS) {
+    const c0 = Math.floor(m.x), r0 = Math.floor(m.z);
+    for (let dr = -R; dr <= R; dr++) for (let dc = -R; dc <= R; dc++) {
+      const c = c0 + dc, r = r0 + dr;
+      if (c < 0 || r < 0 || c >= N || r >= N) continue;
+      const i = T(c, r);
+      if (!SHOAL[i] && (LV[i] || BR[i] || !WL[i] || LAVA[i] || CY[i] || WT[i] === 1 || WT[i] === 3)) continue;
+      if ((c + 0.5 - m.x) * m.dx + (r + 0.5 - m.z) * m.dz < -1) continue;
+      let l = MOUTH_AT.get(i);
+      if (!l) MOUTH_AT.set(i, l = []);
+      l.push(m);
+    }
+  }
+  // (a shoal tile cut deep through: water now)
+  let cut = 0;
+  for (const [i] of MOUTH_AT) {
+    if (!SHOAL[i]) continue;
+    const c = i % N, r = (i - c) / N;
+    if (carveH(i, c + 0.5, r + 0.5) < LV[i] * STEP - BEACH_DROP * (SHOAL[i] & 512 ? 2.5 : 1.5) - MOUTH.wade) { SHOAL[i] = 0; LV[i] = 0; cut++; }
+  }
+  beachStats.mouths = MOUTHS.length; beachStats.mouthCut = cut;
 }
 // The shelf (Jordan, v678): past the shoals the sea or lake bed no longer drops off a cliff but slopes on down, SHELF_SLOPE
 // a tile, from the second shoal row's foot until it meets the bed as it was (so the deep sea is as deep as ever), making
@@ -8838,11 +8903,14 @@ function groundColor(c, r, i, j) {
 // so the lower tile's outer half rises to meet its higher neighbour, and corners fill in by themselves.
 const tileSurf = (c, r, u, v) => {
   const i = T(c, r), l = LIFT[SH[i]];
-  if (SHOAL[i]) { const m = SHOAL[i] & 255; return LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5)); }
+  if (SHOAL[i]) {
+    const m = SHOAL[i] & 255, h = LV[i] * STEP - BEACH_DROP * ((SHOAL[i] & 512 ? 3 : 2) - (m ? beachH(m, u, v) : 0.5));
+    return MOUTH_AT.size && MOUTH_AT.has(i) ? Math.min(h, carveH(i, c + u, r + v)) : h;   // (cut by a river's mouth)
+  }
   if (!LV[i] || BR[i]) {   // a lake or river bed, the sea floor, a canyon's floor
     // (the shelf off the shoals: the bed sloping on down from them until it meets the bed as it was: see markShelf)
-    if (SHELFT[i]) return Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v));
-    return GL[i] * STEP;
+    const h = SHELFT[i] ? Math.max(GL[i] * STEP, WL[i] * STEP - BEACH_DROP * 3 - SHELF_SLOPE * shelfD(c + u, r + v)) : GL[i] * STEP;
+    return MOUTH_AT.size && MOUTH_AT.has(i) ? Math.min(h, carveH(i, c + u, r + v)) : h;
   }
   if (WT[i] === 1) return LV[i] * STEP - BOG_BED;   // a swamp pool's bed (its banks are its neighbours' edges)
   if (BEACH[i]) return LV[i] * STEP - beachDrop(i) * (1 - beachH(BEACH[i], u, v));   // a beach, sloping into the water
@@ -30573,7 +30641,7 @@ window.GAME = {
   mapLabelMiss: () => mapLabelMiss, dockWhy: (c0, r0, R) => { const why = {}; const add = k => why[k] = (why[k] || 0) + 1; for (let r = r0 - R; r <= r0 + R; r++) for (let c = c0 - R; c <= c0 + R; c++) { const s = T(c, r), L = LV[s]; if (!L) continue; let shore = false; for (let d = 0; d < 4; d++) if (!LV[s + DI[d]]) shore = true; if (!shore) continue; if (BI[s] === TOWN || TN[s]) { add('town'); continue; } if (BR[s] || WT[s] || SH[s] || LAVA[s] || FL[s] || OBJ[OB[s]].tile) { add('ground'); continue; } let fit = false; for (let d = 0; d < 4; d++) if (dockFits(s, d, L)) fit = true; add(fit ? 'fits' : 'nofit'); const t = s + DI[[0,1,2,3].find(d => !LV[s + DI[d]])]; add('wl' + WL[t] + '_L' + L + '_wt' + WT[t]); } return why; }, docks: () => docks.map(k => ({ c: k.c, r: k.r, d: k.d, cut: k.cut, why: k.why, town: k.town && k.town.name, tiles: k.tiles.length, name: k.name, lv: LV[k.base] })), pois: () => poiAll.map(({ p, kind }) => ({ kind, name: p.name, at: poiTile(p), found: p.found })), lands: () => ({ masses: landmasses.map(m => ({ id: m.id, n: m.n, c: m.c, r: m.r, deep: m.deep, name: m.name, band: bandWin[m.id], towns: towns.filter(t => LANDID[T(t.c, t.r)] === m.id).length })), stats: landStats }), landId: (c, r) => LANDID[T(c, r)],
   climate: (c, r) => climateAt ? climateAt(c, r) : null, spines: () => spines.map(sp => ({ w: sp.w, n: sp.pts.length, a: sp.pts[0], b: sp.pts[sp.pts.length - 1] })), wind: () => climateWind,
   beaches: () => ({ ...beachStats, n: BEACH.reduce((a, v) => a + (v ? 1 : 0), 0) }),
-  raw: () => ({ BEACH, SHOAL, BDIRT, SHORE, beachH, TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
+  raw: () => ({ BEACH, SHOAL, BDIRT, SHORE, MOUTHS, beachH, TSTREET, connectStats, N, T, LV, SH, RAMP_LEN, WL, WT, GL, CY, BR, PATH, TN, BI, FX, FZ, LAVA, cornerL, CX, CZ, waterStats, pointH, waterPoint, STEP, river, lakeList, chunks, foes, camera, foeTop, DOCK, WN, WW, towns, UP, FL, OB, O, stairs, stairAt, BALCONY, rooms, buildings, roses: DETAIL_U.roses.value, CATH_OPEN }),
   tile: (c, r) => { const i = T(c, r); return { lv: LV[i], sh: SH[i], bi: BI[i], ob: OB[i], wt: WT[i], fl: FL[i], wn: WN[i], ww: WW[i], rim: RIM[i], path: PATH[i], room: roomOf.get(i) || 0, tn: TN[i], gl: GL[i], wl: WL[i], cy: CY[i], br: BR[i] }; },
   walk: (dx, dz) => { const n = Math.ceil(Math.hypot(dx, dz) / 0.1); for (let k = 0; k < n; k++) { moveEntity(H, dx / n, dz / n, 0.26, false); heroSettle(); } H.y = heroFloorY(); return [H.x, H.z]; },
   plots: () => ({ n: plots.length - 1, sizes: plots.slice(1).map(p => p.n), spans: plots.slice(1).map(p => [p.x1 - p.x0 + 1, p.z1 - p.z0 + 1]), claimed: plots.filter(p => p && p.claimed).length, hearths: hearths.size }),
