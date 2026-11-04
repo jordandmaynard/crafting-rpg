@@ -384,6 +384,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v703:** (Jordan: the goblins looked cuter before, not just for the shorter legs) The goblin's head is the old goblin's again, blown up by its old scale over GOBLIN_SCALE so it is the old size in the world: wider than the tunic and sat straight on the shoulders with no neck, plain glowing eyes flush on the skin, a little stub of a nose, flat ears out to the sides. The heavy brow, dark eye sockets, long tilted nose, mouth and teeth are gone; the cap, tuft, earring and hair bone stay as before. Its height is unchanged (0.76).
 
+**v704:** (Jordan: the health bar looked a little off in its bottom right corner) The belt's red health fill now draws under the frame: a copy of the frame with its glass cut out (ui/belt/hp-frame-ring.webp, made by art/src/hp-frame-ring.py from hp-frame.webp, the frame's outline shrunk 9 px at 2x so the brass and its dark inner rule stay) sits over the fill and the part just lost, with the numbers on top. The full frame stays underneath for the empty glass.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
