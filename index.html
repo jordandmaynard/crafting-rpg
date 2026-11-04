@@ -19822,7 +19822,6 @@ function potionIcons() {
 }
 function potionRedo() {
   if (!potionIcons()) return;
-  potionPack.shared.clear();
   if (typeof invOpen !== 'undefined' && invOpen) renderInv(); else renderHot();
 }
 // Sloshing: a potion whose liquid is moving is drawn live on a canvas standing in for its icon, until it settles. Each
@@ -19833,40 +19832,190 @@ function potionRedo() {
 // 'hot'). One frame loop runs them all.
 const potionMats = {}, POTION_ACT = { give: 0, redraw: 0, greens: 0 };
 const POTION_LIVE = new Set();
-const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0, shared: new Map() };
-// (v764: Jordan's frame rate fell walking with potions in the pack and on the hotbar) the squares the walk sets
-// sloshing all feel the same push, so those of one colour (and size) share one state, stepped and painted once a frame,
-// and each square just copies the picture
-function potionShare(S, home) {
-  const key = home + ':' + S.kind + ':' + S.g.w;
-  let Sh = potionPack.shared.get(key);
-  if (!Sh) {
-    const cv = document.createElement('canvas'); cv.width = S.g.w; cv.height = S.g.h;
-    const ctx = cv.getContext('2d');
-    Sh = { cv, ctx, g: S.g, img: ctx.createImageData(S.g.w, S.g.h), tint: S.tint, kind: S.kind, st: potionState(), key, frame: -1 };
-    potionDraw(Sh);
-    potionPack.shared.set(key, Sh);
-  }
-  S.share = Sh; S.st = Sh.st;
-  S.ctx.drawImage(Sh.cv, 0, 0);
-  return S;
-}
+const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0 };
 let potionDragS = null;
 const potionState = () => ({ x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0, tilt: 0, tv: 0, amp: 0, phase: 0, bub: [], calm: false, lv: null });
-// a live canvas for kind, its sheet picked by the box's size on screen
-function potionCanvas(kind, cssPx) {
-  const g = POTION_GEOM[cssPx * (devicePixelRatio || 1) > 140 ? 256 : 128];
+// (v767, Jordan: the slosh cost more CPU than the whole lit haze march) the liquid is painted on the GPU: POTION_WGSL is
+// potionPaint's per-pixel work as a shader function, run by the bottles in the world (pcardMat) and, for the pack's,
+// the hotbar's and the dragged one, by a WebGPU canvas in each square (potionGpu, one tiny draw each). The CPU only
+// steps each one's liquid (potionStep) and hands over its lean, wave and bubbles.
+const POTION_BUB = 16;   // (bubbles a bottle hands the shader, at most)
+const POTION_PFX = new Float32Array(16);
+let POTION_LV = null;   // (the level's size and place, pixels of 256: potionStep's bubbles need it)
+// the shader's shared numbers: the tunables and where the level lies in the 256 painting
+function potionFxPack() {
+  const g = POTION_GEOM[256], F = POTION_FX;
+  if (!g) return false;
+  const inset = F.inset, soft = Math.max(0.5, F.soft), ys = g.bot - (g.bot - g.neck) * F.fill;
+  const ch = potionChord(g, ys, inset) || [127, 129];
+  const cx = (ch[0] + ch[1]) / 2, W = Math.max(2, (ch[1] - ch[0]) / 2 + 2), H = W * F.persp;
+  POTION_PFX.set([inset, soft, ys, g.bot, cx, W, H, F.mid, F.contrast, F.shade, F.light, F.depth, F.surface, F.rim, F.front, F.gleam]);
+  POTION_LV = { ys, cx, W, H };
+  return true;
+}
+const potionTintRgb = new Map();
+// bottle k's numbers into pbt (2 vec4 each) and pbb (POTION_BUB bubbles each): its tint and lean; its wave, the first
+// row painted, its bubbles' first and count
+function potionBottlePack(pbt, pbb, k, st, kind) {
+  let T = potionTintRgb.get(POTION_TINT[kind]);
+  if (!T) { T = potionRgb(POTION_TINT[kind] || '#ffffff'); potionTintRgb.set(POTION_TINT[kind], T); }
+  const n = Math.min(POTION_BUB, st.bub.length), o = k * 8;
+  pbt[o] = T[0]; pbt[o + 1] = T[1]; pbt[o + 2] = T[2]; pbt[o + 3] = st.tilt;
+  pbt[o + 4] = st.amp * Math.sin(st.phase); pbt[o + 5] = POTION_GEOM[256].neck * 0.6; pbt[o + 6] = k * POTION_BUB; pbt[o + 7] = n;
+  for (let j = 0; j < n; j++) { const b = st.bub[j], q = (k * POTION_BUB + j) * 4; pbb[q] = b.x; pbb[q + 1] = b.y; pbb[q + 2] = b.r; pbb[q + 3] = b.a ?? 1; }
+}
+const POTION_WGSL = /* wgsl */ `
+// a potion's liquid over the empty bottle, potionPaint's work for one pixel: p the point in the 256 painting's pixels,
+// src the empty bottle's colour there, d how far in from the glass's edge (pixels of 256), pw an output pixel's size
+// in those pixels, k the bottle (U.pbt[2k]: tint, lean; [2k + 1]: wave, first row painted, bubbles' first and count)
+fn potionLiquid(p: vec2f, src: vec3f, d: f32, pw: f32, k: i32) -> vec3f {
+  let A = U.pfx[0]; let B = U.pfx[1]; let C = U.pfx[2]; let E = U.pfx[3];
+  let inset = A.x; let soft = A.y; let ys = A.z; let bot = A.w;
+  let cx = B.x; let W = B.y; let H = B.z;
+  let b0 = U.pbt[k * 2]; let b1 = U.pbt[k * 2 + 1];
+  let T = b0.rgb;
+  if (p.y < b1.y || d < inset - soft) { return src; }
+  let ct = cos(b0.w); let sn = sin(b0.w);
+  let dx = p.x - cx; let dy = p.y - ys;
+  let u = dx * ct + dy * sn;
+  let v = -dx * sn + dy * ct + b1.x * cos(PI * clamp(u / W, -1.0, 1.0));
+  let q = sqrt((u / W) * (u / W) + (v / H) * (v / H)); let fe = (q - 1.0) * min(H, W);
+  let cSurf = sat(0.5 - fe / pw);
+  let cLiq = max(cSurf, sat(0.5 + v / pw)) * sat((d - inset + soft) / soft);
+  if (cLiq <= 0.0) { return src; }
+  let L = dot(src, vec3f(0.3, 0.59, 0.11)); let t = sat((L - B.w) * C.x + 0.5);
+  let dark = T * C.y; let lite = T + (1.0 - T) * C.z;
+  var c = select(T + (lite - T) * (t * 2.0 - 1.0), dark + (T - dark) * (t * 2.0), t < 0.5);
+  c *= 1.0 - C.w * sat((p.y - ys) / max(1.0, bot - ys));
+  if (cSurf > 0.0) {
+    let rw = max(1.6, pw);
+    let m = min(1.0, max(0.0, 1.0 - abs(fe) / rw) * (1.6 / rw) * E.y * select(E.z, 1.0, v < 0.0)) * 0.7;
+    c += (lite - c) * (cSurf * E.x);
+    c += (vec3f(1.0) - c) * m;
+  }
+  let foam = lite + (vec3f(1.0) - lite) * 0.5;
+  let f0 = i32(b1.z); let n = i32(b1.w);
+  for (var j = 0; j < n; j++) {
+    let o = U.pbb[f0 + j];
+    let bd = length(p - o.xy) / max(o.z, 0.01);
+    if (bd < 1.2) { c += (foam - c) * (sat((1.2 - bd) / 0.4) * select(0.3, 0.85, bd > 0.55) * o.w); }
+  }
+  let sp = sat((L - E.w) / max(0.01, 1.0 - E.w));
+  c += (src - c) * sp;
+  return src + (c - src) * cLiq;
+}`;
+// the empty bottle at N px, premultiplied (left), and its distance in from the glass's edge (right, x 4 as grey),
+// two pixels apart: what the shader paints the liquid from, at about the size it's shown
+const potionGeoTexs = new Map();
+function potionGeoTex(N) {
+  N = Math.max(8, Math.round(N));
+  let t = potionGeoTexs.get(N);
+  if (t) return t;
+  const g = POTION_GEOM[256];
+  if (!g) return null;
+  const mk = (fill) => { const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'); const im = x.createImageData(256, 256); fill(im.data); x.putImageData(im, 0, 0); return c; };
+  const srcC = mk(o => o.set(g.src)), dC = mk(o => { for (let i = 0; i < 256 * 256; i++) { const v = Math.min(255, Math.round(g.d[i] * 4)); o[i * 4] = o[i * 4 + 1] = o[i * 4 + 2] = v; o[i * 4 + 3] = 255; } });
+  const Wt = N * 2 + 2, c = document.createElement('canvas'); c.width = Wt; c.height = N;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+  x.drawImage(srcC, 0, 0, N, N); x.drawImage(dC, N + 2, 0, N, N);
+  const d = x.getImageData(0, 0, Wt, N).data;
+  for (let y = 0; y < N; y++) for (let xx = 0; xx < N; xx++) { const o = (y * Wt + xx) * 4, a = d[o + 3] / 255; d[o] = Math.round(d[o] * a); d[o + 1] = Math.round(d[o + 1] * a); d[o + 2] = Math.round(d[o + 2] * a); }
+  t = new GFX.DataTexture(new Uint8Array(d.buffer), Wt, N);
+  t.needsUpdate = true;
+  if (potionGeoTexs.size > 24) potionGeoTexs.clear();   // (sizes come and go with the zoom; the ones in use are made again)
+  potionGeoTexs.set(N, t);
+  return t;
+}
+// sampling the bottle (premultiplied colour, and its depth in from the glass) at uv (0 to 1) of the texture above
+const POTION_GEO_WGSL = /* wgsl */ `
+fn potionGeoAt(uv: vec2f) -> vec4f {
+  let n = (f32(textureDimensions(tG).x) - 2.0) * 0.5; let wt = n * 2.0 + 2.0;
+  let x = clamp(uv.x, 0.5 / n, 1.0 - 0.5 / n);
+  let s = textureSampleLevel(tG, tGS, vec2f(x * n / wt, uv.y), 0.0);
+  let d = textureSampleLevel(tG, tGS, vec2f((n + 2.0 + x * n) / wt, uv.y), 0.0).r * 63.75;
+  return vec4f(select(vec3f(0.0), s.rgb / s.a, s.a > 0.001), d);
+}
+fn potionGeoA(uv: vec2f) -> f32 {
+  let n = (f32(textureDimensions(tG).x) - 2.0) * 0.5; let wt = n * 2.0 + 2.0;
+  return textureSampleLevel(tG, tGS, vec2f(clamp(uv.x, 0.5 / n, 1.0 - 0.5 / n) * n / wt, uv.y), 0.0).a;
+}`;
+// The squares' bottles: a WebGPU canvas each, drawn by one quad of potionUiMat (one material per size, for its
+// texture). UI_MAX bottles a round at most.
+const POTION_UI_MAX = 48;
+const potionUi = { pbt: new Float32Array(POTION_UI_MAX * 8), pbb: new Float32Array(POTION_UI_MAX * POTION_BUB * 4), mats: new Map(), cam: new GFX.OrthographicCamera(-1, 1, 1, -1, 0.1, 10) };
+function potionUiMat(N) {
+  let m = potionUi.mats.get(N);
+  if (m) return m;
+  const tex = potionGeoTex(N);
+  if (!tex) return null;
+  m = new GFX.ShaderMaterial({
+    uniforms: { tG: { value: tex }, pfx: { value: POTION_PFX }, pbt: { value: potionUi.pbt }, pbb: { value: potionUi.pbb } },
+    attributes: { pk: 'f32' }, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
+    code: POTION_WGSL + POTION_GEO_WGSL + /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) @interpolate(flat) k: f32 }
+@vertex fn vs(v: VIn) -> VOut { var o: VOut; o.pos = vec4f(v.position.xy, 0.5, 1.0); o.k = v.pk; return o; }
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let uv = i.pos.xy * F.res.zw;
+  let a = potionGeoA(uv);
+  if (a <= 0.0) { return vec4f(0.0); }
+  let g = potionGeoAt(uv);
+  let c = potionLiquid(uv * 256.0, g.rgb, g.w, 256.0 * F.res.z, i32(i.k + 0.5));
+  return vec4f(c * a, a);
+}`,
+  });
+  potionUi.mats.set(N, m);
+  return m;
+}
+// draw these live squares' bottles now (each canvas sized to its box), all in one go
+function potionGpu(list) {
+  if (!list.length || !potionFxPack()) return;
+  const dpr = devicePixelRatio || 1, todo = [];
+  for (const S of list) {
+    if (todo.length >= POTION_UI_MAX) break;
+    const w = parseFloat(S.cv.style.width) || S.cv.clientWidth || 96, h = parseFloat(S.cv.style.height) || S.cv.clientHeight || w;
+    const W = Math.max(8, Math.round(w * dpr)), Hh = Math.max(8, Math.round(h * dpr));
+    if (S.cv.width !== W || S.cv.height !== Hh) { S.cv.width = W; S.cv.height = Hh; }
+    const mat = potionUiMat(Math.round(Math.max(W, Hh) / 4) * 4);
+    if (!mat) continue;
+    if (!S.gpu) {
+      const g = new GFX.BufferGeometry();
+      g.setAttribute('position', new GFX.Float32BufferAttribute(new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0]), 3));
+      g.setAttribute('pk', new GFX.Float32BufferAttribute(new Float32Array(6), 1));
+      const mesh = new GFX.Mesh(g, mat); mesh.frustumCulled = false;
+      const scene = new GFX.Scene(); scene.add(mesh);
+      S.gpu = { tgt: renderer.canvasTarget(S.cv), mesh, scene, k: -1 };
+    }
+    if (S.gpu.mesh.material !== mat) S.gpu.mesh.material = mat;
+    const k = todo.length;
+    if (S.gpu.k !== k) { S.gpu.k = k; const a = S.gpu.mesh.geometry.attributes.pk; a.array.fill(k); a.needsUpdate = true; }
+    potionBottlePack(potionUi.pbt, potionUi.pbb, k, S.st, S.kind);
+    S.dirty = false;
+    todo.push(S);
+  }
+  if (!todo.length) return;
+  const tgt = renderer.getRenderTarget(), name = renderer.passName;
+  renderer.passName = 'potion slosh';
+  for (const S of todo) {
+    renderer.setRenderTarget(S.gpu.tgt); renderer.setClearColor(0x000000, 0); renderer.clear();
+    renderer.render(S.gpu.scene, potionUi.cam);
+  }
+  renderer.setRenderTarget(tgt); renderer.setClearColor('#0b0912', 1); renderer.passName = name;
+  renderer.flush();
+}
+// a live canvas for kind, drawn on the GPU (null until the painting's measured)
+function potionCanvas(kind) {
+  const g = POTION_GEOM[256];
   if (!g) return null;
   const cv = document.createElement('canvas');
-  cv.className = 'paint'; cv.width = g.w; cv.height = g.h; cv.dataset.potionLive = kind;
-  const ctx = cv.getContext('2d');
-  return { cv, ctx, g, img: ctx.createImageData(g.w, g.h), tint: POTION_TINT[kind], kind };
+  cv.className = 'paint'; cv.width = cv.height = 8; cv.dataset.potionLive = kind;
+  return { cv, g, tint: POTION_TINT[kind], kind };
 }
+// its liquid's moved: drawn again (the squares' at the end of the slosh loop; the world's each frame anyway)
 function potionDraw(S) {
-  const P = S.st;
-  S.img.data.set(S.g.src);
-  P.lv = potionPaint(S.g, S.img.data, POTION_FX, S.tint, { tilt: P.tilt, wave: P.amp, phase: P.phase, bubbles: P.bub, y0: S.g.neck * 0.6 });
-  S.ctx.putImageData(S.img, 0, 0);
+  if (!POTION_LV) potionFxPack();
+  S.st.lv = POTION_LV;
+  S.dirty = true;
 }
 // one step of a potion's liquid, pushed to (x, y) (screen px); returns whether it has settled
 function potionStep(S, x, y, dt) {
@@ -19900,13 +20049,15 @@ function potionStep(S, x, y, dt) {
   return calm && was;
 }
 // What a dragged item shows: its icon, or for a potion a live canvas that sloshes as it's dragged.
-function setDragIcon(drag, id) {
-  const it = ITEMS[id], S = it.potion && potionCanvas(it.potion, 96);
+// (now: drawn at once; not from inside the frame, which draws on, so it's left to the slosh loop)
+function setDragIcon(drag, id, now = true) {
+  const it = ITEMS[id], S = it.potion && potionCanvas(it.potion);
   if (!S) { drag.innerHTML = ICON[it.icon]; return; }
   drag.innerHTML = '';
+  S.cv.style.width = S.cv.style.height = '96px';
   drag.append(S.cv);
   Object.assign(S, { drag: true, st: potionState(), from: null, at: null });
-  potionDraw(S);
+  potionDraw(S); if (now) potionGpu([S]);
   if (potionDragS) POTION_LIVE.delete(potionDragS);
   potionDragS = S;
   POTION_LIVE.add(S);
@@ -19919,12 +20070,12 @@ function potionLiveAt(sel, kind, st, home) {
   if (el.tagName === 'CANVAS') return [...POTION_LIVE].find(o => o.cv === el) || null;
   const w = el.offsetWidth, h = el.offsetHeight;
   if (!w) return null;
-  const S = potionCanvas(kind, w);
+  const S = potionCanvas(kind);
   if (!S) return null;
   S.cv.style.width = w + 'px'; S.cv.style.height = h + 'px';
   Object.assign(S, { sel, st: st || potionState(), home });
   el.replaceWith(S.cv);
-  potionDraw(S);
+  potionDraw(S); potionGpu([S]);
   POTION_LIVE.add(S);
   return S;
 }
@@ -19965,13 +20116,11 @@ function potionTickBody(now) {
     if (pk.busy > 0 && (F.walkPush > 0 || F.walkBob > 0)) {
       if (invOpen) for (const el of document.querySelectorAll('#inv .cell[data-cell^="pack:"] img[data-potion]')) {
         const sel = `#inv .cell[data-cell="${el.closest('.cell').dataset.cell}"]`;
-        const L = potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, true);
-        if (L) potionShare(L, 'pack');
+        potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, true);
       }
       if (hotOn) for (const el of document.querySelectorAll('#hotbar .hslot[data-hot] img[data-potion]')) {
         const sel = `.hslot[data-hot="${el.closest('.hslot').dataset.hot}"]`;
-        const L = potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, 'hot');
-        if (L) potionShare(L, 'hot');
+        potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, 'hot');
       }
     }
   } else { pk.hx = null; pk.busy = 0; pk.bob = 0; }
@@ -20000,24 +20149,12 @@ function potionTickBody(now) {
     if (!S.cv.isConnected) {
       POTION_LIVE.delete(S);
       const L = potionLiveAt(potionSel(S.sel, S.kind), S.kind, S.st, S.home);
-      if (L) { L.anchor = S.anchor; if (S.share) potionShare(L, S.home === 'hot' ? 'hot' : 'pack'); }
+      if (L) L.anchor = S.anchor;
       continue;
     }
     if (!S.anchor) S.anchor = [0, 0];
     const push = pushed(S.home);
-    let settled;
-    if (S.share) {
-      // (one step and one painting a frame for all that share it; the rest copy it)
-      const Sh = S.share;
-      if (Sh.frame !== potionFrame) {
-        Sh.frame = potionFrame;
-        Sh.settled = potionStep(Sh, push ? pk.x : 0, push ? pk.y - (pk.bob || 0) : 0, dt);
-        Sh.drew = !Sh.st.calm;
-        if (Sh.drew) potionDraw(Sh);
-      }
-      settled = Sh.settled;
-      if (!(settled && !(push && pk.busy > 0)) && Sh.drew) { S.ctx.clearRect(0, 0, S.cv.width, S.cv.height); S.ctx.drawImage(Sh.cv, 0, 0); }
-    } else settled = potionStep(S, S.anchor[0] + (push ? pk.x : 0), S.anchor[1] + (push ? pk.y - (pk.bob || 0) : 0), dt);
+    const settled = potionStep(S, S.anchor[0] + (push ? pk.x : 0), S.anchor[1] + (push ? pk.y - (pk.bob || 0) : 0), dt);
     if (settled && !(push && pk.busy > 0)) {
       // settled: back to its icon
       POTION_LIVE.delete(S);
@@ -20025,8 +20162,12 @@ function potionTickBody(now) {
       S.cv.replaceWith(t.content.firstElementChild);
       continue;
     }
-    if (!S.share && !S.st.calm) potionDraw(S);
+    if (!S.st.calm) potionDraw(S);
   }
+  // (all the squares' bottles that moved, drawn on the GPU in one go)
+  const dirty = [];
+  for (const S of POTION_LIVE) if (S.dirty && S.cv.isConnected) dirty.push(S);
+  potionGpu(dirty);
 }
 let potionFrame = 0, potionProf = null;   // (the G profiler, once it's made)
 requestAnimationFrame(potionTick);
@@ -25014,7 +25155,6 @@ function drawSeals(useD) {
     const want = Math.max(16, Math.min(256, Math.ceil(big / 8) * 8));
     const sig = pcardSrcs().join('|');
     if ((!pcardCell || Math.abs(want - pcardCell) > pcardCell / 6 || sig !== pcardSig) && !buildPotionAtlas(want) && !pcardCell) pcardMesh.visible = false;
-    pcardBake();
     if (pcardNormG !== POTION_GEOM[128]) buildPotionNormals();
     PCARD_U.screen.value.set(w, h); PCARD_U.useD.value = useD ? 1 : 0;
     const PL = POTION_LIT;
@@ -25987,14 +26127,17 @@ const PCARD_MAX = 16;
 const POTION_LIT = { strength: 0.85, ref: 0.6, glint: 2.1, gloss: 55 };   // (v759, Jordan's tuning)
 const PCARD_U = { tP: { value: new GFX.DataTexture(new Uint8Array(4), 1, 1) }, tD: { value: outlineRT.depthTexture },
   tN: { value: new GFX.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1) },
+  tG: { value: new GFX.DataTexture(new Uint8Array(16), 4, 1) },
   screen: { value: new GFX.Vector2(1, 1) }, cells: { value: 6 }, useD: { value: 1 }, cellPx: { value: 16 },
+  pfx: { value: POTION_PFX }, pbt: { value: new Float32Array(6 * 8) }, pbb: { value: new Float32Array(6 * POTION_BUB * 4) },
   litK: { value: POTION_LIT.strength }, litRef: { value: POTION_LIT.ref }, glint: { value: POTION_LIT.glint }, gloss: { value: POTION_LIT.gloss } };
 const pcardMat = new GFX.ShaderMaterial({
-  uniforms: PCARD_U, attributes: { qm: 'vec4f', qs: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
+  uniforms: PCARD_U, attributes: { qm: 'vec4f', qs: 'vec4f', qb: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
   blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
-  code: /* wgsl */ `
+  code: POTION_WGSL + POTION_GEO_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32, @location(2) @interpolate(flat) soft: f32,
-  @location(3) nuv: vec2f, @location(4) wp: vec3f, @location(5) @interpolate(flat) rc: vec2f }
+  @location(3) nuv: vec2f, @location(4) wp: vec3f, @location(5) @interpolate(flat) rc: vec2f,
+  @location(6) @interpolate(flat) live: f32, @location(7) @interpolate(flat) pw: f32 }
 @vertex fn vs(v: VIn) -> VOut {
   let c = F.viewProj * vec4f(v.position, 1.0);
   var o: VOut;
@@ -26018,6 +26161,9 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
   let Rw = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]); let Uw = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
   o.wp = v.position + (Rw * off.x + Uw * off.y) * (v.qs.x / max(px, 1e-3));
   o.rc = vec2f(cs, sn);
+  // (v767) a sloshing one's slot (its liquid painted here, POTION_WGSL), and a screen pixel's size in the painting's 256
+  o.live = v.qb.x;
+  o.pw = 256.0 / max(1.0, px * (U.cellPx - 2.0) / max(U.cellPx, 3.0));
   return o;
 }
 // the light at world point w on normal N (Ng the card's own, facing the eye), as the scene's surfaces take it, and
@@ -26056,6 +26202,12 @@ fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
   }
   if (k <= 0.0 || col.a <= 0.0) { discard; }
   var rgb = col.rgb;
+  if (i.live >= 0.0) {
+    // its liquid as it is now, inside the glass (outside it the icon's own, outline and all)
+    let gu = clamp(i.nuv, vec2f(0.0), vec2f(1.0));
+    let g = potionGeoAt(gu);
+    if (g.w >= U.pfx[0].x - U.pfx[0].y) { rgb = potionLiquid(gu * 256.0, g.rgb, g.w, i.pw, i32(i.live + 0.5)) * col.a; }
+  }
   if (U.litK > 0.0 || U.glint > 0.0) {
     // the bottle's normal on the card (x right, y up, z out of it), turned with the card, into the world
     let nt = textureSampleLevel(tN, tNS, clamp(i.nuv, vec2f(0.0), vec2f(1.0)), 0.0).xyz * 2.0 - 1.0;
@@ -26070,12 +26222,13 @@ fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
   return vec4f(rgb, col.a) * k;
 }`,
 });
-const pcardPos = new Float32Array(PCARD_MAX * 18), pcardQm = new Float32Array(PCARD_MAX * 24), pcardQs = new Float32Array(PCARD_MAX * 24);
+const pcardPos = new Float32Array(PCARD_MAX * 18), pcardQm = new Float32Array(PCARD_MAX * 24), pcardQs = new Float32Array(PCARD_MAX * 24), pcardQb = new Float32Array(PCARD_MAX * 24);
 const pcardMesh = (() => {
   const g = new GFX.BufferGeometry();
   g.setAttribute('position', new GFX.Float32BufferAttribute(pcardPos, 3));
   g.setAttribute('qm', new GFX.Float32BufferAttribute(pcardQm, 4));
   g.setAttribute('qs', new GFX.Float32BufferAttribute(pcardQs, 4));
+  g.setAttribute('qb', new GFX.Float32BufferAttribute(pcardQb, 4));
   const m = new GFX.Mesh(g, pcardMat);
   m.frustumCulled = false; m.castShadow = false; m.visible = false;
   return m;
@@ -26085,13 +26238,13 @@ const pcardImgs = new Map(), POTION_KINDS = Object.keys(POTION_TINT);
 // (v760) the cards' icon cells: each potion's, then the empty bottle's ('empty')
 const PCARD_KINDS = [...POTION_KINDS, 'empty'];
 const pcardSrcs = () => PCARD_KINDS.map(k => ((ICON[k === 'empty' ? 'emptyBottle' : 'potion_' + k] || '').match(/src="([^"]+)"/) || [])[1] || '');
-// (v757, Jordan) the 2D bottles slosh like the pack's: each one moving has a live canvas (potionCanvas, potionStep), the
-// one in hand pushed by the fist's moves in the world (mapped to the screen as the pack's walk push is, x
-// POTION_DRAW.slosh2d), a flying one by where it is on the screen (x POTION_THROW.slosh; it takes over the liquid of the
-// bottle that was in hand). While its liquid moves it's drawn into one of PCARD_LIVE cells after the icons' own
-// (pcardBake, from drawSeals); once it's settled the card goes back to the icon's cell.
+// (v757, Jordan) the 2D bottles slosh like the pack's: each one moving has a liquid of its own (potionStep), the one in
+// hand pushed by the fist's moves in the world (mapped to the screen as the pack's walk push is, x POTION_DRAW.slosh2d),
+// a flying one by where it is on the screen (x POTION_THROW.slosh; it takes over the liquid of the bottle that was in
+// hand). (v767) While its liquid moves it takes one of PCARD_LIVE slots, and the card's shader paints its liquid
+// (POTION_WGSL, from the slot's numbers in pbt / pbb); once it's settled the card shows the icon as it is.
 const PCARD_LIVE = 6, pcardSlots = new Array(PCARD_LIVE).fill(null);
-let pcardHeld = null, pcardT = 0, pcardScratch = null;
+let pcardHeld = null, pcardT = 0;
 // premultiply RGBA d (W px wide, h high) and give each cell (cell px wide) the items' one-pixel black outline
 function pcardInk(d, W, h, cell) {
   const A = new Uint8Array(W * h);
@@ -26140,13 +26293,13 @@ function buildPotionNormals() {
   const t = PCARD_U.tN.value;
   t.image = { data: out, width: w, height: h }; t.needsUpdate = true;
 }
-// the atlas: each potion's icon side by side, cell px square, premultiplied, with the items' one-pixel black outline,
-// then PCARD_LIVE cells for the sloshing ones
+// the atlas: each potion's icon side by side, cell px square, premultiplied, with the items' one-pixel black outline
+// (and the sloshing ones' empty bottle and its depth at the icons' size, potionGeoTex)
 function buildPotionAtlas(cell) {
   const srcs = pcardSrcs();
   const ims = srcs.map(src => { let im = pcardImgs.get(src); if (!im) { im = new Image(); im.src = src; pcardImgs.set(src, im); } return im; });
   if (!ims.every(im => im.complete && im.naturalWidth)) return false;
-  const n = ims.length, W = cell * (n + PCARD_LIVE), c = document.createElement('canvas'); c.width = W; c.height = cell;
+  const n = ims.length, W = cell * n, c = document.createElement('canvas'); c.width = W; c.height = cell;
   const g = c.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
   ims.forEach((im, k) => g.drawImage(im, k * cell + 1, 1, cell - 2, cell - 2));
@@ -26154,56 +26307,34 @@ function buildPotionAtlas(cell) {
   pcardInk(d, W, cell, cell);
   const t = PCARD_U.tP.value;
   t.image = { data: new Uint8Array(d.buffer), width: W, height: cell }; t.regions = []; t.needsUpdate = true;
-  PCARD_U.cells.value = n + PCARD_LIVE; PCARD_U.cellPx.value = cell; pcardCell = cell; pcardSig = srcs.join('|');
-  for (const S of pcardSlots) if (S) S.dirty = true;
+  PCARD_U.cells.value = n; PCARD_U.cellPx.value = cell; pcardCell = cell; pcardSig = srcs.join('|');
+  const gt = potionGeoTex(cell - 2);
+  if (gt) PCARD_U.tG.value = gt;
   return true;
 }
-// a live 2D bottle (null until the potions' sheet is in)
+// a live 2D bottle (null until the potions' painting is measured)
 function pcardLiveNew(kind) {
-  const S = POTION_GEOM[128] ? potionCanvas(kind, 0) : null;
-  if (!S) return null;
-  Object.assign(S, { st: potionState(), slot: -1, dirty: false, wp: null, px: 0, py: 0, seen: 0 });
+  if (!POTION_GEOM[256]) return null;
+  const S = { kind, tint: POTION_TINT[kind], g: POTION_GEOM[256], st: potionState(), slot: -1, wp: null, px: 0, py: 0, seen: 0 };
   potionDraw(S);
   return S;
 }
-// one step of a live bottle's liquid, pushed to (x, y); whether it's still moving (and so wants a live cell)
+// one step of a live bottle's liquid, pushed to (x, y); whether it's still moving (and so wants a slot)
 function pcardSlosh(S, x, y, dt) {
-  if (potionStep(S, x, y, dt)) return false;
-  if (!S.st.calm) { potionDraw(S); S.dirty = true; }
-  return true;
-}
-// draw the live bottles whose liquid has moved into their atlas cells (after the atlas is sized, in drawSeals)
-function pcardBake() {
-  const t = PCARD_U.tP.value, cell = pcardCell, nK = PCARD_KINDS.length, W = cell * (nK + PCARD_LIVE);
-  if (!cell || !t.image.data || t.image.width !== W) return;
-  for (let k = 0; k < PCARD_LIVE; k++) {
-    const S = pcardSlots[k];
-    if (!S || !S.dirty) continue;
-    S.dirty = false;
-    if (!pcardScratch || pcardScratch.width !== cell) {
-      pcardScratch = document.createElement('canvas'); pcardScratch.width = pcardScratch.height = cell;
-      pcardScratch.g = pcardScratch.getContext('2d', { willReadFrequently: true });
-    }
-    const g = pcardScratch.g;
-    g.clearRect(0, 0, cell, cell); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-    g.drawImage(S.cv, 1, 1, cell - 2, cell - 2);
-    const d = g.getImageData(0, 0, cell, cell).data, x0 = (nK + k) * cell, A = t.image.data;
-    pcardInk(d, cell, cell, cell);
-    for (let y = 0; y < cell; y++) A.set(d.subarray(y * cell * 4, (y + 1) * cell * 4), (y * W + x0) * 4);
-    (t.regions || (t.regions = [])).push([x0, 0, cell, cell]); t.needsUpdate = true;
-  }
+  return !potionStep(S, x, y, dt);
 }
 const h2a = new GFX.Vector3(), h2b = new GFX.Vector3(), h2c = new GFX.Vector3();
 // one card: hung from world point p by `neck` of its height (h tiles), turned rot (radians, on the screen), pushed
 // bias tiles back from the eye, hidden by anything more than soft nearer
 function pcardPut(p, kind, h, neck, rot, bias, soft, S) {
   if (pcardN >= PCARD_MAX) return;
-  const cell = S && S.slot >= 0 ? PCARD_KINDS.length + S.slot : Math.max(0, PCARD_KINDS.indexOf(kind)), C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  const cell = Math.max(0, PCARD_KINDS.indexOf(kind)), live = S && S.slot >= 0 ? S.slot : -1, C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
   C.forEach(([a, b], v) => {
     const o = pcardN * 6 + v;
     pcardPos.set(p, o * 3);
     pcardQm[o * 4] = a; pcardQm[o * 4 + 1] = b; pcardQm[o * 4 + 2] = cell; pcardQm[o * 4 + 3] = rot;
     pcardQs[o * 4] = h; pcardQs[o * 4 + 1] = neck; pcardQs[o * 4 + 2] = bias; pcardQs[o * 4 + 3] = soft;
+    pcardQb[o * 4] = live;
   });
   pcardN++;
 }
@@ -26286,7 +26417,7 @@ function fillBottles() {
   }
   if (invOpen) renderInv();
   $('inv').querySelector(`[data-cell="${cellKey(c)}"]`)?.classList.add('held');
-  setDragIcon($('dragIcon'), cellGet(c));
+  setDragIcon($('dragIcon'), cellGet(c), false);
   return true;
 }
 function updateBottleDrag(now, dt, sw, sh, want, cards) {
@@ -26384,11 +26515,13 @@ function updateHeldPotion() {
   for (const S of pcardSlots) if (S && !want.includes(S)) S.slot = -1;
   pcardSlots.fill(null);
   for (const S of want) if (S.slot >= 0 && !pcardSlots[S.slot]) pcardSlots[S.slot] = S; else S.slot = -1;
-  for (const S of want) if (S.slot < 0) { const k = pcardSlots.indexOf(null); if (k >= 0) { pcardSlots[k] = S; S.slot = k; S.dirty = true; } }
+  for (const S of want) if (S.slot < 0) { const k = pcardSlots.indexOf(null); if (k >= 0) { pcardSlots[k] = S; S.slot = k; } }
+  if (want.length && pcardCell && PCARD_U.tG.value.image.width < 8) { const gt = potionGeoTex(pcardCell - 2); if (gt) PCARD_U.tG.value = gt; }
+  if (want.length && potionFxPack()) for (const S of pcardSlots) if (S) potionBottlePack(PCARD_U.pbt.value, PCARD_U.pbb.value, S.slot, S.st, S.kind);
   for (const c of cards) pcardPut(...c);
   for (let k = pcardN * 6; k < PCARD_MAX * 6; k++) pcardQs[k * 4] = 0;
   const g = pcardMesh.geometry.attributes;
-  g.position.needsUpdate = g.qm.needsUpdate = g.qs.needsUpdate = true;
+  g.position.needsUpdate = g.qm.needsUpdate = g.qs.needsUpdate = g.qb.needsUpdate = true;
   pcardMesh.visible = pcardN > 0;
 }
 // (v752) does a throw go on letting go of the attack? With Options > Attack on release, and always on touch buttons
@@ -32724,7 +32857,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 766, crashSeen = new Map();
+const GAME_VERSION = 767, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
