@@ -420,6 +420,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v722:** (Jordan) The crate, foot locker and iron chest counts end 8 px left of their close X and sit level with its middle, like the backpack's; the vault's stays centred in its painted recess.
 
+**v723:** (Jordan) The crate's squares are square like every other square in the game: its painting reuses the foot locker's grid (two rows of five, colour-matched to the crate's wood) and closes up around it. A column and a row are cut from the crate's middle where the grain matches, cross-faded, so the window is 695 x 443 instead of 840 x 480 (art/src/crate-locker-grid.py). Its squares, items, stack numbers and tint mask are the foot locker's; the crate's own mask is gone.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
