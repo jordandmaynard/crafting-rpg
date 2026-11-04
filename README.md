@@ -464,6 +464,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v744:** (Jordan) The magenta potion is now the Purple Potion and the violet one the Clear Potion. Jordan's tuning: potion colours red #e10e27, purple #aa20c5, green #10e525, blue #0951e1, amber #fdb435, clear #a8ddf5; mid 0.79 (was 0.74), contrast 2.7 (2.85), shade 0.57 (0.46).
 
+**v745:** (Jordan: the same lumps and light on the chimney smoke; the noise only in the normals, so every puff looks rounder and lumpier in direct sun, never banded) The noise no longer touches a puff's outline or thickness (v742's ragged edge and uneven thickness are gone): it only bends the ball's normal (puffNormal in particles.js). Dust puffs, flame smoke and now the chimney, brazier and lava smoke sprites are all lit that way, by the sky, the sun through its shadow and the lamps, smoothly (bands stay 0). The sprites keep their own shapes; their ball normal turns with the sprite's spin. T > Spell effects: 'Dust and smoke: lumps in their light' (1; 0 a smooth ball) and 'lumps across' (2.2).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
