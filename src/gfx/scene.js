@@ -13,6 +13,8 @@ export class Layers {
 }
 
 let objectId = 0;
+// (v776) updateMatrixWorld's tally, for the profiler: objects looked at, and those whose world matrix was made anew
+export const MATRIX_STATS = { seen: 0, made: 0 };
 const _q = new Quaternion(), _v = new Vector3(), _m = new Matrix4(), _target = new Vector3(), _pos = new Vector3();
 export class Object3D {
   constructor() {
@@ -36,6 +38,8 @@ export class Object3D {
     this.frustumCulled = true;
     this.renderOrder = 0;
     this.userData = {};
+    // (v776: updateMatrixWorld's record of what its matrices were made from, set here so every object keeps one shape)
+    this._mc = undefined; this._mm = undefined; this._mwV = 0; this._mwP = undefined; this._mwPV = -1;
   }
   add(...objs) {
     for (const o of objs) {
@@ -55,18 +59,43 @@ export class Object3D {
   }
   traverse(fn) { fn(this); for (const c of this.children) c.traverse(fn); }
   updateMatrix() { this.matrix.compose(this.position, this.quaternion, this.scale); }
+  // (v776, Jordan: most of the world never moves, and the whole scene's matrices were made anew every frame, 0.8 ms)
+  // Only what changed is worked out again: the matrix when the position, turn or size differ from when it was last
+  // made (or, set by hand, when its numbers differ), the world matrix when that did or the parent's world matrix
+  // (its _mwV, a count of its changes) or the parent itself did. The result is the same as making them all.
   updateMatrixWorld() {
-    if (this.matrixAutoUpdate) this.updateMatrix();
-    if (this.parent) this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
-    else this.matrixWorld.copy(this.matrix);
-    for (const c of this.children) c.updateMatrixWorld();
+    let moved = false;
+    if (this.matrixAutoUpdate) {
+      const p = this.position, q = this.quaternion, s = this.scale, c = this._mc;
+      if (c === undefined || c[0] !== p.x || c[1] !== p.y || c[2] !== p.z || c[3] !== q._x || c[4] !== q._y || c[5] !== q._z || c[6] !== q._w
+        || c[7] !== s.x || c[8] !== s.y || c[9] !== s.z) {
+        this._mc = [p.x, p.y, p.z, q._x, q._y, q._z, q._w, s.x, s.y, s.z];
+        this.updateMatrix(); moved = true;
+      }
+    } else {
+      const e = this.matrix.elements, c = this._mm;
+      if (c === undefined) { this._mm = e.slice(); moved = true; }
+      else for (let i = 0; i < 16; i++) if (c[i] !== e[i]) { for (let j = 0; j < 16; j++) c[j] = e[j]; moved = true; break; }
+    }
+    const par = this.parent;
+    MATRIX_STATS.seen++;
+    if (moved || this._mwV === 0 || this._mwP !== par || (par !== null && par._mwV !== this._mwPV)) {
+      if (par) this.matrixWorld.multiplyMatrices(par.matrixWorld, this.matrix);
+      else this.matrixWorld.copy(this.matrix);
+      this._mwP = par; this._mwPV = par ? par._mwV : 0; this._mwV++;
+      MATRIX_STATS.made++;
+    }
+    const ch = this.children;
+    for (let i = 0; i < ch.length; i++) ch[i].updateMatrixWorld();
   }
-  // this object's world matrix brought up to date along with every parent's, but not its children's
+  // this object's world matrix brought up to date along with every parent's, but not its children's (counted as a
+  // change, so updateMatrixWorld redoes them)
   _updateUp() {
     if (this.parent) this.parent._updateUp();
     if (this.matrixAutoUpdate) this.updateMatrix();
     if (this.parent) this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
     else this.matrixWorld.copy(this.matrix);
+    this._mwP = this.parent; this._mwPV = this.parent ? this.parent._mwV : 0; this._mwV++;
   }
   getWorldPosition(out) { this._updateUp(); return out.setFromMatrixPosition(this.matrixWorld); }
   getWorldQuaternion(out) { this._updateUp(); this.matrixWorld.decompose(_pos, out, _v); return out; }

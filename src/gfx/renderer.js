@@ -111,6 +111,10 @@ class Renderer {
     // as usual) instead of its colour, through its own fragment code (so cuts and discards still apply): the red, times
     // 64, is how many times each pixel was lit. Recorded lists are left alone meanwhile
     this.overdraw = false;
+    // (v776) depth pre-pass: while set, draws write depth only (their own vertex code, a fragment that does nothing,
+    // no colour), so a later render of the same meshes lights only what ends up in front. The material's vertex
+    // position must be @invariant, so both come out the same to the bit (buildMat's is)
+    this.depthPrepass = false;
     this.bundleMargin = 4;   // (world units: how far out of view a mesh is still recorded, see _walk)
     this._chans = new Map(); this._chanIds = new WeakMap(); this._chanN = 0; this._flushNo = 0; this._walkNo = 0;
     this._time0 = performance.now();
@@ -1109,7 +1113,7 @@ class Renderer {
     const memo = mat._pipeMemo || (mat._pipeMemo = new Map());
     let byFmt = memo.get(format);
     if (!byFmt) memo.set(format, byFmt = []);
-    const k = (kind === 'shader' ? 0 : kind === 'std' ? 1 : kind === 'basic' ? 2 : 3) | (hasColor ? 4 : 0) | (inst ? 8 : 0) | (clip ? 16 : 0) | (this.overdraw ? 32 : 0);
+    const k = (kind === 'shader' ? 0 : kind === 'std' ? 1 : kind === 'basic' ? 2 : 3) | (hasColor ? 4 : 0) | (inst ? 8 : 0) | (clip ? 16 : 0) | (this.overdraw ? 32 : 0) | (this.depthPrepass ? 64 : 0);
     const e = byFmt[k];
     if (e && e.blending === mat.blending && e.blendSrc === mat.blendSrc && e.blendDst === mat.blendDst && e.keepAlpha === mat.keepAlpha
       && e.transparent === mat.transparent && e.side === mat.side && e.depthTest === mat.depthTest && e.depthFunc === mat.depthFunc
@@ -1124,10 +1128,11 @@ class Renderer {
     const cull = kind === 'normal' ? 'none' : mat.side === M.DoubleSide ? 'none' : mat.side === M.BackSide ? 'front' : 'back';
     const depthCompare = !mat.depthTest ? 'always' : kind === 'normal' ? 'less-equal' : DEPTH_FUNC[mat.depthFunc] || 'less-equal';
     const depthWrite = kind === 'normal' ? true : !!mat.depthWrite;
-    const writeMask = kind === 'normal' || mat.colorWrite ? GPUColorWrite.ALL : 0;
+    const pre = this.depthPrepass && kind !== 'normal';
+    const writeMask = pre ? 0 : kind === 'normal' || mat.colorWrite ? GPUColorWrite.ALL : 0;
     const prog = kind === 'shader' ? 'shader' + mat.id : kind;
-    const od = this.overdraw && kind !== 'normal' && writeMask !== 0;
-    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format, clip, od].join('|');
+    const od = this.overdraw && !pre && kind !== 'normal' && writeMask !== 0;
+    const key = [prog, hasColor, inst, JSON.stringify(blend || 0), cull, depthCompare, depthWrite, writeMask, format, clip, od, pre].join('|');
     let p = this._pipelines.get(key);
     if (p !== undefined) return p;
     const buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }];
@@ -1141,15 +1146,16 @@ class Renderer {
       for (const name in mat.attributes) { const [f, s] = ATTR_FORMAT[mat.attributes[name]]; buffers.push({ arrayStride: s, attributes: [{ shaderLocation: loc++, offset: 0, format: f }] }); }
     } else code = builtinCode(kind, hasColor, inst, clip);
     if (od) code = overdrawCode(code);
+    if (pre) code += '\n@fragment fn fs_prepass() -> @location(0) vec4f { return vec4f(0.0); }\n';
     if (inst) buffers.push(INSTANCE_LAYOUT);
     const module = this._module(code);
     try {
       p = this.device.createRenderPipeline({
         layout,
         vertex: { module, entryPoint: 'vs', buffers },
-        fragment: { module, entryPoint: 'fs', targets: [{ format, blend: od ? OD_BLEND : blend, writeMask }] },
+        fragment: { module, entryPoint: pre ? 'fs_prepass' : 'fs', targets: [{ format, blend: pre ? undefined : od ? OD_BLEND : blend, writeMask }] },
         primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
-        depthStencil: { format: DEPTH, depthCompare, depthWriteEnabled: depthWrite },
+        depthStencil: { format: DEPTH, depthCompare, depthWriteEnabled: pre || depthWrite },
       });
     } catch (err) { console.error('pipeline', kind, err); p = null; }
     this._pipelines.set(key, p);
