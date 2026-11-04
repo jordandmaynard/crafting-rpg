@@ -482,6 +482,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v753:** (Jordan) The red potion heals: the moment it breaks it heals every friend within 2 tiles by 30 HP (only you for now, as townsfolk take no harm), with no wind-up, and it can't touch foes. It has no splash (red would look like blood), only the glass breaking, and whoever it heals gets green plus signs swirling up round them: a new PLUS particle style (src/gfx/particles.js), FX_LIB potionHeal. T > Thrown potions: red heal and reach.
 
+**v754:** (Jordan) T > Thrown potions inHand 2 holds the potion's 2D icon in the right fist by its neck instead of the 3D bottle (pinned to the hand, sized to the world: POTION_DRAW size2d, neck2d). Either bottle is gone while potions cool down; over the cooldown's last 0.55 s the right arm reaches up and back over the shoulder to the pack and brings a new one down (in hand from 45% of the reach). T > Thrown potions: POTION_DRAW time, at, hoist, out, elbow.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
