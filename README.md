@@ -484,6 +484,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v754:** (Jordan) T > Thrown potions inHand 2 holds the potion's 2D icon in the right fist by its neck instead of the 3D bottle (pinned to the hand, sized to the world: POTION_DRAW size2d, neck2d). Either bottle is gone while potions cool down; over the cooldown's last 0.55 s the right arm reaches up and back over the shoulder to the pack and brings a new one down (in hand from 45% of the reach). T > Thrown potions: POTION_DRAW time, at, hoist, out, elbow.
 
+**v755:** (Jordan) The 2D bottles (the one in hand with inHand 2, and every thrown one) are cards in the world now, drawn with the quest seals at the screen's own pixels and hidden by whatever stands in front of them (the hero, terrain, trees: the mosaic's depth). Both are sized in tiles, so they zoom with the world (POTION_THROW.size 0.45 for a flying one). The one in hand hangs from its neck along the hand's line on the screen, turning with it, and sits POTION_DRAW.gripBias (0.06) behind the fist so the fist covers its neck; gripSoft is how much nearer something must be to hide it.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

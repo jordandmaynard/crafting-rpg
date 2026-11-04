@@ -19594,18 +19594,19 @@ const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue:
 // cursor in an arc and breaks there, letting its effect out over the spot. POTION_THROW: the throw (cd: seconds before
 // the next, shared by every potion; range: furthest tiles; reach: how far with a pad or touch, which have no cursor;
 // speed: tiles a second along the ground, plus `hang` seconds; arc: peak height per tile thrown, plus arcMin; spin:
-// degrees a second the bottle tumbles; size: the flying icon's px; ring: 1 shows the landing ring while aiming; inHand:
+// degrees a second the bottle tumbles; size: the flying bottle's height (tiles, v755); ring: 1 shows the landing ring while aiming; inHand:
 // 1 shows the bottle in the weapon hand while a potion square's in hand; ringAfter: with Options > Attack on release
 // (and on touch), a press is held this long, in seconds, before the ring shows, so a quick click throws with none).
 // POTION_EFFECT: what each colour does where it breaks (only green so far: the poison cloud, hurting foes inside it).
 // T > Thrown potions.
-const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 44, ring: 1, inHand: 1, ringAfter: 0.18 };
+const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 0.45, ring: 1, inHand: 1, ringAfter: 0.18 };
 // (v754, Jordan) the bottle in hand: inHand 1 the 3D one, 2 the potion's icon (2D) held by its neck; either is gone
 // while potions cool down, and over the last `time` seconds of it you reach up and back over the right shoulder to the
 // pack and bring a new one down (it's in hand from `at`, a share of that time). hoist/out/elbow: the reach's arm
 // (radians: raised up and back, out to the side, the elbow bent). size2d: the 2D bottle's height (tiles); neck2d: where
-// its neck is, down from the top of its picture (share of it).
-const POTION_DRAW = { time: 0.55, at: 0.45, hoist: 3.3, out: 0.35, elbow: 1.3, size2d: 0.42, neck2d: 0.2 };
+// its neck is, down from the top of its picture (share of it); gripBias: how far behind the fist it's held (tiles), so
+// the fist covers its neck; gripSoft: how much nearer something must be to hide it (tiles).
+const POTION_DRAW = { time: 0.55, at: 0.45, hoist: 3.3, out: 0.35, elbow: 1.3, size2d: 0.42, neck2d: 0.2, gripBias: 0.06, gripSoft: 0.01 };
 const POTION_EFFECT = {
   // (v753, Jordan) red heals every friend in reach the moment it breaks (only you, for now: townsfolk take no harm), with
   // no wind-up; it can't touch foes. No splash (red would look like blood): the glass breaks, and each one healed gets
@@ -24876,7 +24877,9 @@ function updateQuestMarks() {
 }
 // (renderWorld, after the picture's on the screen; useD: the mosaic's depth was drawn this frame)
 function drawSeals(useD) {
-  if (!sealMesh) { if (sealsUp) { sealView.style.display = 'none'; sealsUp = false; } return; }
+  // (v755: the 2D potion bottles are drawn here too: pcardMesh, potionCards)
+  const cards = pcardMesh.visible;
+  if (!sealMesh && !cards) { if (sealsUp) { sealView.style.display = 'none'; sealsUp = false; } return; }
   // the same place and size on the page as the game's canvas, at the screen's own pixels
   const st = sealView.style, cs = cv.style;
   if (st.width !== cs.width) st.width = cs.width;
@@ -24885,14 +24888,28 @@ function drawSeals(useD) {
   const dpr = Math.min(2, devicePixelRatio || 1), w = Math.max(1, Math.round(parseFloat(cs.width) * dpr)), h = Math.max(1, Math.round(parseFloat(cs.height) * dpr));
   if (sealView.width !== w || sealView.height !== h) { sealView.width = w; sealView.height = h; }
   const cell = Math.max(8, Math.round(QUEST_MARK.size * uiScale() * dpr));
-  if (cell !== sealCell && !buildSealAtlas(cell)) return;
+  if (sealMesh && cell !== sealCell && !buildSealAtlas(cell)) return;
+  if (cards) {
+    // the potion atlas at about the size the biggest card shows (redrawn when that's changed by a sixth, or the icons have)
+    let big = 0;
+    for (let k = 0; k < pcardN; k++) {
+      h2a.set(pcardPos[k * 18], pcardPos[k * 18 + 1], pcardPos[k * 18 + 2]); h2b.copy(h2a); h2b.y += pcardQs[k * 24];
+      h2a.project(camera); h2b.project(camera); big = Math.max(big, Math.abs(h2b.y - h2a.y) / 2 * h);
+    }
+    const want = Math.max(16, Math.min(256, Math.ceil(big / 8) * 8));
+    const sig = POTION_KINDS.map(k => (ICON['potion_' + k].match(/src="([^"]+)"/) || [])[1] || '').join('|');
+    if ((!pcardCell || Math.abs(want - pcardCell) > pcardCell / 6 || sig !== pcardSig) && !buildPotionAtlas(want) && !pcardCell) pcardMesh.visible = false;
+    PCARD_U.screen.value.set(w, h); PCARD_U.useD.value = useD ? 1 : 0;
+  }
   if (!sealsUp) { st.display = ''; sealsUp = true; }
   SEAL_U.cell.value = cell; SEAL_U.screen.value.set(w, h); SEAL_U.lift.value = QUEST_MARK.lift; SEAL_U.bob.value = QUEST_MARK.bob; SEAL_U.useD.value = useD ? 1 : 0;
   const auto = renderer.shadowMap.autoUpdate, lay = camera.layers.mask;
   renderer.shadowMap.autoUpdate = false;
   renderer.setRenderTarget(sealTarget); renderer.setClearColor(0x000000, 0); renderer.clear();
   renderer.passName = 'quest seals';
-  camera.layers.set(0); renderer.render(sealScene, camera);
+  camera.layers.set(0);
+  if (pcardMesh.parent !== sealScene) sealScene.add(pcardMesh);
+  renderer.render(sealScene, camera);
   camera.layers.mask = lay; renderer.shadowMap.autoUpdate = auto;
   renderer.setRenderTarget(null); renderer.setClearColor('#0b0912', 1);
 }
@@ -25802,7 +25819,7 @@ function updateFlights(dt) {
 // POTION_THROW.range): its icon flies there in an arc, tumbling (a screen element pinned to the point in the world, as
 // the refined items flying to storage are), breaks where it lands (or on higher ground it meets on the way: a cliff),
 // and lets out its POTION_EFFECT there. Every potion then waits POTION_THROW.cd seconds.
-const thrown = [], clouds = [], potV = new GFX.Vector3();
+const thrown = [], clouds = [];
 // (v754) how far through drawing a new bottle from the pack (0 none, 0-1 the reach) and whether a bottle's in hand now
 function potionDrawAt() {
   const D = POTION_DRAW, cd = H.cdPotion;
@@ -25822,28 +25839,121 @@ function potionDrawPose(tucked) {
   a.set(a.x + (-D.hoist - a.x) * w, a.y * (1 - w), a.z + (-0.08 - D.out - a.z) * w);
   e.x += (-D.elbow - e.x) * w;
 }
-// (v754) the 2D bottle: the potion's icon pinned to the right fist, hanging from its neck, sized to the world
-let held2d = null, held2dKind = '';
-const h2a = new GFX.Vector3(), h2b = new GFX.Vector3();
-function updateHeldPotion() {
-  const hp = Math.round(POTION_THROW.inHand) === 2 && started && mode === 'play' && H.alive && !H.still ? handPotion() : null;
-  const show = !!hp && potionDrawAt().held;
-  if (!held2d) {
-    if (!show) return;
-    held2d = document.createElement('div'); held2d.className = 'flyIcon heldPotion';
-    $('flyLayer').appendChild(held2d);
+// (v754, v755) the 2D bottles: the potion's icon as a card in the world (the one in the right fist, held by its neck
+// and turned with the hand, and every one flying), drawn over the picture at the screen's own pixels with the quest
+// seals (drawSeals) and hidden wherever something stands in front of it (the mosaic's depth). The one in hand sits
+// POTION_DRAW.gripBias behind the fist, so the fist covers its neck. Sized in the world, so they zoom with it.
+const PCARD_MAX = 16;
+const PCARD_U = { tP: { value: new GFX.DataTexture(new Uint8Array(4), 1, 1) }, tD: { value: outlineRT.depthTexture },
+  screen: { value: new GFX.Vector2(1, 1) }, cells: { value: 6 }, useD: { value: 1 } };
+const pcardMat = new GFX.ShaderMaterial({
+  uniforms: PCARD_U, attributes: { qm: 'vec4f', qs: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
+  blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32, @location(2) @interpolate(flat) soft: f32 }
+@vertex fn vs(v: VIn) -> VOut {
+  let c = F.viewProj * vec4f(v.position, 1.0);
+  var o: VOut;
+  o.vz = (F.view * vec4f(v.position, 1.0)).z - v.qs.z;
+  let cw = max(c.w, 1e-6);
+  // its height in the screen's pixels (qs.x tiles at its distance), its corner from the point it hangs by (qs.y of
+  // the way down from its top), turned by qm.w on the screen
+  let px = v.qs.x * F.proj[1][1] * 0.5 * U.screen.y / cw;
+  let lx = v.qm.x * 0.5 * px;
+  let ly = select(-(1.0 - v.qs.y), v.qs.y, v.qm.y > 0.0) * px;
+  let cs = cos(v.qm.w); let sn = sin(v.qm.w);
+  let cp = (c.xy / cw * 0.5 + 0.5) * U.screen + vec2f(lx * cs - ly * sn, lx * sn + ly * cs);
+  o.pos = vec4f(cp / U.screen * 2.0 - 1.0, 0.5, 1.0);
+  if (c.w <= 0.0 || v.qs.x <= 0.0) { o.pos = vec4f(2.0, 2.0, 0.5, 1.0); }
+  o.uv = vec2f((v.qm.z + v.qm.x * 0.5 + 0.5) / U.cells, 0.5 - v.qm.y * 0.5);
+  o.soft = v.qs.w;
+  return o;
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  let col = textureSample(tP, tPS, i.uv);
+  var k = 1.0;
+  if (U.useD > 0.5) {
+    let dims = vec2i(textureDimensions(tD));
+    let zb = textureLoad(tD, clamp(vec2i(i.pos.xy / U.screen * vec2f(dims)), vec2i(0), dims - 1), 0);
+    let P = F.proj;
+    let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
+    k = 1.0 - smoothstep(i.soft, i.soft * 2.0 + 0.03, vb - i.vz);
   }
-  held2d.style.display = show ? '' : 'none';
-  if (!show) return;
-  if (held2dKind !== hp) { held2d.innerHTML = ICON[ITEMS[hp].icon]; held2dKind = hp; }
-  camera.updateMatrixWorld();
-  hero.potion2d.getWorldPosition(h2a);
-  h2b.copy(h2a); h2b.y += POTION_DRAW.size2d;
-  h2a.project(camera); h2b.project(camera);
-  if (h2a.z > 1) { held2d.style.display = 'none'; return; }
-  const rect = cv.getBoundingClientRect(), px = Math.max(8, Math.abs(h2b.y - h2a.y) / 2 * rect.height);
-  held2d.style.setProperty('--fs', px.toFixed(1) + 'px');
-  held2d.style.transform = `translate(${(rect.left + (h2a.x + 1) / 2 * rect.width).toFixed(1)}px, ${(rect.top + (1 - h2a.y) / 2 * rect.height).toFixed(1)}px) translate(-50%, ${(-POTION_DRAW.neck2d * 100).toFixed(1)}%)`;
+  if (k <= 0.0 || col.a <= 0.0) { discard; }
+  return col * k;
+}`,
+});
+const pcardPos = new Float32Array(PCARD_MAX * 18), pcardQm = new Float32Array(PCARD_MAX * 24), pcardQs = new Float32Array(PCARD_MAX * 24);
+const pcardMesh = (() => {
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pcardPos, 3));
+  g.setAttribute('qm', new GFX.Float32BufferAttribute(pcardQm, 4));
+  g.setAttribute('qs', new GFX.Float32BufferAttribute(pcardQs, 4));
+  const m = new GFX.Mesh(g, pcardMat);
+  m.frustumCulled = false; m.castShadow = false; m.visible = false;
+  return m;
+})();
+let pcardN = 0, pcardCell = 0, pcardSig = '';
+const pcardImgs = new Map(), POTION_KINDS = Object.keys(POTION_TINT);
+// the atlas: each potion's icon side by side, cell px square, premultiplied, with the items' one-pixel black outline
+function buildPotionAtlas(cell) {
+  const srcs = POTION_KINDS.map(k => (ICON['potion_' + k].match(/src="([^"]+)"/) || [])[1] || '');
+  const ims = srcs.map(src => { let im = pcardImgs.get(src); if (!im) { im = new Image(); im.src = src; pcardImgs.set(src, im); } return im; });
+  if (!ims.every(im => im.complete && im.naturalWidth)) return false;
+  const n = ims.length, W = cell * n, c = document.createElement('canvas'); c.width = W; c.height = cell;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  ims.forEach((im, k) => g.drawImage(im, k * cell + 1, 1, cell - 2, cell - 2));
+  const d = g.getImageData(0, 0, W, cell).data, A = new Uint8Array(W * cell);
+  for (let k = 0; k < A.length; k++) A[k] = d[k * 4 + 3];
+  for (let y = 0; y < cell; y++) for (let x = 0; x < W; x++) {
+    const k = y * W + x, o = k * 4, a = A[k] / 255, c0 = x - x % cell;
+    let m = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if ((dx || dy) && xx >= c0 && xx < c0 + cell && yy >= 0 && yy < cell) m = Math.max(m, A[yy * W + xx]);
+    }
+    d[o] = Math.round(d[o] * a); d[o + 1] = Math.round(d[o + 1] * a); d[o + 2] = Math.round(d[o + 2] * a);
+    d[o + 3] = Math.round(A[k] + m * (1 - a));
+  }
+  const t = PCARD_U.tP.value;
+  t.image = { data: new Uint8Array(d.buffer), width: W, height: cell }; t.needsUpdate = true;
+  PCARD_U.cells.value = n; pcardCell = cell; pcardSig = srcs.join('|');
+  return true;
+}
+const h2a = new GFX.Vector3(), h2b = new GFX.Vector3(), h2c = new GFX.Vector3();
+// one card: hung from world point p by `neck` of its height (h tiles), turned rot (radians, on the screen), pushed
+// bias tiles back from the eye, hidden by anything more than soft nearer
+function pcardPut(p, kind, h, neck, rot, bias, soft) {
+  if (pcardN >= PCARD_MAX) return;
+  const cell = Math.max(0, POTION_KINDS.indexOf(kind)), C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  C.forEach(([a, b], v) => {
+    const o = pcardN * 6 + v;
+    pcardPos.set(p, o * 3);
+    pcardQm[o * 4] = a; pcardQm[o * 4 + 1] = b; pcardQm[o * 4 + 2] = cell; pcardQm[o * 4 + 3] = rot;
+    pcardQs[o * 4] = h; pcardQs[o * 4 + 1] = neck; pcardQs[o * 4 + 2] = bias; pcardQs[o * 4 + 3] = soft;
+  });
+  pcardN++;
+}
+// each frame, after the camera's set: the cards for the bottle in hand and those flying
+function updateHeldPotion() {
+  pcardN = 0;
+  const D = POTION_DRAW, playing = started && mode === 'play';
+  const hp = Math.round(POTION_THROW.inHand) === 2 && playing && H.alive && !H.still ? handPotion() : null;
+  if (hp && potionDrawAt().held) {
+    // the hand's line on the screen (from the fist on down along it): the bottle hangs that way from its neck
+    hero.potion2d.getWorldPosition(h2a);
+    h2b.set(0, -0.2, 0).applyMatrix4(hero.potion2d.matrixWorld);
+    h2c.copy(h2a).project(camera); h2b.project(camera);
+    const sx = (h2b.x - h2c.x) * (cv.clientWidth || 1), sy = (h2b.y - h2c.y) * (cv.clientHeight || 1);
+    const rot = Math.hypot(sx, sy) > 1e-3 ? Math.atan2(sx, -sy) : 0;
+    pcardPut([h2a.x, h2a.y, h2a.z], ITEMS[hp].potion, D.size2d, D.neck2d, rot, D.gripBias, D.gripSoft);
+  }
+  for (const f of thrown) pcardPut(f.p, f.kind, POTION_THROW.size, 0.5, f.rot * Math.PI / 180, 0, 0.1);
+  for (let k = pcardN * 6; k < PCARD_MAX * 6; k++) pcardQs[k * 4] = 0;
+  const g = pcardMesh.geometry.attributes;
+  g.position.needsUpdate = g.qm.needsUpdate = g.qs.needsUpdate = true;
+  pcardMesh.visible = pcardN > 0;
 }
 // (v752) does a throw go on letting go of the attack? With Options > Attack on release, and always on touch buttons
 const potionOnRelease = () => OPTIONS.attackOnRelease || (TOUCH.on && !PAD.on);
@@ -25863,11 +25973,8 @@ function throwPotion() {
   if (d > 0.3) H.face = Math.atan2(dx, dz);
   const fx = Math.sin(H.face), fz = Math.cos(H.face);
   const a = [H.x + fx * 0.3, H.y + 1.05, H.z + fz * 0.3], b = [tx, surfaceY(tx, tz), tz];
-  const el = document.createElement('div');
-  el.className = 'flyIcon potionFly'; el.innerHTML = ICON[ITEMS[id].icon];
-  el.style.setProperty('--fs', P.size + 'px');
-  $('flyLayer').appendChild(el);
-  thrown.push({ el, id, kind: ITEMS[id].potion, a, b, t: 0, len: d / Math.max(1, P.speed) + P.hang, arc: P.arcMin + d * P.arc, rot: Math.random() * 360 });
+  // (v755: drawn as a card in the world, potionCards, hidden by whatever stands in front of it)
+  thrown.push({ id, kind: ITEMS[id].potion, a, b, t: 0, len: d / Math.max(1, P.speed) + P.hang, arc: P.arcMin + d * P.arc, rot: Math.random() * 360, p: a.slice() });
   // one fewer in the square (empty, it's bare hands)
   HOT_N[hotSel]--;
   if (HOT_N[hotSel] <= 0) { HOT[hotSel] = null; HOT_N[hotSel] = 0; dressHero(); }
@@ -25884,18 +25991,15 @@ function potionAt(f, t, out) {
 }
 const potP = [0, 0, 0];
 function updatePotions(dt) {
-  const rect = thrown.length ? cv.getBoundingClientRect() : null;
   for (let k = thrown.length - 1; k >= 0; k--) {
     const f = thrown[k];
     f.t += dt / f.len;
     const t = Math.min(1, f.t), [x, y, z] = potionAt(f, t, potP);
     // (it breaks on the first thing it meets: the ground where it was thrown, or something higher on the way)
     const hit = t >= 1 || (t > 0.15 && y < surfaceY(x, z));
-    if (hit) { f.el.remove(); thrown.splice(k, 1); breakPotion(f.kind, x, Math.max(y, surfaceY(x, z)), z); continue; }
+    if (hit) { thrown.splice(k, 1); breakPotion(f.kind, x, Math.max(y, surfaceY(x, z)), z); continue; }
     f.rot += POTION_THROW.spin * dt;
-    potV.set(x, y, z).project(camera);
-    f.el.style.display = potV.z > 1 || roofDrawnAt(T(Math.floor(x), Math.floor(z))) ? 'none' : '';
-    f.el.style.transform = `translate(${rect.left + (potV.x + 1) / 2 * rect.width}px, ${rect.top + (1 - potV.y) / 2 * rect.height}px) translate(-50%, -50%) rotate(${f.rot.toFixed(1)}deg)`;
+    f.p[0] = x; f.p[1] = y; f.p[2] = z;
   }
   // the clouds left behind: each hurts the foes inside it every so often, till it thins away
   for (let k = clouds.length - 1; k >= 0; k--) {
@@ -30957,7 +31061,7 @@ const TUNING = [
     [POTION_THROW, 'arc', 'Arc height per tile thrown', 0, 1, 0.01],
     [POTION_THROW, 'arcMin', 'Arc height, least', 0, 3, 0.05],
     [POTION_THROW, 'spin', 'Tumble (degrees a second)', 0, 1500, 10],
-    [POTION_THROW, 'size', 'Flying icon size (px)', 16, 96, 1],
+    [POTION_THROW, 'size', 'Flying bottle height (tiles)', 0.1, 1.5, 0.01],
     [POTION_THROW, 'ring', 'Landing ring while aiming (0 off)', 0, 1, 1],
     [POTION_THROW, 'ringAfter', 'Attack on release: hold this long before the ring shows (s)', 0, 1, 0.01],
     [POTION_THROW, 'inHand', 'Bottle in the weapon hand while a potion is picked (0 off, 1 the 3D bottle, 2 the 2D icon held by the neck)', 0, 2, 1, () => dressHero()],
@@ -30968,6 +31072,8 @@ const TUNING = [
     [POTION_DRAW, 'elbow', 'New bottle: elbow bent', 0, 2.5, 0.01],
     [POTION_DRAW, 'size2d', '2D bottle: height (tiles)', 0.1, 1.2, 0.01],
     [POTION_DRAW, 'neck2d', '2D bottle: where the hand holds it, down from the top (share)', 0, 0.6, 0.01],
+    [POTION_DRAW, 'gripBias', '2D bottle: held behind the fist by (tiles: the fist covers its neck)', 0, 0.3, 0.005],
+    [POTION_DRAW, 'gripSoft', '2D bottle: hidden by anything nearer than this (tiles)', 0, 0.3, 0.005],
     [POTION_EFFECT.red, 'heal', 'Red: heals (HP, at once)', 0, 100, 1],
     [POTION_EFFECT.red, 'radius', 'Red: reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'linger', 'Green: poison cloud lasts (s)', 1, 20, 0.5],
@@ -32159,7 +32265,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 754, crashSeen = new Map();
+const GAME_VERSION = 755, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
