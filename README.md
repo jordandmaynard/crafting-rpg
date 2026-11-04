@@ -474,6 +474,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v749:** (Jordan) T > Pixels anti-aliasing has an auto setting, 0, now the default: 2 samples each way once the mosaic is 4 (zoomed in from 2.25), off below. 1 is off, 2 to 4 fixed as before. A readout shows what it's using now.
 
+**v750:** (Jordan's tuning) Anti-aliasing defaults to off (1) again; auto (0) stays a choice.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
