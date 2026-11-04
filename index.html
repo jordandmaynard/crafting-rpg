@@ -19599,14 +19599,17 @@ const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue:
 // (and on touch), a press is held this long, in seconds, before the ring shows, so a quick click throws with none).
 // POTION_EFFECT: what each colour does where it breaks (only green so far: the poison cloud, hurting foes inside it).
 // T > Thrown potions.
-const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 0.45, ring: 1, inHand: 1, ringAfter: 0.18 };
+const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 0.35, ring: 1, inHand: 2, ringAfter: 0.18 };   // (v756, Jordan's tuning)
 // (v754, Jordan) the bottle in hand: inHand 1 the 3D one, 2 the potion's icon (2D) held by its neck; either is gone
 // while potions cool down, and over the last `time` seconds of it you reach up and back over the right shoulder to the
 // pack and bring a new one down (it's in hand from `at`, a share of that time). hoist/out/elbow: the reach's arm
 // (radians: raised up and back, out to the side, the elbow bent). size2d: the 2D bottle's height (tiles); neck2d: where
 // its neck is, down from the top of its picture (share of it); gripBias: how far behind the fist it's held (tiles), so
 // the fist covers its neck; gripSoft: how much nearer something must be to hide it (tiles).
-const POTION_DRAW = { time: 0.55, at: 0.45, hoist: 3.3, out: 0.35, elbow: 1.3, size2d: 0.42, neck2d: 0.2, gripBias: 0.06, gripSoft: 0.01 };
+const POTION_DRAW = { time: 0.55, at: 0.45, hoist: 3.3, out: 0.35, elbow: 1.3, size2d: 0.35, neck2d: 0.3, gripBias: 0, gripSoft: 0.01 };   // (v756, Jordan's tuning)
+// (v756, Jordan) holding a potion: the upper arm a little forward (raise), the elbow bent (radians) so the hand's out in
+// front, a little out to the side (out), the walk's swing kept only by `swing` of it; the bottle stays upright
+const POTION_HOLD = { raise: 0.2, elbow: 1.45, out: 0.1, swing: 0.25 };
 const POTION_EFFECT = {
   // (v753, Jordan) red heals every friend in reach the moment it breaks (only you, for now: townsfolk take no harm), with
   // no wind-up; it can't touch foes. No splash (red would look like blood): the glass breaks, and each one healed gets
@@ -25829,13 +25832,26 @@ function potionDrawAt() {
 }
 // the right arm reaching up and back over the shoulder to the pack, and down again with the new bottle (laid over
 // whatever the arm was doing, eased in and out), and the 3D bottle shown only while it's in hand
+// (how far the arm is into the reach to the pack, 0-1)
+function potionReachW() {
+  const D = POTION_DRAW, d = potionDrawAt();
+  return d.u <= 0 ? 0 : smooth(0, D.at, d.u) * (1 - smooth(D.at + 0.08, 1, d.u));
+}
 function potionDrawPose(tucked) {
   const D = POTION_DRAW, hp = handPotion(), d = potionDrawAt();
   hero.potion.visible = !!DRESS.potion() && d.held;
-  if (!hp || tucked || H.still || d.u <= 0) return;
-  const w = smooth(0, D.at, d.u) * (1 - smooth(D.at + 0.08, 1, d.u));
-  if (w <= 0) return;
+  if (!hp || tucked || H.still) return;
   const a = hero.armR.rotation, e = hero.elbows[1].rotation;
+  // (v756) the hold: elbow bent, hand out in front, the walk's swing cut down (the 3D bottle, along the hand, stands up)
+  if (Math.round(POTION_THROW.inHand) > 0) {
+    const P = POTION_HOLD;
+    a.set(-P.raise + a.x * P.swing, a.y * P.swing, -0.08 - P.out);
+    e.x = -P.elbow;
+    hero.wrists[1].rotation.set(0, 0, 0);
+  }
+  if (d.u <= 0) return;
+  const w = potionReachW();
+  if (w <= 0) return;
   a.set(a.x + (-D.hoist - a.x) * w, a.y * (1 - w), a.z + (-0.08 - D.out - a.z) * w);
   e.x += (-D.elbow - e.x) * w;
 }
@@ -25943,10 +25959,10 @@ function updateHeldPotion() {
   if (hp && potionDrawAt().held) {
     // the hand's line on the screen (from the fist on down along it): the bottle hangs that way from its neck
     hero.potion2d.getWorldPosition(h2a);
-    h2b.set(0, -0.2, 0).applyMatrix4(hero.potion2d.matrixWorld);
-    h2c.copy(h2a).project(camera); h2b.project(camera);
-    const sx = (h2b.x - h2c.x) * (cv.clientWidth || 1), sy = (h2b.y - h2c.y) * (cv.clientHeight || 1);
-    const rot = Math.hypot(sx, sy) > 1e-3 ? Math.atan2(sx, -sy) : 0;
+    // (v756, Jordan: upright, held by the neck, while the arm's out; along the hand only as it reaches to the pack)
+    const turn = (pt) => { h2c.copy(h2a).project(camera); pt.project(camera); const sx = (pt.x - h2c.x) * (cv.clientWidth || 1), sy = (pt.y - h2c.y) * (cv.clientHeight || 1); return Math.hypot(sx, sy) > 1e-3 ? Math.atan2(sx, -sy) : 0; };
+    const up = turn(h2b.set(h2a.x, h2a.y - 0.2, h2a.z)), w = potionReachW();
+    const rot = w > 0 ? up + angDiff(turn(h2b.set(0, -0.2, 0).applyMatrix4(hero.potion2d.matrixWorld)), up) * w : up;
     pcardPut([h2a.x, h2a.y, h2a.z], ITEMS[hp].potion, D.size2d, D.neck2d, rot, D.gripBias, D.gripSoft);
   }
   for (const f of thrown) pcardPut(f.p, f.kind, POTION_THROW.size, 0.5, f.rot * Math.PI / 180, 0, 0.1);
@@ -31065,6 +31081,10 @@ const TUNING = [
     [POTION_THROW, 'ring', 'Landing ring while aiming (0 off)', 0, 1, 1],
     [POTION_THROW, 'ringAfter', 'Attack on release: hold this long before the ring shows (s)', 0, 1, 0.01],
     [POTION_THROW, 'inHand', 'Bottle in the weapon hand while a potion is picked (0 off, 1 the 3D bottle, 2 the 2D icon held by the neck)', 0, 2, 1, () => dressHero()],
+    [POTION_HOLD, 'raise', 'Holding: upper arm forward (radians)', -0.5, 1.5, 0.01],
+    [POTION_HOLD, 'elbow', 'Holding: elbow bent (radians)', 0, 2.5, 0.01],
+    [POTION_HOLD, 'out', 'Holding: arm out to the side', 0, 0.8, 0.01],
+    [POTION_HOLD, 'swing', 'Holding: walk swing kept (share)', 0, 1, 0.01],
     [POTION_DRAW, 'time', 'New bottle: reach to the pack over the last of the cooldown (s)', 0.1, 2, 0.01],
     [POTION_DRAW, 'at', 'New bottle: in hand from (share of the reach)', 0.05, 0.95, 0.01],
     [POTION_DRAW, 'hoist', 'New bottle: arm raised up and back (radians)', 1, 4.5, 0.01],
@@ -32265,7 +32285,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 755, crashSeen = new Map();
+const GAME_VERSION = 756, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
