@@ -279,6 +279,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 .tune .sec-copy { font-size: 15px; padding: 1px 8px; margin: 2px 0 8px; }
 .tune label { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; margin: 3px 0 8px; }
 .tune label .v { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+/* (v698, Jordan) a value moved off its default: yellow, with a circular arrow before it that puts just that one back */
+.tune label .vw { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.tune label.changed .v { color: #ffe23a; }
+.tune .tune-undo { display: none; width: 15px; height: 15px; padding: 0; color: #ffe23a; cursor: pointer; opacity: 0.85; }
+.tune label.changed .tune-undo { display: inline-flex; }
+.tune .tune-undo:hover, .tune .tune-undo:focus-visible { opacity: 1; filter: brightness(1.2); }
+.tune .tune-undo svg { width: 100%; height: 100%; display: block; }
 .tune input[type=range] { grid-column: 1 / 3; width: 100%; accent-color: var(--gold); }
 .tune select { grid-column: 1 / 3; width: 100%; padding: 2px 4px; font: inherit; color: inherit; background: var(--panel-edge); border: 2px solid var(--panel-edge); cursor: pointer; }
 .tune input[type=color] { grid-column: 1 / 3; width: 100%; height: 22px; padding: 0; border: 2px solid var(--panel-edge); background: none; cursor: pointer; }
@@ -1197,8 +1204,8 @@ document.body.classList.toggle('touch', MOBILE);
 // flat or a ramp that rises one level toward one side. Level 0 is open water.
 // How high one level stands (the tuning panel's World section; changing it rebuilds the same world). 1 is the
 // first height the game had, 0.5 the half height it went to; slopes and ramps keep their widths either way.
-const STEP_KEY = 'emberwild.tileHeight';
-const WORLD = { tileHeight: (() => { try { const v = parseFloat(localStorage.getItem(STEP_KEY)); return v >= 0.25 && v <= 2 ? v : 2; } catch (err) { return 2; } })() };
+const STEP_KEY = 'emberwild.tileHeight', TILE_H_DEFAULT = 2;
+const WORLD = { tileHeight: (() => { try { const v = parseFloat(localStorage.getItem(STEP_KEY)); return v >= 0.25 && v <= 2 ? v : TILE_H_DEFAULT; } catch (err) { return TILE_H_DEFAULT; } })() };
 const N = 1216, CH = 32, NC = N / CH, STEP = WORLD.tileHeight, MAXL = 8;   // (v639, Jordan: 1024 till then; land is only ~44% of the map since continents. N must stay a multiple of CH)
 const T = (c, r) => r * N + c;
 const params = new URLSearchParams(location.search);
@@ -30465,6 +30472,13 @@ const saveTuneClosed = () => { try { localStorage.setItem(TUNE_CLOSED_KEY, JSON.
 const tuneDecimals = step => Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
 const tuneShow = (v, step) => (typeof v === 'string' ? v : v.toFixed(tuneDecimals(step)));
 const tuneLine = ([title, items]) => `${title}: ` + items.filter(it => it[3] !== 'action').map(([o, k, , , , st]) => `${k} ${tuneShow(o[k], st)}`).join(', ');
+// (v698, Jordan) values the panel never marks as changed (the clock moves time of day by itself), and values whose
+// default isn't what the game started with (tile height and the map's book font are kept in storage, so the code's
+// defaults are named here)
+const TUNE_UNMARKED = [[SKY, 'timeOfDay']];
+const TUNE_HOMES = [[WORLD, 'tileHeight', TILE_H_DEFAULT], [OPTIONS, 'mapFont', 1]];
+const tuneSame = (a, b, step) => (typeof a === 'number' && typeof b === 'number' ? tuneShow(a, step) === tuneShow(b, step) : String(a).toLowerCase() === String(b).toLowerCase());
+const TUNE_UNDO_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.6A5 5 0 1 0 5 4.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2.4 1.8v4.3h4.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const tuneButton = (text, className = '') => Object.assign(document.createElement('button'), { type: 'button', textContent: text, className });
 function tuneCopy(text, btn, out, label) {
   const fallback = () => { out.value = text; out.hidden = false; out.select(); out.scrollIntoView({ block: 'nearest' }); };
@@ -30479,7 +30493,41 @@ let tuneFilter = '';
 function createTuningPanel(el, spec, heading = 'Tuning') {
   const sliders = [], readouts = [];
   spec = spec.slice().sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }));
-  const defaults = spec.flatMap(([, items]) => items.map(([o, k]) => [o, k, o[k]]));
+  const defaults = spec.flatMap(([, items]) => items.filter(it => it[3] !== 'action' && it[3] !== 'readout').map(([o, k, , , , , apply]) => {
+    const home = TUNE_HOMES.find(([ho, hk]) => ho === o && hk === k);
+    return [o, k, home ? home[2] : o[k], apply];
+  }));
+  const homes = new Map();
+  for (const [o, k, v] of defaults) { if (!homes.has(o)) homes.set(o, new Map()); homes.get(o).set(k, v); }
+  // (v698, Jordan) a value off its default turns yellow and gets a reset arrow; sync puts the row's controls back
+  // to the value it holds now, and apply is the row's own (called with the default, as letting go of it would)
+  function markable(row, val, obj, key, step, apply, sync) {
+    if (!homes.get(obj)?.has(key) || TUNE_UNMARKED.some(([uo, uk]) => uo === obj && uk === key)) return () => {};
+    const def = homes.get(obj).get(key);
+    const undo = document.createElement('span');
+    undo.className = 'tune-undo';
+    undo.setAttribute('role', 'button');
+    undo.tabIndex = 0;
+    undo.title = 'Reset to ' + tuneShow(def, step);
+    undo.setAttribute('aria-label', 'Reset this value to its default');
+    undo.innerHTML = TUNE_UNDO_SVG;
+    const mark = () => row.classList.toggle('changed', !tuneSame(obj[key], def, step));
+    const back = e => {
+      // (inside the label: don't let the click open its colour picker or focus its slider)
+      e.preventDefault(); e.stopPropagation();
+      obj[key] = def; sync(); mark();
+      if (apply) apply(def);
+      undo.blur();
+    };
+    undo.addEventListener('click', back);
+    undo.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') back(e); });
+    const wrap = document.createElement('span');
+    wrap.className = 'vw';
+    wrap.append(undo, val);
+    row.append(wrap);
+    mark();
+    return mark;
+  }
   function build() {
     el.innerHTML = '';
     const head = document.createElement('div');
@@ -30545,31 +30593,41 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
           val.textContent = obj[key] + '×';
           const pick = document.createElement('select');
           for (const v of max) pick.append(Object.assign(document.createElement('option'), { value: v, textContent: v + '×', selected: v === obj[key] }));
-          pick.addEventListener('change', () => { obj[key] = parseFloat(pick.value); val.textContent = obj[key] + '×'; pick.blur(); if (apply) apply(obj[key]); });
-          row.append(text, val, pick);
+          row.append(text);
+          const mark = markable(row, val, obj, key, step, apply, () => { pick.value = obj[key]; val.textContent = obj[key] + '×'; });
+          pick.addEventListener('change', () => { obj[key] = parseFloat(pick.value); val.textContent = obj[key] + '×'; mark(); pick.blur(); if (apply) apply(obj[key]); });
+          if (!val.parentNode) row.append(val);
+          row.append(pick);
           sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
           continue;
         }
         if (min === 'color') {
           val.textContent = obj[key];
           const pick = Object.assign(document.createElement('input'), { type: 'color', value: obj[key] });
-          pick.addEventListener('input', () => { obj[key] = pick.value; val.textContent = pick.value; });
+          row.append(text);
+          const mark = markable(row, val, obj, key, step, apply, () => { pick.value = obj[key]; val.textContent = obj[key]; });
+          pick.addEventListener('input', () => { obj[key] = pick.value; val.textContent = pick.value; mark(); });
           pick.addEventListener('change', () => pick.blur());
-          row.append(text, val, pick);
+          if (!val.parentNode) row.append(val);
+          row.append(pick);
           sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
           continue;
         }
         val.textContent = obj[key].toFixed(tuneDecimals(step));
         const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step, value: obj[key] });
+        row.append(text);
+        const mark = markable(row, val, obj, key, step, apply, () => { input.value = obj[key]; val.textContent = obj[key].toFixed(tuneDecimals(step)); });
         input.addEventListener('input', () => {
           obj[key] = parseFloat(input.value);
           val.textContent = obj[key].toFixed(tuneDecimals(step));
+          mark();
           if (apply && apply.live) apply(obj[key]);   // (cheap ones follow the slider as it moves)
         });
         // hand the keyboard back to the game once the mouse lets go, so the arrow keys aim again
         input.addEventListener('change', () => { if (!input.matches(':focus-visible')) input.blur(); if (apply) apply(obj[key]); });
         sliders.push({ obj, key, input, val, step });
-        row.append(text, val, input);
+        if (!val.parentNode) row.append(val);
+        row.append(input);
         sec.append(row); rowsOf.push([row, (label + ' ' + key).toLowerCase()]);
       }
       el.append(sec);
@@ -30579,7 +30637,13 @@ function createTuningPanel(el, spec, heading = 'Tuning') {
     const all = tuneButton('Copy all values');
     const reset = tuneButton('Reset');
     all.addEventListener('click', () => tuneCopy(spec.map(tuneLine).join('\n'), all, out, 'Copy all values'));
-    reset.addEventListener('click', () => { for (const [o, k, v] of defaults) o[k] = v; build(); });
+    // (v698) each value put back has its own apply run once (tile height rebuilds the world only if it was changed)
+    reset.addEventListener('click', () => {
+      const applies = new Map();
+      for (const [o, k, v, apply] of defaults) { if (o[k] !== v && apply) applies.set(apply, v); o[k] = v; }
+      build();
+      for (const [apply, v] of applies) apply(v);
+    });
     buttons.append(all, reset);
     el.append(buttons, out);
     function applyFilter() {
@@ -30787,7 +30851,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 697, crashSeen = new Map();
+const GAME_VERSION = 698, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
