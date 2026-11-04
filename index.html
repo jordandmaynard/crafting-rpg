@@ -17149,35 +17149,74 @@ function makeGoblin() {
   g.scale.setScalar(1.3);
   return { g, parts, topH: 0.62 };
 }
+// (v691) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
+// hindquarters, the hind legs and the tail hang from it), the head turns and nods on a neck pivot, and each leg
+// hangs from a pivot at the shoulder or hip with a second one part way down: the front leg's wrist, which folds
+// the paw back as it lifts, and the hind leg's hock, which folds it forward. The body and each leg are their old
+// boxes cut in two where the joint is, so standing still it looks as it always did; the tail has a root of its own.
+// The boar is built the same way (BOAR_FRAME: shorter legs, a low head, no tail).
+// canineRig makes the pivots where the frame says; on(p) gives an adder that takes the build's own (unjointed)
+// coordinates. gait names the WOLF_GAIT or BOAR_GAIT that moves it (poseCanine).
+const CANINE = { spineY: 0.3, spineZ: -0.02, neck: [0, 0.42, 0.2], hipY: 0.24, knee: 0.13, tail: [0, 0.3, -0.2], legs: [[-1, 0.14], [1, 0.14], [-1, -0.17], [1, -0.17]], gait: 'wolf' };
+const BOAR_FRAME = { ...CANINE, neck: [0, 0.36, 0.19], hipY: 0.2, knee: 0.11, tail: null, gait: 'boar' };
+function canineRig(g, parts, legX, C = CANINE) {
+  const joint = (parent, x, y, z) => {
+    const p = new GFX.Group(), a = parent.userData.at || [0, 0, 0];
+    p.position.set(x - a[0], y - a[1], z - a[2]); p.userData.at = [x, y, z]; parent.add(p); return p;
+  };
+  const on = p => { const b = boxer(p, parts), a = p.userData.at || [0, 0, 0]; return (w, h, d, x, y, z, m, rx, rz, ry) => b(w, h, d, x - a[0], y - a[1], z - a[2], m, rx, rz, ry); };
+  const spine = joint(g, 0, C.spineY, C.spineZ), neck = joint(g, ...C.neck), tail = C.tail ? joint(spine, ...C.tail) : null;
+  const upper = [], lower = [];
+  C.legs.forEach(([s, z], k) => { const u = joint(k < 2 ? g : spine, s * legX, C.hipY, z); upper.push(u); lower.push(joint(u, s * legX, C.hipY - C.knee, z)); });
+  // the body's box (or one along the back) cut at the spine: the hindquarters a hair slimmer and running 0.02 on
+  // into the front half
+  const body = (w, h, d, y, z, m) => {
+    const c = C.spineZ, f0 = z + d / 2, r0 = z - d / 2;
+    on(g)(w, h, f0 - c, 0, y, (f0 + c) / 2, m);
+    on(spine)(w - 0.006, h - 0.006, c + 0.02 - r0, 0, y, (c + 0.02 + r0) / 2, m);
+  };
+  // a leg's box (it ran from the ground to just under the body) from the hip down to the knee, and from there to the ground,
+  // the lower part a hair slimmer and running 0.01 up into the upper one
+  const leg = (k, w, m) => {
+    const x = C.legs[k][0] * legX, z = C.legs[k][1], kn = C.hipY - C.knee;
+    on(upper[k])(w, C.hipY - kn + 0.01, w, x, (C.hipY + kn - 0.01) / 2, z, m);
+    on(lower[k])(w - 0.006, kn + 0.01, w - 0.006, x, (kn + 0.01) / 2, z, m);
+  };
+  return { joint, on, spine, neck, tail, upper, lower, body, leg };
+}
 // a hellhound: a wolf's build gone to charcoal, with horns, burning eyes, a glowing maw, and a mane, tail
 // tip and paws of flickering flame
 function makeHellhound() {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts), flames = [];
+  const g = new GFX.Group(), parts = [], flames = [], J = canineRig(g, parts, 0.075), add = J.on(g), head = J.on(J.neck);
   const f = flatMat({ color: '#2a2224' }), fd = flatMat({ color: '#171214' }), horn = flatMat({ color: '#d8c8a0' });
   const glow = new GFX.MeshBasicMaterial({ color: '#ff6a1a' }), eye = new GFX.MeshBasicMaterial({ color: '#ffd23a' });
-  add(0.24, 0.21, 0.46, 0, 0.3, -0.02, f);
+  J.body(0.24, 0.21, 0.46, 0.3, -0.02, f);
   add(0.26, 0.13, 0.17, 0, 0.42, 0.12, fd);
-  add(0.21, 0.19, 0.19, 0, 0.44, 0.27, f);
-  add(0.12, 0.08, 0.15, 0, 0.39, 0.42, fd);
-  add(0.1, 0.02, 0.12, 0, 0.36, 0.43, glow);   // the maw
-  add(0.04, 0.03, 0.02, 0, 0.42, 0.5, darkMat);
-  add(0.035, 0.12, 0.035, -0.07, 0.57, 0.22, horn, -0.5, 0.25); add(0.035, 0.12, 0.035, 0.07, 0.57, 0.22, horn, -0.5, -0.25);
-  add(0.05, 0.03, 0.02, -0.05, 0.47, 0.366, eye); add(0.05, 0.03, 0.02, 0.05, 0.47, 0.366, eye);
-  for (const [lx, lz] of [[-0.075, 0.14], [0.075, 0.14], [-0.075, -0.17], [0.075, -0.17]]) add(0.065, 0.22, 0.065, lx, 0.11, lz, fd);
-  add(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
-  const flame = (r, h, x, y, z, mat, rx = 0) => { const m = new GFX.Mesh(new GFX.ConeGeometry(r, h, 5), mat); m.position.set(x, y, z); m.rotation.x = rx; g.add(m); parts.push(m); flames.push(m); };
+  head(0.21, 0.19, 0.19, 0, 0.44, 0.27, f);
+  head(0.12, 0.08, 0.15, 0, 0.39, 0.42, fd);
+  head(0.1, 0.02, 0.12, 0, 0.36, 0.43, glow);   // the maw
+  head(0.04, 0.03, 0.02, 0, 0.42, 0.5, darkMat);
+  head(0.035, 0.12, 0.035, -0.07, 0.57, 0.22, horn, -0.5, 0.25); head(0.035, 0.12, 0.035, 0.07, 0.57, 0.22, horn, -0.5, -0.25);
+  head(0.05, 0.03, 0.02, -0.05, 0.47, 0.366, eye); head(0.05, 0.03, 0.02, 0.05, 0.47, 0.366, eye);
+  for (let k = 0; k < 4; k++) J.leg(k, 0.065, fd);
+  J.on(J.tail)(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
+  const flame = (p, r, h, x, y, z, mat, rx = 0) => {
+    const a = p.userData.at || [0, 0, 0], m = new GFX.Mesh(new GFX.ConeGeometry(r, h, 5), mat);
+    m.position.set(x - a[0], y - a[1], z - a[2]); m.rotation.x = rx; p.add(m); parts.push(m); flames.push(m);
+  };
   // the mane, along the neck and shoulders, leaning back
-  flame(0.07, 0.2, 0, 0.56, 0.16, flameMats[0], -0.5); flame(0.06, 0.17, 0, 0.53, 0.06, flameMats[1], -0.6);
-  flame(0.05, 0.14, -0.05, 0.52, 0.12, flameMats[0], -0.5); flame(0.05, 0.14, 0.05, 0.52, 0.12, flameMats[0], -0.5);
-  flame(0.04, 0.11, 0, 0.47, -0.04, flameMats[2], -0.7);
+  flame(g, 0.07, 0.2, 0, 0.56, 0.16, flameMats[0], -0.5); flame(g, 0.06, 0.17, 0, 0.53, 0.06, flameMats[1], -0.6);
+  flame(g, 0.05, 0.14, -0.05, 0.52, 0.12, flameMats[0], -0.5); flame(g, 0.05, 0.14, 0.05, 0.52, 0.12, flameMats[0], -0.5);
+  flame(J.spine, 0.04, 0.11, 0, 0.47, -0.04, flameMats[2], -0.7);
   // the tail's tip
-  flame(0.05, 0.16, 0, 0.47, -0.42, flameMats[1], -1.0);
+  flame(J.tail, 0.05, 0.16, 0, 0.47, -0.42, flameMats[1], -1.0);
   // and the paws
-  for (const [lx, lz] of [[-0.075, 0.14], [0.075, 0.14], [-0.075, -0.17], [0.075, -0.17]]) {
-    flame(0.055, 0.12, lx, 0.05, lz, flameMats[0]); flame(0.035, 0.08, lx, 0.04, lz + 0.02, flameMats[2]);
-  }
-  g.scale.setScalar(1.45);
-  return { g, parts, flames, topH: 0.68 };
+  CANINE.legs.forEach(([s, lz], k) => {
+    const lx = s * 0.075;
+    flame(J.lower[k], 0.055, 0.12, lx, 0.05, lz, flameMats[0]); flame(J.lower[k], 0.035, 0.08, lx, 0.04, lz + 0.02, flameMats[2]);
+  });
+  g.scale.setScalar(1.45); g.rotation.order = 'YXZ';
+  return { g, parts, flames, spine: J.spine, neck: J.neck, tailRoot: J.tail, upperLegs: J.upper, lowerLegs: J.lower, canine: CANINE, topH: 0.68 };
 }
 // a fire spirit: a floating flame with a bright heart, its tongues flickering, two dark eyes in the blaze
 const flameMats = ['#ff4a10', '#ff8a20', '#ffd060'].map((c, k) => new GFX.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.9 + k * 0.2, flatShading: true, transparent: true, opacity: 0.8 + k * 0.08, roughness: 1 }));
@@ -17193,19 +17232,19 @@ function makeFireSpirit() {
   return { g, parts, flames, ghost: true, topH: 0.9 };
 }
 function makeWolf(fur = '#6c6a78', furD = '#4c4a58', eye = '#ff4a3a') {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const g = new GFX.Group(), parts = [], J = canineRig(g, parts, 0.07), add = J.on(g), head = J.on(J.neck);
   const f = flatMat({ color: fur }), fd = flatMat({ color: furD }), red = new GFX.MeshBasicMaterial({ color: eye });
-  add(0.22, 0.2, 0.44, 0, 0.3, -0.02, f);
+  J.body(0.22, 0.2, 0.44, 0.3, -0.02, f);
   add(0.24, 0.12, 0.16, 0, 0.42, 0.12, fd);
-  add(0.2, 0.18, 0.18, 0, 0.44, 0.27, f);
-  add(0.11, 0.08, 0.14, 0, 0.39, 0.42, fd);
-  add(0.04, 0.03, 0.02, 0, 0.42, 0.495, darkMat);
-  add(0.05, 0.09, 0.04, -0.06, 0.56, 0.24, fd); add(0.05, 0.09, 0.04, 0.06, 0.56, 0.24, fd);
-  add(0.04, 0.03, 0.02, -0.05, 0.47, 0.361, red); add(0.04, 0.03, 0.02, 0.05, 0.47, 0.361, red);
-  for (const [lx, lz] of [[-0.07, 0.14], [0.07, 0.14], [-0.07, -0.17], [0.07, -0.17]]) add(0.06, 0.22, 0.06, lx, 0.11, lz, fd);
-  add(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
-  g.scale.setScalar(1.35);
-  return { g, parts, topH: 0.62 };
+  head(0.2, 0.18, 0.18, 0, 0.44, 0.27, f);
+  head(0.11, 0.08, 0.14, 0, 0.39, 0.42, fd);
+  head(0.04, 0.03, 0.02, 0, 0.42, 0.495, darkMat);
+  head(0.05, 0.09, 0.04, -0.06, 0.56, 0.24, fd); head(0.05, 0.09, 0.04, 0.06, 0.56, 0.24, fd);
+  head(0.04, 0.03, 0.02, -0.05, 0.47, 0.361, red); head(0.04, 0.03, 0.02, 0.05, 0.47, 0.361, red);
+  for (let k = 0; k < 4; k++) J.leg(k, 0.06, fd);
+  J.on(J.tail)(0.05, 0.05, 0.22, 0, 0.36, -0.3, f, 0.55);
+  g.scale.setScalar(1.35); g.rotation.order = 'YXZ';   // (its lean and gallop rocking pitch about its own side, whichever way it faces)
+  return { g, parts, spine: J.spine, neck: J.neck, tailRoot: J.tail, upperLegs: J.upper, lowerLegs: J.lower, canine: CANINE, topH: 0.62 };
 }
 const SLIME_PROFILE = [[0.3, 0.01], [0.34, 0.05], [0.33, 0.14], [0.27, 0.25], [0.17, 0.33], [0.07, 0.37], [0, 0.375]].map(([r, y]) => new GFX.Vector2(r, y));
 const slimeMat = new GFX.MeshStandardMaterial({ color: '#5fe36a', emissive: '#1b6b22', roughness: 0.25, metalness: 0, flatShading: true, transparent: true, opacity: 0.62, side: GFX.DoubleSide });
@@ -17261,18 +17300,18 @@ function makeScorpion() {
   return { g, parts, topH: 0.6 };
 }
 function makeBoar() {
-  const g = new GFX.Group(), parts = [], add = boxer(g, parts);
+  const g = new GFX.Group(), parts = [], J = canineRig(g, parts, 0.09, BOAR_FRAME), add = J.on(g), head = J.on(J.neck);
   const hide = flatMat({ color: '#6a4a34' }), dark = flatMat({ color: '#4a3424' }), snout = flatMat({ color: '#c8908a' }), tusk = flatMat({ color: '#f0ead8' }), red = new GFX.MeshBasicMaterial({ color: '#ff4a3a' });
-  add(0.28, 0.24, 0.46, 0, 0.3, -0.02, hide);
-  add(0.06, 0.08, 0.36, 0, 0.45, -0.02, dark);
-  add(0.22, 0.2, 0.16, 0, 0.3, 0.27, hide);
-  add(0.12, 0.1, 0.06, 0, 0.26, 0.37, snout);
-  add(0.03, 0.08, 0.03, -0.07, 0.26, 0.38, tusk, -0.4); add(0.03, 0.08, 0.03, 0.07, 0.26, 0.38, tusk, -0.4);
-  add(0.04, 0.03, 0.02, -0.06, 0.35, 0.351, red); add(0.04, 0.03, 0.02, 0.06, 0.35, 0.351, red);
-  add(0.05, 0.07, 0.04, -0.08, 0.42, 0.24, dark); add(0.05, 0.07, 0.04, 0.08, 0.42, 0.24, dark);
-  for (const [lx, lz] of [[-0.09, 0.14], [0.09, 0.14], [-0.09, -0.17], [0.09, -0.17]]) add(0.07, 0.18, 0.07, lx, 0.09, lz, dark);
-  g.scale.setScalar(1.35);
-  return { g, parts, topH: 0.6 };
+  J.body(0.28, 0.24, 0.46, 0.3, -0.02, hide);
+  J.body(0.06, 0.08, 0.36, 0.45, -0.02, dark);   // the bristly ridge along the back
+  head(0.22, 0.2, 0.16, 0, 0.3, 0.27, hide);
+  head(0.12, 0.1, 0.06, 0, 0.26, 0.37, snout);
+  head(0.03, 0.08, 0.03, -0.07, 0.26, 0.38, tusk, -0.4); head(0.03, 0.08, 0.03, 0.07, 0.26, 0.38, tusk, -0.4);
+  head(0.04, 0.03, 0.02, -0.06, 0.35, 0.351, red); head(0.04, 0.03, 0.02, 0.06, 0.35, 0.351, red);
+  head(0.05, 0.07, 0.04, -0.08, 0.42, 0.24, dark); head(0.05, 0.07, 0.04, 0.08, 0.42, 0.24, dark);
+  for (let k = 0; k < 4; k++) J.leg(k, 0.07, dark);
+  g.scale.setScalar(1.35); g.rotation.order = 'YXZ';
+  return { g, parts, spine: J.spine, neck: J.neck, upperLegs: J.upper, lowerLegs: J.lower, canine: BOAR_FRAME, topH: 0.6 };
 }
 // a giant spider: low and quick on eight jointed legs, which scuttle as it runs
 function makeSpider() {
@@ -18620,7 +18659,8 @@ function spawnFoe(kind, x, z) {
   f.g.position.set(x, surfaceY(x, z), z);
   const sh = new GFX.Object3D(); sh.position.set(x, surfaceY(x, z) + 0.02, z);
   const foe = Object.assign(f, { kind, def: d, level: lvl, x, z, y: surfaceY(x, z), hp: mhp, maxHp: mhp, face: Math.random() * 6.28, aggro: false, atk: -1, cd: 0.5,
-    home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x });
+    home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x,
+    gait: Math.random(), run: 0, amp: 0, turnV: 0, lastFace: null });
   if (d.human) humanFoe(foe);
   foes.push(foe);
   return foe;
@@ -27451,6 +27491,94 @@ function helmHands() {
   }
 }
 
+// (v691) How wolves, frost wolves and hellhounds move on their joints (canineRig). Wandering or walking home they
+// trot, diagonal pairs of legs together; chasing (over runFrom of their top speed) they gallop, the hind legs
+// then the front ones, the back flexing as the hind legs reach under and stretching as the front ones reach out,
+// a little leap between strides. The legs' phase runs on the ground covered (stride tiles a stride), so the paws
+// don't slide. A leg swings from its shoulder or hip; lifting, the front wrist folds the paw back and the hind
+// hock folds it forward (the hind legs stand a little crooked, rest). Turning, the back curves into the turn and
+// the head leads it; chasing, the head turns to you. To bite it crouches back on its haunches, head low, and
+// springs, forelegs out and hind legs thrown back. T > Wolf moves; on 0 = the old stiff-legged wolf.
+// The boar trots and charges the same way, stiffer in the back and shorter in the stride, and gores rather than
+// pounces: head down, then thrown up (toss) as it drives in, forelegs barely leaving the ground (reach). T > Boar moves.
+const WOLF_GAIT = {
+  on: 1, trotStride: 0.65, runStride: 1.4, runFrom: 0.7, swing: 0.5, runSwing: 0.75, knee: 1.1, hock: 0.8, rest: 0.25,
+  flex: 0.22, sway: 0.08, turn: 0.12, head: 0.6, tail: 1, leap: 0.05, pounce: 1, crouch: 0.89, reach: 0.95, kick: 0.6, toss: 0.35,
+};
+const BOAR_GAIT = {
+  on: 1, trotStride: 0.55, runStride: 1.1, runFrom: 0.7, swing: 0.45, runSwing: 0.65, knee: 1.2, hock: 1, rest: 0.15,
+  flex: 0.12, sway: 0.06, turn: 0.08, head: 0.6, tail: 0, leap: 0.03, pounce: 1, crouch: 1.05, reach: 0.3, kick: 0.2, toss: 0.7,
+};
+const GAITS = { wolf: WOLF_GAIT, boar: BOAR_GAIT };
+const TROT_OFF = [0, 0.5, 0.5, 0], GALLOP_OFF = [0.55, 0.45, 0, 0.1];
+const canineOut = { lift: 0, pitch: 0, roll: 0 };
+// a bump of 1 at phase c (of a cycle), falling to 0 w either side
+const phaseBump = (x, c, w) => { const e = ((x - c) % 1 + 1.5) % 1 - 0.5; return Math.abs(e) < w ? 0.5 + 0.5 * Math.cos(Math.PI * e / w) : 0; };
+// a paw's sole, (y, z) in the build's frame, from the leg's hip (or shoulder) and its two bends
+const rotYZ = (y, z, a) => [y * Math.cos(a) - z * Math.sin(a), y * Math.sin(a) + z * Math.cos(a)];
+function canineSole(f, k) {
+  const C = f.canine, U = f.upperLegs[k], L = f.lowerLegs[k];
+  let hy = C.hipY, hz = C.legs[k][1], a = U.rotation.x;
+  if (k >= 2) { const s = f.spine.rotation.x, [dy, dz] = rotYZ(hy - C.spineY, hz - C.spineZ, s); hy = C.spineY + dy; hz = C.spineZ + dz; a += s; }
+  const [y1, z1] = rotYZ(-C.knee, 0, a), [y2, z2] = rotYZ(C.knee - C.hipY, 0, a + L.rotation.x);
+  return [hy + y1 + y2, hz + z1 + z2];
+}
+// lean: the root's pitch from the bite (nose down +)
+function poseCanine(f, dt, sp, lean) {
+  const G = GAITS[f.canine.gait], U = f.upperLegs, L = f.lowerLegs, out = canineOut;
+  if (!G.on) {
+    for (const j of [f.spine, f.neck, f.tailRoot, ...U, ...L]) if (j) j.rotation.set(0, 0, 0);
+    out.lift = sp > 0 ? Math.abs(Math.sin(time * 11 + f.phase)) * 0.06 : 0; out.pitch = 0; out.roll = sp > 0 ? Math.sin(time * 11 + f.phase) * 0.06 : 0;
+    return out;
+  }
+  const ease = 1 - Math.exp(-dt * 8), d = f.def, TAU = Math.PI * 2;
+  f.run += ((sp > d.speed * G.runFrom ? 1 : 0) - f.run) * (1 - Math.exp(-dt * 4));
+  f.amp += ((sp > 0.05 ? Math.min(1, sp / 1.2) : 0) - f.amp) * ease;
+  const R = f.run, A = f.amp;
+  f.gait = (f.gait + sp * dt / (G.trotStride + (G.runStride - G.trotStride) * R)) % 1;
+  const p = f.gait;
+  // turning: how fast it's coming round, eased
+  if (f.lastFace === null) f.lastFace = f.face;
+  if (dt > 0) f.turnV += (angDiff(f.face, f.lastFace) / dt - f.turnV) * (1 - Math.exp(-dt * 6));
+  f.lastFace = f.face;
+  const bend = clamp(f.turnV * G.turn, -0.4, 0.4);
+  // the bite: crouch (wind) then spring
+  const u = f.atk, wind = u >= 0 ? smooth(0, 0.4, u) * (1 - smooth(0.44, 0.5, u)) * G.pounce : 0, spring = u >= 0 ? smooth(0.42, 0.5, u) * (1 - smooth(0.6, 0.85, u)) * G.pounce : 0;
+  // the back: flexed (rump down, hind legs under) as the gallop gathers, stretched as it reaches out
+  const flexC = Math.cos(TAU * (p - 0.93)) * G.flex * R * A;
+  f.spine.rotation.set(-flexC - 0.12 * wind + 0.12 * spring, -G.sway * (1 - R) * A * Math.sin(TAU * p) - bend, 0);
+  out.pitch = flexC * 0.4;
+  out.roll = 0.04 * (1 - R) * A * Math.sin(TAU * p);
+  const swingA = (G.swing + (G.runSwing - G.swing) * R) * A, stance = 0.5 - 0.2 * R;
+  for (let k = 0; k < 4; k++) {
+    const q = ((p + TROT_OFF[k] + (GALLOP_OFF[k] - TROT_OFF[k]) * R) % 1 + 1) % 1;
+    let w, lift = 0;
+    if (q < stance) w = 1 - 2 * q / stance;
+    else { const t = (q - stance) / (1 - stance); w = -1 + 2 * t * t * (3 - 2 * t); lift = Math.sin(Math.PI * t) * A; }
+    const th = -swingA * w;
+    if (k < 2) {
+      U[k].rotation.x = th - 0.15 * wind - G.reach * spring;
+      L[k].rotation.x = G.knee * lift + 0.15 * wind + 0.35 * spring;
+    } else {
+      // (the hip hangs from the spine, so its bend is taken back out: the legs keep to the ground)
+      // (crouching, the hock folds twice the hip's bend, so the paw stays under the hip)
+      U[k].rotation.x = th + G.rest - f.spine.rotation.x + G.crouch * wind + G.kick * spring;
+      L[k].rotation.x = -2 * G.rest - G.hock * lift - (2 * G.crouch - 0.5) * wind + 2 * G.rest * spring;
+    }
+  }
+  // the body rides as low as its legs let it (its lowest paw on the ground), and leaps a little between gallop strides
+  const P = lean + out.pitch, cp = Math.cos(P), sn = Math.sin(P);
+  let low = 9;
+  for (let k = 0; k < 4; k++) { const [y, z] = canineSole(f, k); low = Math.min(low, y * cp - z * sn); }
+  out.lift = (-low + G.leap * R * A * phaseBump(p, 0.93, 0.12)) * f.base;
+  // the head held steady against the rocking, leading turns, and turned to you while it hunts you
+  let look = 0;
+  if (f.aggro) look = clamp(angDiff(Math.atan2(H.x - f.x, H.z - f.z), f.face), -0.5, 0.5) * 0.6;
+  f.neck.rotation.set(-out.pitch * G.head + 0.06 * R * A * Math.sin(TAU * (p - 0.3)) + 0.45 * wind - G.toss * spring, clamp(bend * 0.7 + look, -0.6, 0.6), 0);
+  // the tail streams out at a gallop, sways at a trot, and drops as it crouches
+  if (f.tailRoot) f.tailRoot.rotation.set(G.tail * (R * A * (-0.35 + 0.15 * Math.sin(TAU * (p - 0.2))) - 0.3 * wind - 0.2 * spring), G.tail * 0.25 * (1 - R) * A * Math.sin(TAU * p + 1), 0);
+  return out;
+}
 function updateFoe(f, dt, night) {
   const d = f.def;
   const dx = H.x - f.x, dz = H.z - f.z, dist = Math.hypot(dx, dz);
@@ -27568,8 +27696,10 @@ function updateFoe(f, dt, night) {
   if (f.plant) { posePlant(f, sq); return; }
   if (f.legs) f.legs.forEach((p, k) => { p.rotation.y = p.userData.ry + (moving ? Math.sin(time * 22 + f.phase + k * 1.9) * 0.3 : 0); p.rotation.z = moving ? Math.max(0, Math.sin(time * 22 + f.phase + k * 1.9)) * 0.15 * (k < 4 ? -1 : 1) : 0; });
   if (f.atk >= 0) { if (f.atk < 0.45) lean = -0.25 * (f.atk / 0.45); else if (f.atk < 0.6) { lean = 0.35; fwd = 0.25; } else lean = 0.35 * (1 - (f.atk - 0.6) / 0.25); }
+  let roll = moving && !f.slime ? Math.sin(time * 11 + f.phase) * 0.06 : 0;
+  if (f.spine) { const c = poseCanine(f, dt, moving ? want / dt : 0, lean); lift = c.lift; lean += c.pitch; roll = c.roll; }
   f.g.position.set(f.x + Math.sin(f.face) * fwd, f.y + lift, f.z + Math.cos(f.face) * fwd);
-  f.g.rotation.set(lean, f.face, moving && !f.slime ? Math.sin(time * 11 + f.phase) * 0.06 : 0);
+  f.g.rotation.set(lean, f.face, roll);
   if (f.jaw) f.jaw.position.y = 0.625 - Math.max(0, Math.sin(time * 9 + f.phase)) * 0.02;
   f.g.visible = f.hitT > 0.12 || Math.floor(f.hitT * 40) % 2 === 0;
   f.shadow.position.set(f.x, f.y + 0.02, f.z);
@@ -29157,6 +29287,28 @@ const TUNING = [
     [SWORD_POSE, 'whirlCrouch', 'Cleave / buzzsaw: crouch', 0, 0.8, 0.01],
     [SWORD_POSE, 'lungeDepth', 'Lunge: depth of the front knee', 0, 1.5, 0.01],
   ]],
+  ...[['Wolf moves', WOLF_GAIT, 'the old stiff wolf'], ['Boar moves', BOAR_GAIT, 'the old stiff boar']].map(([title, G, old]) => [title, [
+    [G, 'on', `Jointed legs and back (0 = ${old})`, 0, 1, 1],
+    [G, 'trotStride', 'Trot: tiles a stride', 0.2, 2, 0.01],
+    [G, 'runStride', 'Gallop: tiles a stride', 0.4, 3, 0.01],
+    [G, 'runFrom', 'Gallops over this share of its top speed', 0, 1, 0.01],
+    [G, 'swing', 'Trot: legs swing (radians either way)', 0, 1.2, 0.01],
+    [G, 'runSwing', 'Gallop: legs swing (radians either way)', 0, 1.5, 0.01],
+    [G, 'knee', 'Front wrists fold the paw back as it lifts', -2, 2.5, 0.01],
+    [G, 'hock', 'Hind hocks fold the paw forward as it lifts', -2, 2.5, 0.01],
+    [G, 'rest', 'Hind legs: crook at the hock standing', -0.5, 0.8, 0.01],
+    [G, 'flex', 'Gallop: back flexing and stretching', 0, 0.8, 0.01],
+    [G, 'sway', 'Trot: hindquarters sway', 0, 0.4, 0.01],
+    [G, 'turn', 'Back curving into turns', 0, 0.5, 0.01],
+    [G, 'head', 'Head held steady against the rocking', 0, 1, 0.01],
+    [G, 'tail', 'Tail movement', 0, 2, 0.01],
+    [G, 'leap', 'Gallop: leap between strides (tiles)', 0, 0.3, 0.005],
+    [G, 'pounce', 'Attack: all of its crouch and spring', 0, 2, 0.01],
+    [G, 'crouch', 'Attack: crouch on the haunches', 0, 1.5, 0.01],
+    [G, 'reach', 'Attack: forelegs thrown out', 0, 1.8, 0.01],
+    [G, 'kick', 'Attack: hind legs thrown back', 0, 1.5, 0.01],
+    [G, 'toss', 'Attack: head thrown up into the blow', -0.5, 1.5, 0.01],
+  ]]),
   ['Auralith shimmer', [
     [PRISM, 'bands', 'Rainbow turns from face-on to edge-on', 0, 4, 0.05],
     [PRISM, 'swirl', 'Swirl across the surface', 0, 2, 0.05],
@@ -30323,7 +30475,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 690, crashSeen = new Map();
+const GAME_VERSION = 691, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
