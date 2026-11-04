@@ -440,6 +440,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v732:** (Jordan) T > Pixels shows what the mosaic is doing as it happens: its pixel size now at this zoom, its size at standard zoom (auto: the screen's short side ÷ "screen px per mosaic px", rounded, at least 2), the screen's short side, the zoom, and how far out the zoom must go before it drops to 2. Auto picks the standard size, then scales it by the zoom and rounds, never below 2: with a short side of 1300 px or more at 520 that's 3, and 3 × the farthest zoom on foot (0.9) rounds to 3, so on foot it stays 3 (it reaches 2 below zoom 0.83, e.g. at a boat's wheel). The size label now says "smaller zoomed out, never below 2" instead of promising 2.
 
+**v733:** (Jordan's photo: a palm in the desert planters instead of the fiddle leaf fig) The basket planters now hold a feathery potted palm: a short stout stem out of the soil with green sheaths at its top, six or seven long bare green stalks rising from it in a vase and running on into ribs that arch over, each hung both sides with long narrow leaflets swept forward and drooping (pairs every half piece, shortening toward the tip), plus two young fronds standing up in the middle. About 1.65 tall from the ground and 1.6 across. The fig's leaf geometry (G.figLeafA/B/U) is gone; the basket and soil are unchanged.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
