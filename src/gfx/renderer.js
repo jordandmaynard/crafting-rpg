@@ -517,12 +517,14 @@ class Renderer {
     return be.finish();
   }
   // (v769) the shadow map's casters as a recorded draw list, as _bundled does for a render: plain casters (no
-  // instancing, no shadow code of their own) recorded once and replayed while the same ones cast. Returns the rest.
+  // instancing) recorded once and replayed while the same ones cast. Returns the rest.
+  // (v786: those with shadow code of their own too (built pieces, folk), with their material's bind group; and a
+  // replay sends only the matrices of the casters that moved since, the shadow map's object block being the matrix alone)
   _bundledShadow(pass, casters, frameOff, swn, SL, near) {
     const key = 'shadow|' + SL.mask;
     const elig = [], rest = [];
     const now = performance.now();
-    for (const m of casters) (!m.isInstancedMesh && !m.material.shadowCode && !(m._bunSkip > now) ? elig : rest).push(m);
+    for (const m of casters) (!m.isInstancedMesh && !(m._bunSkip > now) ? elig : rest).push(m);
     if (elig.length < 4) return casters;
     let ch = this._chans.get(key);
     if (!ch) {
@@ -546,7 +548,13 @@ class Renderer {
         for (const r of ch.items) {
           const m = r.mesh, mat = m.material;
           if (r.seen !== st && (m._sv !== swn || (m._sn !== swn && ++extra * 5 > ch.items.length))) { ok = false; why = 'gone'; break; }
-          let same = !(mat !== r.mat || m.geometry !== r.geo || m.isInstancedMesh || mat.shadowCode || this._shadowPipeline(mat.shadowSide ?? mat.side, false) !== r.pipe);
+          // (v786: the side drawn, not the pipeline looked up again: the same material and side make the same pipeline)
+          let same = !(mat !== r.mat || m.geometry !== r.geo || m.isInstancedMesh || (mat.shadowSide ?? mat.side) !== r.side || !!mat.shadowCode !== r.own);
+          if (same && r.own) {
+            // (once a frame for each material, as in _bundleSame: it sends the material's numbers too)
+            if (mat._bgF !== this._frameNo) { mat._bgF = this._frameNo; mat._bgV = this._materialBindGroup(mat); }
+            if (mat._bgV !== r.mbg) same = false;
+          }
           const A = r.attrs;
           for (let j = 0; same && j < A.length; j++) { const a = A[j]; if (a._gb !== r.gbs[j] || a.version !== r.vers[j] || a.array.length !== r.lens[j]) same = false; }
           if (!same) { ok = false; why = 'changed'; m._bunSkip = now + 4000; break; }
@@ -555,9 +563,19 @@ class Renderer {
     }
     if (!ok) { const W = this.info.why || (this.info.why = {}); W[why] = (W[why] || 0) + 1; }
     if (ok) {
-      const d = ch.objData;
-      for (const r of ch.items) this._objData(d, r.k * OBJ_BYTES / 4, r.mesh, r.mat);
-      this.device.queue.writeBuffer(ch.objBuf, 0, d, 0, ch.items.length * OBJ_BYTES / 4);
+      // (v786) only the moved casters' matrices, sent in runs (a gap of a few unchanged ones is sent along)
+      const d = ch.objData, q = this.device.queue, W = OBJ_BYTES / 4;
+      let lo = -1, hi = -1, sent = 0;
+      for (const r of ch.items) {
+        const v = r.mesh._mwV;
+        if (v === r.mv && v !== 0) continue;
+        r.mv = v; this._setMat(d, r.k * W, r.mesh.matrixWorld); sent++;
+        if (lo < 0) lo = hi = r.k;
+        else if (r.k - hi > 8) { q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W); lo = hi = r.k; }
+        else hi = r.k;
+      }
+      if (lo >= 0) q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W);
+      this.info.shMoved = (this.info.shMoved || 0) + sent;
       pass.executeBundles([ch.bundle]);
       this.info.replayed++; this.info.draws += ch.items.length;
       return rest;
@@ -565,7 +583,7 @@ class Renderer {
     const dev = this.device;
     for (let j = elig.length - 1; j >= 0; j--) if (elig[j]._bunSkip > now) rest.push(elig.splice(j, 1)[0]);
     // (and the casters just out of the sun's view: see _renderShadow)
-    for (const m of near) if (!m.material.shadowCode && !(m._bunSkip > now)) elig.push(m);
+    for (const m of near) if (!(m._bunSkip > now)) elig.push(m);
     if (ch.objCap < elig.length) {
       if (ch.objBuf) this._trash.push(ch.objBuf);
       ch.objCap = Math.ceil(elig.length * 1.25 / 64) * 64;
@@ -578,18 +596,24 @@ class Renderer {
     const items = [], index = new Map(), d = ch.objData;
     let last = null;
     for (const mesh of elig) {
-      const mat = mesh.material, geo = mesh.geometry;
-      const pipe = this._shadowPipeline(mat.shadowSide ?? mat.side, false);
+      const mat = mesh.material, geo = mesh.geometry, own = !!mat.shadowCode, side = mat.shadowSide ?? mat.side;
+      const pipe = own ? this._shadowPipelineMat(mat) : this._shadowPipeline(side, false);
       if (!pipe) continue;
       const k = items.length;
       if (pipe !== last) { be.setPipeline(pipe); last = pipe; }
-      this._objData(d, k * OBJ_BYTES / 4, mesh, mat);
+      this._setMat(d, k * OBJ_BYTES / 4, mesh.matrixWorld);
       be.setBindGroup(1, ch.objBG, [k * OBJ_BYTES]);
-      if (!this._bindGeometry(be, geo, null, false, true)) continue;
+      let mbg = null;
+      if (own) {
+        if (mat._bgF !== this._frameNo) { mat._bgF = this._frameNo; mat._bgV = this._materialBindGroup(mat); }
+        mbg = mat._bgV; be.setBindGroup(2, mbg);
+      }
+      if (!(own ? this._bindGeometry(be, geo, mat, !!mat.vertexColors) : this._bindGeometry(be, geo, null, false, true))) { last = null; continue; }
       this._draw(be, geo, 1);
       const attrs = [geo.attributes.position];
+      if (own) { if (mat.vertexColors) attrs.push(geo.attributes.color); for (const n in mat.attributes) attrs.push(geo.attributes[n]); }
       if (geo.index) attrs.push(geo.index);
-      const r = { mesh, mat, geo, pipe, attrs, gbs: attrs.map(a => a._gb), vers: attrs.map(a => a.version), lens: attrs.map(a => a.array.length), k, seen: 0 };
+      const r = { mesh, mat, geo, pipe, side, own, mbg, mv: mesh._mwV, attrs, gbs: attrs.map(a => a._gb), vers: attrs.map(a => a.version), lens: attrs.map(a => a.array.length), k, seen: 0 };
       items.push(r); index.set(mesh, r);
     }
     ch.bundle = be.finish(); ch.items = items; ch.index = index;
@@ -863,8 +887,10 @@ class Renderer {
         if (mat && mat.visible && wn >= 0) o._wv = wn;
         // (v769) just out of view (within bundleMargin of it): kept in a recorded draw list (marked _wn and listed in
         // near), so one coming into view as the camera moves is already recorded
-        if (mat && mat.visible && wn >= 0 && this.bundles && o.frustumCulled && !mat.transparent && !this._inFrustum(o, fr) && this._inFrustum(o, fr, this.bundleMargin)) { o._wn = wn; near.push(o); }
-        else if (mat && mat.visible && (!o.frustumCulled || this._inFrustum(o, fr))) {
+        // (v786: in view, near or out found in one look, the mesh's world sphere kept from frame to frame)
+        const cls = !mat || !mat.visible ? 0 : !o.frustumCulled ? 2 : this._frustumClass(o, fr, wn >= 0 && this.bundles && !mat.transparent ? this.bundleMargin : 0);
+        if (cls === 1) { o._wn = wn; near.push(o); }
+        else if (cls === 2) {
           const e = o.matrixWorld.elements;
           v.set(e[12], e[13], e[14]).applyMatrix4(vp);
           // (drawFirst: opaque things drawn before the rest at their renderOrder, as roofs are, so what they cover fails
@@ -872,7 +898,8 @@ class Renderer {
           (mat.transparent ? clear : opaque).push({ mesh: o, z: v.z, order: o.renderOrder - (mat.drawFirst ? 0.5 : 0), mid: mat.id });
         }
       }
-      for (const c of o.children) visit(c);
+      const ch = o.children;
+      for (let i = 0; i < ch.length; i++) visit(ch[i]);
     };
     visit(scene);
     opaque.sort((a, b) => a.order - b.order || a.mid - b.mid || a.z - b.z);
@@ -882,11 +909,27 @@ class Renderer {
     return out;
   }
   _inFrustum(mesh, fr, extra = 0) {
+    const w = this._worldSphere(mesh);
+    return !!w && fr.sphereClass(w.x, w.y, w.z, w.r + extra, 0) === 2;
+  }
+  // (v786) in view (2), just out of it (within m: 1) or out (0), in one look
+  _frustumClass(mesh, fr, m = 0) {
+    const w = this._worldSphere(mesh);
+    return w ? fr.sphereClass(w.x, w.y, w.z, w.r, m) : 0;
+  }
+  // (v786) a mesh's bounding sphere in the world, kept until it moves (its _mwV, scene.js) or its geometry's sphere is
+  // another (a new geometry, or one worked out again); null without positions
+  _worldSphere(mesh) {
     const geo = mesh.geometry;
-    if (!geo || !geo.attributes.position) return false;
-    const s = geo.boundingSphere || geo.computeBoundingSphere(), e = mesh.matrixWorld.elements;
-    const x = e[0] * s.x + e[4] * s.y + e[8] * s.z + e[12], y = e[1] * s.x + e[5] * s.y + e[9] * s.z + e[13], z = e[2] * s.x + e[6] * s.y + e[10] * s.z + e[14];
-    return fr.intersectsSphere(x, y, z, s.r * mesh.matrixWorld.getMaxScaleOnAxis() + extra);
+    if (!geo || !geo.attributes.position) return null;
+    const s = geo.boundingSphere || geo.computeBoundingSphere(), v = mesh._mwV;
+    let w = mesh._ws;
+    if (w && w.v === v && w.s === s && v !== 0) return w;
+    if (!w) w = mesh._ws = { v: 0, s: null, x: 0, y: 0, z: 0, r: 0 };
+    const e = mesh.matrixWorld.elements;
+    w.x = e[0] * s.x + e[4] * s.y + e[8] * s.z + e[12]; w.y = e[1] * s.x + e[5] * s.y + e[9] * s.z + e[13]; w.z = e[2] * s.x + e[6] * s.y + e[10] * s.z + e[14];
+    w.r = s.r * mesh.matrixWorld.getMaxScaleOnAxis(); w.v = v; w.s = s;
+    return w;
   }
   // (casters are the meshes on the camera's layers, or on shadowLayers when that's set)
   _renderShadow(scene, camera, sun) {
@@ -906,22 +949,32 @@ class Renderer {
     const casters = [], near = [], swn = ++this._walkNo, SL = this.shadowLayers || camera.layers;
     // (castHidden: a hidden mesh that still casts, e.g. an upper story hidden while you're under it)
     // (v769: every caster found, in the sun's view or not, is marked _sv with this walk's number, for _bundledShadow)
+    const I = this.info, t0 = performance.now(), margin = this.bundles ? this.bundleMargin : 0;
     const visit = o => {
       if (!o.visible && !o.castHidden) return;
       if (o._mwH) o.updateMatrixWorld();
       if (o.isMesh && o.castShadow && o.layers.test(SL) && o.material && !(o.isInstancedMesh && !o.count)) {
         o._sv = swn;
-        if (!o.frustumCulled || this._inFrustum(o, fr)) casters.push(o);
-        else if (this.bundles && !o.isInstancedMesh && this._inFrustum(o, fr, this.bundleMargin)) { o._sn = swn; near.push(o); }
+        // (v786: in view, near or out in one look, as in _walk)
+        const cls = !o.frustumCulled ? 2 : this._frustumClass(o, fr, o.isInstancedMesh ? 0 : margin);
+        if (cls === 2) casters.push(o);
+        else if (cls === 1) { o._sn = swn; near.push(o); }
       }
-      for (const c of o.children) visit(c);
+      const ch = o.children;
+      for (let i = 0; i < ch.length; i++) visit(ch[i]);
     };
     visit(scene);
-    this.info.casters = casters.length; if (this.keepCasters) this.lastCasters = casters;
+    const t1 = performance.now();
+    // (v786, for the G rows: the casters found, the recorded list's time, and the time and count of those drawn one by one)
+    I.tShFind = (I.tShFind || 0) + t1 - t0;
+    I.casters = casters.length; if (this.keepCasters) this.lastCasters = casters;
     const pass = this._enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.shadowView, depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 }, timestampWrites: this._tsw('shadow map') });
     this.info.passes++; this.info.passTotal = (this.info.passTotal || 0) + 1;
     let rest = casters;
     if (this.bundles) rest = this._bundledShadow(pass, casters, slot * FRAME_BYTES, swn, SL, near);
+    const t2 = performance.now();
+    I.tShList = (I.tShList || 0) + t2 - t1;
+    I.shOne = (I.shOne || 0) + rest.length;
     pass.setBindGroup(0, this.frameBGShadow, [slot * FRAME_BYTES]);
     let last = null;
     for (const mesh of rest) {
@@ -938,6 +991,7 @@ class Renderer {
       this._draw(pass, mesh.geometry, inst ? mesh.count : 1);
     }
     pass.end();
+    I.tShOne = (I.tShOne || 0) + performance.now() - t2;
   }
   _draw(pass, geo, copies = 1) {
     if (!copies) return;

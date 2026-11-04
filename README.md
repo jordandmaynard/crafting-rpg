@@ -546,6 +546,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v785:** (Jordan's G: grass 1.44 ms of 4.41 passes, ground pre-pass ~0) A grass pre-pass (G > Tests > Grass pre-pass, with the depth pre-pass on): the tufts' depth is drawn after the built pieces' and before anything is lit (grassMat's position @invariant; its wind and trample are per frame, so both renders place every blade alike). Each tuft is then lit once where it shows, and the ground behind grass isn't lit at all. The tufts' shapes are worked out twice: compare the grass pre-pass and grass rows, and the ground's, with it on and off.
 
+**v786:** shadow map encode (Jordan's G: 0.80 ms of ~4.7 ms CPU). Finding the casters is cheaper: each mesh keeps its bounding sphere in the world until it moves (or its geometry changes), and in view, just out of it, or out is told in one look at the planes, in the shadow map's walk and the camera's (which tested most meshes twice). The recorded shadow list now takes the built pieces and folk too (their own shadow code, with their material's bind group; before, every one was drawn one by one each frame), and a replay sends only the matrices of the casters that moved since, not every caster's block. G rows split the shadow map's encode: finding casters, recorded list, drawn one by one, with counts of casters, those drawn one by one, and matrices sent.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

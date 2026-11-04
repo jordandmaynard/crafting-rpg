@@ -351,7 +351,8 @@ export class Ray {
 
 // the six planes of a camera's view, for leaving out what it can't see
 export class Frustum {
-  constructor() { this.planes = []; for (let i = 0; i < 6; i++) this.planes.push(new Float64Array(4)); }
+  // (v786: the planes also kept as one flat run, f, for sphereClass)
+  constructor() { this.planes = []; for (let i = 0; i < 6; i++) this.planes.push(new Float64Array(4)); this.f = new Float64Array(24); }
   setFromProjectionMatrix(m) {
     const e = m.elements;
     const rows = [[e[0], e[4], e[8], e[12]], [e[1], e[5], e[9], e[13]], [e[2], e[6], e[10], e[14]], [e[3], e[7], e[11], e[15]]];
@@ -362,10 +363,22 @@ export class Frustum {
     };
     set(this.planes[0], 1, 0); set(this.planes[1], -1, 0); set(this.planes[2], 1, 1);
     set(this.planes[3], -1, 1); set(this.planes[4], 1, 2); set(this.planes[5], -1, 2);
+    for (let i = 0; i < 6; i++) this.f.set(this.planes[i], i * 4);
     return this;
   }
   intersectsSphere(x, y, z, r) {
     for (const p of this.planes) if (p[0] * x + p[1] * y + p[2] * z + p[3] < -r) return false;
     return true;
+  }
+  // (v786) a sphere in view (2), out of it but within m of it (1), or further out (0), in one look at the planes
+  sphereClass(x, y, z, r, m = 0) {
+    const f = this.f, far = -(r + m);
+    let near = false;
+    for (let i = 0; i < 24; i += 4) {
+      const d = f[i] * x + f[i + 1] * y + f[i + 2] * z + f[i + 3];
+      if (d < far) return 0;
+      if (d < -r) near = true;
+    }
+    return near ? 1 : 2;
   }
 }
