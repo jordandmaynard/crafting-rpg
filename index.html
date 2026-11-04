@@ -101,6 +101,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .xpSpark.orb { box-shadow: 0 0 calc(10px * var(--xg, 1)) calc(4px * var(--xg, 1)) rgba(90, 192, 255, min(1, calc(0.7 * var(--xg, 1)))); }
 .flyIcon { position: absolute; left: 0; top: 0; width: 48px; height: 48px; will-change: transform, opacity; }
 .flyIcon svg, .flyIcon img { width: 48px; height: 48px; image-rendering: pixelated; }
+.flyIcon.potionFly, .flyIcon.potionFly img, .flyIcon.potionFly svg { width: var(--fs, 44px); height: var(--fs, 44px); }   /* (v751: a thrown potion, full strength) */
 #crashBox { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 30; width: min(640px, calc(100vw - 32px)); box-sizing: border-box; border-color: #d8443a; }
 #crashBox .crashBar { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-family: var(--display); font-size: 11px; color: #ff8a7a; margin-bottom: 8px; }
 #crashBox button { font-size: 10px; padding: 0.4em 0.7em; cursor: pointer; }
@@ -482,6 +483,13 @@ body:not(.touch) #hotbar .hslot.drop { --hotSkin: url("ui/slot-hot-selected.webp
 body:not(.touch) #hotbar .hslot .ic { position: absolute; left: 9px; top: 9px; width: 74px; height: 74px; --ic: 74px; }
 body:not(.touch) #hotbar .hslot .ic img.paint { width: 74px; height: 74px; }
 body:not(.touch) #hotbar .hslot .key { left: 50%; top: 95px; transform: translateX(-50%); height: 26px; min-width: 28px; box-sizing: border-box; padding: 2px 6px; font: 600 17px/22px var(--wk); display: flex; align-items: center; justify-content: center; color: #342014; background: url("ui/keycap.webp") center/100% 100%; text-shadow: none; white-space: nowrap; }
+/* (v751) a potion stack's count in the square's corner, and its 2 s throw cooldown shading the icon from the bottom up */
+#hotbar .hslot .ic { position: relative; }
+#hotbar .hslot .n { position: absolute; right: 4px; bottom: 2px; z-index: 2; font-family: var(--display); font-size: calc(var(--slotW) * 0.2); color: var(--bone); text-shadow: var(--nStroke), 2px 2px 0 #000; pointer-events: none; }
+#hotbar .hslot .cdn { z-index: 3; pointer-events: none; }
+body:not(.touch) #hotbar .hslot .ic { position: absolute; }
+body:not(.touch) #hotbar .hslot .n { right: 12px; bottom: 9px; font: 600 20px/1 var(--wk); color: #ffefd2; text-shadow: var(--nStroke), 0 2px 2px #180c06, 1px 0 2px #180c06; font-variant-numeric: tabular-nums; }
+body:not(.touch) #hotbar .hslot .cdn { inset: auto; left: 9px; top: 9px; width: 74px; height: 74px; font: 600 30px/1 var(--wk); color: #fff0d2; text-shadow: 0 2px 3px #000; }
 
 /* Pack / Build / Map / Settings, bottom right in the corner, the action bar just left of them (92px squares 6px apart):
    glyph over its name, the key on a tab under it, the same size as the action buttons */
@@ -19026,7 +19034,7 @@ const H = {
   kills: 0, level: 1, xp: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
-  cdQ: 0, cdE: 0, cdDash: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
+  cdQ: 0, cdE: 0, cdDash: 0, cdPotion: 0, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
   kx: 0, kz: 0, bow: null, spear: null,
 };
 const CD = { Q: 8, E: 7 };
@@ -19570,10 +19578,22 @@ const POTION_FX = { fill: 0.8, inset: 10, soft: 0.5, persp: 0.25, mid: 0.79, con
   surface: 0.7, rim: 2, front: 0.8, gleam: 0.94, slosh: 1.8, spring: 124, damp: 6.5, maxTilt: 0.63, wave: 1.8, bubbles: 2,
   walkPush: 60, walkBob: 4 };   // (v748, Jordan's tuning)
 const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue: '#0951e1', amber: '#fdb435', clear: '#a8ddf5' };   // (v744, Jordan's colours and names)
-// (sample potions for now: they do nothing, T > Potion bottles puts some in your pack)
+// (v751, Jordan) potions are thrown, not drunk: put a stack on the hotbar, pick its square and click; it flies to the
+// cursor in an arc and breaks there, letting its effect out over the spot. POTION_THROW: the throw (cd: seconds before
+// the next, shared by every potion; range: furthest tiles; reach: how far with a pad or touch, which have no cursor;
+// speed: tiles a second along the ground, plus `hang` seconds; arc: peak height per tile thrown, plus arcMin; spin:
+// degrees a second the bottle tumbles; size: the flying icon's px; ring: 1 shows the landing ring while one's in hand).
+// POTION_EFFECT: what each colour does where it breaks (only green so far: the poison cloud, hurting foes inside it).
+// T > Thrown potions.
+const POTION_THROW = { cd: 2, range: 9, reach: 6, speed: 11, hang: 0.25, arc: 0.22, arcMin: 0.6, spin: 600, size: 44, ring: 1 };
+const POTION_EFFECT = {
+  green: { fx: 'poisonCloud', about: 'Throw it from the hotbar: it breaks into a cloud of poison gas that hurts foes inside it.',
+    linger: 6, radius: 2, every: 0.5, dmg: 3 },
+};
+// (the rest are samples: they still fly and break, with nothing let out yet. T > Potion bottles puts some in your pack)
 const POTION_ITEMS = Object.fromEntries(Object.keys(POTION_TINT).map(c => ['potion_' + c, {
   name: c[0].toUpperCase() + c.slice(1) + ' Potion', icon: 'potion_' + c, potion: c, stack: 20, loot: 'material',
-  about: 'A sample of the filled bottle look. It does nothing yet.' }]));
+  about: POTION_EFFECT[c] ? POTION_EFFECT[c].about : 'A sample of the filled bottle look. Thrown from the hotbar it breaks, but does nothing yet.' }]));
 // The bottle's inside, measured once from the empty bottle's painting (RGBA, w x h): how far each pixel is from the
 // glass's outside edge (a chamfer distance, in pixels of the 256 painting), its brightness, and where the bulb runs.
 function potionGeom(px, w, h) {
@@ -19721,7 +19741,7 @@ function potionRedo() {
 // let go, the square it landed in (the drag's sudden stop sets it swinging, and it carries on there until it settles,
 // v748); and with the pack open, every potion in the pack is pushed as if dragged the opposite way to your walk, with a
 // bob on each step (POTION_FX.walkPush, walkBob). One frame loop runs them all.
-const potionMats = {}, POTION_ACT = { give: 0, redraw: 0 };
+const potionMats = {}, POTION_ACT = { give: 0, redraw: 0, greens: 0 };
 const POTION_LIVE = new Set();
 const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0 };
 let potionDragS = null;
@@ -20009,9 +20029,16 @@ const GEAR = { head: null, amulet: null, chest: 'clothShirt', legs: 'clothPants'
 const PACK = new Array(20).fill(null), PACK_N = new Array(20).fill(0);
 // the hotbar's seven squares (see The hotbar): weapons kept there rather than in the pack, starting with the five
 // you set out with, and which square is in hand (GEAR.weapon is always what that square holds)
+// (v751, Jordan) a square can hold a stack of potions too (HOT_N counts it; a weapon is always 1): with one in hand
+// you're bare-handed, and a click throws one (see Thrown potions)
 const HOT = ['sword_wood', 'bow_wood', 'spear_wood', 'axe_wood', 'hammer_wood', null, null, null];
+const HOT_N = HOT.map(id => id ? 1 : 0);
 let hotSel = 0;
-const hotUsable = id => !!id && !!ITEMS[id] && ITEMS[id].slot === 'weapon';
+const hotUsable = id => !!id && !!ITEMS[id] && (ITEMS[id].slot === 'weapon' || !!ITEMS[id].potion);
+// the weapon in hand: the square in hand's, unless that holds potions
+const handWeapon = () => { const id = HOT[hotSel]; return id && ITEMS[id].slot === 'weapon' ? id : null; };
+// the potion in hand, if the square in hand holds some
+const handPotion = () => { const id = HOT[hotSel]; return id && ITEMS[id].potion ? id : null; };
 // building materials are counted out of the pack (H.wood and H.stone read it; addItem and takeItem change it)
 Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') },
   // (v538) at a boat's wheel or sat down: weapon away, no attacks, rolls or abilities
@@ -20101,10 +20128,10 @@ renderLookDesc();
 // refines, nothing can be put in its output, a hotbar square takes only weapons, and a box takes anything.
 const realCell = c => c[0] === 'gear' && c[1] === 'weapon' ? ['hot', hotSel] : c;
 const cellGet = c => { const [k, i] = realCell(c); return k === 'hot' ? HOT[i] : k === 'gear' ? GEAR[i] : k === 'in' ? openSt.inp[i] : k === 'out' ? openSt.out[i] : k === 'box' ? openSt.box[i] : PACK[i]; };
-const cellCount = c => { const [k, i] = realCell(c); return k === 'hot' ? (HOT[i] ? 1 : 0) : k === 'gear' ? (GEAR[i] ? 1 : 0) : k === 'in' ? openSt.inN[i] : k === 'out' ? openSt.outN[i] : k === 'box' ? openSt.boxN[i] : PACK_N[i]; };
+const cellCount = c => { const [k, i] = realCell(c); return k === 'hot' ? (HOT[i] ? HOT_N[i] : 0) : k === 'gear' ? (GEAR[i] ? 1 : 0) : k === 'in' ? openSt.inN[i] : k === 'out' ? openSt.outN[i] : k === 'box' ? openSt.boxN[i] : PACK_N[i]; };
 const cellSet = (c, id, n = 1) => {
   const [k, i] = realCell(c);
-  if (k === 'hot') { HOT[i] = id; GEAR.weapon = HOT[hotSel]; }
+  if (k === 'hot') { HOT[i] = id; HOT_N[i] = id ? n : 0; GEAR.weapon = handWeapon(); }
   else if (k === 'gear') GEAR[i] = id;
   else if (k === 'in') { openSt.inp[i] = id; openSt.inN[i] = id ? n : 0; }
   else if (k === 'out') { openSt.out[i] = id; openSt.outN[i] = id ? n : 0; }
@@ -20228,16 +20255,17 @@ $('trash').innerHTML = paintImg('act-trash', '64px');
 // send it to the pack. A weapon you craft goes in the first empty square, or the pack if there's none.
 function useHot(n) {
   if (mode !== 'play' || !H.alive || hotSel === n) return false;
-  hotSel = n; GEAR.weapon = HOT[n];
+  hotSel = n; GEAR.weapon = handWeapon();
   gearChanged(); renderHot();
   return true;
 }
 // swap two squares, the weapon in hand going with its square
 function moveHot(a, b) {
   if (a === b) return false;
-  [HOT[a], HOT[b]] = [HOT[b], HOT[a]];
+  if (HOT[a] && HOT[a] === HOT[b] && stackOf(HOT[a]) > 1) { const ok = moveItem(['hot', a], ['hot', b]); renderHot(); return ok; }   // (potions top up the stack)
+  [HOT[a], HOT[b]] = [HOT[b], HOT[a]]; [HOT_N[a], HOT_N[b]] = [HOT_N[b], HOT_N[a]];
   if (hotSel === a) hotSel = b; else if (hotSel === b) hotSel = a;
-  GEAR.weapon = HOT[hotSel];
+  GEAR.weapon = handWeapon();
   gearChanged(); renderHot();
   return true;
 }
@@ -20257,10 +20285,19 @@ function renderHot() {
     const el = document.createElement('div');
     el.className = 'plate slot hslot' + (n === hotSel ? ' worn' : '');
     el.dataset.hot = n;
-    el.innerHTML = `<span class="key">${n + 1}</span><div class="ic">${id ? ICON[ITEMS[id].icon] : ''}</div><span class="name">${id ? ITEMS[id].name.toUpperCase() : ''}</span>`;
-    el.title = id ? `${ITEMS[id].name} (${n + 1})${n === hotSel ? ', in hand' : ''}` : `Empty (${n + 1})${n === hotSel ? ', bare fists' : ''}: drag a weapon here from your pack`;
+    const pot = id && ITEMS[id].potion;
+    el.innerHTML = `<span class="key">${n + 1}</span><div class="ic">${id ? ICON[ITEMS[id].icon] : ''}${pot ? '<div class="cd"></div>' : ''}</div><span class="name">${id ? ITEMS[id].name.toUpperCase() : ''}</span>`
+      + (pot ? `<span class="n">${HOT_N[n]}</span><div class="cdn"></div>` : '');
+    el.title = id ? `${ITEMS[id].name}${pot ? ' × ' + HOT_N[n] : ''} (${n + 1})${n === hotSel ? ', in hand' : ''}${pot ? ': click to throw' : ''}` : `Empty (${n + 1})${n === hotSel ? ', bare fists' : ''}: drag a weapon or potions here from your pack`;
     bar.appendChild(el);
   });
+  hotCds = [...bar.querySelectorAll('.hslot')].map(el => ({ cd: el.querySelector('.cd'), cdn: el.querySelector('.cdn') })).filter(o => o.cd);
+}
+// the potion squares' cooldown shade, each frame (from updateBar)
+let hotCds = [];
+function updateHotCd() {
+  const f = clamp(H.cdPotion / POTION_THROW.cd, 0, 1);
+  for (const { cd, cdn } of hotCds) { cd.style.height = f * 100 + '%'; cdn.textContent = f > 0 ? Math.ceil(H.cdPotion) : ''; }
 }
 {
   const bar = $('hotbar'), drag = $('dragIcon');
@@ -20411,7 +20448,7 @@ function renderInv() {
   const doll = $('doll'), pack = $('pack');
   doll.innerHTML = ''; pack.innerHTML = '';
   for (const g of GEAR_SLOTS) {
-    const id = GEAR[g.slot];
+    const id = cellGet(['gear', g.slot]);   // (v751: the weapon square shows the hand's potions, if that's what it holds)
     const box = document.createElement('div');
     box.className = 'gear-item'; box.style.left = g.pos[0] + 'px'; box.style.top = g.pos[1] + 'px';
     doll.appendChild(box);
@@ -20639,7 +20676,7 @@ function navInv(dx, dy) {
     const hs = at?.closest('.hslot');
     if (hs) {
       const r = realCell(p.c), n = +hs.dataset.hot;
-      if (!hotUsable(cellGet(p.c))) { toast('Only weapons go on the hotbar.'); sfx.nope(); }
+      if (!hotUsable(cellGet(p.c))) { toast('Only weapons and potions go on the hotbar.'); sfx.nope(); }
       else if (r[0] === 'hot') moveHot(r[1], n);
       else if (!fits(p.c, HOT[n])) { toast(`${ITEMS[HOT[n]].name} can't go there.`); sfx.nope(); }
       else moveItem(p.c, ['hot', n]);
@@ -20735,10 +20772,10 @@ function craft(k) {
   const note = (text, problem) => { craftNote = { k, text, problem }; };
   if (!canCraft(rc)) { note(`You need ${Object.entries(rc.cost).filter(([id, n]) => haveCount(id) < n).map(([id, n]) => (n - haveCount(id)) + ' more ' + ITEMS[id].name.toLowerCase()).join(' and ')}.`, true); sfx.nope(); renderCraft(); return false; }
   for (const [id, n] of Object.entries(rc.cost)) spend(id, n);
-  const slot = hotUsable(rc.make) ? HOT.indexOf(null) : -1;
+  const slot = it.slot === 'weapon' ? HOT.indexOf(null) : -1;
   if (slot >= 0) {
     // (a weapon goes straight onto the hotbar if there's room)
-    HOT[slot] = rc.make; GEAR.weapon = HOT[hotSel];
+    HOT[slot] = rc.make; HOT_N[slot] = 1; GEAR.weapon = handWeapon();
     if (slot === hotSel) gearChanged();
     renderHot(); sfx.place(); sfx.coin();
     note(`Made ${it.name.toLowerCase()}. It's on your hotbar (${slot + 1}).`, false);
@@ -20814,7 +20851,8 @@ function playSlots() {
       : { id, key, pad, name: 'NONE', icon: 'lock', locked: true };
   };
   return [
-    { id: 'atk', key: 'LMB', pad: 'RT', name: st.name, icon: st.icon },
+    handPotion() ? { id: 'atk', key: 'LMB', pad: 'RT', name: 'THROW', icon: ITEMS[handPotion()].icon, cd: () => H.cdPotion / POTION_THROW.cd, left: () => H.cdPotion }
+      : { id: 'atk', key: 'LMB', pad: 'RT', name: st.name, icon: st.icon },
     ability('q', 'Q', 'X', 'cdQ', 'Q'),
     ability('e', 'E', 'Y', 'cdE', 'E'),
     { id: 'dash', key: 'SPC', pad: 'B', name: 'DASH', icon: 'dash', cd: () => H.cdDash / TUMBLE.cooldown, left: () => H.cdDash },
@@ -20942,6 +20980,7 @@ function slotAction(id) {
   else { setBuildKind(id); if (subOpen) { subOpen = null; renderBar(); } }   // a kind, the hearth, remove
 }
 function updateBar() {
+  updateHotCd();
   for (const { s, cd } of touchEls) if (s.cd) cd.style.height = clamp(s.cd(), 0, 1) * 100 + '%';
   for (const slot of slotEls) {
     const { s, el, cd, cdn } = slot;
@@ -21189,6 +21228,8 @@ const sfx = {
   xp: () => { beep(784, 0.05, { type: 'sine', vol: 0.03 }); beep(1175, 0.07, { type: 'sine', vol: 0.03, at: 0.04 }); },
   levelUp: () => [523, 659, 784, 1047, 1319].forEach((f, i) => beep(f, 0.16, { type: 'triangle', at: i * 0.07, vol: 0.06 })),
   coin: () => { beep(988, 0.05, { vol: 0.03 }); beep(1319, 0.08, { vol: 0.03, at: 0.04 }); },
+  // (v751) a bottle breaking: bright glassy tinks falling over each other, a dull crack under them
+  shatter: () => { [2400, 3100, 1900, 2700].forEach((f, i) => beep(f, 0.05, { type: 'triangle', slide: -600, vol: 0.022, at: i * 0.025 })); beep(420, 0.06, { type: 'sawtooth', slide: -250, vol: 0.02 }); },
   // (v676) a gull's cry, two falling mews; a dolphin back into the water
   gull: () => { beep(1500, 0.16, { type: 'sine', slide: -600, vol: 0.012 }); beep(1400, 0.2, { type: 'sine', slide: -650, vol: 0.01, at: 0.22 }); },
   splash: () => { beep(320, 0.1, { type: 'sawtooth', slide: -220, vol: 0.012 }); beep(180, 0.14, { type: 'triangle', slide: -90, vol: 0.02, at: 0.03 }); },
@@ -21426,6 +21467,23 @@ const FX_LIB = {
       { style: 'puff', count: 6, shape: { disc: 0.3, y: 0.1 }, out: [0.3, 0.8], up: [0.5, 1], drag: 2, life: [0.5, 0.8], size: [[0.15, 0.25], [0.4, 0.6]], ramp: 'water', tone: [0.95, 0.9], alpha: 0.4 },
     ] },
     { name: 'settle', dur: 1 },
+  ] },
+  // (v751) a thrown potion breaking: shards of glass flying apart and glinting, then lying where they land
+  potionGlass: { phases: [
+    { name: 'break', dur: 0.05, emit: [
+      { style: 'shard', count: [10, 14], at: [0, 0.12, 0], shape: { sphere: 0.08 }, out: [1, 2.6], up: [1.2, 2.8], grav: 1, floor: true, bounce: 0.3, spin: [4, 10], life: [0.9, 1.4], size: [0.05, 0.035], ramp: 'white', tone: [0.95, 0.7], alpha: 0.8 },
+      { style: 'glint', count: 6, at: [0, 0.15, 0], shape: { sphere: 0.2 }, out: [0.4, 1.2], up: [0.3, 1], life: [0.2, 0.4], size: [0.08, 0.02], ramp: 'white', tone: [1, 0.9], glow: 2 },
+    ] },
+    { name: 'settle', dur: 1.4 },
+  ] },
+  // (v751) and what was in it splashing out (its ramp is the potion's colour, given as it plays)
+  potionSplash: { phases: [
+    { name: 'splash', dur: 0.05, emit: [
+      { style: 'drop', count: [14, 18], at: [0, 0.1, 0], shape: { disc: 0.12 }, out: [0.8, 2.2], up: [1.2, 2.6], grav: 1, floor: true, stretch: 0.07, life: [0.5, 0.8], size: 0.05, ramp: 'white', tone: [0.8, 1], glow: 0.4 },
+      { style: 'ring', count: 1, onGround: true, size: [0.2, 1.1], life: 0.5, ramp: 'white', tone: [1, 0.7], glow: 0.8, cover: 0.4 },
+      { style: 'disc', count: [2, 3], onGround: true, delay: [0.2, 0.4], shape: { ring: [0, 0.5] }, size: [[0.16, 0.24], [0.26, 0.38]], life: 2.5, ramp: 'white', tone: [0.55, 0.3], alpha: 0.7, cover: 1 },
+    ] },
+    { name: 'dry', dur: 0.6 },
   ] },
   // a bleeding wound's tick: a few drops off the body that land as splats and dry
   bleed: { phases: [
@@ -23564,6 +23622,7 @@ const AIM_FX = { style: 1, color: '#34628d', steady: 1,
   shotWidth: 0.45, shotEdge: 0.03, shotEdgeBright: 1.5, shotFill: 0.4,
   volleyEdge: 0.04, volleyEdgeBright: 2, volleyFill: 0.75,
   rainEdge: 0.08, rainEdgeBright: 1.9, rainFill: 0.65,
+  potionEdge: 0.08, potionEdgeBright: 1.9, potionFill: 0.65,
   lungeWidth: 1.25, lungeTaper: 1, lungeEdge: 0.08, lungeEdgeBright: 2.4, lungeFill: 0.85,
   flurryEdge: 0.04, flurryEdgeBright: 2, flurryFill: 0.75,
   harpoonWidth: 0.45, harpoonEdge: 0.03, harpoonEdgeBright: 1.5, harpoonFill: 0.4,
@@ -23758,11 +23817,14 @@ function releaseAbility(key) {
   if (AIMED.has(weapon()[key])) useAbility(key);
 }
 let aimForce = -1;   // (the test hook's stand-in for a held button: an index into AIM_NAMES)
-const AIM_NAMES = ['shot', 'volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boomerang', 'stunsmash', 'charge'];
+const AIM_NAMES = ['shot', 'volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boomerang', 'stunsmash', 'charge', 'potion'];
 // which shape shows now: a held aimed ability's, else the bow's shot while the attack's held
 function aimName() {
   if (aimForce >= 0) return AIM_NAMES[aimForce];
   if (mode !== 'play' || !H.alive || invOpen || H.still) return null;   // (v506: none at a boat's wheel)
+  // (v751) with a potion in hand that lets something out, a ring where it would break
+  const hp = handPotion();
+  if (hp) return POTION_THROW.ring > 0.5 && POTION_EFFECT[ITEMS[hp].potion]?.radius ? 'potion' : null;
   const w = weapon();
   for (const key of ['e', 'q']) if ((abilHeld[key] || TOUCH.hold === key) && AIMED.has(w[key])) return w[key];
   if (w.strike === 'shoot' && (mouse.down || PAD.attack || TOUCH.attack)) return 'shot';
@@ -23779,6 +23841,7 @@ function aimSpec(nm) {
   if (nm === 'flurry') return { shape: 1, len: SPEAR.flurryReach, cone: SPEAR.flurryCone };
   if (nm === 'boomerang') return { shape: 0, len: AXE.throwRange, boxW: A.boomerangWidth };
   if (nm === 'stunsmash') return { shape: 2, radius: HAMMER.smashRadius, at: leapTarget() };
+  if (nm === 'potion') return { shape: 2, radius: (handPotion() && POTION_EFFECT[ITEMS[handPotion()].potion]?.radius) || 2, at: potionTarget() };
   if (nm === 'charge') return { shape: 0, len: HAMMER.chargeSpeed * HAMMER.chargeTime + 0.75, boxW: A.chargeWidth, taper: A.chargeTaper };
   return { shape: 0, len: SPEAR.harpoonRange, boxW: A.harpoonWidth };
 }
@@ -25695,6 +25758,88 @@ function updateFlights(dt) {
     f.el.style.opacity = (0.6 * Math.min(1, f.t * 6, (1 - f.t) * 5)).toFixed(3);
   }
 }
+// ---------- Thrown potions ----------
+// (v751, Jordan) a click with a potion square in hand throws one of its stack toward the cursor (no further than
+// POTION_THROW.range): its icon flies there in an arc, tumbling (a screen element pinned to the point in the world, as
+// the refined items flying to storage are), breaks where it lands (or on higher ground it meets on the way: a cliff),
+// and lets out its POTION_EFFECT there. Every potion then waits POTION_THROW.cd seconds.
+const thrown = [], clouds = [], potV = new GFX.Vector3();
+// where a throw would land: the ground under the cursor (or ahead along the aim, on a pad or touch), within range
+function potionTarget() {
+  const P = POTION_THROW, g = !TOUCH.on && !PAD.on ? pickGround(false) : null;
+  let tx = g ? g.x : H.x + aim.x * P.reach, tz = g ? g.z : H.z + aim.z * P.reach;
+  const dx = tx - H.x, dz = tz - H.z, l = Math.hypot(dx, dz);
+  if (l > P.range) { tx = H.x + dx / l * P.range; tz = H.z + dz / l * P.range; }
+  return [clamp(tx, 1, N - 1), clamp(tz, 1, N - 1)];
+}
+function throwPotion() {
+  const id = handPotion(), P = POTION_THROW;
+  if (!id || mode !== 'play' || !H.alive || H.still || H.dash >= 0 || H.flip || H.lunge >= 0 || H.whirl >= 0) return false;
+  if (H.cdPotion > 0) { sfx.nope(); return false; }
+  const [tx, tz] = potionTarget(), dx = tx - H.x, dz = tz - H.z, d = Math.hypot(dx, dz);
+  if (d > 0.3) H.face = Math.atan2(dx, dz);
+  const fx = Math.sin(H.face), fz = Math.cos(H.face);
+  const a = [H.x + fx * 0.3, H.y + 1.05, H.z + fz * 0.3], b = [tx, surfaceY(tx, tz), tz];
+  const el = document.createElement('div');
+  el.className = 'flyIcon potionFly'; el.innerHTML = ICON[ITEMS[id].icon];
+  el.style.setProperty('--fs', P.size + 'px');
+  $('flyLayer').appendChild(el);
+  thrown.push({ el, id, kind: ITEMS[id].potion, a, b, t: 0, len: d / Math.max(1, P.speed) + P.hang, arc: P.arcMin + d * P.arc, rot: Math.random() * 360 });
+  // one fewer in the square (empty, it's bare hands)
+  HOT_N[hotSel]--;
+  if (HOT_N[hotSel] <= 0) { HOT[hotSel] = null; HOT_N[hotSel] = 0; }
+  H.cdPotion = P.cd;
+  sfx.swoosh();
+  renderBar(); if (invOpen) renderInv(); else renderHot();
+  return true;
+}
+// a point along a throw's arc (t 0-1): straight across, lifted by a parabola
+function potionAt(f, t, out) {
+  const lift = 4 * f.arc * t * (1 - t);
+  out[0] = f.a[0] + (f.b[0] - f.a[0]) * t; out[1] = f.a[1] + (f.b[1] - f.a[1]) * t + lift; out[2] = f.a[2] + (f.b[2] - f.a[2]) * t;
+  return out;
+}
+const potP = [0, 0, 0];
+function updatePotions(dt) {
+  const rect = thrown.length ? cv.getBoundingClientRect() : null;
+  for (let k = thrown.length - 1; k >= 0; k--) {
+    const f = thrown[k];
+    f.t += dt / f.len;
+    const t = Math.min(1, f.t), [x, y, z] = potionAt(f, t, potP);
+    // (it breaks on the first thing it meets: the ground where it was thrown, or something higher on the way)
+    const hit = t >= 1 || (t > 0.15 && y < surfaceY(x, z));
+    if (hit) { f.el.remove(); thrown.splice(k, 1); breakPotion(f.kind, x, Math.max(y, surfaceY(x, z)), z); continue; }
+    f.rot += POTION_THROW.spin * dt;
+    potV.set(x, y, z).project(camera);
+    f.el.style.display = potV.z > 1 || roofDrawnAt(T(Math.floor(x), Math.floor(z))) ? 'none' : '';
+    f.el.style.transform = `translate(${rect.left + (potV.x + 1) / 2 * rect.width}px, ${rect.top + (1 - potV.y) / 2 * rect.height}px) translate(-50%, -50%) rotate(${f.rot.toFixed(1)}deg)`;
+  }
+  // the clouds left behind: each hurts the foes inside it every so often, till it thins away
+  for (let k = clouds.length - 1; k >= 0; k--) {
+    const c = clouds[k], E = c.e;
+    c.t += dt; c.tick -= dt;
+    if (c.t >= E.linger) { if (c.h) c.h.stop(); clouds.splice(k, 1); continue; }
+    if (c.tick > 0) continue;
+    c.tick += E.every;
+    for (const f of foes.slice()) {
+      if (f.hp <= 0 || Math.hypot(f.x - c.x, f.z - c.z) > E.radius + (f.def?.rad || 0) || Math.abs(f.y - c.y) > 2) continue;
+      hurtFoe(f, E.dmg, c.x, c.z, 0, '#9be04a');
+    }
+  }
+}
+// a potion breaking at (x, y, z): glass flying apart, a splash of what was in it, and its effect let out there
+function breakPotion(kind, x, y, z) {
+  const tint = POTION_TINT[kind] || '#ffffff';
+  fxParts.tint(tint);
+  playFx('potionGlass', { x, y, z, dir: Math.random() * 6.283 });
+  playFx('potionSplash', { x, y, z, dir: Math.random() * 6.283, ramp: 'tint:' + tint });
+  sfx.shatter();
+  const E = POTION_EFFECT[kind];
+  if (!E) return;
+  const h = E.fx ? playFx(E.fx, { x, y, z, dir: 0, target: { x, y, z } }) : null;
+  if (E.linger) clouds.push({ e: E, h, x, y, z, t: 0, tick: 0.2 });
+  else if (h) setTimeout(() => h.stop(), 1000);
+}
 function outAdd(st, id) {
   let i = st.out.findIndex((o, k) => o === id && st.outN[k] < stackOf(id));
   if (i < 0) i = st.out.indexOf(null);
@@ -25925,6 +26070,7 @@ function updateStations(dt) {
     beep(f * (0.9 + Math.random() * 0.2), 0.08, { type, vol: 0.02 * (1 - humD / 7) + 0.004 });
   }
   updateFlights(dt);
+  updatePotions(dt);
   updateQuestMarks();
   if (invOpen) litActs();
   if (openSt) {
@@ -27785,7 +27931,7 @@ function heroSpeed() { const i = T(Math.floor(H.x), Math.floor(H.z)); return (mo
 function update(dt) {
   time += dt;
   advanceClock(dt);
-  H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt);
+  H.cdQ = Math.max(0, H.cdQ - dt); H.cdE = Math.max(0, H.cdE - dt); H.cdDash = Math.max(0, H.cdDash - dt); H.cdPotion = Math.max(0, H.cdPotion - dt);
   H.invuln = Math.max(0, H.invuln - dt); H.comboT -= dt; H.boost = Math.max(0, (H.boost || 0) - dt);
   updateAim();
   updateBoats(dt);
@@ -27858,7 +28004,10 @@ function update(dt) {
     else { heroSettle(); if (!H.flip) H.y = heroFloorY(); }
 
     // attacks
-    if (mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack) && H.swing < 0 && !H.bow && !H.spear && !H.still) startSwing();
+    const atkHeld = mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack);
+    if (handPotion()) { if (atkHeld && !H.atkWas && !H.still) throwPotion(); }   // (v751: each press throws one)
+    else if (atkHeld && H.swing < 0 && !H.bow && !H.spear && !H.still) startSwing();
+    H.atkWas = atkHeld;
     if (H.bow) updateBow(dt);
     if (H.spear) updateSpear(dt);
     if (H.axeWind >= 0) updateAxeWind(dt);
@@ -30685,6 +30834,31 @@ const TUNING = [
     [POTION_FX, 'walkPush', 'Walking with the pack open: push (screen px a tile walked, 0 off)', 0, 300, 1],
     [POTION_FX, 'walkBob', 'Walking with the pack open: bob on each step (px)', 0, 20, 0.5],
   ]],
+  ['Thrown potions', [
+    [POTION_ACT, 'greens', 'Put five green potions on the hotbar (else the pack)', 'action', () => {
+      let n = HOT.findIndex(id => id === 'potion_green');
+      if (n < 0) n = HOT.indexOf(null);
+      if (n < 0) { addItem('potion_green', 5); toast('Green potions put in your pack (the hotbar is full).', 'good'); return; }
+      const k = Math.min(stackOf('potion_green') - HOT_N[n], 5);
+      HOT[n] = 'potion_green'; HOT_N[n] += k;
+      renderHot(); renderBar(); if (invOpen) renderInv();
+      toast(`Green potions on your hotbar (${n + 1}).`, 'good');
+    }],
+    [POTION_THROW, 'cd', 'Cooldown after a throw (s, every potion)', 0, 10, 0.1],
+    [POTION_THROW, 'range', 'Furthest throw (tiles)', 2, 20, 0.5],
+    [POTION_THROW, 'reach', 'Throw with a pad or touch (tiles ahead)', 1, 20, 0.5],
+    [POTION_THROW, 'speed', 'Flight speed (tiles a second across the ground)', 2, 40, 0.5],
+    [POTION_THROW, 'hang', 'Extra flight time (s)', 0, 1, 0.01],
+    [POTION_THROW, 'arc', 'Arc height per tile thrown', 0, 1, 0.01],
+    [POTION_THROW, 'arcMin', 'Arc height, least', 0, 3, 0.05],
+    [POTION_THROW, 'spin', 'Tumble (degrees a second)', 0, 1500, 10],
+    [POTION_THROW, 'size', 'Flying icon size (px)', 16, 96, 1],
+    [POTION_THROW, 'ring', 'Landing ring while a potion is in hand (0 off)', 0, 1, 1],
+    [POTION_EFFECT.green, 'linger', 'Green: poison cloud lasts (s)', 1, 20, 0.5],
+    [POTION_EFFECT.green, 'radius', 'Green: cloud reach (tiles)', 0.5, 5, 0.1],
+    [POTION_EFFECT.green, 'every', 'Green: hurts every (s)', 0.1, 3, 0.05],
+    [POTION_EFFECT.green, 'dmg', 'Green: damage each time', 0, 50, 1],
+  ]],
   ['Empty gear squares', [
     [EMPTY_SLOT, 'fill', 'Inside darkness', 0, 1, 0.01, applyEmptySlot],
     [EMPTY_SLOT, 'dark', 'Shaded edge (top-left)', 0, 1, 0.01, applyEmptySlot],
@@ -31190,6 +31364,9 @@ const TUNING = [
     [AIM_FX, 'rainEdge', 'Rain: edge width (tiles)', 0, 0.5, 0.01],
     [AIM_FX, 'rainEdgeBright', 'Rain: edge brightness', 0, 6, 0.05],
     [AIM_FX, 'rainFill', 'Rain: fill brightness', 0, 3, 0.05],
+    [AIM_FX, 'potionEdge', 'Potion: edge width (tiles)', 0, 0.5, 0.01],
+    [AIM_FX, 'potionEdgeBright', 'Potion: edge brightness', 0, 6, 0.05],
+    [AIM_FX, 'potionFill', 'Potion: fill brightness', 0, 3, 0.05],
     [AIM_FX, 'lungeWidth', 'Lunge: box width (tiles)', 0.1, 4, 0.05],
     [AIM_FX, 'lungeTaper', 'Lunge: length of the pointed end (tiles)', 0, 3, 0.05],
     [AIM_FX, 'lungeEdge', 'Lunge: edge width (tiles)', 0, 0.5, 0.01],
@@ -31865,7 +32042,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 750, crashSeen = new Map();
+const GAME_VERSION = 751, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
@@ -32316,7 +32493,7 @@ window.GAME = {
   trash: c => trashCell(c),
   refineAll: () => refineAll(), stashAll: () => stashAll(), homePlot: () => homePlot(), haveCount: id => haveCount(id),
   queueKeys: () => [...buildQueue.keys()],
-  hot: () => HOT.slice(), hotSel: () => hotSel, setHot: (n, id) => setHot(n, id), useHot: n => useHot(n), hotShown: () => [...document.querySelectorAll('#hotbar .hslot')].map(e => e.className),
+  hot: () => HOT.slice(), hotN: () => HOT_N.slice(), hotSel: () => hotSel, throwPotion: () => throwPotion(), potions: () => ({ thrown: thrown.length, clouds: clouds.length, cd: H.cdPotion }), setHot: (n, id) => setHot(n, id), useHot: n => useHot(n), hotShown: () => [...document.querySelectorAll('#hotbar .hslot')].map(e => e.className),
   flights: () => flights.length, flightsRoofed: () => flights.map(f => !!f.roofed), bodies: () => [...stations.values()].filter(s => s.body).map(s => [s.kind, s.pulse || 0, s.body.scale.x]),
   look: () => hero.look, setLook: (body, seed) => setLook(body, seed),
   wear: (slot, id) => { GEAR[slot] = id; dressHero(); },

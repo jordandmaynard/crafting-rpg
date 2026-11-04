@@ -476,6 +476,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v750:** (Jordan's tuning) Anti-aliasing defaults to off (1) again; auto (0) stays a choice.
 
+**v751:** (Jordan) Potions are thrown, not drunk. A hotbar square can hold a whole stack of potions (the count shows in its corner): pick the square and click to throw one toward the cursor (up to 9 tiles; ahead along the aim on a pad or touch). Its icon flies there in a tumbling arc, as refined items fly to storage, and breaks where it lands: glass shards and a splash of its colour. Green lets out the poison gas cloud spell effect, which lingers 6 s and hurts foes inside it (3 every 0.5 s); the other colours break with nothing let out yet. Every throw puts all potions on a 2 s cooldown, shown on the potion squares and on the LMB slot (THROW). With a potion in hand you're bare-handed, and a rune ring marks where a green one would break. T > Thrown potions (and a button putting five green potions on the hotbar); T > Aim decal: potion ring.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
