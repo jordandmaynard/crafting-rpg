@@ -394,6 +394,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v708:** (Jordan's Lit haze paste) HAZE.forward default 0.26 -> 0.19, so the sun scatters a little more evenly; every other Lit haze value already matched.
 
+**v709:** (Jordan's Window titles paste) Title ink #feefd7; the rest of WIN_TITLE unchanged.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
