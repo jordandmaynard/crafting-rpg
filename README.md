@@ -550,6 +550,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v787:** (Jordan's G: CPU 3.9 ms and GPU passes 3.5 ms both fit a 240 Hz frame, yet frames take 7 ms; mosaic 4 and HDR off each took away only what they saved in the passes) G > Between frames has two new rows: the GPU's time from the frame's first timed pass starting to its last ending, and the gaps between passes in that (waits, copies, uploads). With the frame time, they tell whether the time the pass timers miss is between our passes or outside them (the browser showing the picture).
 
+**v788:** (Jordan's G in town: passes 4.30 ms, first pass to last 6.22 ms, gaps 1.91 ms, frame 6.4 ms: the time the pass timers missed is inside our frame, between passes) G > "GPU gaps, by the pass after": the ten largest gaps between passes, each put to the pass that follows it (waits, copies, untimed work, a switch of targets), so the costly ones can be found.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

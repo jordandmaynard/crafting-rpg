@@ -96,6 +96,17 @@ export class GpuProfiler {
       });
       // (v787) the GPU's time from the frame's first timed pass starting to its last ending, and the part of that
       // in none of them (the gaps between passes: waits, copies, uploads)
+      // (v788) each gap put to the pass after it (the passes in the order the GPU ran them), so the costly ones show
+      { const runs = [];
+        names.forEach((nm, i) => { const b = t[i * 2], e = t[i * 2 + 1]; if (b > 0n && e >= b) runs.push([b, e, nm]); });
+        runs.sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+        const gs = new Map();
+        for (let k = 1; k < runs.length; k++) { const g = Math.max(0, Number(runs[k][0] - runs[k - 1][1]) / 1e6); gs.set(runs[k][2], (gs.get(runs[k][2]) ?? 0) + g); }
+        this.gapBy = this.gapBy || new Map();
+        for (const nm of new Set([...this.gapBy.keys(), ...gs.keys()])) {
+          const g = gs.get(nm) ?? 0, prev = this.gapBy.get(nm);
+          this.gapBy.set(nm, prev === undefined ? g : prev + (g - prev) * SMOOTH);
+        } }
       if (first !== null && last !== null && last > first) {
         const span = Number(last - first) / 1e6, gaps = Math.max(0, span - inside);
         this.spanMs = this.spanSeen ? this.spanMs + (span - this.spanMs) * SMOOTH : span;
@@ -181,7 +192,7 @@ export class GpuProfiler {
     if (this.cnt) this.cnt.clear();
     this.order = [];
     this.shown = 0;
-    this.doneSeen = false; this.spanSeen = false;
+    this.doneSeen = false; this.spanSeen = false; if (this.gapBy) this.gapBy.clear();
     return this.on;
   }
 
@@ -217,6 +228,8 @@ export class GpuProfiler {
     between.push(['GPU done, after last submit', this.doneSeen ? this.doneMs : '…']);
     between.push(['GPU: first pass start to last pass end', this.spanSeen ? this.spanMs : '…']);
     between.push(['GPU: gaps between passes', this.spanSeen ? this.gapMs : '…']);
+    // (v788) the largest gaps, by the pass they come before
+    const gapRows = [...(this.gapBy || [])].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([nm, g]) => ['before ' + nm, g]);
     // (v775) the counts in groups by what they're of, each its own section: encode parts, recorded draw lists, overdraw
     const groups = new Map([['Each frame', []], ['Encode, by part (ms)', []], ['Recorded draw lists', []], ['Moving objects (in ½ s)', []], ['Overdraw', []]]);
     for (const [nm, n] of this.cnt || []) {
@@ -233,6 +246,7 @@ export class GpuProfiler {
         : `<div class="gnote">This browser doesn't expose GPU timestamps (timestamp-query), so only frame timing is shown.</div>`) +
       table('CPU (JavaScript)', 'CPU ms', [...this.cpu], 'All CPU', this.cpuMs) +
       plain('Between frames', 'ms', between, 2, 'GPU done: from the last submit until the GPU has finished it, counting driver work the pass timers miss. Longer than the frame means the GPU side is the bottleneck. First pass to last: the GPU\'s time on the frame\'s own passes, gaps between them included; what the frame takes beyond that is outside them (the browser showing the picture, other work).') +
+      (gapRows.length ? plain('GPU gaps, by the pass after', 'ms', gapRows, 2, 'The ten largest gaps between passes, each put to the pass that follows it: the GPU waiting, copying or switching between them.') : '') +
       [...groups].filter(([, r]) => r.length).map(([g, r]) => plain(g, g === 'Encode, by part (ms)' ? 'ms' : 'count', r, g === 'Encode, by part (ms)' ? 2 : 1, NOTES[g])).join('') +
       `<div class="gnote">${extra}` +
       (this.hasTimestamps ? ' Chrome rounds GPU times to 0.1 ms unless chrome://flags "WebGPU Developer Features" is on.' : '') + '</div>';
