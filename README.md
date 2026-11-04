@@ -454,6 +454,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v739:** (Jordan's tuning) Auto mosaic size steps to 3 from zoom 1.25 and to 4 from zoom 2.25 (was 1.5 and 2.0).
 
+**v740:** (Jordan: the dust puffs from broken rocks showed only a lower quarter of each round puff, but looked right in shadow) The same thing as the chimney smoke before v616: a dust puff is lit as a ball, and the sun's share was stepped into 3 hard bands (T > Spell effects: 'Smoke and dust lit in bands'), so the bright sunlit cap and the shaded crescent opposite it met along a hard arc and the puff read as a cut-off quarter. In shadow there's no sun term, so no bands. The default is now 0, smooth light over the ball; the slider brings the bands back. (v612/v615 had chased depth for this; v616's flat-lit SMOKE sprites fixed the chimneys by not banding.)
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
