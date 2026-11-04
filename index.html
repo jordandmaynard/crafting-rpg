@@ -7233,7 +7233,10 @@ function placeTowns(rand) {
 // its four streets, where the ground outside is higher or lower, a cutting three tiles wide straight out, ramps up
 // or down (RAMP_LEN long) at each step and flat between, until it meets ground at its own level. Nothing is cut
 // through water, canyons, bridges or another town; then that street is left as it was.
-const TOWN_EXIT = { wide: 3, reach: 26 };
+// (v694, Jordan: a cliff stood a few tiles past an archway: one flat row used to be enough, so a street ending on a
+// strip of level ground with a cliff just beyond was left alone. Now it takes `clear` level rows in a row, and the
+// cutting carries on up or down any cliff before them.)
+const TOWN_EXIT = { wide: 3, reach: 30, clear: 6 };
 function townExits(lock) {
   towns.forEach((t, n) => {
     const own = n + 1;
@@ -7241,38 +7244,57 @@ function townExits(lock) {
       // the street's last tile in the town
       let e = 0;
       while (e < t.R + 3 && TN[T(t.c + DC[d] * (e + 1), t.r + DR[d] * (e + 1))] === own) e++;
-      const pc = -DR[d], pr = DC[d], half = (TOWN_EXIT.wide - 1) >> 1;
-      const at = (j, w) => T(t.c + DC[d] * (e + j) + pc * w, t.r + DR[d] * (e + j) + pr * w);
-      const plan = new Map(), set = (j, lv, sh) => { for (let w = -half; w <= half; w++) if (TN[at(j, w)] !== own) plan.set(at(j, w), [lv, sh]); };
-      const shape = (left, up) => RAMP_LEN === 1 ? up + 1 : RAMP_LEN === 2 ? (left ? 5 : 9) + up : (left === 2 ? 13 : left === 1 ? 17 : 21) + up;
-      let level = t.L, j = 1, ok = false;
-      // (past any of the town's own ragged edge beside the street first: that stays town ground)
-      while (j < 4 && [-half, 0, half].some(w => TN[at(j, w)] === own)) { set(j, level, 0); j++; }
-      while (j < TOWN_EXIT.reach) {
-        const o = LV[at(j, 0)];
-        if (!o) break;
-        if (o === level) {
-          let flat = true;
-          for (let w = -half; w <= half; w++) if (LV[at(j, w)] !== level || SH[at(j, w)]) flat = false;
-          if (flat) { ok = true; break; }
-          set(j, level, 0); j++; continue;
+      const pc = -DR[d], pr = DC[d];
+      // (v694: where the full width can't be cut, say for the sea beside it, a single ramp's width down the middle)
+      for (const half of [(TOWN_EXIT.wide - 1) >> 1, 0]) {
+        const at = (j, w) => T(t.c + DC[d] * (e + j) + pc * w, t.r + DR[d] * (e + j) + pr * w);
+        const plan = new Map(), set = (j, lv, sh) => { for (let w = -half; w <= half; w++) if (TN[at(j, w)] !== own) plan.set(at(j, w), [lv, sh, j]); };
+        const shape = (left, up) => RAMP_LEN === 1 ? up + 1 : RAMP_LEN === 2 ? (left ? 5 : 9) + up : (left === 2 ? 13 : left === 1 ? 17 : 21) + up;
+        let level = t.L, j = 1, ok = false, run = 0;
+        const keep = [], goods = [];   // (level rows already as they should be, [i, j]: left alone, but locked so no ramp lands on them)
+        // (past any of the town's own ragged edge beside the street first: that stays town ground)
+        while (j < 4 && [-half, 0, half].some(w => TN[at(j, w)] === own)) { set(j, level, 0); j++; }
+        while (j < TOWN_EXIT.reach) {
+          const o = LV[at(j, 0)];
+          if (!o) break;
+          if (o === level) {
+            let flat = true;
+            for (let w = -half; w <= half; w++) if (LV[at(j, w)] !== level || SH[at(j, w)]) flat = false;
+            if (flat) for (let w = -half; w <= half; w++) keep.push([at(j, w), j]);
+            else set(j, level, 0);
+            goods.push(++j);
+            if (++run >= TOWN_EXIT.clear) { ok = true; break; }
+            continue;
+          }
+          run = 0;
+          if (o > level) {   // up: the ramp's foot on the tile before, its top the tile after it
+            for (let k = 0; k < RAMP_LEN; k++) set(j + k, level, shape(RAMP_LEN - 1 - k, d));
+            j += RAMP_LEN; level++; set(j, level, 0); j++;
+          } else {   // down: its top the tile before, rising back toward the town
+            for (let k = 0; k < RAMP_LEN; k++) set(j + k, level - 1, shape(k, (d + 2) & 3));
+            j += RAMP_LEN; level--;
+          }
         }
-        if (o > level) {   // up: the ramp's foot on the tile before, its top the tile after it
-          for (let k = 0; k < RAMP_LEN; k++) set(j + k, level, shape(RAMP_LEN - 1 - k, d));
-          j += RAMP_LEN; level++; set(j, level, 0); j++;
-        } else {   // down: its top the tile before, rising back toward the town
-          for (let k = 0; k < RAMP_LEN; k++) set(j + k, level - 1, shape(k, (d + 2) & 3));
-          j += RAMP_LEN; level--;
+        // how far to cut: all the way when it found its long level run. Otherwise (water or the reach first), or when
+        // the way crosses something not to be cut (another town, water, a canyon, a bridge, a dock, a floor, another
+        // cutting), only as far as the last level row before that, as before v694: there the ground at least meets it
+        const isBad = i => (TN[i] && TN[i] !== own) || !LV[i] || BR[i] || DOCK[i] || WT[i] >= 2 || LAVA[i] || CY[i] || FL[i] || lock[i];
+        let badRow = Infinity, bad = '';
+        for (const [i, v] of plan) if (isBad(i) && v[2] < badRow) { badRow = v[2]; bad = TN[i] ? 'town' : !LV[i] ? 'water' : CY[i] ? 'canyon' : lock[i] ? 'lock' : 'other'; }
+        let stop = ok ? Infinity : goods.length ? goods[goods.length - 1] : 0;
+        if (badRow < stop) { stop = 0; for (const g of goods) if (g <= badRow) stop = g; } else bad = '';
+        if (stop < Infinity) {
+          for (const [i, v] of plan) if (v[2] >= stop) plan.delete(i);
+          for (let k = keep.length - 1; k >= 0; k--) if (keep[k][1] >= stop) keep.splice(k, 1);
         }
+        (t.exitWhy = t.exitWhy || [])[d] = (half ? '' : 'narrow ') + (!stop ? bad || 'reach ' + j + ' L' + level : stop < Infinity ? 'short ' + stop + (bad ? ' ' + bad : '') : plan.size ? '' : 'flat');
+        if (!stop) continue;
+        for (const [i] of keep) lock[i] = 1;
+        if (!plan.size) break;
+        for (const [i, [lv, sh]] of plan) { LV[i] = lv; SH[i] = sh; WT[i] = 0; OB[i] = 0; lock[i] = 1; for (let dd = 0; dd < 4; dd++) lock[i + DI[dd]] = 1; }
+        (t.exits = t.exits || []).push(d);
+        break;
       }
-      (t.exitWhy = t.exitWhy || [])[d] = !ok ? 'reach ' + j + ' L' + level : plan.size ? '' : 'flat';
-      if (!ok || !plan.size) continue;
-      let bad = '';
-      for (const [i, [lv, sh]] of plan) if ((TN[i] && TN[i] !== own) || !LV[i] || BR[i] || DOCK[i] || WT[i] >= 2 || LAVA[i] || CY[i] || FL[i] || lock[i]) bad = TN[i] ? 'town' : !LV[i] ? 'water' : CY[i] ? 'canyon' : lock[i] ? 'lock' : 'other';
-      t.exitWhy[d] = bad;
-      if (bad) continue;
-      for (const [i, [lv, sh]] of plan) { LV[i] = lv; SH[i] = sh; WT[i] = 0; OB[i] = 0; lock[i] = 1; for (let dd = 0; dd < 4; dd++) lock[i + DI[dd]] = 1; }
-      (t.exits = t.exits || []).push(d);
     }
   });
 }
@@ -30546,7 +30568,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 693, crashSeen = new Map();
+const GAME_VERSION = 694, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
