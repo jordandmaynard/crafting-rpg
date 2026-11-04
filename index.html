@@ -723,6 +723,12 @@ body.winDrag, body.winDrag * { cursor: grabbing !important; }
 #storeCol.locker { --fk: 0.56; top: calc(40px * var(--ui)); width: calc(1199px * var(--fk)); height: calc(1312px * var(--fk)); padding: 0; background: none !important; filter: drop-shadow(0 6px 7px #100b0799); isolation: isolate; }
 #storeCol.locker .locker-frame { display: block; position: absolute; left: 0; top: 0; width: calc(1199px * var(--fk)); height: calc(1312px * var(--fk)); pointer-events: none; z-index: -1; user-select: none; }
 #storeCol.locker .card-title { display: block; margin: 0; }
+/* (v720, Jordan) a painted foot locker's window takes its paint: the paint laid over the painting with the color blend
+   (the painting's lightness, the paint's hue and saturation) through ui/locker/locker-wood-mask.webp, which leaves
+   the iron brackets and straps and the brass hinges and rivets bare (art/src/foot-locker-wood-mask.py) */
+#storeCol .locker-tint { display: none; }
+#storeCol.locker.painted .locker-tint { display: block; position: absolute; left: 0; top: 0; width: calc(1199px * var(--fk)); height: calc(1312px * var(--fk)); z-index: -1; pointer-events: none; background: var(--lkPaint); mix-blend-mode: color; opacity: var(--lkPaintK, 1);
+  -webkit-mask: url("ui/locker/locker-wood-mask.webp") 0 0 / 100% 100% no-repeat; mask: url("ui/locker/locker-wood-mask.webp") 0 0 / 100% 100% no-repeat; }
 #storeCol.locker #storeTitle { position: absolute; left: calc(126px * var(--fk)); top: calc(90px * var(--fk)); width: calc(560px * var(--fk)); height: calc(87px * var(--fk)); font: 700 calc(52px * var(--fk))/calc(87px * var(--fk)) var(--wk); white-space: nowrap; pointer-events: none; }
 #storeCol.locker .card-title span#storeCount { position: absolute; left: calc(700px * var(--fk)); top: calc(90px * var(--fk)); width: calc(180px * var(--fk)); height: calc(87px * var(--fk)); text-align: right; font: 400 28px/calc(87px * var(--fk)) var(--wk); color: #5a351c; white-space: nowrap; pointer-events: none; font-variant-numeric: tabular-nums; }
 #storeCol.locker #store { display: block; position: absolute; left: 0; top: 0; width: 0; height: 0; }
@@ -1162,6 +1168,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
     <img class="crate-frame" id="crateFrame" src="ui/crate/crate-window.webp" alt="" draggable="false">
     <img class="vault-frame" src="ui/vault/vault-shell.webp" alt="" draggable="false">
     <img class="locker-frame" src="ui/locker/locker-window.webp" alt="" draggable="false">
+    <div class="locker-tint" aria-hidden="true"></div>
     <img class="ironchest-frame" src="ui/ironchest/ironchest-window.webp" alt="" draggable="false">
     <p class="vault-foot">Drag items between your backpack<br>and the vault.</p>
     <div class="card-title"><span id="storeTitle"></span> <span id="storeCount"></span></div>
@@ -20011,6 +20018,8 @@ function renderInv() {
     const crate = openSt.kind === 'crate', locker = openSt.kind === 'locker', ironchest = openSt.kind === 'chest', sc = $('storeCol');
     sc.classList.toggle('crate', crate);
     sc.classList.toggle('locker', locker);   // (v713: the foot locker's own painted window)
+    sc.classList.toggle('painted', !!(locker && openSt.paint));   // (v720: in its paint, if the locker's painted)
+    if (locker && openSt.paint) sc.style.setProperty('--lkPaint', openSt.paint);
     sc.classList.toggle('ironchest', ironchest);   // (v718: the iron chest's, built or the guard house's)
     sc.classList.toggle('vault', !!openSt.vault);   // (v584: the bank vault's own painted window)
     if (openSt.vault) { sc.style.backgroundImage = ''; delete sc.dataset.skin; sc.style.setProperty('--vk', VAULT_UI.scale); fitSoon($('storeTitle'), 30 * VAULT_UI.scale); }
@@ -24148,7 +24157,7 @@ function lootCrateStore(lc) {
   let st = LOOT_CRATES.get(lc.key);
   if (!st) {
     const kind = lootTableOf(lc), sk = lc.locker ? 'locker' : lc.chest ? 'chest' : 'crate';
-    st = { kind: sk, loot: kind, title: (CRATE_LOOT[kind] || CRATE_LOOT.home).title, x: lc.x, z: lc.z, y: lc.y, k: lc.k, inp: [], inN: [], out: [], outN: [], ...rollCrateLoot(kind, lc.c, lc.r, lc.k, STATION_KIND[sk].store, crateLootKind(lc.house)) };
+    st = { kind: sk, loot: kind, paint: lc.paint || null, title: (CRATE_LOOT[kind] || CRATE_LOOT.home).title, x: lc.x, z: lc.z, y: lc.y, k: lc.k, inp: [], inN: [], out: [], outN: [], ...rollCrateLoot(kind, lc.c, lc.r, lc.k, STATION_KIND[sk].store, crateLootKind(lc.house)) };
     LOOT_CRATES.set(lc.key, st);
   }
   return st;
@@ -24173,7 +24182,7 @@ function lootCrateNear(reach = LOOT_CRATE_UI.reach) {
     let o = null;
     if (q && LOOT_PROPS.has(q.id) && Math.abs(q.y - 0.06 - H.y) < 0.9) {
       const [qc, qr] = [(q.tiles[0] % SNN) % N, Math.floor((q.tiles[0] % SNN) / N)];
-      o = { key: q.tiles[0], c: qc, r: qr, k, x: q.x, y: q.y - 0.06, z: q.z, house: q.house, chest: q.id === 'ironChest', locker: q.id === 'chest' };
+      o = { key: q.tiles[0], c: qc, r: qr, k, x: q.x, y: q.y - 0.06, z: q.z, house: q.house, chest: q.id === 'ironChest', locker: q.id === 'chest', paint: q.id === 'chest' && q.look?.paint?.[2] || null };
     }
     else if (!k && TOWN_PROP.get(i) === 'crate' && Math.abs(LV[i] * STEP - H.y) < 0.6) {
       const [x, z] = crateAt(c, r);
@@ -31329,7 +31338,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 719, crashSeen = new Map();
+const GAME_VERSION = 720, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

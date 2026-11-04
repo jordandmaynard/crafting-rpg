@@ -414,6 +414,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v719:** (Jordan) Iron chests hold 15 squares, the 3 x 5 wells of the painting as delivered: the v718 fourth row and its script are gone, and the window shows the original painting (1122 x 1402 at 0.62). The guard house chests roll for 15 too. Chest contents aren't kept between visits, so there's nothing in old chests to move.
 
+**v720:** (Jordan) A painted foot locker (moss green, madder red, woad blue or ochre) opens in a window in its own paint. The paint goes over the painting with the color blend, so the painting's light and shade stay and the paint gives the hue. It goes through a mask (ui/locker/locker-wood-mask.webp, made by art/src/foot-locker-wood-mask.py from the kit's source) that covers the wood, wells and blanket and leaves the iron brackets, straps, brass hinges and rivets bare. Bare-wood lockers look as before.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
