@@ -377,6 +377,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v699:** (Jordan: the big health bar in the centre shook out of its frame when hit) It no longer shakes. A hit flashes it and leaves the health just lost as a part that flares hot and shrinks away, as the monsters' bars do, with the same HPBAR settings (flash, flashFade, delay, trailRate, lost, hot, hotCore, hotBright, hotBloom); renderHp draws it through barHot, which drawBar now shares. On the belt the lost part is the lost colour masked by hp-fill.webp so it keeps the fill's rounded ends, its bloom as drop shadows; the touch health plate does the same with its plain bar. Jordan's HUD bars paste baked in (nameY 4 to 5.5).
 
+**v700:** (Jordan: the backpack title's crest, and titles that read better) The Backpack title's crest is the Pack mode button's backpack (ui/mode-pack.webp, 38 px). The Character and Backpack titles get their look from a new T > Window titles section (WIN_TITLE: size, weight, ink, letter spacing, stroke and its colour, shadow across/down/blur/colour/strength, applied by applyWinTitle as CSS vars); the default is a heavier (700), darker ink (#22130a) at 29 px with a hard light rim 1 px under the letters, as if pressed into the parchment. The backpack's 0 / 20 count is now 17 px, 600, #6a4526, the same as "Armor 0". Colour rows in the tuning panel now run their apply while you pick.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
