@@ -544,6 +544,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v784:** (Jordan's overdraw view: deep chasms' walls lit 4-6 times over) A ground pre-pass (G > Tests > Ground pre-pass, with the depth pre-pass on): the ground's depth is drawn after the built pieces' (groundShapeMat's position @invariant), the shadow map in that render, then the snow and sand and the ground are lit before the world, at less-or-equal against their own depth, so each terrace face is lit only where it shows. The ground going before the world keeps a floor laid flush on it on top (drawn after, it wins the tie, as v439 had it). Trees, plants and folk, not in a pre-pass, now cover ground already lit: compare the passes in a forest with it on and off.
 
+**v785:** (Jordan's G: grass 1.44 ms of 4.41 passes, ground pre-pass ~0) A grass pre-pass (G > Tests > Grass pre-pass, with the depth pre-pass on): the tufts' depth is drawn after the built pieces' and before anything is lit (grassMat's position @invariant; its wind and trample are per frame, so both renders place every blade alike). Each tuft is then lit once where it shows, and the ground behind grass isn't lit at all. The tufts' shapes are worked out twice: compare the grass pre-pass and grass rows, and the ground's, with it on and off.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

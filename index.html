@@ -1350,7 +1350,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 784;
+const GAME_VERSION = 785;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8941,6 +8941,18 @@ function renderWorld() {
   // the pre-pass leaves out (trees, plants, folk) is drawn over ground already lit.
   const gPre = BUILD_PRE.on && BUILD_PRE.ground;
   groundShapeMat.depthFunc = gPre ? GFX.LessEqualDepth : GFX.LessDepth;
+  // (v785, Jordan's G: grass 1.44 ms of 4.41, its tufts lit 2-6 times over) the grass's depth too, before any of the
+  // ground or world is lit: the tufts are then lit once each where they show, and the ground and whatever else they
+  // stand in front of isn't lit there at all. Its wind and trample are the frame's (U.windV, the trample map), not the
+  // render's clock, so both renders place every blade alike
+  if (BUILD_PRE.on && BUILD_PRE.grass && grassMesh.visible) {
+    camera.layers.set(4);
+    renderer.passName = 'grass pre-pass'; renderer.drawFilter = GRASS_PRE_F; renderer.depthPrepass = true;
+    const au = renderer.shadowMap.autoUpdate; renderer.shadowMap.autoUpdate = false;
+    renderer.render(scene, camera);
+    renderer.shadowMap.autoUpdate = au; renderer.depthPrepass = false; renderer.drawFilter = null;
+    camera.layers.set(0);
+  }
   if (gPre) {
     camera.layers.set(5);
     renderer.passName = 'ground pre-pass'; renderer.drawFilter = GROUND_PRE_F; renderer.depthPrepass = true;
@@ -9919,7 +9931,7 @@ const BUILD_TEST = { shade: 0, cull: true };
 // pre-pass turns it off to compare
 // (v777: and the roofs and props too, the ones whose vertex code doesn't move with time; each material's position is
 // @invariant: buildMat, slateMat's code, and the built-in lit material's, which flatMat makes)
-const BUILD_PRE = { on: true, ground: true }, BUILD_PRE_F = m => !!BUILD_PRE.mats && BUILD_PRE.mats.has(m.material) && !m.material.transparent;
+const BUILD_PRE = { on: true, ground: true, grass: true }, BUILD_PRE_F = m => !!BUILD_PRE.mats && BUILD_PRE.mats.has(m.material) && !m.material.transparent;
 const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(24) }, tRose: { value: roseTex } };
 // (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
 // shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
@@ -10402,7 +10414,7 @@ const GRASS_U = {
 const fl = k => `vec3f(${FLOWER[k].r.toFixed(3)}, ${FLOWER[k].g.toFixed(3)}, ${FLOWER[k].b.toFixed(3)})`;
 const grassMat = new GFX.ShaderMaterial({ uniforms: GRASS_U, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+struct VOut { @builtin(position) @invariant pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 fn gHash(a: u32) -> u32 {
   var x = a * 747796405u + 2891336453u;
   x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
@@ -10597,7 +10609,7 @@ const FLOWER_SIDES = 12;
 const grassGeo = new GFX.BufferGeometry();
 grassGeo.setAttribute('position', new GFX.BufferAttribute(new Float32Array((36 + 6 * FLOWER_SIDES) * 3), 3));
 grassGeo.instanceCount = 0;
-const grassMesh = new GFX.Mesh(grassGeo, grassMat);
+const grassMesh = new GFX.Mesh(grassGeo, grassMat), GRASS_PRE_F = m => m === grassMesh;
 grassMesh.frustumCulled = false; grassMesh.receiveShadow = true; grassMesh.matrixAutoUpdate = false;
 grassMesh.layers.set(4);   // drawn in a pass of its own, after the world (see renderWorld)
 scene.add(grassMesh);
@@ -33036,7 +33048,7 @@ const PROF_FOLD_KEY = 'emberwild.profFold';
 try { const f = JSON.parse(localStorage.getItem(PROF_FOLD_KEY) || '[]'); if (Array.isArray(f)) prof.folded = new Set(f); } catch (e) {}
 prof.onFold = F => { try { localStorage.setItem(PROF_FOLD_KEY, JSON.stringify([...F])); } catch (e) {} };
 const showSpikes = () => { const F = prof.folded, fh = n => `<div class="spike-head"><b class="pfold" data-fold="${n}">${F.has(n) ? '▸' : '▾'} ${n}</b></div>`;
-  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Ground pre-pass</b> <button data-gpre="1" class="${BUILD_PRE.ground ? 'on' : ''}">${BUILD_PRE.ground ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the ground's depth too (the "ground pre-pass" row), then the snow, sand and ground lit before the world, so a chasm's walls are lit only where they show; trees and plants then cover ground already lit. Off: as before v784.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
+  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Ground pre-pass</b> <button data-gpre="1" class="${BUILD_PRE.ground ? 'on' : ''}">${BUILD_PRE.ground ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the ground's depth too (the "ground pre-pass" row), then the snow, sand and ground lit before the world, so a chasm's walls are lit only where they show; trees and plants then cover ground already lit. Off: as before v784.</div><div class="spike-head"><b>Grass pre-pass</b> <button data-grpre="1" class="${BUILD_PRE.grass ? 'on' : ''}">${BUILD_PRE.grass ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the grass tufts' depth is drawn before anything is lit (the "grass pre-pass" row), so each tuft is lit once where it shows and the ground behind it not at all; their shapes are worked out twice. Off: as before v785.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
 // (pointerdown, not click: the tables are drawn anew 4 times a second, and a click's press and release can land on
 // two different copies of a heading)
 profLive.addEventListener('pointerdown', e => { const f = e.target.closest('[data-fold]'); if (f) { prof.fold(f.dataset.fold); e.preventDefault(); } });
@@ -33046,6 +33058,7 @@ spikePanel.addEventListener('click', e => {
   if (e.target.closest('[data-bundles]')) { renderer.bundles = !renderer.bundles; showSpikes(); return; }
   if (e.target.closest('[data-bpre]')) { BUILD_PRE.on = !BUILD_PRE.on; showSpikes(); return; }
   if (e.target.closest('[data-gpre]')) { BUILD_PRE.ground = !BUILD_PRE.ground; showSpikes(); return; }
+  if (e.target.closest('[data-grpre]')) { BUILD_PRE.grass = !BUILD_PRE.grass; showSpikes(); return; }
   if (e.target.closest('[data-overdraw]')) { OVERDRAW.on = !OVERDRAW.on; showSpikes(); return; }
   const bt = e.target.closest('[data-btest]'); if (bt) { setBuildTest(+bt.dataset.btest, BUILD_TEST.cull); showSpikes(); return; }
   if (e.target.closest('[data-bcull]')) { setBuildTest(BUILD_TEST.shade, !BUILD_TEST.cull); showSpikes(); return; }
