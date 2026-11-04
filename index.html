@@ -28862,27 +28862,36 @@ function posePlant(f, sq) {
 let yaw = Math.PI / 4, yawGoal = yaw, zoom = 1;
 const camTarget = new GFX.Vector3();
 let texel = 0.03, pxScale = 3;
-// Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 to size it from the screen
+// Tuning (T > Pixels): the mosaic's big-pixel size at standard zoom, or 0 for auto
 // antiAlias: the scene is drawn this many times finer each way and averaged into each mosaic pixel, so thin
 // lines and edges come out as blended colours instead of broken runs of pixels (1 = off)
-const PIXEL = { size: 0, autoDiv: 520, antiAlias: 1 };
+// (v735, Jordan) desktop auto: autoMin at the farthest zoom out on foot (VIEW.zoomOut), then as you zoom in the size
+// grows with the zoom so a mosaic pixel stays about as big on screen, stepping up a whole pixel at a time (2, 3, 4),
+// never past autoMax; farther out than that (a boat's wheel) it stays autoMin. Phones still size it from the screen
+// (autoDiv), at half the size
+const PIXEL = { size: 0, autoMin: 2, autoMax: 4, autoDiv: 520, antiAlias: 1 };
 let ssNow = 1, spanW = 1, spanH = 1;   // the orthographic view's width and height in world units
 const pixelBase = () => PIXEL.size >= 1 ? Math.round(PIXEL.size) : Math.max(2, Math.round(Math.min(innerWidth, innerHeight) / PIXEL.autoDiv));
-// the mosaic follows the zoom: full size at standard zoom and closer, smaller (down to 2) zoomed out;
-// phones get half the desktop mosaic
-const pixelSize = () => {
-  const b = pixelBase();
-  if (MOBILE) { const m = Math.max(1, Math.round(b / 2)); return zoom <= 1 ? Math.max(1, Math.round(m * zoom)) : Math.min(m + 1, Math.round(m + (zoom - 1))); }
-  return Math.max(Math.min(2, b), Math.min(b, Math.round(b * zoom)));
+const pixelAutoLo = () => Math.max(2, Math.round(PIXEL.autoMin)), pixelAutoHi = () => Math.max(pixelAutoLo(), Math.round(PIXEL.autoMax));
+const pixelZoomRef = () => Math.max(0.01, Math.min(VIEW.zoomOut, VIEW.zoomIn));
+// the mosaic's pixel size at zoom z
+const pixelAt = z => {
+  if (MOBILE) { const m = Math.max(1, Math.round(pixelBase() / 2)); return z <= 1 ? Math.max(1, Math.round(m * z)) : Math.min(m + 1, Math.round(m + (z - 1))); }
+  if (PIXEL.size < 1) { const lo = pixelAutoLo(); return Math.min(pixelAutoHi(), Math.max(lo, Math.round(lo * z / pixelZoomRef()))); }
+  const b = pixelBase();   // a set size: full size at standard zoom and closer, smaller (down to 2) zoomed out
+  return Math.max(Math.min(2, b), Math.min(b, Math.round(b * z)));
 };
+const pixelSize = () => pixelAt(zoom);
+// the zoom desktop auto steps up to size n at (0 if it never does: past autoMax, or not on auto)
+const pixelStepZoom = n => MOBILE || PIXEL.size >= 1 || n > pixelAutoHi() ? 0 : n <= pixelAutoLo() ? pixelZoomRef() : pixelZoomRef() * (n - 0.5) / pixelAutoLo();
 // (v732, Jordan) what the mosaic is doing now, for T > Pixels: its pixel size at this zoom and at standard zoom, the
-// screen's short side auto divides, the zoom, and how far out the zoom must go before it drops to 2 (1: already 2)
+// zoom, and (v735) the zooms auto steps up to 3 and 4 at
 const PIXEL_READ = {
   get now() { return pxScale; },
-  get standard() { return pixelBase(); },
-  get screen() { return Math.min(innerWidth, innerHeight); },
+  get standard() { return pixelAt(1); },
   get zoom() { return zoom; },
-  get twoBelow() { const b = MOBILE ? Math.max(1, Math.round(pixelBase() / 2)) : pixelBase(); return b <= 2 ? 1 : 2.5 / b; },
+  get threeAt() { return pixelStepZoom(3); },
+  get fourAt() { return pixelStepZoom(4); },
 };
 // the Wanderer's Kit groups are laid out at 1920 x 1080 and scaled once to fit (a touch screen, which the skin
 // doesn't cover yet, fits the inventory's width instead)
@@ -30114,14 +30123,16 @@ const TUNING = [
     [RESOURCES, 'amount', 'How much everything gives: rocks, trees, ore, hides (× normal)', 'choice', [0.5, 1, 2, 4], 0.1],
   ]],
   ['Pixels', [
-    [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto; smaller zoomed out, never below 2)', 0, 10, 1],
-    [PIXEL, 'autoDiv', 'Auto: screen px per mosaic px', 120, 520, 10],
+    [PIXEL, 'size', 'Mosaic pixel size at standard zoom (0 = auto: the auto sizes below, by zoom)', 0, 10, 1],
+    [PIXEL, 'autoMin', 'Auto: mosaic pixel size at the farthest zoom out on foot, and the smallest it goes (a boat\'s wheel too)', 2, 6, 1],
+    [PIXEL, 'autoMax', 'Auto: largest mosaic pixel size, zoomed in (it grows with the zoom to keep pixels the same size on screen)', 2, 8, 1],
+    [PIXEL, 'autoDiv', 'Auto on phones: screen px per mosaic px', 120, 520, 10],
     [PIXEL, 'antiAlias', 'Anti-aliasing: samples each way per mosaic pixel (1 off)', 1, 4, 1],
     [PIXEL_READ, 'now', 'Mosaic pixel size now, at this zoom', 'readout', 0, 1],
-    [PIXEL_READ, 'standard', 'Mosaic pixel size at standard zoom (auto: screen short side ÷ screen px per mosaic px, rounded, at least 2)', 'readout', 0, 1],
-    [PIXEL_READ, 'screen', 'Screen short side (px)', 'readout', 0, 1],
+    [PIXEL_READ, 'standard', 'Mosaic pixel size at standard zoom (1)', 'readout', 0, 1],
     [PIXEL_READ, 'zoom', 'Zoom now (1 standard, smaller is farther out)', 'readout', 0, 0.01],
-    [PIXEL_READ, 'twoBelow', 'Zoom the mosaic drops to 2 below (1: already 2)', 'readout', 0, 0.01],
+    [PIXEL_READ, 'threeAt', 'Auto steps up to 3 at zoom (0: never)', 'readout', 0, 0.01],
+    [PIXEL_READ, 'fourAt', 'Auto steps up to 4 at zoom (0: never)', 'readout', 0, 0.01],
   ]],
   ['Camera', [
     [VIEW, 'perspective', 'Perspective (0 orthographic, 1 perspective)', 0, 1, 1],
@@ -31738,7 +31749,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 734, crashSeen = new Map();
+const GAME_VERSION = 735, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
