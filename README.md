@@ -492,6 +492,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v758:** (Jordan) The 2D bottles in the world (in hand and thrown) are lit by the scene. buildPotionNormals works a normal map out of the bottle's outline (each row round like a turned vase, the shoulders and base tipped by how the glass widens); the card shader turns it with the card into the world and lights each pixel at its own spot with the sky and ground, the inside fill, the sun (with its shadow map and cloud shade) and the point lights, then postExpose. The icon is taken as the bottle at POTION_LIT.ref of light, and strength (0.8) blends toward the lit colour; glint and gloss add the sun's highlight. drawSeals hands the world's lights to the seal render through renderer.lightsOverride. T > Thrown potions has the four knobs.
 
+**v759:** Jordan's tuning: POTION_LIT strength 0.85, ref 0.6, glint 2.1, gloss 55.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
