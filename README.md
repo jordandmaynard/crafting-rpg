@@ -428,6 +428,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v726:** (Jordan) Every trade's workshop hangs a sign like the tavern's and the bank's beside its door (or over it, on the story above), with the trade painted on the board: a stretched hide for the tanner, an anvil and hammer for the smith, an axe in a log for the woodcutter, a sheaf of wheat for the goodfolk, a horseshoe over ingots for the ironmonger, a flask and herbs for the herbalist, a leaded window for the glazier, dressed stone and a chisel for the mason, a cart wheel for the carter, a cut gem for the jeweller, a balance for the merchant and a compass rose for the cartographer (prop `tradeSign`, emblems in `SIGN_EMBLEMS` in src/props/props.js). Churches, the guard house, plain houses, farms and mills get none. The workshops' benches can be used now: the saw tables, grinders and smelters refine just as yours do (press F), each on its own tile with its saw blade, millstone and fire running while it works, and the herbalist's alchemy table crafts like the tannery's and the smithy's tables. They belong to the townsfolk, so they can't be moved or taken down. The trades' crates could already be opened.
 
+**v727:** (Jordan) F only reaches what's on the floor you stand on: upstairs it opens the door in front of you, not the one under it on the floor below, and the tables, stations and loot on the ground floor are out of reach from above. On a stair you count as on the floor you're nearer (the one above once you're past halfway up).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
