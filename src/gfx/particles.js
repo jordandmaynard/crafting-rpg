@@ -525,7 +525,7 @@ export class FxParticles {
     // ramps: names to ids, and their colours for the shaders
     this.rampIds = new Map(); this.rampData = new Float32Array(MAX_RAMPS * RAMP_N * 4);
     this.look = { x: 1, y: 1, z: 1, w: 3 };   // hard ramp steps (1) or blended (0); glow ×; size ×; light bands on soft volumes (0 smooth)
-    this.puff = { x: 3, y: 0, z: 1.8, w: 0 };   // puffs' and smoke's lumps (in their normals only): how much they bend the light, _, how many across, _
+    this.puff = { x: 6, y: 0, z: 1.1, w: 0 };   // puffs' and smoke's lumps (in their normals only): how much they bend the light, _, how many across, _
     const U = {
       now: { value: { x: 0, y: 0, z: 0, w: 0 } }, look: { value: this.look }, puff: { value: this.puff }, ramps: { value: this.rampData },
       tRefrD: shared.tRefrD || { value: null }, refr: shared.refr || { value: 0 }, base: { value: { x: 0, y: 0 } },

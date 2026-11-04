@@ -468,6 +468,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v746:** (Jordan's tuning) Dust and smoke lumps: lumps in their light 3 (was 1; the slider now goes to 6), lumps across 1.8 (was 2.2).
 
+**v747:** (Jordan's tuning) Dust and smoke lumps: lumps in their light 6 (the slider now goes to 12), lumps across 1.1.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
