@@ -59,6 +59,7 @@ fn giGrid() -> vec4i { return P.grid; }
 fn giStandInLight() -> vec3f { return GI_STAND_IN * (P.sky.rgb + P.ground.rgb); }
 fn giVisAt(i: vec3i) -> vec4f { return textureLoad(visA, i, 0); }
 fn giLightAt(i: vec3i) -> vec4f { return textureLoad(lightA, i, 0); }
+fn giFloor(c: vec2i) -> f32 { return giColumnBase(c); }   // (the renderer's reads the floor this pass stores)
 ${GI_WGSL}
 const PI = 3.141592653589793;
 
@@ -154,6 +155,13 @@ fn update(@builtin(global_invocation_id) id: vec3u) {
   let li = vec3i(slot.x * 3, layer, slot.y);
   let c = P.grid.xy + giSlot(slot - P.grid.xy, N);
   let gen = i32(P.cfg2.y);
+  // (v772) every frame, each column's floor into the layer past the last, for the renderer's giFloor: high half
+  // and what the f16 lost of it, so the two add back to it
+  if (layer == 0) {
+    let fl = giColumnBase(c);
+    let hi = unpack2x16float(pack2x16float(vec2f(fl, 0.0))).x;
+    textureStore(visB, vec3i(slot.x, P.grid.w, slot.y), vec4f(hi, fl - hi, 0.0, 0.0));
+  }
   let k = textureLoad(keyA, vi, 0);
   let same = k.x == c.x && k.y == c.y && k.z == gen && k.w == 1;
   let rel = vec2f(c) + 0.5 - P.view.xy;
@@ -263,8 +271,9 @@ export class HeightProbes {
     const L = GI_LAYERS.length, T = GPUTextureUsage, dev = this.device;
     if (this.sets) for (const s of this.sets) { s.key.destroy(); s.vis.destroy(); s.light.destroy(); }
     this.N = N;
-    const make = (fmt, w) => dev.createTexture({ label: 'gi probes', size: [w, L, N], dimension: '3d', format: fmt, usage: T.TEXTURE_BINDING | T.STORAGE_BINDING });
-    this.sets = [0, 1].map(() => ({ key: make('rgba32sint', N), vis: make('rgba16float', N), light: make('rgba16float', N * 3) }));
+    const make = (fmt, w, l = L) => dev.createTexture({ label: 'gi probes', size: [w, l, N], dimension: '3d', format: fmt, usage: T.TEXTURE_BINDING | T.STORAGE_BINDING });
+    // (v772: vis has a layer more, each column's floor, see update)
+    this.sets = [0, 1].map(() => ({ key: make('rgba32sint', N), vis: make('rgba16float', N, L + 1), light: make('rgba16float', N * 3) }));
     for (const s of this.sets) { s.keyV = s.key.createView(); s.visV = s.vis.createView(); s.lightV = s.light.createView(); }
     // pass k reads set k and writes set 1 - k
     this.groups = [0, 1].map(k => {

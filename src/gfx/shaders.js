@@ -75,7 +75,7 @@ fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
     let c = base + o;
     let rel = c - g.xy;
     if (any(rel < vec2i(0)) || any(rel >= vec2i(g.z))) { continue; }
-    let floorY = giColumnBase(c);
+    let floorY = giFloor(c);
     if (floorY < -1000.0) { continue; }
     let h = q.y - floorY;
     var wc = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
@@ -93,7 +93,7 @@ fn giGather(q: vec3f, n: vec3f, bounce: bool) -> GIOut {
     var l = 0;
     for (var k = 1; k < g.w - 1; k++) { if (hl >= giLayerH(k)) { l = k; } }
     let t = clamp((hl - giLayerH(l)) / (giLayerH(l + 1) - giLayerH(l)), 0.0, 1.0);
-    let s = giSlot(c, g.z);
+    let s = giSlot(c, g.z);   // (the probe column's slot; giFloor finds the same one)
     for (var e = 0; e < 2; e++) {
       let layer = l + e;
       let w = wc * select(1.0 - t, t, e == 1);
@@ -183,6 +183,16 @@ fn giStandInLight() -> vec3f { return GI_STAND_IN * (F.hemiSky.rgb + F.hemiGroun
 fn giGrid() -> vec4i { return vec4i(F.giB); }
 fn giVisAt(i: vec3i) -> vec4f { return textureLoad(giVisTex, i, 0); }
 fn giLightAt(i: vec3i) -> vec4f { return textureLoad(giLightTex, i, 0); }
+// (v772) a probe column's floor, as giColumnBase finds it: stored by the probes' pass in the layer past the last
+// (high and low halves, so it's as exact as the height field), one read in place of four; a column outside the grid
+// has no slot of its own and is worked out as before
+fn giFloor(c: vec2i) -> f32 {
+  let g = giGrid(); let rel = c - g.xy;
+  if (any(rel < vec2i(0)) || any(rel >= vec2i(g.z))) { return giColumnBase(c); }
+  let s = giSlot(c, g.z);
+  let f = textureLoad(giVisTex, vec3i(s.x, g.w, s.y), 0);
+  return f.x + f.y;
+}
 ${GI_WGSL}
 
 const PI = 3.141592653589793;

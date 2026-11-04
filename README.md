@@ -518,6 +518,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v771:** (Jordan's shots: with GI sky visibility on, 9 lists recorded again every frame; with GI off, all replayed) The probes swap between two texture sets each frame, and the frame's bind group was made new on every swap, so every recorded list (a bundle belongs to its bind group) was encoded again. Frame bind groups are now kept by what they bind (renderer._frameBGs, cleared when the GI, haze, eye, bloom or shadow map changes; the probes' key carries their generation), so the two sets' bind groups are the same objects frame to frame and both bundles replay.
 
+**v772:** (Jordan: cut the sky-visibility lighting cost; GI mode 1 was about 5 ms of GPU at mosaic 2) Each probe column's floor (giColumnBase: the highest of four height-field texels) is stored once a frame by the probes' pass, in a layer past the last of the probe visibility texture (high half and the f16's remainder, so it adds back to the same height), and read by giFloor in one load. The lit surfaces' gather (giGather) reads 44 textures a pixel instead of 56, and the lit haze's ambientAt 3 a column instead of 6, with the same look. The probes' own pass still works the floor out from the height field.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

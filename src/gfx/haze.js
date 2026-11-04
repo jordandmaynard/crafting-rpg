@@ -234,7 +234,7 @@ fn ambientAt(p: vec3f) -> vec3f {
     let o = vec2i(i & 1, i >> 1);
     let c = base + o;
     let w = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
-    let floorY = giColumnBase(c);
+    let floorY = giFloor(c);
     if (floorY < -1000.0) { sum += w * plain; continue; }
     let h = p.y - floorY;
     let hl = clamp(h, giLayerH(0), giLayerH(L - 1));
