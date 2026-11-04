@@ -422,6 +422,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v723:** (Jordan) The crate's squares are square like every other square in the game: its painting reuses the foot locker's grid (two rows of five, colour-matched to the crate's wood) and closes up around it. A column and a row are cut from the crate's middle where the grain matches, cross-faded, so the window is 695 x 443 instead of 840 x 480 (art/src/crate-locker-grid.py). Its squares, items, stack numbers and tint mask are the foot locker's; the crate's own mask is gone.
 
+**v724:** (Jordan) Barrels in buildings open and can be looted (F: SEARCH THE BARREL). The new window is Jordan's open-barrel painting with a 2 x 2 piece of the foot locker's grid laid in its floor, hue-matched with a soft shadow (art/src/barrel-locker-grid.py, ui/barrel/barrel-window.webp, 470 x 734). The title, count and the shared close X sit on the lid's widest board. Squares, items, stack numbers and the mask are the foot locker's. Barrel loot tables (barrel, tavernBarrel, guardBarrel, farmBarrel, millBarrel, cabinBarrel) hold most of the food, wheat and sourdough bread for now. Bread and wheat in the crate, foot locker and iron chest tables are cut down to a little.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
