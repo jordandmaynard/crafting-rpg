@@ -606,8 +606,7 @@ export function makeFolkKit(GFX) {
     if (d.creature === 'goblin') return buildGoblin();
     // (v701) a goblin on the person's joints (hips, knees, ankles, waist, shoulders, elbows, wrists, neck), which the
     // whole is shrunk round (GOBLIN_SCALE): bare green legs under a ragged tunic, big bare feet, a hunched wide chest,
-    // long arms with big hands, and a big head with a heavy brow, glowing eyes, a long nose, a wide mouth with two
-    // teeth, and long ears swept out and up
+    // long arms with big hands, and the old goblin's big plain head (v702)
     function buildGoblin() {
       const S = d.skin, SD = shade(S, -0.2), C = d.torso.color, CD = shade(C, -0.3), LEA = '#4a3020', G = d.gob, CH = 0.42;
       const body = pivot(g, 0, 0, 0), flaps = [], fronts = [], backs = [];
@@ -638,33 +637,23 @@ export function makeFolkKit(GFX) {
       box(chest, 0.33, 0.11, 0.19, 0, 0.175, -0.005, C);
       box(chest, 0.18, 0.06, 0.012, 0, 0.21, 0.098, shade(S, -0.05));
       if (G.strap) { box(chest, 0.04, 0.3, 0.012, 0, 0.12, 0.1, LEA, 0, 0.65); box(chest, 0.04, 0.3, 0.012, 0, 0.12, -0.1, LEA, 0, -0.65); }
-      box(chest, 0.12, 0.06, 0.11, 0, 0.26, 0.015, S);
-      if (d.quiver) {
-        const q = pivot(chest, -0.06, 0.1, -0.12); q.rotation.z = 0.35;
-        box(q, 0.07, 0.28, 0.07, 0, 0, 0, d.quiver);
-        box(q, 0.078, 0.03, 0.078, 0, -0.12, 0, shade(d.quiver, -0.3));
-        [[-0.016, -0.012], [0.016, 0.0], [0, 0.016]].forEach(([x, z]) => { box(q, 0.008, 0.06, 0.008, x, 0.16, z, '#6a5440'); box(q, 0.004, 0.05, 0.022, x, 0.2, z, '#c8c0a8'); });
-      }
-      // the head: big, heavy-browed, long-nosed, long-eared
-      const head = pivot(chest, 0, 0.7 - CH, 0.02);
-      box(head, 0.3, 0.24, 0.26, 0, 0.12, 0.005, S);
-      box(head, 0.29, 0.045, 0.05, 0, 0.18, 0.12, SD);
+      // the head (v702, the old goblin's face back): big, wider than the tunic and sat straight on the shoulders with
+      // no neck, plain round glowing eyes flush on the skin, a little stub of a nose, flat ears out to the sides, no
+      // brow, mouth or teeth; the old goblin's head box blown up by its old scale over GOBLIN_SCALE (1.3 / 0.8), so
+      // it is the old size in the world while the body is a little longer
+      const head = pivot(chest, 0, 0.65 - CH, 0);
+      box(head, 0.38, 0.29, 0.32, 0, 0.145, 0, S);
       for (const sx of [1, -1]) {
-        box(head, 0.065, 0.045, 0.012, sx * 0.068, 0.137, 0.137, '#1a1410');
-        box(head, 0.04, 0.03, 0.008, sx * 0.068, 0.137, 0.146, d.eyes);
-        const ear = pivot(head, sx * 0.15, 0.15, -0.01); ear.rotation.set(0, 0, -sx * 0.4); ear.scale.setScalar(G.ears);
-        box(ear, 0.2, 0.08, 0.028, sx * 0.1, 0, 0, S);
-        box(ear, 0.12, 0.05, 0.03, sx * 0.17, 0.01, 0, S);
-        box(ear, 0.13, 0.04, 0.012, sx * 0.09, 0, 0.016, SD);
-        if (G.ring === sx) box(ear, 0.02, 0.04, 0.04, sx * 0.05, -0.05, 0, '#d8b048');
+        box(head, 0.08, 0.057, 0.02, sx * 0.09, 0.177, 0.165, d.eyes);
+        const ear = pivot(head, sx * 0.19, 0.195, 0); ear.rotation.set(0, 0, -sx * 0.45); ear.scale.setScalar(G.ears);
+        box(ear, 0.23, 0.08, 0.05, sx * 0.085, 0, 0, S);
+        if (G.ring === sx) box(ear, 0.02, 0.045, 0.06, sx * 0.03, -0.05, 0, '#d8b048');
       }
-      const nose = pivot(head, 0, 0.11, 0.13); nose.rotation.x = 0.35; nose.scale.setScalar(G.nose);
-      box(nose, 0.06, 0.06, 0.11, 0, 0, 0.04, S);
-      box(head, 0.16, 0.03, 0.012, 0, 0.045, 0.138, '#2a1418');
-      for (const sx of [1, -1]) box(head, 0.022, 0.035, 0.012, sx * 0.05, 0.06, 0.14, '#efe6c8');
-      if (G.cap) { box(head, 0.31, 0.06, 0.27, 0, 0.255, 0.005, LEA); box(head, 0.32, 0.02, 0.28, 0, 0.228, 0.005, shade(LEA, -0.3)); }
-      else if (G.tuft) { box(head, 0.06, 0.08, 0.14, 0, 0.27, -0.01, d.hair); box(head, 0.05, 0.05, 0.08, 0, 0.3, -0.06, d.hair, 0.4); }
-      if (G.bone && !G.cap) box(head, 0.12, 0.025, 0.025, 0, 0.25, -0.1, '#e8dcc0', 0, 0.3);
+      const nose = pivot(head, 0, 0.095, 0.16); nose.scale.setScalar(G.nose);
+      box(nose, 0.065, 0.1, 0.08, 0, 0, 0.02, S);
+      if (G.cap) { box(head, 0.39, 0.07, 0.33, 0, 0.32, 0, LEA); box(head, 0.4, 0.02, 0.34, 0, 0.29, 0, shade(LEA, -0.3)); }
+      else if (G.tuft) { box(head, 0.07, 0.08, 0.16, 0, 0.32, -0.02, d.hair); box(head, 0.06, 0.06, 0.09, 0, 0.35, -0.08, d.hair, 0.4); }
+      if (G.bone && !G.cap) box(head, 0.14, 0.03, 0.03, 0, 0.3, -0.12, '#e8dcc0', 0, 0.3);
       // the arms: long, bare, with big hands
       const armL = pivot(chest, 0.195, 0.64 - CH, 0), armR = pivot(chest, -0.195, 0.64 - CH, 0), ELBOW = -0.1, WRIST = -0.2;
       armL.rotation.order = armR.rotation.order = 'YXZ';
@@ -689,7 +678,7 @@ export function makeFolkKit(GFX) {
       g.scale.set(GOBLIN_SCALE * d.build, GOBLIN_SCALE * d.height, GOBLIN_SCALE * d.build);
       // (the head's box for the ragdoll, from the neck: bigger than a person's)
       return { g, parts, d, body, chest, head, legL, legR, knees, ankles, armL, armR, elbows, wrists, flaps, fronts, backs, broom, crate, hoe, tool, hand, staff, shadow,
-        headY: 0.82, headHalf: [0.15, 0.125, 0.13] };
+        headY: 0.795, headHalf: [0.19, 0.145, 0.16] };
     }
     // (v695) a skeleton, bone by bone on the person's own joints (hips, knees, ankles, the waist, shoulders, elbows,
     // wrists, the neck) so it walks, strikes and falls as they do: thin limb bones with knobs at the joints, a pelvis, a
