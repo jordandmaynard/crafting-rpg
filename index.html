@@ -19719,10 +19719,20 @@ async function potionIcons() {
       u.push(URL.createObjectURL(blob));
     }
     urls.push(...u);
-    rules.push(`img.paint[data-potion="${c}"] { background-image: ${potionSet(u[0], u[1])}; }`);
+    rules.push([c, potionSet(u[0], u[1])]);
   }
   if (gen !== potionGen) { urls.forEach(u => URL.revokeObjectURL(u)); return; }
-  potionCss.textContent = potionCss.textContent.split('\n')[0] + '\n' + rules.join('\n');
+  potionCss.textContent = potionCss.textContent.split('\n')[0] + '\n' + rules.map(([c, set]) => `img.paint[data-potion="${c}"] { background-image: ${set}; }`).join('\n');
+  // (Jordan saw a new rule not repaint the icons already on screen until the window lost focus: each one gets the new
+  // picture on its own element too, so it's redrawn at once)
+  const by = Object.fromEntries(rules);
+  for (const el of document.querySelectorAll('img[data-potion]')) if (by[el.dataset.potion]) el.style.backgroundImage = by[el.dataset.potion];
+  for (const k of Object.keys(ICON)) {
+    const c = POTION_ITEMS[k]?.potion;
+    if (c && by[c]) ICON[k] = `<img class="paint" data-potion="${c}" src="${CLEAR_PX}" style="background-image: ${by[c].replace(/"/g, "'")}" alt="" draggable="false">`;
+  }
+  // (and the pack and hotbar drawn afresh, new elements, in case the browser still holds the old picture)
+  if (gen > 1) { if (invOpen) renderInv(); else renderHot(); }
   const old = potionUrls; potionUrls = urls;
   setTimeout(() => old.forEach(u => URL.revokeObjectURL(u)), 1000);
 }
@@ -19731,7 +19741,6 @@ function potionRedo() {
   potionQueued = true;
   requestAnimationFrame(() => { potionQueued = false; potionIcons(); });
 }
-potionRedo.live = true;
 // What a dragged item shows: its icon, or for a potion a live canvas that sloshes as it's dragged.
 const potionDrag = { cv: null, raf: 0 }, potionMats = {}, POTION_ACT = { give: 0 };
 function setDragIcon(drag, id) {
@@ -31737,7 +31746,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 729, crashSeen = new Map();
+const GAME_VERSION = 731, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
