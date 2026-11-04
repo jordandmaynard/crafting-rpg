@@ -406,6 +406,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v715:** (Jordan: character and backpack clean-up) The Character side's X is gone: the Backpack's X closes both (they never close apart). The Character title now sits level with the Backpack title (top 58, 16 px lower), and everything under it but the boots moved down without changing size: the Armor line, helmet, torso and amulet 16 px, the hero 10 px, and the weapon and pants 8 px, so the spacing above the boots is a little tighter.
 
+**v716:** (Jordan) The Armor line moved off the Character title's painted divider to the corner left of the boots: a column centred on the boots' square, with room for more stat lines (max HP, DPS). The hero moved up 36 px (head just under the Helmet label), the boots up the same (top 480), and the torso/amulet and weapon/pants rows were balanced between helmet and boots (tops 240 and 375). Foot locker items now draw at the pack's 78 px, and their stack numbers use the pack's 20 px size and 7/3 px inset, so the numbers sit the same way in both.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
