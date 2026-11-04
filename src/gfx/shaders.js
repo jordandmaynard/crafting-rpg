@@ -383,7 +383,8 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) vp: vec3f }
 }`;
   const head = PRELUDE + `
 ${vin}
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+// (v777: @invariant, so a depth pre-pass of these and their own draw land on the same depth to the bit)
+struct VOut { @builtin(position) @invariant pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = ${model} * vec4f(v.position, 1.0);
   return VOut(F.viewProj * w, w.xyz, ${col}, w.xyz - F.camPos.xyz);

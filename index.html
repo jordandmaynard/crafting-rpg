@@ -8140,6 +8140,26 @@ const cv = renderer.domElement;
 const scene = new GFX.Scene();
 // (renderWorld brings every world matrix up to date once a frame, rather than the renderer in each of its renders)
 scene.matrixAutoUpdate = false;
+// (v777) G > Moving objects: what the scene's objects that moved belong to, by their top-level group (tagged where
+// they're added: hero, foes, boats...), counted twice a second while the panel's open: those whose world matrix was
+// made anew since the last count (scene.js _mwV against _mwS)
+const MOVER_TAG = new WeakMap(), MOVER_SEEN = new Set();
+let moverT = 0;
+function moverRows() {
+  // (the first count after a while away only takes note of where things are: since then, everything has moved)
+  const now = performance.now(), prime = now - moverT > 1000;
+  moverT = now;
+  const out = new Map();
+  for (const top of scene.children) {
+    let n = 0;
+    top.traverse(o => { if (o._mwV !== o._mwS) { n++; o._mwS = o._mwV; } });
+    if (!n || prime) continue;
+    const k = MOVER_TAG.get(top) || (top.isLight ? 'lights' : top.isInstancedMesh ? 'instanced meshes (crowds, props)' : top.isMesh ? 'single meshes' : 'other groups');
+    out.set(k, (out.get(k) || 0) + n);
+  }
+  for (const k of MOVER_SEEN) if (!out.has(k)) out.set(k, 0);
+  for (const [k, n] of [...out].sort((a, b) => b[1] - a[1])) { MOVER_SEEN.add(k); prof.count('moving: ' + k, n); }
+}
 // distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
 const FOG = { on: 1, start: 0, end: 31, amount: 0.8, day: '#b8c4d8', dusk: '#d8a890', night: '#020203' };
 scene.fog = new GFX.Fog('#b8c4d8', 1e5, 1e5 + 1);
@@ -8907,7 +8927,7 @@ function renderWorld() {
   camera.layers.set(0);
   // (v776) the built pieces' depth first (BUILD_PRE); the shadow map waits for the world render, as before
   if (BUILD_PRE.on) {
-    renderer.passName = 'built pieces depth'; renderer.drawFilter = BUILD_PRE_F; renderer.depthPrepass = true;
+    renderer.passName = 'depth pre-pass'; renderer.drawFilter = BUILD_PRE_F; renderer.depthPrepass = true;
     renderer.shadowMap.autoUpdate = false; renderer.render(scene, camera); renderer.shadowMap.autoUpdate = true;
     renderer.depthPrepass = false; renderer.drawFilter = null;
   }
@@ -9874,7 +9894,9 @@ const BUILD_TEST = { shade: 0, cull: true };
 // facade lit in full and then covered) The built pieces' depth is drawn first, on its own (renderer.depthPrepass:
 // their own vertex code, no colour), so the world pass lights only the piece in front. G > Tests > Built pieces
 // pre-pass turns it off to compare
-const BUILD_PRE = { on: true }, BUILD_PRE_F = m => m.material === buildMat;
+// (v777: and the roofs and props too, the ones whose vertex code doesn't move with time; each material's position is
+// @invariant: buildMat, slateMat's code, and the built-in lit material's, which flatMat makes)
+const BUILD_PRE = { on: true }, BUILD_PRE_F = m => !!BUILD_PRE.mats && BUILD_PRE.mats.has(m.material) && !m.material.transparent;
 const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(24) }, tRose: { value: roseTex } };
 // (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
 // shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
@@ -16514,7 +16536,7 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
   }
   if (half) leaf.scale.x = 0.5;   // (one of a pair in a single doorway)
   pivot.add(leaf);
-  scene.add(shadowy(pivot));
+  scene.add(shadowy(pivot)); MOVER_TAG.set(pivot, 'doors and gates');
   if (k) pivot.visible = k <= shownStory;
   const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k };
   doors.set(dKey(c, r, w, k), d);
@@ -16600,7 +16622,8 @@ const SLATE_U = { s: { value: { x: 2, y: 1.2, z: 2, w: 0.69 } }, slope: { value:
 function updateSlateU() { const v = SLATE_U.s.value; v.x = SLATE.bump; v.y = SLATE.row * SLATE_TEX.rows; v.z = SLATE.width * SLATE_TEX.across; v.w = SLATE.shade; }
 const slateMat = new GFX.ShaderMaterial({ uniforms: SLATE_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
   code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+// (v777: @invariant for the depth pre-pass, BUILD_PRE)
+struct VOut { @builtin(position) @invariant pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
   return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
@@ -18582,7 +18605,7 @@ function boatGroup(b) {
   const m = brigModel(boatShapes(b), BOAT, { boat: boatMat, sail: sailMat, glow: boatGlowMat });
   Object.assign(b, m);
   b.g.traverse(o => o.layers.enable(9));   // (v525: seen by the water's mirror too, see proxyRT)
-  scene.add(b.g);
+  scene.add(b.g); MOVER_TAG.set(b.g, 'boats');
 }
 // (v498) T > Boats: every boat made again in the model picked, where it is and as it's set (sails, anchor, plank)
 function restyleBoats() {
@@ -18800,7 +18823,7 @@ function spawnGulls() {
     const m = gullModel(boatMat, GULLS.model, dolphinMat), g = m.g;
     shadowy(g);
     g.scale.setScalar(Gl.size * (0.9 + Math.random() * 0.2));
-    scene.add(g);
+    scene.add(g); MOVER_TAG.set(g, 'gulls');
     fl.birds.push({ k, g, m, ph: Math.random() * 6.28, A: 0.6, flapping: Math.random() < 0.7, swapT: 0.5 + Math.random() * 2,
       back: k * 1.25 + (k ? (Math.random() - 0.5) * 0.3 : 0), across: k * 0.95 * fl.side, up: k * 0.08 + (Math.random() - 0.5) * 0.2, rate: 0.92 + Math.random() * 0.16 });
   }
@@ -18854,7 +18877,7 @@ function spawnPod(b) {
     // (v681, Jordan) seen by the water's mirror too (layer 9, as the boats are), cut off where it meets the water
     // (seaLifeMirror sets it on level water for that pass)
     g.traverse(o => o.layers.enable(9));
-    scene.add(g);
+    scene.add(g); MOVER_TAG.set(g, 'dolphins');
     list.push({ g, m, su, sv, ph: Math.random() * 6.28, x, z, d: -3.5, hd: b.h, jump: null, jumps: Math.max(0, Math.round(D.jumps * (0.5 + Math.random() * 0.5))),
       nextJump: 4.5 + Math.random() * 6, above: false, beat: Math.random() });
   }
@@ -19008,7 +19031,7 @@ const nearHelm = () => !!H.boat && Math.hypot(H.bu, H.bv - BOAT.helmV) < 1.0;
 const hero = makeHuman();
 const heroRoot = new GFX.Group();
 heroRoot.add(shadowy(hero.g));
-scene.add(heroRoot);
+scene.add(heroRoot); MOVER_TAG.set(heroRoot, 'hero');
 // SILHOUETTE.steady: how much of the eye's exposure its colour takes back off (1 always as bright, 0 brightens in the dark)
 const SILHOUETTE = { color: '#4fb8b0', steady: 1 };
 const silMat = new GFX.MeshBasicMaterial({ color: SILHOUETTE.color, depthWrite: false, depthFunc: GFX.GreaterDepth });
@@ -19312,6 +19335,7 @@ function spawnFoe(kind, x, z) {
     home: [x, z], wander: null, wanderT: Math.random() * 3, path: null, pathT: 0, goal: -1, calm: 0, homing: false, side: 0, sideT: 0, kx: 0, kz: 0, squish: 0, phase: Math.random() * 6, hitT: 9, shadow: sh, base: f.g.scale.x,
     gait: Math.random(), run: 0, amp: 0, turnV: 0, lastFace: null });
   if (d.human) humanFoe(foe);
+  MOVER_TAG.set(f.g, d.human ? 'hostile people' : 'foes');
   foes.push(foe);
   return foe;
 }
@@ -32845,6 +32869,7 @@ const WORLD_SPLIT_F = {};
 // cull: drop back faces (pieces wound the wrong way vanish too, so it's only a test)
 function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; buildMat.shadowSide = GFX.DoubleSide; }
 const WORLD_PARTS = ['roofs', 'built pieces', 'glass', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
+BUILD_PRE.mats = new Set([buildMat, roofMat, slateMat, slateSteep, thatchMat, groundMat, metalMat]);
 function worldPart(m) {
   const t = m.material;
   if (t === buildMat) return 'built pieces';
@@ -32864,7 +32889,7 @@ const PROF_FOLD_KEY = 'emberwild.profFold';
 try { const f = JSON.parse(localStorage.getItem(PROF_FOLD_KEY) || '[]'); if (Array.isArray(f)) prof.folded = new Set(f); } catch (e) {}
 prof.onFold = F => { try { localStorage.setItem(PROF_FOLD_KEY, JSON.stringify([...F])); } catch (e) {} };
 const showSpikes = () => { const F = prof.folded, fh = n => `<div class="spike-head"><b class="pfold" data-fold="${n}">${F.has(n) ? '▸' : '▾'} ${n}</b></div>`;
-  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Built pieces pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the built pieces' depth is drawn first on its own (the "built pieces depth" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
+  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
 // (pointerdown, not click: the tables are drawn anew 4 times a second, and a click's press and release can land on
 // two different copies of a heading)
 profLive.addEventListener('pointerdown', e => { const f = e.target.closest('[data-fold]'); if (f) { prof.fold(f.dataset.fold); e.preventDefault(); } });
@@ -33017,7 +33042,7 @@ function frameBody(now) {
   CROWD_READ.foes = foes.length; CROWD_READ.draws = renderer.info.draws; CROWD_READ.fps = fps;
   // (how many draws the frame made, and how many meshes the scene holds, counted twice a second: one that climbs
   // while you stand still is a leak)
-  if (!profPanel.hidden && (sceneCountT -= real) < 0) { sceneCountT = 0.5; sceneMeshes = 0; scene.traverse(o => { if (o.isMesh) sceneMeshes++; }); }
+  if (!profPanel.hidden && (sceneCountT -= real) < 0) { sceneCountT = 0.5; sceneMeshes = 0; scene.traverse(o => { if (o.isMesh) sceneMeshes++; }); moverRows(); }
   prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'} · ${renderer.info.draws} draws · ${renderer.info.passTotal || 0} render passes · ${sceneMeshes} meshes`;
   renderer.info.draws = 0; renderer.info.passTotal = 0;
   // (v768) since the last frame, the potions' own loop's work included: sends to the GPU, canvases drawn, uploads
@@ -33049,7 +33074,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 776, crashSeen = new Map();
+const GAME_VERSION = 777, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;

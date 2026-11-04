@@ -39,7 +39,7 @@ export class Object3D {
     this.renderOrder = 0;
     this.userData = {};
     // (v776: updateMatrixWorld's record of what its matrices were made from, set here so every object keeps one shape)
-    this._mc = undefined; this._mm = undefined; this._mwV = 0; this._mwP = undefined; this._mwPV = -1;
+    this._mc = undefined; this._mm = undefined; this._mwV = 0; this._mwP = undefined; this._mwPV = -1; this._mwS = 0;
   }
   add(...objs) {
     for (const o of objs) {
