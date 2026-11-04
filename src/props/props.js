@@ -754,6 +754,12 @@ export const PROPS = {
       scroll: r() < 0.8, chains: r() < 0.6 }),
     describe: L => [['Board', L.board[1], L.board[0]], ['A pile of gold coins in a border of', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
     build(L, C) { tavernSign(L, C, 'coins'); } },
+  // (v725, Jordan: every trade's building has a sign like the tavern's and the bank's) the trade's emblem on the board
+  tradeSign: { name: 'Trade sign', group: 'Tavern', tiles: [1, 1], wall: true, hang: true, outside: true, use: 'Show (outside, by or over the door)', goes: 'Every trade\'s workshop front',
+    roll: r => ({ board: pick(r, [['#a07848', 'Weathered oak'], ['#8a6440', 'Old oak'], ['#b08a58', 'Pale pine']]), paint: pick(r, [['#2a1c12', 'Black'], ['#5a2a1a', 'Ox-blood'], ['#3a2a1a', 'Brown'], ['#2a3a24', 'Dark green'], ['#24344a', 'Navy']]),
+      scroll: r() < 0.6, chains: r() < 0.5, emblem: pick(r, Object.keys(SIGN_EMBLEMS)) }),
+    describe: L => [['Board', L.board[1], L.board[0]], ['Painted', SIGN_EMBLEMS[L.emblem]?.name || L.emblem], ['Border', L.paint[1], L.paint[0]], ['Bracket', L.scroll ? 'Scrolled iron' : 'Plain iron'], ['Hung by', L.chains ? 'Chains' : 'Ropes']],
+    build(L, C) { tavernSign(L, C, L.emblem); } },
   // ---------- (2026-11-03, Jordan) the guard house: two stories of stone, the barracks upstairs, a training yard beside it ----------
   weaponRack: { name: 'Weapon rack', group: 'Guard', tiles: [2, 1], wall: true, use: 'Show: the watch\'s spears and swords', goes: 'Guard house; its training yard (wooden weapons)',
     roll: r => ({ spears: 2 + Math.floor(r() * 3), swords: 2 + Math.floor(r() * 2), steel: pick(r, BLADES), grip: pick(r, GRIPS), gone: Math.floor(r() * 5) }),
@@ -954,6 +960,7 @@ function tavernSign(L, C, emblem = 'keg') {
     for (const [dz, dy, lz, ly] of [[0, bh / 2 - 0.04, bw - 0.08, 0.018], [0, -bh / 2 + 0.04, bw - 0.08, 0.018], [bw / 2 - 0.04, 0, 0.018, bh - 0.08], [-bw / 2 + 0.04, 0, 0.018, bh - 0.08]])
       part(G.box, K, (x + x1) / 2, by + dy, bz + dz, { sx: Math.abs(x1 - x), sy: ly, sz: lz });
     if (emblem === 'coins') { signCoins(s, x, x1, x2, by, bz); continue; }
+    if (SIGN_EMBLEMS[emblem]) { SIGN_EMBLEMS[emblem].draw(signLayers(s, x, x1, x2, by, bz), K); continue; }
     // the keg on its side: a bellied outline, darker hoops and stave lines over it, the tap at one end
     plateX([[-0.17, -0.085], [-0.09, -0.115], [0.09, -0.115], [0.17, -0.085], [0.17, 0.085], [0.09, 0.115], [-0.09, 0.115], [-0.17, 0.085]], 0, 0, s < 0 ? x1 : x, s < 0 ? x : x1, K, bz, by - 0.01);
     for (const hz of [-0.12, -0.05, 0.05, 0.12]) part(G.box, IRON, (x1 + x2) / 2 - s * 0.001, by - 0.01, bz + hz, { sx: Math.abs(x2 - x1) + 0.002, sy: Math.abs(hz) > 0.1 ? 0.19 : 0.225, sz: 0.018 });
@@ -980,6 +987,108 @@ function signCoins(s, x, x1, x2, by, bz) {
   // two coins fallen flat before the heap, seen edge on
   for (const dz of [-0.215, 0.215]) part(G.box, GOLD, (x + x2) / 2, y0 - 0.05, bz + dz, { sx: Math.abs(x2 - x), sy: 0.012, sz: 0.09 });
 }
+// (v725) a trade sign's painted layers on face s of the board: f1/f2 a flat shape (pts (z, y) fanned about its middle,
+// at oz, oy) in the first layer (2-6 mm proud) or the second (6-10 mm), b1/b2 a bar from (z0, y0) to (z1, y1) w wide,
+// el an ellipse's outline, all about the board's middle
+function signLayers(s, x, x1, x2, by, bz) {
+  const lay = [[x, x1], [x1, x2]];
+  // (fanned about its corners' mean, so a shape off the board's middle needn't be given about its own)
+  const f = n => (pts, col, oz = 0, oy = 0) => {
+    const [a, b] = lay[n], mz = pts.reduce((m, p) => m + p[0], 0) / pts.length, my = pts.reduce((m, p) => m + p[1], 0) / pts.length;
+    plateX(pts.map(([z, y]) => [z - mz, y - my]), 0, 0, s < 0 ? b : a, s < 0 ? a : b, col, bz + oz + mz, by + oy + my);
+  };
+  const b = n => (z0, y0, z1, y1, w, col) => {
+    const [a, c] = lay[n], L = Math.hypot(z1 - z0, y1 - y0);
+    part(G.box, col, (a + c) / 2, by + (y0 + y1) / 2, bz + (z0 + z1) / 2, { sx: Math.abs(c - a), sy: L, sz: w, rx: Math.atan2(z1 - z0, y1 - y0) });
+  };
+  const el = (rz, ry, a = 0, n = 12) => Array.from({ length: n }, (_, k) => { const t = k / n * Math.PI * 2, u = Math.cos(t) * rz, v = Math.sin(t) * ry; return [u * Math.cos(a) - v * Math.sin(a), u * Math.sin(a) + v * Math.cos(a)]; });
+  return { f1: f(0), f2: f(1), b1: b(0), b2: b(1), el };
+}
+// the trades' emblems (src: index.html SIGN_OF picks one by trade), each kept inside the board's painted border
+const SIGN_EMBLEMS = {
+  hide: { name: 'A stretched hide (tanner)', draw({ f1, b2 }) {
+    f1([[0, 0.15], [0.07, 0.11], [0.15, 0.14], [0.12, 0.05], [0.17, -0.05], [0.09, -0.07], [0.07, -0.15], [0, -0.12], [-0.07, -0.15], [-0.09, -0.07], [-0.17, -0.05], [-0.12, 0.05], [-0.15, 0.14], [-0.07, 0.11]], '#946038');
+    b2(0, 0.12, 0, -0.1, 0.03, '#8a5a34');
+  } },
+  anvil: { name: 'An anvil and hammer (smith)', draw({ f1, b2 }) {
+    f1([[-0.21, 0.06], [-0.1, 0.08], [0.15, 0.08], [0.15, 0.02], [0.06, 0], [0.04, -0.07], [0.11, -0.11], [0.11, -0.14], [-0.11, -0.14], [-0.11, -0.11], [-0.04, -0.07], [-0.06, 0], [-0.11, 0.025]], IRON);
+    b2(-0.1, 0.07, 0.15, 0.07, 0.012, IRON_LT);
+    b2(-0.02, 0.1, 0.17, 0.165, 0.02, '#8a5a34');
+    b2(-0.05, 0.065, -0.085, 0.165, 0.055, IRON_LT);
+  } },
+  axe: { name: 'An axe in a log (woodcutter)', draw({ f1, f2, b2, el }) {
+    f1([[-0.2, -0.06], [0.16, -0.06], [0.16, -0.16], [-0.2, -0.16]], '#7a5232');
+    f2(el(0.045, 0.05), '#c89a62', 0.16, -0.11);
+    b2(-0.18, -0.09, 0.1, -0.09, 0.008, '#5a3a22'); b2(-0.18, -0.13, 0.08, -0.13, 0.008, '#5a3a22');
+    b2(0.03, -0.07, 0.0, 0.17, 0.024, '#c8a070');
+    f2([[0.0, 0.16], [-0.09, 0.19], [-0.115, 0.12], [-0.09, 0.05], [0.0, 0.085]], '#9a9aa6');
+  } },
+  sheaf: { name: 'A sheaf of wheat (goodfolk)', draw({ b1, b2, f2, el }) {
+    for (let k = -3; k <= 3; k++) b1(k * 0.012, -0.16, k * 0.04, 0.07, 0.012, '#c8a04a');
+    for (let k = -3; k <= 3; k++) f2(el(0.018, 0.05, -k * 0.12, 8), '#e0b85a', k * 0.044, 0.11);
+    b2(-0.05, -0.05, 0.05, -0.05, 0.03, '#8a5a34');
+  } },
+  ingots: { name: 'A horseshoe over ingots (ironmonger)', draw({ f1, b1, b2 }) {
+    const ingot = (z, y) => { f1([[-0.075, -0.03], [0.075, -0.03], [0.055, 0.03], [-0.055, 0.03]], '#8a8a96', z, y); b2(z - 0.05, y + 0.02, z + 0.05, y + 0.02, 0.008, '#b0b0bc'); };
+    ingot(-0.085, -0.12); ingot(0.085, -0.12); ingot(0, -0.055);
+    const r = 0.065, cy = 0.11;
+    for (let k = 0; k < 7; k++) {
+      const a0 = -0.15 * Math.PI + k / 7 * 1.3 * Math.PI, a1 = a0 + 1.3 * Math.PI / 7;
+      b1(r * Math.cos(a0), cy - r * Math.sin(a0), r * Math.cos(a1), cy - r * Math.sin(a1), 0.028, IRON);
+    }
+  } },
+  flask: { name: 'A flask and herbs (herbalist)', draw({ f1, f2, b1, b2, el }) {
+    f1(el(0.085, 0.085, 0, 16), '#bfe4ee', 0, -0.07);
+    f2([[-0.075, -0.07], [0.075, -0.07], [0.06, -0.12], [0, -0.15], [-0.06, -0.12]], '#5ac08a');
+    b1(0, 0.0, 0, 0.12, 0.045, '#bfe4ee');
+    b2(0, 0.11, 0, 0.15, 0.05, '#8a5a34');
+    for (const sg of [-1, 1]) { b1(sg * 0.15, -0.15, sg * 0.17, 0.06, 0.01, '#3a5a2a'); for (const y of [-0.08, -0.01, 0.05]) f2(el(0.035, 0.014, sg * 0.6, 8), '#5a8a3a', sg * 0.16 + sg * 0.03, y); }
+  } },
+  pane: { name: 'A leaded window (glazier)', draw({ f1, b2 }) {
+    const W = 0.12, Hh = 0.14, w = 0.1, h = 0.12;
+    f1([[-W, -Hh], [W, -Hh], [W, Hh], [-W, Hh]], '#a8d0e0');
+    for (const k of [-0.12, 0, 0.12]) {
+      let y0 = Math.max(-h, -w - k), y1 = Math.min(h, w - k);
+      if (y1 > y0) b2(y0 + k, y0, y1 + k, y1, 0.01, '#2a2630');
+      y0 = Math.max(-h, k - w); y1 = Math.min(h, k + w);
+      if (y1 > y0) b2(k - y0, y0, k - y1, y1, 0.01, '#2a2630');
+    }
+    for (const sg of [-1, 1]) { b2(-W - 0.012, sg * Hh, W + 0.012, sg * Hh, 0.024, '#5a3a22'); b2(sg * W, -Hh + 0.012, sg * W, Hh - 0.012, 0.024, '#5a3a22'); }
+  } },
+  blocks: { name: 'Dressed stone and a chisel (mason)', draw({ f1, b2 }) {
+    [[3, -0.12], [2, -0.045], [1, 0.03]].forEach(([n, y], row) => {
+      for (let j = 0; j < n; j++) f1([[-0.058, -0.034], [0.058, -0.034], [0.058, 0.034], [-0.058, 0.034]], ['#a8a4b0', '#9a96a2', '#b4b0bc'][(j + row) % 3], (j - (n - 1) / 2) * 0.124, y);
+    });
+    b2(0.09, 0.03, 0.17, 0.15, 0.014, '#9a9aa6'); b2(0.15, 0.12, 0.19, 0.18, 0.03, '#8a5a34');
+  } },
+  wheel: { name: 'A cart wheel (carter)', draw({ f2, b1, b2, el }) {
+    const R = 0.13, n = 16;
+    for (let k = 0; k < n; k++) { const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2; b1(Math.cos(a0) * R, Math.sin(a0) * R, Math.cos(a1) * R, Math.sin(a1) * R, 0.034, '#4a3020'); }
+    for (let k = 0; k < 4; k++) { const a = k / 8 * Math.PI * 2; b1(Math.cos(a) * R, Math.sin(a) * R, -Math.cos(a) * R, -Math.sin(a) * R, 0.018, '#5a3a22'); }
+    for (let k = 0; k < n; k++) { const a0 = k / n * Math.PI * 2, a1 = (k + 1) / n * Math.PI * 2, R2 = R + 0.012; b2(Math.cos(a0) * R2, Math.sin(a0) * R2, Math.cos(a1) * R2, Math.sin(a1) * R2, 0.012, IRON); }
+    f2(el(0.035, 0.035, 0, 10), IRON);
+  } },
+  gem: { name: 'A cut gem (jeweller)', draw({ f1, b2 }) {
+    f1([[-0.07, 0.1], [0.07, 0.1], [0.14, 0.04], [0, -0.14], [-0.14, 0.04]], '#3a7ad0');
+    const L = '#9ac4f0';
+    b2(-0.14, 0.04, 0.14, 0.04, 0.008, L);
+    for (const sg of [-1, 1]) { b2(sg * 0.07, 0.1, sg * 0.035, 0.04, 0.007, L); b2(sg * 0.035, 0.04, 0, -0.14, 0.007, L); }   // (the crown's facets, the pavilion's)
+  } },
+  scales: { name: 'A balance (merchant)', draw({ f1, f2, b1 }) {
+    f1([[-0.07, -0.16], [0.07, -0.16], [0.03, -0.13], [-0.03, -0.13]], BRASS);
+    b1(0, -0.13, 0, 0.13, 0.016, BRASS);
+    b1(-0.16, 0.1, 0.16, 0.1, 0.014, BRASS);
+    for (const sg of [-1, 1]) {
+      b1(sg * 0.15, 0.1, sg * 0.2, -0.03, 0.006, IRON_LT); b1(sg * 0.15, 0.1, sg * 0.1, -0.03, 0.006, IRON_LT);
+      f2([[-0.065, 0], [0.065, 0], [0.045, -0.03], [0, -0.04], [-0.045, -0.03]], GOLD_DK, sg * 0.15, -0.03);
+    }
+  } },
+  compass: { name: 'A compass rose (cartographer)', draw({ f1, f2 }, K) {
+    const star = (Rr, ri, a0) => Array.from({ length: 8 }, (_, k) => { const a = a0 + k / 8 * Math.PI * 2, r = k % 2 ? ri : Rr; return [Math.cos(a) * r, Math.sin(a) * r]; });
+    f1(star(0.165, 0.035, Math.PI / 2), '#e8dcc0');
+    f2(star(0.09, 0.025, Math.PI / 4), K);
+  } },
+};
 // a stack of n coins at (x, y, z), its top a little off true
 function coinStack(x, y, z, n, r = 0.026) {
   for (let k = 0; k < n; k++) part(G.cyl12, k % 2 ? GOLD : shade(CC(GOLD), 0.9), x + ((k * 7) % 3 - 1) * 0.002, y + 0.006 + k * 0.012, z + ((k * 5) % 3 - 1) * 0.002, { sx: r * 2, sy: 0.011, sz: r * 2 });

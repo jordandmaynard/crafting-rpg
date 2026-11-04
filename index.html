@@ -4226,7 +4226,7 @@ function townProps(t, n) {
       furnish(h, BANK_HALL, { wood, n: n * 31 + j });
       for (const i of back) h.clear.delete(i);
     } else furnish(h, h.vaultLater ? [{ id: 'vaultDoor' }, ...kit] : kit || PROP_KITS.home[t.tier], { wood, n: n * 31 + j });
-    if (h.role === 'tavern' || h.role === 'bank' || h.role === 'guard') tavernFront(t, n, h, { wood, n: n * 31 + j });
+    if (h.role === 'tavern' || h.role === 'bank' || h.role === 'guard' || (!h.role && SIGN_OF[h.trade])) tavernFront(t, n, h, { wood, n: n * 31 + j });   // (v725: every trade's workshop too)
   });
 }
 // (v555, Jordan) the tavern's bar: the barrel rack against a wall, a free row before it for the innkeeper (kept
@@ -4382,9 +4382,13 @@ function propCounter(h, cid, ctx) {
 }
 // (v555, Jordan) the tavern's front (and since 2026-11-03 the bank's, its sign a pile of coins, on its stone wall): a hanging sign with a keg on it, on a plain stretch of wall beside the door
 // (high on the ground floor) or over the door (low on the story above), and a stack of kegs or two out beside the house
+// (v725, Jordan: every trade's building has a sign like theirs; none on a church, the guard house, a plain house, a farm
+// or a mill) the emblem painted on each trade's board (src/props/props.js SIGN_EMBLEMS)
+const SIGN_OF = { tanner: 'hide', smith: 'anvil', armorer: 'anvil', masterSmith: 'anvil', woodcutter: 'axe', goodfolk: 'sheaf', ironmonger: 'ingots',
+  herbalist: 'flask', glazier: 'pane', mason: 'blocks', carter: 'wheel', jeweller: 'gem', merchant: 'scales', cartographer: 'compass' };
 function tavernFront(t, n, h, ctx) {
   if (!h.door || !h.inside) return;
-  const [ic, ir] = h.inside, ins = T(ic, ir), set = new Set(h.tiles.map(([c, r]) => T(c, r)));
+  const [ic, ir] = h.inside, ins = T(ic, ir), set = new Set(h.tiles.map(([c, r]) => T(c, r))), trade = !h.role && SIGN_OF[h.trade];
   let out = -1;
   for (let d = 0; d < 4; d++) { const [ec, er, ew] = edgeOf(ic, ir, d); if (ec === h.door[0] && er === h.door[1] && ew === h.door[2]) out = d; }
   if (out < 0) return;
@@ -4393,7 +4397,7 @@ function tavernFront(t, n, h, ctx) {
     const nc = ic + DC[p], nr = ir + DR[p];
     const v = set.has(T(nc, nr)) ? wallOn(nc, nr, out) : 0;
     // (on a window's wall it goes on the post at that stretch's far end, a tile from the door, clear of the glass)
-    if (v === 1 || v === 13 || v === 4 || v === 14) spots.push({ c: nc, r: nr, k: 0, v, slide: v === 13 || v === 14 ? 0.47 * (p === ((out + 3) & 3) ? 1 : -1) : 0 });
+    if (v === 1 || v === 13 || v === 4 || v === 14 || (v === 3 && trade)) spots.push({ c: nc, r: nr, k: 0, v, slide: v === 13 || v === 14 ? 0.47 * (p === ((out + 3) & 3) ? 1 : -1) : 0 });   // (3: a hamlet's log wall)
   }
   if (upWallOn(ic, ir, out, 1) === 1) spots.push({ c: ic, r: ir, k: 1, v: 1, slide: 0 });
   // (2026-11-03, Jordan) the guard house hangs one shield with crossed swords beside its door, on a wall with no
@@ -4407,7 +4411,7 @@ function tavernFront(t, n, h, ctx) {
   }
   for (const s of pickFrom.length ? [pickFrom[Math.floor(hs(ic, ir, 553) * pickFrom.length)]] : []) {
     const oc = s.c + DC[out], or = s.r + DR[out], [ec, er, ew] = edgeOf(s.c, s.r, out);
-    propPut(h, s.k, guard ? 'shield' : h.role === 'bank' ? 'bankSign' : 'tavernSign', [[oc, or]], out, s.v, ctx, { cut: dKey(ec, er, ew, s.k) + 1, y0: storyY(s.k, ins), look: guard ? crest : { up: !!s.k }, slide: s.slide });
+    propPut(h, s.k, guard ? 'shield' : trade ? 'tradeSign' : h.role === 'bank' ? 'bankSign' : 'tavernSign', [[oc, or]], out, s.v, ctx, { cut: dKey(ec, er, ew, s.k) + 1, y0: storyY(s.k, ins), look: guard ? crest : trade ? { up: !!s.k, emblem: trade } : { up: !!s.k }, slide: s.slide });
     buildCount[Math.floor(or / CH) * NC + Math.floor(oc / CH)]++;   // (drawn with the pieces of the chunk it hangs over)
   }
   if (h.role !== 'tavern') return;
@@ -6916,6 +6920,7 @@ function finishTowns() {
     for (const g of t.gates || []) { const d = makeDoor(...g, 'gate'); d.open = true; openDoors.add(edgeKey(...g)); }
     for (const h of t.huts || []) { makeDoor(...h.door); makeRoom(h.tiles, h.color); }
   }
+  townStations();
   buildHalos();   // (after the bank's lanterns are in t.lamps)
   buildGrottoFalls();
   buildObelisks();
@@ -7864,6 +7869,7 @@ const STATION_KIND = {
 };
 // how many tiles across a station stands (2 but for the crate)
 const stFoot = k => STATION_KIND[k].foot || 2;
+const stF = st => st.foot || stFoot(st.kind);   // (v725: a town workshop's station stands on its one tile)
 const isStation = k => k in STATION_KIND;
 const REFINE = { time: 0.5 };   // seconds to refine one (T > Stations)
 const STATION_IN = 4, STATION_OUT = 4;   // squares in a station's input and output
@@ -12157,7 +12163,7 @@ function buildSmoke() {
   // (and a smelter's chimney while it works)
   for (const st of stations.values()) {
     if (st.kind !== 'smelter' || !st.busy || Math.abs(st.c - H.x) > SMOKE_R || Math.abs(st.r - H.z) > SMOKE_R) continue;
-    const [mx, mz] = stMid(st), S = STATION_LOOK.size, [sx, sz] = stationAt(mx, mz, st.ry)(0, 0.14 * S);
+    const [mx, mz] = stMid(st), S = st.town ? 1 : STATION_LOOK.size, [sx, sz] = stationAt(mx, mz, st.ry)(0, 0.14 * S);
     add(sx, surfaceY(mx, mz) + 2.0 * S, sz, 0, 0.05);
   }
   if (!pos.length) return;
@@ -13798,7 +13804,7 @@ const STATION_LOOK = { size: 1.5 };
 // how much lower a built table's top is (from 0.53 up: about half), its legs shortened to suit
 const TABLE_LOW = 0.26;
 // the middle of a station's 2 x 2 tiles, and the station (if any) on a tile
-const stMid = st => { const h = stFoot(st.kind) / 2; return [st.c + h, st.r + h]; };
+const stMid = st => { const h = stF(st) / 2; return [st.c + h, st.r + h]; };
 const stationTile = new Map();   // each of its 4 tiles -> the station
 const partShrink = new GFX.Matrix4();
 // (v452, Jordan) a town bed, 2 x 1: a wooden frame on short legs, a tall headboard against the wall and a low
@@ -23946,7 +23952,7 @@ const tablesNear = () => TABLES.filter(t => Math.hypot(t.x - H.x, t.z - H.z) < (
 const stationsNear = () => [...stations.values()].filter(st => {
   if (STATION_KIND[st.kind].craft) return false;
   const [mx, mz] = stMid(st);
-  return Math.hypot(mx - H.x, mz - H.z) - (2 - stFoot(st.kind)) * 0.5 < STATION_REACH && Math.abs(LV[T(st.c, st.r)] * STEP - H.y) < 0.6;
+  return Math.hypot(mx - H.x, mz - H.z) - (2 - stF(st)) * 0.5 < STATION_REACH && Math.abs(LV[T(st.c, st.r)] * STEP - H.y) < 0.6;
 });
 const doorsNear = () => [...doors.values()].map(d => [d, d.w ? d.c : d.c + 0.5, d.w ? d.r + 0.5 : d.r]).filter(([, x, z]) => Math.hypot(x - H.x, z - H.z) < 1.7);
 // what F (A on the controller) does here: pick up loot, use an armor or weapon crafting table or a station, or open or
@@ -25280,7 +25286,7 @@ function gearMesh(R, mat) {
 // the moving parts of a station, in a group turned as it was built: spin is what turns, mouth the smelter's fire
 function stationFx(st) {
   const g = new GFX.Group(), [x, z] = stMid(st), y = surfaceY(x, z);
-  g.position.set(x, y, z); g.rotation.y = st.ry; g.scale.setScalar(STATION_LOOK.size);
+  g.position.set(x, y, z); g.rotation.y = st.ry; g.scale.setScalar(st.town ? 1 : STATION_LOOK.size);
   const parts = {};
   if (st.kind === 'sawtable') {
     const s = parts.blade = new GFX.Group();
@@ -25316,10 +25322,10 @@ const outRoom = (st, id) => st.out.some((o, i) => o === null || (o === id && st.
 // the crates and chests sharing an edge with a station: what it makes goes in them first, topping up a stack in any
 // of them before starting a new one, and only into its own output once they're full
 function touching(st) {
-  const f = stFoot(st.kind), out = [];
+  const f = stF(st), out = [];
   for (const o of stations.values()) {
     if (o === st || !isStore(o)) continue;
-    const g = stFoot(o.kind), xs = st.c <= o.c + g - 1 && o.c <= st.c + f - 1, zs = st.r <= o.r + g - 1 && o.r <= st.r + f - 1;
+    const g = stF(o), xs = st.c <= o.c + g - 1 && o.c <= st.c + f - 1, zs = st.r <= o.r + g - 1 && o.r <= st.r + f - 1;
     if ((xs && (o.r + g === st.r || st.r + f === o.r)) || (zs && (o.c + g === st.c || st.c + f === o.c))) out.push(o);
   }
   return out;
@@ -25476,6 +25482,7 @@ function movePick() {
   const s = ghostSpot;
   if (!s || !s.st) { sfx.nope(); toast('Drag a station, crafting table, crate or chest to move it.'); return; }
   if (s.st.poi) { sfx.nope(); toast(farmWhy(4)); return; }   // (v677: the mill's grinder stays put)
+  if (s.st.town) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }   // (v725: so do the workshops')
   const [x, z] = stMid(s.st);
   if (Math.hypot(x - H.x, z - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to pick that up.'); return; }
   moving = s.st; sfx.remove();
@@ -25516,7 +25523,7 @@ const STATION_REACH = 2.1;
 const nearStation = () => {
   let best = null, bd = STATION_REACH;
   for (const st of stations.values()) {
-    const [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z) - (2 - stFoot(st.kind)) * 0.5;
+    const [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z) - (2 - stF(st)) * 0.5;
     if (d < bd && Math.abs(LV[T(st.c, st.r)] * STEP - H.y) < 0.6) { bd = d; best = st; }
   }
   return best;
@@ -25572,7 +25579,7 @@ function updateStations(dt) {
       st.body.scale.setScalar(k); st.body.position.set(bx * (1 - k), by * (1 - k), bz * (1 - k));
     }
     const p = st.parts, [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z);
-    st.fx.visible = d < 60; st.fx.scale.setScalar(STATION_LOOK.size);
+    st.fx.visible = d < 60; st.fx.scale.setScalar(st.town ? 1 : STATION_LOOK.size);   // (a town workshop's is drawn full size on its tile)
     if (p.blade) p.blade.rotation.x -= dt * st.spin * 30;
     if (p.runner) p.runner.rotation.y += dt * st.spin * 2.2;
     if (p.big) { p.big.rotation.z += dt * st.spin * 1.6; p.small.rotation.z -= dt * st.spin * 1.6 * 15 / 9; }
@@ -25595,6 +25602,23 @@ function updateStations(dt) {
   if (openSt) {
     if (openSt.loot ? (H.story || 0) !== openSt.k || Math.hypot(openSt.x - H.x, openSt.z - H.z) > 3.2 : openSt.vault ? !vaultNear(3.2) : !stations.has(T(openSt.c, openSt.r)) || Math.hypot(stMid(openSt)[0] - H.x, stMid(openSt)[1] - H.z) > 3.2) { closeStation(); if (invOpen) toggleInv(false); }
     else stationProgress();
+  }
+}
+// (v725, Jordan: usable refining and crafting tables in the trade buildings, a smelter in the ironmonger's and so on)
+// each workshop's bench (TOWN_PROP) made a station anyone can use, on its own tile, drawn as it was (its moving parts
+// full size): the saw table, grinder and smelter refine as yours do, the alchemy table crafts as a town's tables do;
+// the trades' crates were already opened as loot
+const TOWN_STATION = { saw: 'sawtable', grinder: 'grinder', smelter: 'smelter', rack: 'tanrack' };
+function townStations() {
+  for (const [i, kind] of TOWN_PROP) {
+    const c = i % N, r = Math.floor(i / N), n = TN[i] - 1;
+    if (kind === 'alchemy') { if (!TABLES.some(t => t.c === c && t.r === r)) TABLES.push({ c, r, x: c + 0.5, z: r + 0.5, ry: 0, town: n, kind: 'alchemy' }); continue; }
+    const k = TOWN_STATION[kind];
+    if (!k || stations.has(i)) continue;
+    const st = { c, r, kind: k, ry: 0, foot: 1, town: n + 1, inp: new Array(STATION_IN).fill(null), inN: new Array(STATION_IN).fill(0),
+      out: new Array(STATION_OUT).fill(null), outN: new Array(STATION_OUT).fill(0), box: [], boxN: [], t: 0, spin: 0, busy: false };
+    stations.set(i, st); stationTile.set(i, st);
+    stationFx(st);
   }
 }
 // whose a point of interest's piece is, when you try to take it down (FARM's value)
@@ -31459,7 +31483,7 @@ function frameBody(now) {
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
-const GAME_VERSION = 725, crashSeen = new Map();
+const GAME_VERSION = 726, crashSeen = new Map();
 function showCrash(err) {
   const msg = String(err && err.message || err), key = msg + (err && err.stack ? err.stack.split('\n')[1] : '');
   const n = (crashSeen.get(key) || 0) + 1;
