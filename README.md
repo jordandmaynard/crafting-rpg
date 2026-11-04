@@ -375,6 +375,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v698:** (Jordan) Tuning panel: a value that isn't at its default shows yellow, with a small circular reset arrow beside it that puts just that one value back (running its own update, as letting go of the slider does). Time of day is never marked, since the clock moves it. Tile height and the map's book font are kept in storage, so they're compared with the code's defaults (2 and on) rather than what the game loaded with (TUNE_HOMES); TUNE_UNMARKED lists rows never marked. Reset now also runs each changed value's update once (tile height rebuilds the world only if it had changed), and no longer touches readouts or buttons.
 
+**v699:** (Jordan: the big health bar in the centre shook out of its frame when hit) It no longer shakes. A hit flashes it and leaves the health just lost as a part that flares hot and shrinks away, as the monsters' bars do, with the same HPBAR settings (flash, flashFade, delay, trailRate, lost, hot, hotCore, hotBright, hotBloom); renderHp draws it through barHot, which drawBar now shares. On the belt the lost part is the lost colour masked by hp-fill.webp so it keeps the fill's rounded ends, its bloom as drop shadows; the touch health plate does the same with its plain bar. Jordan's HUD bars paste baked in (nameY 4 to 5.5).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
