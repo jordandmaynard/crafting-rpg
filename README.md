@@ -687,6 +687,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v875:** (Jordan) T > Backpack tabs: the first tab's top, the spacing from tab to tab, the number's place across (its middle, from the tab's point) and how far the closed tabs stick out past the backpack's edge (the open one sticks out 74). PACK_TABS, applyPackTabs (follows the sliders live).
 
+**v876:** (Jordan's tuning) Backpack tabs: first tab's top 116.5 (was 107), spacing 76 (was 109.5), number across 32 (was 46), closed tabs stick out 48 (was 62).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
