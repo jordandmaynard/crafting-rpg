@@ -618,6 +618,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v821:** (Jordan's v819 Scene contents: nothing leaks; after play it's 21 foes about and more of the world loaded, and doors and gates were 2,245 of the scene's 4,537 objects) Each door or gate leaf's boards, bands, studs and bars are merged into one mesh per material when it's made (bakeLeaf, the hero's merge: the same triangles), and a door is left by the scene's matrix pass but for the frames it swings (matrixStill, unstill). Foes were already drawn in shared batches (v88, v701), so nothing there. G > Recorded draw lists: draws encoded one by one, all passes and the six passes with the most.
 
+**v822:** (Jordan: only a refining station's moving parts need to be apart) Each moving part's pieces are merged into one mesh per material, as a door leaf's are: the saw's blade, 14 teeth and hub (16 meshes to 3), the grinder's runner and eye, each gear and its cogs (11 to 2). Each part turns whole, so no bones are needed for the same look. A station's parts no longer creep round forever after it stops (the run-down now ends at zero, as the doors' did in v781), and its group is left by the scene's matrix pass while nothing on it moves.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

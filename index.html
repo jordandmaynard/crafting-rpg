@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 821;
+const GAME_VERSION = 822;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -26684,12 +26684,17 @@ function stationFx(st) {
     const m = parts.mouth = new GFX.Mesh(mouthGeo, stationMats.embers);
     m.position.set(0, 0.26, -0.384); g.add(m);
   }
+  // (v822, Jordan: only the moving parts need to be apart) each moving part's pieces merged into one mesh for each
+  // material (bakeLeaf, as a door's are): the saw's blade, teeth and hub, the runner and its eye, each gear and its cogs.
+  // Each part turns whole, so the same look. The group is left by the scene's matrix pass while nothing on it moves
+  for (const k of ['blade', 'runner', 'big', 'small']) if (parts[k]) bakeLeaf(parts[k]);
+  g.matrixStill = true;
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(g);
   st.fx = g; st.parts = parts;
 }
 // its moving parts set on the ground (or the floor) under it
-function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); }
+function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); st.fx.unstill(); }
 // what goes in, and what it becomes
 const refinesTo = (st, id) => id ? STATION_KIND[st.kind].refine[id] || null : null;
 // room in the output for one more of id
@@ -27581,7 +27586,7 @@ function relocateStation(st, s) {
   stations.set(T(s.c, s.r), st);
   if (tb) Object.assign(tb, { c: s.c, r: s.r, x: s.c + 1, z: s.r + 1, ry: s.ry });
   const [x, z] = stMid(st);
-  st.fx.position.set(x, surfaceY(x, z), z); st.fx.rotation.y = st.ry;
+  st.fx.position.set(x, surfaceY(x, z), z); st.fx.rotation.y = st.ry; st.fx.unstill();
   markTiles(s.c, s.r, f);
   for (const [c, r] of [[oldC, oldR], [s.c, s.r]]) { paintMapTile(c, r); markPieces(c, r); }
   flushDirty();
@@ -27643,6 +27648,8 @@ function updateStations(dt) {
     } else st.t = 0;
     // its parts come up to speed while it works, and run down after
     st.spin += ((st.busy ? 1 : 0) - st.spin) * (1 - Math.exp(-dt * (st.busy ? 3 : 1.2)));
+    // (v822) and stop once all but stopped (it crept on forever before, as the doors did, v781)
+    if (!st.busy && st.spin < 1e-3) st.spin = 0;
     if (st.body && st.pulse > 0) {
       // (swell and settle about its foot)
       st.pulse = Math.max(0, st.pulse - dt * 3.2);
@@ -27651,6 +27658,9 @@ function updateStations(dt) {
     }
     const p = st.parts, [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z);
     st.fx.visible = d < 60; st.fx.scale.setScalar(st.town ? 1 : STATION_LOOK.size);   // (a town workshop's is drawn full size on its tile)
+    // (v822) its group looked at by the matrix pass only while something on it moves (matrixStill, stationFx; the
+    // scale above is the same each frame unless the size slider moves, so it's looked at then too)
+    if (st.spin > 0 || st.busy || st.fx._sz !== st.fx.scale.x) { st.fx._sz = st.fx.scale.x; st.fx.unstill(); }
     if (p.blade) p.blade.rotation.x -= dt * st.spin * 30;
     if (p.runner) p.runner.rotation.y += dt * st.spin * 2.2;
     if (p.big) { p.big.rotation.z += dt * st.spin * 1.6; p.small.rotation.z -= dt * st.spin * 1.6 * 15 / 9; }
