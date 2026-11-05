@@ -570,6 +570,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v797:** (Jordan) Dragging an item out of the pack or the hotbar over the world (a potion held out, a bottle to fill) no longer attacks or uses what's under the cursor, and the cursor is the open 'use' hand while it's held. Jordan's tuning, filling bottles: down 0.32 (was 0.22), hold 0.25 (0.12), sink -0.13 (0.04), edge 0.29 (0.2).
 
+**v798:** (Jordan) Empty bottles are open, with no cork: Jordan's new painting (icons/paint/src/empty-bottle-open-256x256.png, shipped as emptyBottleOpen-128/256.webp) is the Empty Bottle's icon everywhere, and the held bottle over the world. The corked painting is now only for filled bottles (every potion is painted into it), so a bottle being filled at the water turns from open to corked at the bottom of its dip, under the water.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
