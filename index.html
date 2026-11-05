@@ -69,6 +69,13 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 #target .meter i img { display: block; width: calc(var(--tbW, 512) * 1px - 18px); height: calc(var(--tbH, 10) * 1px); filter: grayscale(1) brightness(1.2); mix-blend-mode: multiply; }
 /* a monster's level, in a ring to the left of its bar */
 .lvl { position: absolute; right: calc(100% + 6px); top: 50%; transform: translateY(-50%); width: 30px; height: 30px; box-sizing: border-box; display: grid; place-items: center; border-radius: 50%; background: var(--panel, #282430); border: 2px solid #000; box-shadow: inset 0 0 0 2px var(--hb-fill, #e8b830), 2px 2px 0 #000; font-family: var(--display); font-size: 13px; line-height: 1; color: var(--bone); }
+.float.gain { left: 0; top: 0; animation: none; display: flex; align-items: center; gap: 4px; will-change: transform, opacity; }
+.float.gain .gi { display: flex; }
+.float.gain .gn { display: inline-block; margin-right: var(--gg, 4px); }
+.float.gain .gi:empty { display: none; }
+.float.gain .gi > img, .float.gain .gi > svg, .float.gain .gi > canvas { width: var(--gi, 22px); height: var(--gi, 22px); display: block; image-rendering: pixelated;
+  filter: drop-shadow(1px 0 0 #000) drop-shadow(-1px 0 0 #000) drop-shadow(0 1px 0 #000) drop-shadow(0 -1px 0 #000); }
+.float.gain .gi > img.paint { image-rendering: auto; }
 .float { position: absolute; font-family: var(--display); font-size: 11px; color: var(--gold); text-shadow: 2px 2px 0 #000; transform: translate(-50%, -50%); animation: rise 0.9s steps(9) forwards; white-space: nowrap; }
 @keyframes rise { to { transform: translate(-50%, -240%); opacity: 0; } }
 
@@ -581,7 +588,7 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 .folio .purse .gold-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
 .folio .purse .gold-pile { width: 46px; height: 34px; flex: none; filter: drop-shadow(0 1px 1px #3a200c66); }
 .folio .purse #goldVal { font-variant-numeric: tabular-nums; }
-/* (v819, Jordan) the Character folio sits on the backpack's right, its art mirrored (ui/inventory-character.webp drawn
+/* (v843, Jordan) the Character folio sits on the backpack's right, its art mirrored (ui/inventory-character.webp drawn
    flipped, its strap edge now on the left under the backpack's right edge, 35px over it as before), and everything on
    it moved 14px right with the parchment so it stays centred (the old x 218 mirrored is 232). The backpack is at the
    group's left (a place kept from before moves 398 right with it, so the backpack stays where it was).
@@ -1388,7 +1395,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 819;
+const GAME_VERSION = 843;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8027,7 +8034,8 @@ const STATION_KIND = {
 const stFoot = k => STATION_KIND[k].foot || 2;
 const stF = st => st.foot || stFoot(st.kind);   // (v725: a town workshop's station stands on its one tile)
 const isStation = k => k in STATION_KIND;
-const REFINE = { time: 0.5 };   // seconds to refine one (T > Stations)
+// (v824, Jordan) per: how many raw make one refined (two logs a plank, two ores an ingot, two hides a leather...)
+const REFINE = { time: 0.5, per: 2 };   // seconds to refine one (T > Stations)
 const STATION_IN = 4, STATION_OUT = 4;   // squares in a station's input and output
 const stations = new Map();   // tile -> { c, r, kind, ry, inp, inN, out, outN, box, boxN, t, spin, busy, fx, parts }
 let openSt = null;   // the station whose window is open
@@ -8242,7 +8250,9 @@ function placeScenery(c, r) {
       else if (k < 0.3) OB[i] = O.PUMICE;
       return;
     case DESERT:
-      if (k < 0.022) OB[i] = O.CACTUS;
+      // (v831, Jordan: half the cacti are date palms)
+      if (k < 0.011) OB[i] = O.PALM;
+      else if (k < 0.022) OB[i] = O.CACTUS;
       else if (k < 0.045) OB[i] = O.SANDROCK;
       else if (k < 0.07) OB[i] = O.DRYBUSH;
       else if (k < 0.078) OB[i] = O.BONES;
@@ -8290,6 +8300,28 @@ function moverRows() {
   }
   for (const k of MOVER_SEEN) if (!out.has(k)) out.set(k, 0);
   for (const [k, n] of [...out].sort((a, b) => b[1] - a[1])) { MOVER_SEEN.add(k); prof.count('moving: ' + k, n); }
+  sceneRows();
+}
+// (v819, Jordan: the GPU waits longer after fighting, building and farming a while) G > Scene contents: what the
+// scene holds, by the same top-level groups, and a few of the game's own lists, to see what grows as you play
+const SCENE_SEEN = new Set();
+function sceneRows() {
+  const out = new Map();
+  let all = 0, shown = 0, tops = 0;
+  for (const top of scene.children) {
+    tops++;
+    let n = 0;
+    const walk = (o, vis) => { n++; vis = vis && o.visible; if (vis && o.isMesh) shown++; for (const c of o.children) walk(c, vis); };
+    walk(top, true);
+    all += n;
+    const k = MOVER_TAG.get(top) || (top.matrixStill ? 'world chunk meshes' : top.isLight ? 'lights' : top.isInstancedMesh ? 'instanced meshes (crowds, props)' : top.isMesh ? 'other single meshes' : 'other groups');
+    out.set(k, (out.get(k) || 0) + n);
+  }
+  prof.count('in scene: objects, all', all); prof.count('in scene: meshes showing', shown); prof.count('in scene: top-level objects', tops);
+  for (const k of SCENE_SEEN) if (!out.has(k)) out.set(k, 0);
+  for (const [k, n] of [...out].sort((a, b) => b[1] - a[1])) { SCENE_SEEN.add(k); prof.count('in scene: ' + k, n); }
+  prof.count('in scene: foes (list)', foes.length); prof.count('in scene: effects running', fxRun.live.length);
+  prof.count('in scene: planted squares', CROPS.size);
 }
 // distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
 const FOG = { on: 1, start: 0, end: 31, amount: 0.8, day: '#b8c4d8', dusk: '#d8a890', night: '#020203' };
@@ -9029,6 +9061,7 @@ function renderWorld() {
   encMark(null);
   // (the ground casts too unless SHADOWS.ground is off: phones, where its ~350k triangles were half the shadow map)
   if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
+  poseView();
   drawCrowds();
   drawFolk();
   drawHumans();
@@ -9144,7 +9177,7 @@ function renderWorld() {
     if (EARLY_SEND.mode > 0) renderer.sendEarly();   // (v789: and the grass, water and the rest; a render follows)
     renderer.passName = 'hero';
     camera.layers.set(1); renderer.render(scene, camera);
-    if (fxParts.solidMesh.visible || fxParts.domeMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
+    if (fxParts.solidMesh.visible || fxParts.domeMesh.visible || fxParts.coinMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
     renderer.passName = 'swamp water, ground haze';
     camera.layers.set(3); renderer.render(scene, camera);
     if (fxParts.clearMesh.visible) { renderer.passName = 'effects'; camera.layers.set(FX_CLEAR_LAYER); renderer.render(scene, camera); }
@@ -9359,6 +9392,9 @@ const bufWeb = new Buf();
 // (window glass: a mesh of its own per story with windowMat, casting no shadow; GLASSB is where glass goes while the
 // pieces are built, else into OUT with the rest. bufGIProxy: the walls as GI sees them, see buildPieces)
 let GLASSB = null;
+// (a tree's leaves: into OUT with the rest as the world is drawn, but into LEAFB of their own while a tree is drawn
+// to be felled (detach), so they can dissolve as it sinks; see fellLeafMat)
+let LEAFB = null;
 const bufGlass = new Buf(), bufGIProxy = new Buf();
 const bufInside = new BuildBuf();   // (v592: an upper story's furniture in its rooms, see buildPieces)
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new GlowBuf(), bufBuild = new BuildBuf(), bufTmp = new Buf(), bufTmpGlow = new GlowBuf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
@@ -9503,7 +9539,7 @@ const SAME_CORNERS = [0, 0, 0], SWAP_CORNERS = [0, 1, -1];   // (offsets in corn
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : OUT;
+  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : into === 'leaf' ? LEAFB || OUT : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   // (v440: a mirrored pose (negative scale) turns every triangle inside out: lay each one's corners the other way
@@ -10843,12 +10879,10 @@ function reapWheat(x, z, r) {
 }
 function updateWheat(dt) {
   if (cropGot.size) {
-    let up = 0;
     for (const [id, n] of cropGot) {
       const lost = addItem(id, n), R = CROP_REAP[id] || CROP_REAP.wheat;
-      if (lost < n) floatText('+' + (n - lost) + ' ' + R.name, H.x, H.y + 1.3 + up, H.z, R.color());
+      if (lost < n) floatGain(id, n - lost, H.x, H.y + 1.3, H.z, R.color());
       if (lost) dropLoot(id, lost, H.x, H.z);
-      up += 0.3;
     }
     cropGot.clear();
   }
@@ -10880,7 +10914,7 @@ function updateWheat(dt) {
 // the farms' wheat does, from stubble over WHEAT.regrow, is reaped the same way (anything that cuts grass), and grows
 // back by itself, so a square is planted once. The hoe on a planted square clears it to bare tilled earth again; on a
 // bare one it puts the ground back as it was. HOE, HOE_POSE and SEED_DRAG are T > Farming.
-const HOE = { reach: 2.2, cost: 6 };
+const HOE = { reach: 2.2, cost: 3 };   // (cost in planks: 6 before v824)
 const FARM_ACT = { give: 0 };   // (T > Farming's action rows)
 // (lift: how high the crop hangs over the ground while dragged; down, hold, up: the dip's seconds; size: the card's
 // height; sink: how far into the soil it dips; center: the share of the way it moves on to the square's middle)
@@ -13159,11 +13193,11 @@ function pine(x, z, k, snow = false) {
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
   for (let i = 0; i < 3; i++) {
     const w = (0.75 - i * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + i * hgt * 0.24 + hgt * 0.2;
-    part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 });
+    part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3, into: 'leaf' });
     if (snow) {
-      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3 });
+      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3, into: 'leaf' });
       // and dusting the wide foot of each tier, turned a sixth round from the one below so it isn't the same
-      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3 });
+      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3, into: 'leaf' });
     }
   }
 }
@@ -13196,13 +13230,13 @@ function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
   }
   // the crown: a clump over the fork, one at each limb's end, darker ones tucked in under them, and a few small
   // light ones on top where the sun catches it
-  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5 });
+  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5, into: 'leaf' });
   for (const [e, a] of ends) {
-    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd() });
-    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2 });
-    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a });
+    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd(), into: 'leaf' });
+    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2, into: 'leaf' });
+    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a, into: 'leaf' });
   }
-  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2 });
+  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2, into: 'leaf' });
 }
 // A birch: one slender white trunk (or two, splaying from one foot), dark and rough at its foot and marked with
 // black up its length, a few thin dark branches angling up, and an airy, tall crown of small leaf clusters along
@@ -13243,10 +13277,10 @@ function birch(x, z, k) {
     crown.push([top[0], top[1] + 0.08 * S, top[2]]);
     // the crown: a tall loose mass up the top of the trunk, with clusters at the branch tips and its peak
     const mid = [pts[2][0] * 0.5 + top[0] * 0.5, pts[2][1] * 0.4 + top[1] * 0.6, pts[2][2] * 0.5 + top[2] * 0.5], cs = twin ? 0.8 : 1;
-    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd });
+    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd, into: 'leaf' });
     for (const [n, c] of crown.entries()) {
       const sz = (0.2 + rnd() * 0.08) * S * cs;
-      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6 });
+      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6, into: 'leaf' });
     }
   }
 }
@@ -13262,7 +13296,7 @@ function swampTree(x, z, k) {
   const hang = [CC('#8f9c78'), CC('#a3ab8c'), CC('#7d8c66')];
   // the foot, flaring, with moss on it
   seg(G.frust7, barkD, [x, y - 0.05, z], [x, y + 0.3 * S, z], 0.2 * S);
-  for (let n = 0; n < 3; n++) { const a = k * 5 + n * 2.1; part(G.dodec, moss, x + Math.sin(a) * 0.15 * S, y + 0.06 * S, z + Math.cos(a) * 0.15 * S, { sx: 0.16 * S, sy: 0.1 * S, sz: 0.14 * S, ry: a }); }
+  for (let n = 0; n < 3; n++) { const a = k * 5 + n * 2.1; part(G.dodec, moss, x + Math.sin(a) * 0.15 * S, y + 0.06 * S, z + Math.cos(a) * 0.15 * S, { sx: 0.16 * S, sy: 0.1 * S, sz: 0.14 * S, ry: a, into: 'leaf' }); }
   // the trunk, kinking as it climbs
   const pts = [[x, y + 0.2 * S, z]];
   for (let n = 0; n < 3; n++) {
@@ -13281,7 +13315,7 @@ function swampTree(x, z, k) {
     seg(G.frust7, bark, from, m, 0.06 * S);
     seg(G.frust7, bark, m, end, 0.04 * S);
     // moss along the top of the limb
-    part(G.dodec, moss, (from[0] + m[0]) / 2, (from[1] + m[1]) / 2 + 0.04 * S, (from[2] + m[2]) / 2, { sx: 0.09 * S, sy: 0.05 * S, sz: 0.09 * S, ry: a });
+    part(G.dodec, moss, (from[0] + m[0]) / 2, (from[1] + m[1]) / 2 + 0.04 * S, (from[2] + m[2]) / 2, { sx: 0.09 * S, sy: 0.05 * S, sz: 0.09 * S, ry: a, into: 'leaf' });
     // bare twigs off its end
     for (let t = 0; t < 2; t++) {
       const ta = a + (t ? 0.7 : -0.7) + (rnd() - 0.5) * 0.4;
@@ -13682,7 +13716,7 @@ function pumice(x, z, k) {
 // crown and narrowing to a yellowed tip), a few young ones standing up in the middle, and dates hanging under them
 function frondBlade(col, x, y, z, ry, rx, rz, sx, sy, sz) {
   dummy.position.set(x, y, z); dummy.rotation.set(rx, ry, rz, 'YXZ'); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
-  emitPart(G.box, col, 'world');
+  emitPart(G.box, col, 'leaf');
   dummy.rotation.set(0, 0, 0, 'XYZ');
 }
 function palm(x, z, k) {
@@ -13700,7 +13734,7 @@ function palm(x, z, k) {
     seg(G.cyl8, ringC, b, [b[0] + (b[0] - a[0]) * 0.12, b[1] + (b[1] - a[1]) * 0.12, b[2] + (b[2] - a[2]) * 0.12], r * 1.2);   // (the ring a frond left)
   }
   const C = at(1);
-  part(G.ico, shade(CC('#6a5a32'), 0.9), C[0], C[1] + 0.02 * S, C[2], { sx: 0.2 * S, sy: 0.16 * S, sz: 0.2 * S });   // (the crown's heart)
+  part(G.ico, shade(CC('#6a5a32'), 0.9), C[0], C[1] + 0.02 * S, C[2], { sx: 0.2 * S, sy: 0.16 * S, sz: 0.2 * S, into: 'leaf' });   // (the crown's heart)
   // the fronds: out and up from the crown, arching over and drooping to their tips
   const frond = (a, up, L, wide) => {
     let px = C[0], py = C[1] + 0.04 * S, pz = C[2], pitch = up;
@@ -13722,7 +13756,7 @@ function palm(x, z, k) {
   // dates hanging in bunches under the crown
   for (let q = 0; q < 3; q++) {
     const a = k * 3 + q * 2.09, bx = C[0] + Math.sin(a) * 0.1 * S, bz = C[2] + Math.cos(a) * 0.1 * S;
-    part(G.ico, shade(CC('#9a5a22'), 0.85 + rnd() * 0.25), bx, C[1] - 0.1 * S, bz, { sx: 0.08 * S, sy: 0.12 * S, sz: 0.08 * S, ry: a });
+    part(G.ico, shade(CC('#9a5a22'), 0.85 + rnd() * 0.25), bx, C[1] - 0.1 * S, bz, { sx: 0.08 * S, sy: 0.12 * S, sz: 0.08 * S, ry: a, into: 'leaf' });
   }
 }
 function cactus(x, z, k) {
@@ -15100,10 +15134,12 @@ const WALL_H = 2;   // (a level at 2x tile height: a floor on top of walls would
 // (refined materials, but for the wooden walls and fences, still of logs, and the hearth and the stations, which
 // have to go up before anything can be refined)
 // (the crafting tables: as the towns', for your own base)
-const COST = { armortable: { planks: 8, leather: 2 }, weapontable: { planks: 8, stoneBlock: 6 }, alchemytable: { planks: 8, copperIngot: 4, glassPane: 4 }, floor: { planks: 2 }, stonefloor: { stoneBlock: 2 }, wall: { planks: 2, stoneBlock: 2 }, door: { planks: 5 }, logwall: { wood: 4 }, stonewall: { stoneBlock: 4 }, hearth: { wood: 2, stone: 4 },
-  fence: { wood: 1 }, stonefence: { stoneBlock: 2 }, gate: { planks: 3 }, ironfence: { ironIngot: 2 }, irongate: { ironIngot: 3 }, irondoor: { ironIngot: 6 },
-  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 8 }, barrel: { wood: 6 }, chest: { ironIngot: 12 }, woodstairs: { planks: 6 }, stonestairs: { stoneBlock: 6 },
-  woodwindow: { planks: 2, stoneBlock: 2, glassPane: 2 }, stonewindow: { stoneBlock: 4, glassPane: 2 } };
+// (v824, Jordan: two raw make one refined now, so every refined cost was halved, odd ones rounded up (door 5 -> 3,
+// gate and iron gate 3 -> 2); ones stay one. Logs and stone, raw, are as they were)
+const COST = { armortable: { planks: 4, leather: 1 }, weapontable: { planks: 4, stoneBlock: 3 }, alchemytable: { planks: 4, copperIngot: 2, glassPane: 2 }, floor: { planks: 1 }, stonefloor: { stoneBlock: 1 }, wall: { planks: 1, stoneBlock: 1 }, door: { planks: 3 }, logwall: { wood: 4 }, stonewall: { stoneBlock: 2 }, hearth: { wood: 2, stone: 4 },
+  fence: { wood: 1 }, stonefence: { stoneBlock: 1 }, gate: { planks: 2 }, ironfence: { ironIngot: 1 }, irongate: { ironIngot: 2 }, irondoor: { ironIngot: 3 },
+  sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 4 }, barrel: { wood: 6 }, chest: { ironIngot: 6 }, woodstairs: { planks: 3 }, stonestairs: { stoneBlock: 3 },
+  woodwindow: { planks: 1, stoneBlock: 1, glassPane: 1 }, stonewindow: { stoneBlock: 2, glassPane: 1 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
 // what's on a tile's floor: 1 planks, 2 flagstones, 3 a mausoleum's marble
@@ -15122,7 +15158,7 @@ const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stone
 const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10, tombdoor: 11, marblewall: 12, woodwindow: 13, stonewindow: 14, townwall: 15 };
 // (v373, Jordan: windowed walls, 13 timber and 14 stone. One goes up over a plain wall of its own sort for just the
 // glass; taken down, it gives back the wall's cost and the glass)
-const WINDOW_OF = { woodwindow: 'wall', stonewindow: 'stonewall' }, WINDOW_GLASS = { glassPane: 2 };
+const WINDOW_OF = { woodwindow: 'wall', stonewindow: 'stonewall' }, WINDOW_GLASS = { glassPane: 1 };
 const isWindowVal = v => v === 13 || v === 14;
 // what a piece costs where it goes: a window over its own wall, only the glass
 const spotCost = s => s.upgrade ? WINDOW_GLASS : COST[s.kind];
@@ -16746,6 +16782,23 @@ const ironBar = new GFX.BoxGeometry(0.03, FENCE_H - 0.12, 0.03), ironTip = new G
 const studGeo = new GFX.BoxGeometry(0.045, 0.045, 0.11);
 // kind: 'door', 'gate', 'irondoor', 'irongate' or 'tombdoor' (flip: hung at the far end, the other half of a pair)
 const bronzeMat = flatMat({ color: '#4f8a76', roughness: 0.5, metalness: 0.4 }), bronzeDkMat = flatMat({ color: '#2e5a4c', roughness: 0.6, metalness: 0.3 });
+// (v821, Jordan's G: doors and gates were 2,245 of the scene's 4,537 objects, a dozen boxes a leaf, every one looked
+// at by the matrix pass and both walks each frame) a leaf's boxes merged into one mesh for each material, as the
+// hero's are (bakeHeroParts): the same triangles in the same places
+function bakeLeaf(leaf) {
+  const by = new Map();
+  for (const p of leaf.children) {
+    const names = Object.keys(p.geometry?.attributes || {});
+    if (!p.isMesh || p.children.length || names.length !== 1 || names[0] !== 'position') continue;
+    let l = by.get(p.material); if (!l) by.set(p.material, l = []); l.push(p);
+  }
+  for (const [mat, list] of by) {
+    if (list.length < 2) continue;
+    const m = new GFX.Mesh(mergeBoxes(list), mat);
+    for (const p of list) leaf.remove(p);
+    leaf.add(m);
+  }
+}
 function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
   const gate = kind === 'gate' || kind === 'irongate';
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP + k * WALL_H;
@@ -16803,7 +16856,10 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
     const ring = new GFX.Mesh(new GFX.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
   }
   if (half) leaf.scale.x = 0.5;   // (one of a pair in a single doorway)
+  bakeLeaf(leaf);
   pivot.add(leaf);
+  // (v821) matrixStill: a door is left by the scene's matrix pass but for the frames it swings (unstill, in update)
+  pivot.matrixStill = true;
   scene.add(shadowy(pivot)); MOVER_TAG.set(pivot, 'doors and gates');
   if (k) pivot.visible = k <= shownStory;
   const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k };
@@ -19323,6 +19379,32 @@ const silMat = new GFX.MeshBasicMaterial({ color: SILHOUETTE.color, depthWrite: 
 // them all and dressHero still shows, hides and recolours them by their gear tag. Every look, every weapon and every
 // armour piece is kept, and the pose is the joints', as before; only the number of objects drops, and with it the
 // world matrices made each time the hero moves and the draws (each part had a silhouette and a shadow copy too).
+// (v780; v821 its own, for doors too) one geometry of the meshes in list (positions only, each under the same
+// parent), each placed by its own matrix in the parent's space
+function mergeBoxes(list) {
+  let nv = 0, ni = 0;
+  for (const p of list) { const g = p.geometry; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+  const pos = new Float32Array(nv * 3), idx = new (nv > 65535 ? Uint32Array : Uint16Array)(ni);
+  let ov = 0, oi = 0;
+  for (const p of list) {
+    p.updateMatrix();
+    const e = p.matrix.elements, g = p.geometry, a = g.attributes.position.array, n = a.length / 3;
+    for (let k = 0; k < n; k++) {
+      const x = a[k * 3], y = a[k * 3 + 1], z = a[k * 3 + 2], o = (ov + k) * 3;
+      pos[o] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    }
+    const src = g.index ? g.index.array : null, m = src ? src.length : n;
+    for (let k = 0; k < m; k += 3) {
+      const i0 = src ? src[k] : k, i1 = src ? src[k + 1] : k + 1, i2 = src ? src[k + 2] : k + 2;
+      idx[oi + k] = ov + i0; idx[oi + k + 1] = ov + i1; idx[oi + k + 2] = ov + i2;
+    }
+    ov += n; oi += m;
+  }
+  const geo = new GFX.BufferGeometry();
+  geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
+  geo.setIndex(new GFX.BufferAttribute(idx, 1));
+  return geo;
+}
 function bakeHeroParts(h) {
   const runs = new Map(), out = [];
   for (const p of h.parts) {
@@ -19336,27 +19418,7 @@ function bakeHeroParts(h) {
   }
   for (const { par, list } of runs.values()) {
     if (list.length === 1) { out.push(list[0]); continue; }
-    let nv = 0, ni = 0;
-    for (const p of list) { const g = p.geometry; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
-    const pos = new Float32Array(nv * 3), idx = new (nv > 65535 ? Uint32Array : Uint16Array)(ni);
-    let ov = 0, oi = 0;
-    for (const p of list) {
-      p.updateMatrix();
-      const e = p.matrix.elements, g = p.geometry, a = g.attributes.position.array, n = a.length / 3;
-      for (let k = 0; k < n; k++) {
-        const x = a[k * 3], y = a[k * 3 + 1], z = a[k * 3 + 2], o = (ov + k) * 3;
-        pos[o] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
-      }
-      const src = g.index ? g.index.array : null, m = src ? src.length : n;
-      for (let k = 0; k < m; k += 3) {
-        const i0 = src ? src[k] : k, i1 = src ? src[k + 1] : k + 1, i2 = src ? src[k + 2] : k + 2;
-        idx[oi + k] = ov + i0; idx[oi + k + 1] = ov + i1; idx[oi + k + 2] = ov + i2;
-      }
-      ov += n; oi += m;
-    }
-    const geo = new GFX.BufferGeometry();
-    geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
-    geo.setIndex(new GFX.BufferAttribute(idx, 1));
+    const geo = mergeBoxes(list);
     geo.heroBaked = true;   // (its own, so let go of when the hero's made again: rebuildHero)
     const f = list[0], mesh = new GFX.Mesh(geo, f.material);
     mesh.renderOrder = f.renderOrder; mesh.castShadow = f.castShadow; mesh.receiveShadow = f.receiveShadow;
@@ -19546,7 +19608,7 @@ lights.forEach(l => l.layers.enableAll());
 const MAX_HP = 100;
 const H = {
   x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true, story: 0, stair: null,
-  kills: 0, level: 1, xp: 0,
+  kills: 0, level: 1, xp: 0, gold: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
   cdQ: 0, cdE: 0, cdDash: 0, cdPotion: 0, toss: null, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
@@ -19641,6 +19703,26 @@ scene.add(foeShadows);
 const crowdOrder = [];
 // before each frame is drawn: every shown foe's joints into its kind's pieces, farthest first (so see-through
 // flames, ghosts and slimes over one another blend in order), and every foe's shadow
+// (v823, Jordan's G: posing foes, folk and people 0.52 ms with 18 foes about) a rig out of the camera's view (by more than
+// POSE_LESS.margin) has its joints' matrices made and its bones sent only every POSE_LESS.every-th frame, each on a
+// frame of its own; what's in view or near it every frame. Its pose is still worked out each frame (update), so it's
+// right the moment it comes into view; only an off-screen shadow can lag a few frames. G > Tests > Pose less off screen
+const POSE_LESS = { on: 1, every: 4, margin: 3 };
+const poseFr = new GFX.Frustum(), poseM = new GFX.Matrix4();
+let poseFrame = 0, poseSkipped = 0;
+function poseView() {
+  camera.updateMatrixWorld();
+  poseFr.setFromProjectionMatrix(poseM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  poseFrame++;
+}
+// can a rig (o, standing at x, y, z) wait this frame?
+function poseWait(o, x, y, z) {
+  if (!POSE_LESS.on || poseFr.sphereClass(x, y + 0.8, z, 1.2, POSE_LESS.margin) !== 0) return false;
+  const n = Math.max(1, POSE_LESS.every | 0), k = o._poseK ?? (o._poseK = (Math.random() * 64) | 0);
+  if ((poseFrame + k) % n === 0) return false;
+  poseSkipped++;
+  return true;
+}
 function drawCrowds() {
   const e = camera.matrixWorld.elements, cx = e[12], cy = e[13], cz = e[14], fx = -e[8], fy = -e[9], fz = -e[10];
   crowdOrder.length = 0;
@@ -19654,7 +19736,7 @@ function drawCrowds() {
     sm.fill(0, o, o + 16); sm[o] = sm[o + 5] = sm[o + 10] = sm[o + 15] = 1; sm[o + 12] = p.x; sm[o + 13] = p.y; sm[o + 14] = p.z;
     if (!f.g.visible || !f.crowd) return;   // (people are drawn with the townsfolk's shader: drawHumans)
     const C = f.crowd, k = C.n++;
-    f.g.updateMatrixWorld();
+    if (!poseWait(f, f.x, f.y, f.z)) f.g.updateMatrixWorld();
     for (const pc of C.pieces) { pc.mesh.reserve(k + 1); pc.mesh.instanceMatrix.set(f.joints[pc.joint].matrixWorld.elements, k * 16); }
   });
   foeShadows.count = foes.length; foeShadows.needsUpdate = true;
@@ -19688,10 +19770,11 @@ function pixelSvg(rows, palette) {
   rows.forEach((row, y) => [...row].forEach((ch, x) => { if (palette[ch]) rects += `<rect x="${x}" y="${y}" width="1.02" height="1.02" fill="${palette[ch]}"/>`; }));
   return `<svg viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges" aria-hidden="true">${rects}</svg>`;
 }
-// The weapons come in four materials, each made at a weapon crafting table from WEAPON_TIER.cost of it (mat) and a few planks:
+// The weapons come in four materials, each made at a weapon crafting table from WEAPON_TIER.cost of it (mat; boneCost of bone) and a few planks:
 // the same strokes and abilities, harder hitting the better the stuff (WEAPON_TIER[tier] times the damage).
 // look recolours each weapon's icon, and part is the HERO_MAT the hero's blade, bow limbs or spearhead wear.
-const WEAPON_TIER = { wood: 1, bone: 1.3, copper: 1.6, iron: 2, verdane: 2.4, caerite: 2.9, orivane: 3.5, auralith: 4.2, cost: 10 };
+// (v824, Jordan) cost: of a refined material (planks, ingots), halved from 10 as two raw make one; bone, used as it is, still takes boneCost
+const WEAPON_TIER = { wood: 1, bone: 1.3, copper: 1.6, iron: 2, verdane: 2.4, caerite: 2.9, orivane: 3.5, auralith: 4.2, cost: 5, boneCost: 10 };
 const TIERS = {
   wood: { name: 'Wooden', mat: 'planks', look: { axe: { w: '#9a6a3e', s: '#5a3a22', b: '#8a6440' }, hammer: { w: '#8a5a32', s: '#5a3a22', b: '#a07a4a' }, sword: { w: '#c89a62', s: '#9a6a3e', y: '#5a3a22', b: '#5a3a22' }, bow: { g: '#5a3a22' }, spear: { s: '#5a3a22', S: '#7a5232' } } },
   bone: { name: 'Bone', mat: 'bone', look: { axe: { w: '#f8f2e2', s: '#d8ccae', k: '#a89a7c' }, hammer: { w: '#f8f2e2', s: '#d8ccae', k: '#a89a7c' }, sword: { w: '#f8f2e2', s: '#d8ccae', y: '#d8ccae', b: '#4a3424', t: '#a89a7c', k: '#a89a7c' }, bow: { b: '#d8ccae', g: '#4a3424', k: '#a89a7c', c: '#4a3424' }, spear: { s: '#d8ccae', S: '#f8f2e2', c: '#4a3424', t: '#d8ccae' } } },
@@ -19981,7 +20064,7 @@ for (const [n, set] of Object.entries(PNG_ICONS)) for (const [k, src] of Object.
 // (and the items Jordan has repainted: the starting shirt, pants, boots and wooden sword, cut out with hard alpha,
 // sized for a pack square)
 // (PAINT_REV goes up when a painting is replaced under the same name, so browsers don't keep showing the old one)
-const PAINT_REV = 285;
+const PAINT_REV = 820;   // (v820: Jordan's new raw meat painting)
 // Each painting is fetched and decoded as the game loads (an off-page image with the same srcset and sizes, so the
 // browser picks the same file), so a weapon's icons show at once the first time you switch to it. The images are
 // kept so they stay decoded.
@@ -20699,7 +20782,7 @@ const ITEMS = {
   flour: { name: 'Flour', icon: 'flour', stack: 100, pile: true, loot: 'material', about: 'Ground from wheat at a grinder. Baked into bread with clear water at a cooking hearth.' },
   bread: { name: 'Sourdough Bread', icon: 'bread', stack: 50, pile: true, loot: 'material', about: 'Baked from flour and clear water at a cooking hearth in town.' },
   bone: { name: 'Bone', icon: 'bone', stack: 100, loot: 'material', about: 'Taken from skeletons, and from wolves, boars and hellhounds half the time. Bone weapons and bone armor are made of it.' },
-  // (v804, Jordan) cut from the wildlife you kill (Jordan's painting, icons/paint/src/raw-meat-painterly.png)
+  // (v804, Jordan) cut from the wildlife you kill (Jordan's painting, icons/paint/src/raw-meat-steak-painterly.png since v820)
   rawMeat: { name: 'Raw Meat', icon: 'rawMeat', stack: 50, pile: true, loot: 'material', about: 'Cut from the wildlife you kill: wolves, boars, hellhounds, spiders and scorpions, three times in four. Kitchens and hunters keep some in their barrels.' },
 };
 // Armor sets past leather, each made of leather and its material at an armor crafting table: bone, copper chain
@@ -20714,7 +20797,9 @@ const ARMOR_SETS = {
   orivane: { name: 'Orivane', mat: 'orivaneIngot', armor: [8, 6, 4, 4] },
   auralith: { name: 'Auralith', mat: 'auralithIngot', armor: [9, 7, 4, 5] },
 };
-const ARMOR_PIECES = [['Armor', 'chest', { leather: 3, mat: 6 }], ['Pants', 'legs', { leather: 2, mat: 4 }], ['Boots', 'boots', { leather: 1, mat: 3 }], ['Helmet', 'head', { leather: 1, mat: 3 }]];
+// (v824, Jordan: refined costs halved as two raw make one, odd ones rounded up (leather 3 -> 2, ingots 3 -> 2), ones
+// left at one; bone, used as it is, keeps its old counts)
+const ARMOR_PIECES = [['Armor', 'chest', { leather: 2, mat: 3, bone: 6 }], ['Pants', 'legs', { leather: 1, mat: 2, bone: 4 }], ['Boots', 'boots', { leather: 1, mat: 2, bone: 3 }], ['Helmet', 'head', { leather: 1, mat: 2, bone: 3 }]];
 for (const [k, st] of Object.entries(ARMOR_SETS)) ARMOR_PIECES.forEach(([n, slot], q) => {
   ITEMS[k + n] = { name: st.name + ' ' + (n === 'Pants' ? 'Leggings' : n), slot, icon: k + n, armor: st.armor[q], mat: k, trim: k + 'Dark', set: k };
 });
@@ -21150,8 +21235,13 @@ function refineAll() {
       let best = null, bk = -1;
       for (const st of to) { const k = room(st); if (k >= 0 && (!best || waiting(st) < waiting(best))) { best = st; bk = k; } }
       if (!best) break;
-      if (!best.inp[bk]) { best.inp[bk] = id; best.inN[bk] = 0; }
-      best.inN[bk]++; n--;
+      // (v824) in lots of REFINE.per, as that many make one, so no station is left one short
+      for (let lot = Math.min(REFINE.per, n); lot > 0; lot--) {
+        const k = room(best);
+        if (k < 0) break;
+        if (!best.inp[k]) { best.inp[k] = id; best.inN[k] = 0; }
+        best.inN[k]++; n--;
+      }
     }
     moved += PACK_N[i] - n;
     PACK_N[i] = n; if (!n) PACK[i] = null;
@@ -21211,7 +21301,7 @@ const invHome = () => folioFolded ? ['pack', 0] : ['gear', 'weapon'];
 const cellKey = c => c[0] + ':' + c[1];
 function itemInfo(c) {
   const id = cellGet(c);
-  if (!id && (c[0] === 'in' || c[0] === 'out')) return c[0] === 'in' ? `<b>INPUT</b> Put ${stationTakes(openSt).toLowerCase()} here, and it's refined into the output, one every ${REFINE.time} seconds.` : '<b>OUTPUT</b> What the station makes lands here. Click or drag it into your pack.';
+  if (!id && (c[0] === 'in' || c[0] === 'out')) return c[0] === 'in' ? `<b>INPUT</b> Put ${stationTakes(openSt).toLowerCase()} here, and it's refined into the output, ${REFINE.per} making one, every ${REFINE.time} seconds.` : '<b>OUTPUT</b> What the station makes lands here. Click or drag it into your pack.';
   if (!id && c[0] === 'box') return `<b>${STATION_KIND[openSt.kind].name}</b> An empty square. Click something in your pack to put it in here.`;
   if (!id) return c[0] === 'gear' ? `<b>${GEAR_SLOTS.find(g => g.slot === c[1]).name}</b> Nothing worn here.` : '<b>PACK</b> An empty square.';
   const it = ITEMS[id], abil = it.tool ? ' ' + it.about : it.strike ? ` LMB ${it.strike}${it.q ? ', Q ' + it.q : ''}${it.e ? ', E ' + it.e : ''}.` : '';
@@ -21367,9 +21457,9 @@ function dragWindow(el, key, scaled, fixTop, fitW) {
   addEventListener('resize', () => { if (Array.isArray(pos) && el.offsetParent) place(); });
   return { place };
 }
-// (v817/v819, Jordan) the inventory may go off the right edge as far as leaves the fold tab on screen (the folio
+// (v817/v843, Jordan) the inventory may go off the right edge as far as leaves the fold tab on screen (the folio
 // folded: the tab's point at x 543 of the group), folded or not, so bringing the folio out never moves the window.
-// (v819: the backpack is now the group's left, 398 further right than the group's old left, so a kept place moves
+// (v843: the backpack is now the group's left, 398 further right than the group's old left, so a kept place moves
 // with it)
 try {
   const old = JSON.parse(localStorage.getItem('emberwild.invPos2'));
@@ -21508,21 +21598,22 @@ function navInv(dx, dy) {
 // What you make goes in the pack.
 const RECIPES = {
   tan: [
-    { make: 'leatherArmor', cost: { leather: 5 } }, { make: 'leatherPants', cost: { leather: 4 } },
-    { make: 'leatherBoots', cost: { leather: 2 } }, { make: 'leatherHelmet', cost: { leather: 2 } },
-    ...Object.entries(ARMOR_SETS).flatMap(([k, st]) => ARMOR_PIECES.map(([n, , c]) => ({ make: k + n, cost: { leather: c.leather, [st.mat]: c.mat } }))),
+    // (v824, Jordan: halved, as two hides make a leather now; armor 5 -> 3 rounded up)
+    { make: 'leatherArmor', cost: { leather: 3 } }, { make: 'leatherPants', cost: { leather: 2 } },
+    { make: 'leatherBoots', cost: { leather: 1 } }, { make: 'leatherHelmet', cost: { leather: 1 } },
+    ...Object.entries(ARMOR_SETS).flatMap(([k, st]) => ARMOR_PIECES.map(([n, , c]) => ({ make: k + n, cost: { leather: c.leather, [st.mat]: st.mat === 'bone' ? c.bone : c.mat } }))),
   ],
   // (a weapon: its material, and planks for the haft or grip; a wooden one is all planks)
   // (v802) and the wooden hoe, after the wooden weapons
   weapon: Object.entries(TIERS).flatMap(([t, tr]) => [...Object.keys(WEAPONS).map(w => ({ make: w + '_' + t,
-    get cost() { return tr.mat === 'planks' ? { planks: WEAPON_TIER.cost } : { planks: WEAPON_HAFT, [tr.mat]: WEAPON_TIER.cost }; } })),
+    get cost() { return tr.mat === 'planks' ? { planks: WEAPON_TIER.cost } : { planks: WEAPON_HAFT, [tr.mat]: tr.mat === 'bone' ? WEAPON_TIER.boneCost : WEAPON_TIER.cost }; } })),
     ...(t === 'wood' ? [{ make: 'hoe_wood', get cost() { return { planks: HOE.cost }; } }] : [])]),
   // (potions to come)
   alchemy: [{ make: 'emptyBottle', cost: { glassPane: 1 } }],
   // (v801, Jordan) the town cooking hearths: bread, moved here off the smelter, from flour and a clear water potion
   cook: [{ make: 'bread', cost: { flour: 1, potion_clear: 1 } }],
 };
-const WEAPON_HAFT = 4;
+const WEAPON_HAFT = 2;   // (v824: 4 before refining took two raw for one)
 const TABLE_NAME = { tan: 'ARMOR CRAFTING TABLE', weapon: 'WEAPON CRAFTING TABLE', alchemy: 'ALCHEMY TABLE', cook: 'COOKING HEARTH' };
 // (v801) the cooking hearth's window says Cooking, and its button Cook (the rest say Craft)
 const CRAFT_TITLE = { cook: 'Cooking' }, CRAFT_VERB = { cook: ['Cook', 'cook', 'Cooked'] }, craftVerb = () => CRAFT_VERB[craftAt?.kind] || ['Craft', 'craft', 'Made'];
@@ -21723,6 +21814,8 @@ const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawt
 let subOpen = null;
 // costs as the bar shows them: 2W logs, 2S stone, 2P planks, 2B stone blocks, 2I iron ingots
 const COST_TAG = { wood: 'W', stone: 'S', planks: 'P', stoneBlock: 'B', ironIngot: 'I', copperIngot: 'C', ironOre: 'Io', copperOre: 'Co', leather: 'L' };
+// (v832) what taking a piece down gives back, a resource fly-up for each material
+const refundGains = (k, x, y, z) => { for (const [r, n] of Object.entries(COST[k] || {})) floatGain(r, n, x, y, z, '#e0b070'); };
 const costText = k => Object.entries(COST[k]).map(([r, n]) => COST_TAG[r] ? n + COST_TAG[r] : n + ' ' + ITEMS[r].name.toLowerCase()).join(' ');
 // a cost in words, e.g. "8 planks, 4 iron ingots" (whatever materials it names, tagged or not)
 const costWords = a => a.map(([r, n]) => n + ' ' + ITEMS[r].name.toLowerCase()).join(', ');
@@ -22019,6 +22112,90 @@ function floatText(text, x, y, z, color) {
   floatCount++;
   setTimeout(() => { el.remove(); floatCount--; }, 950);
 }
+// (v832, Jordan) resource fly-ups: "+12 LOGS" with the item's icon to its right, pinned to the point in the world. One
+// holds still GAIN_FLY.hold seconds, then rises and fades over GAIN_FLY.rise (smoothly; v832 used the old fly-up's 9 steps, GAIN_FLY.steps). Another gain
+// of the same item while it's still holding adds to its count instead (the +count pulses toward white, the whole fly-up swells, for
+// GAIN_FLY.pulse seconds) and starts its hold again; a different item gets its own, stacked above any still holding
+// there. Damage, healing, XP and the like keep floatText.
+// (v836, Jordan) gains merge only from the same spot: the same tile (a tree's or rock's own, or the one the hero stood on
+// for pickups and crops). A new fly-up pops in with the pulse too, and the +count can glow past white: GAIN_FLY.glow
+// overdrives its brightness at the pulse's peak, glowSize puts a halo of its color round it. gap: the space between the
+// +count and the name (pixels; the font's own space was a whole wide cell).
+const GAIN_FLY = { size: 14, hold: 1, rise: 0.9, risePx: 28, steps: 0, pulse: 0.5, pulseMix: 85, pulseGrow: 0.22, glow: 1.85, glowSize: 9, gap: 4, iconSize: 25, stack: 0.35,
+  outline: 2, shadowDist: 2, shadowBlur: 0, shadowWeight: 0 };   // (v839: Jordan's tuning)
+const gains = [], gainV = new GFX.Vector3();
+// (v840) gains that aren't items in the pack: gold, paid straight into the purse (its coin a stand-in till Jordan's icon)
+const GAIN_KINDS = { gold: { name: 'Gold', icon: 'goldCoin' } };
+ICON.goldCoin = '<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gcFace" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#fff0a8"/>'
+  + '<stop offset="0.5" stop-color="#f2c14e"/><stop offset="1" stop-color="#c88a22"/></linearGradient></defs>'
+  + '<circle cx="12.6" cy="13" r="9.4" fill="#8a5414" stroke="#3a2008" stroke-width="1.2"/><circle cx="11.6" cy="11.8" r="9" fill="url(#gcFace)" stroke="#5a3608" stroke-width="1.1"/>'
+  + '<circle cx="11.6" cy="11.8" r="6.2" fill="none" stroke="#b07a1c" stroke-width="1.1"/><path d="M10.2 8.2 h2.8 v7.4 h-2.8 z" fill="#c88a22" opacity="0.8"/>'
+  + '<ellipse cx="8.4" cy="7.6" rx="2.6" ry="1.2" fill="#fffbe0" opacity="0.85" transform="rotate(-35 8.4 7.6)"/></svg>';
+// at: the spot gains merge by (a tile), or 'hero': it stays over your head as you move and every gain of the kind
+// merges into it while it holds, or { near: r } (v841): it merges with one of the kind still holding within r tiles
+function floatGain(id, n, x, y, z, color = '#e8c08a', at = T(Math.floor(x), Math.floor(z))) {
+  const it = ITEMS[id] || GAIN_KINDS[id];
+  if (!(n > 0) || !it) return;
+  const name = it.name.toUpperCase(), held = g => g.t < GAIN_FLY.hold;
+  const near = at && at.near, same = gains.find(g => g.id === id && held(g) && (near ? Math.hypot(g.x - x, g.z - z) <= near : g.at === at));
+  if (same) { same.n += n; same.t = 0; same.pulse = 1; same.num.textContent = '+' + same.n; return; }
+  if (gains.length > 24) return;
+  // (a gain by another still holding there stands above it)
+  let slot = 0;
+  while (gains.some(g => g.slot === slot && held(g) && Math.hypot(g.x - x, g.z - z) < 1.5 && Math.abs(g.y0 - y) < 1)) slot++;
+  const el = document.createElement('div');
+  el.className = 'float gain';
+  el.innerHTML = `<span class="gt"><span class="gn"></span><span class="gw"></span></span><span class="gi">${ICON[it.icon] || ''}</span>`;
+  const txt = el.firstChild, num = txt.firstChild; num.textContent = '+' + n; txt.lastChild.textContent = name; txt.style.color = color;
+  $('fx').appendChild(el);
+  const g = { id, n, at, x, y0: y, y: y + slot * GAIN_FLY.stack, z, slot, color, el, txt, num, t: 0, pulse: 1, follow: at === 'hero' ? y - H.y : null };
+  gains.push(g);
+  placeGain(g, cv.getBoundingClientRect());
+}
+function placeGain(g, rect) {
+  const G = GAIN_FLY, rising = Math.max(0, g.t - G.hold) / Math.max(0.01, G.rise);
+  const st = Math.round(G.steps), u = Math.min(1, st > 0 ? Math.floor(rising * st + 1e-6) / st : rising);   // (v833: smooth unless steps > 0)
+  if (g.follow !== null) { g.x = H.x; g.z = H.z; g.y0 = H.y + g.follow; g.y = g.y0 + g.slot * G.stack; }   // (v840: over your head)
+  gainV.set(g.x, g.y, g.z).project(camera);
+  g.el.style.display = gainV.z > 1 ? 'none' : '';
+  const p = g.pulse > 0 ? Math.sin(Math.PI * 0.5 * g.pulse) : 0;
+  const sc = 1 + G.pulseGrow * p;
+  g.el.style.transform = `translate(${(rect.left + (gainV.x + 1) / 2 * rect.width).toFixed(1)}px, ${(rect.top + (1 - gainV.y) / 2 * rect.height - u * G.risePx).toFixed(1)}px) translate(-50%, -50%) scale(${sc.toFixed(3)})`;
+  const base = gainShadow(sc);
+  g.txt.style.textShadow = base;
+  g.el.style.opacity = (1 - u).toFixed(3);
+  g.el.style.setProperty('--gi', G.iconSize + 'px');
+  g.el.style.setProperty('--gg', G.gap + 'px');
+  g.el.style.fontSize = G.size + 'px';   // (v838, Jordan) the text's size at rest, before any swell
+  // (v835, Jordan) the whole fly-up swells about its middle (above); only the +count pulses color (and glows, v836)
+  const on = p > 0.01, c = on ? `color-mix(in srgb, ${g.color}, #fff ${(G.pulseMix * p).toFixed(1)}%)` : '';
+  g.num.style.color = c;
+  g.num.style.filter = on && G.glow > 0 ? `brightness(${(1 + G.glow * p).toFixed(3)})` : '';
+  g.num.style.textShadow = on && G.glowSize > 0 ? gainShadow(sc, `0 0 ${(G.glowSize * p).toFixed(2)}px ${c}, 0 0 ${(G.glowSize * p * 0.5).toFixed(2)}px ${c}`) : '';
+}
+// (v837, Jordan: the hard shadow parted from the text as it swelled) the fly-up text's shadows, kept in screen pixels
+// however far the fly-up is scaled (each length / sc): an outline GAIN_FLY.outline px wide (8 hard copies round it; 0
+// off), then any glow, then the drop shadow, shadowDist down and right, blurred shadowBlur, shadowWeight copies deep
+// (1 = one black copy, 0.5 half see-through, 2-4 darken a blurred one)
+function gainShadow(sc, glow) {
+  const G = GAIN_FLY, k = 1 / Math.max(0.01, sc), out = [], f = v => (v * k).toFixed(3) + 'px';
+  if (G.outline > 0) { const o = G.outline; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) out.push(`${f(dx * o)} ${f(dy * o)} 0 #000`); }
+  if (glow) out.push(glow);
+  const w = Math.max(0, G.shadowWeight), d = f(G.shadowDist), b = f(G.shadowBlur);
+  for (let i = 0; i < Math.ceil(w - 1e-6); i++) out.push(`${d} ${d} ${b} rgba(0, 0, 0, ${Math.min(1, w - i).toFixed(3)})`);
+  return out.join(', ') || 'none';
+}
+function updateGains(dt) {
+  if (!gains.length) return;
+  const rect = cv.getBoundingClientRect();
+  for (let k = gains.length - 1; k >= 0; k--) {
+    const g = gains[k];
+    g.t += dt;
+    if (g.pulse > 0) g.pulse = Math.max(0, g.pulse - dt / Math.max(0.01, GAIN_FLY.pulse));
+    if (g.t >= GAIN_FLY.hold + GAIN_FLY.rise) { g.el.remove(); gains.splice(k, 1); continue; }
+    placeGain(g, rect);
+  }
+}
 
 // ---------- Sound (tiny square-wave chiptune blips) ----------
 let actx = null;
@@ -22129,8 +22306,8 @@ fxParts.loadSmoke([1, 2, 3, 4].map(k => new URL(`textures/dust_${k}.png`, docume
 fxParts.ramp('soot', ['#5a544e', '#6a645e', '#7a736c', '#8a827a', '#9a9188', '#aaa197', '#bab0a6', '#cac0b6']);
 // (layers of their own, drawn in renderWorld: the solid ones after the hero, the see-through ones after the smoke
 // and haze)
-fxParts.clearMesh.layers.set(FX_CLEAR_LAYER); fxParts.solidMesh.layers.set(FX_SOLID_LAYER); fxParts.domeMesh.layers.set(FX_SOLID_LAYER);
-scene.add(fxParts.clearMesh, fxParts.solidMesh, fxParts.domeMesh);
+fxParts.clearMesh.layers.set(FX_CLEAR_LAYER); fxParts.solidMesh.layers.set(FX_SOLID_LAYER); fxParts.domeMesh.layers.set(FX_SOLID_LAYER); fxParts.coinMesh.layers.set(FX_SOLID_LAYER);
+scene.add(fxParts.clearMesh, fxParts.solidMesh, fxParts.domeMesh, fxParts.coinMesh);
 // the brightest two lights the effects ask for each frame (flares at a strike, a fireball's glow)
 const fxLights = [0, 1].map(() => { const l = addLight(new GFX.PointLight('#ffffff', 0, 5, 2)); l.visible = false; return l; });
 const fxShake = { t: 0, amp: 0, off: new GFX.Vector3() };
@@ -22449,6 +22626,30 @@ function fxChips(x, y, z, kind, n) {
     fxParts.spawn({ style: kind === 'wood' ? GFX.FX.SHARD : GFX.FX.CHUNK, x, y, z, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 2,
       life: 1.1 + Math.random() * 0.5, size0: 0.045, size1: 0.04, grav: 1, drag: 0.3, bounce: 0.3, floor: gy, spin: (Math.random() - 0.5) * 24,
       ramp, tone0: tone, tone1: tone });
+  }
+}
+// ---------- Coin fountain (T > Gold) ----------
+// (v840, Jordan) as a foe that carries gold dies, gold coins burst up out of it: flat discs of shiny gold metal that
+// flip as they arc out, bounce on the ground, settle flat and dither away. COIN_FX.per coins for each gold piece
+// (min to most); up/upVar how hard they're thrown up, out how far out; spin how fast they flip (rad/s, halved at
+// each bounce), bounce how much of their fall they keep; size their radius, thick their thickness for it; metal,
+// rough and shine their gold (shine: how much they mirror the sky), glow a little light of their own; fadeAt how far
+// through their life they start to dither out; stagger how long the burst takes to throw them all
+const COIN_FX = { on: 1, per: 1.5, min: 3, most: 60, up: 5, upVar: 1.3, out: 1.5, spin: 22, bounce: 0.45, grav: 1, size: 0.075, thick: 0.14,
+  life: 2.6, fadeAt: 0.72, stagger: 0.12, height: 0.8, metal: 0.7, rough: 0.28, shine: 1.75, glow: 0.12, tone: 0.6 };   // (v842: Jordan's tuning)
+fxParts.ramp('gold', ['#3a2204', '#6a420a', '#9a6612', '#c88e1e', '#e8b232', '#f6d058', '#fde69a', '#fff8dc']);
+function coinFountain(x, y, z, gold) {
+  const C = COIN_FX;
+  if (C.on < 0.5 || FX_TUNE.on < 0.5) return;
+  const n = Math.round(clamp(gold * C.per, C.min, Math.max(C.min, C.most))), gy = surfaceY(x, z), ramp = fxParts.ramp('gold');
+  fxParts.coin.x = C.metal; fxParts.coin.y = C.rough; fxParts.coin.z = C.shine; fxParts.coin.w = C.fadeAt;   // (the coins' shared look)
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.283, out = C.out * Math.sqrt(Math.random()), ca = Math.cos(a), sa = Math.sin(a);
+    const tone = clamp(C.tone + (Math.random() - 0.5) * 0.14, 0, 1);
+    fxParts.spawn({ style: GFX.FX.COIN, x: x + ca * 0.08, y: Math.max(y, gy) + C.height, z: z + sa * 0.08, vx: ca * out, vz: sa * out,
+      vy: C.up + (Math.random() * 2 - 1) * C.upVar, delay: Math.random() * C.stagger, life: C.life * (0.85 + Math.random() * 0.3),
+      size0: C.size, size1: C.size, grav: C.grav, drag: 0.15, bounce: C.bounce, floor: gy, stretch: C.thick, rot: Math.random() * 6.283,
+      spin: (Math.random() < 0.5 ? -1 : 1) * C.spin * (0.6 + Math.random() * 0.8), ramp, tone0: tone, tone1: tone, glow: C.glow });
   }
 }
 // ---------- Fountain water effects (T > Fountain water) ----------
@@ -23181,7 +23382,7 @@ function pickUpBonePile(b) {
   paintMapTile(b.c, b.r);
   scene.remove(d.g); detached.delete(b.i);
   if (lost) dropLoot('bone', lost, b.x, b.z);
-  floatText('+' + (BONE_PILE.give - lost) + ' ' + ITEMS.bone.name.toUpperCase(), H.x, H.y + 1.3, H.z, '#e8c08a');
+  floatGain('bone', BONE_PILE.give - lost, H.x, H.y + 1.3, H.z, '#e8c08a');
   sfx.coin();
   if (craftAt) renderCraft();
 }
@@ -23193,8 +23394,7 @@ function pickUpLoot() {
     if (d.n > left) got[d.id] = (got[d.id] || 0) + d.n - left;
     if (left) { d.n = left; full = true; } else removeDrop(d);
   }
-  let y = H.y + 1.3;
-  for (const [id, n] of Object.entries(got)) { floatText('+' + n + ' ' + ITEMS[id].name.toUpperCase(), H.x, y, H.z, '#e8c08a'); y += 0.35; }
+  for (const [id, n] of Object.entries(got)) floatGain(id, n, H.x, H.y + 1.3, H.z, '#e8c08a');
   if (Object.keys(got).length) { sfx.coin(); if (craftAt) renderCraft(); }
   if (full) packFull();
 }
@@ -23208,26 +23408,191 @@ scene.add(arcMesh, ringMesh);
 let arcT = 9, ringT = 9;
 
 // ---------- Chopping ----------
+// (v826, Jordan) a felled tree topples as a pole tipping over about its foot does under gravity: slow to start, ever
+// faster, thudding down (a little bounce), dust thrown up all along it the moment it lands, the colour of its
+// bark; then it sinks into the ground as its leaves dissolve away in a smooth noise. T > Tree felling.
+const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolveAt: -0.75, dissolve: 1.3, noise: 2.6, trail: 1.25, burst: 1.6 };
+// the bark a felled tree's dust takes (its trunk's own colour, by kind)
+const FELL_BARK = { [O.PINE]: '#5a3a22', [O.SNOWPINE]: '#5a3a22', [O.OAK]: '#6a4428', [O.BIRCH]: '#e8e4d8', [O.CACTUS]: '#5a8a3a', [O.PALM]: '#8a6a48', [O.BURNT]: '#1e1816' };
+// (v829) the leaves it sheds, by kind (none for the leafless ones): colour, how wide for their length (pine needles
+// narrow), size, and the share of them that colour
+function fellLeaves(o, c, r) {
+  const b = BI[T(c, r)];
+  switch (o) {
+    case O.OAK: return [{ col: b === TOWN ? '#5a9a3e' : '#4f8a3a', w: 0.6, size: 0.075, share: 1 }];
+    case O.BIRCH: return [{ col: hs(c, r, 6) > 0.9 ? '#c8b84a' : '#9ab84a', w: 0.55, size: 0.06, share: 1 }];
+    case O.PINE: return [{ col: '#2f5a34', w: 0.18, size: 0.065, share: 1 }];
+    case O.SNOWPINE: return [{ col: '#2f5048', w: 0.18, size: 0.065, share: 0.6 }, { col: '#eef4fa', w: 1, size: 0.045, share: 0.4 }];
+    case O.PALM: return [{ col: '#4a8a36', w: 0.3, size: 0.09, share: 1 }];
+    case O.DEAD: return b === SWAMP ? [{ col: '#8f9c78', w: 0.3, size: 0.07, share: 0.6 }, { col: '#56702e', w: 0.6, size: 0.06, share: 0.4 }] : null;
+  }
+  return null;
+}
+const fellBark = (o, c, r) => FELL_BARK[o] || (o === O.DEAD ? (BI[T(c, r)] === SWAMP ? '#3e3a2c' : BI[T(c, r)] === GRAVE ? '#4a4448' : '#3a3030') : '#6a4428');
+// A felled tree's leaves, drawn as groundMat draws them but cut away where a smooth 3D noise (in the tree's own
+// frame, so it rides along as it falls) is under the cut: as fd.x rises from 0 to 1, holes open in the crown and
+// spread till nothing's left. A plain cut, no dither. Its shadow is cut the same way. Each tree falling has its own
+// (from a small pool, so their pipelines are made once): fd = (cut, noise scale, seed x, seed z).
+const FELL_WGSL = /* wgsl */ `
+fn fdHash(p: vec3f) -> vec3f {
+  let q = vec3f(dot(p, vec3f(127.1, 311.7, 74.7)), dot(p, vec3f(269.5, 183.3, 246.1)), dot(p, vec3f(113.5, 271.9, 124.6)));
+  return fract(sin(q) * 43758.5453) * 2.0 - 1.0;
+}
+fn fdGrad(i: vec3f, f: vec3f, o: vec3f) -> f32 { return dot(normalize(fdHash(i + o) + vec3f(1e-4)), f - o); }
+// gradient (Perlin) noise, about -0.9..0.9
+fn fdNoise(p: vec3f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  let a = mix(fdGrad(i, f, vec3f(0.0, 0.0, 0.0)), fdGrad(i, f, vec3f(1.0, 0.0, 0.0)), u.x);
+  let b = mix(fdGrad(i, f, vec3f(0.0, 1.0, 0.0)), fdGrad(i, f, vec3f(1.0, 1.0, 0.0)), u.x);
+  let c = mix(fdGrad(i, f, vec3f(0.0, 0.0, 1.0)), fdGrad(i, f, vec3f(1.0, 0.0, 1.0)), u.x);
+  let d = mix(fdGrad(i, f, vec3f(0.0, 1.0, 1.0)), fdGrad(i, f, vec3f(1.0, 1.0, 1.0)), u.x);
+  return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+}
+// is this point of the leaves (lp: in the tree's own frame) gone yet?
+fn fellCut(lp: vec3f) -> bool {
+  if (U.fd.x <= 0.0) { return false; }
+  let p = lp * U.fd.y + vec3f(U.fd.z, 0.0, U.fd.w);
+  let n = fdNoise(p) * 0.7 + fdNoise(p * 2.03 + vec3f(5.2, 1.3, 7.7)) * 0.3;
+  return clamp(0.5 + n * 0.85, 0.0, 1.0) < mix(-0.02, 1.02, U.fd.x);
+}
+`;
+const makeFellLeafMat = () => new GFX.ShaderMaterial({ uniforms: { fd: { value: { x: 0, y: FELL.noise, z: 0, w: 0 } } }, vertexColors: true, side: GFX.DoubleSide, lit: true,
+  shadowFrag: true,
+  shadowCode: FELL_WGSL + /* wgsl */ `
+struct SOut { @builtin(position) pos: vec4f, @location(0) lp: vec3f }
+@vertex fn vs(v: VIn) -> SOut { return SOut(F.viewProj * (O.model * vec4f(v.position, 1.0)), v.position); }
+@fragment fn fs(i: SOut) { if (fellCut(i.lp)) { discard; } }`,
+  code: FELL_WGSL + /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) lp: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = O.model * vec4f(v.position, 1.0);
+  return VOut(F.viewProj * w, w.xyz, v.color, w.xyz - F.camPos.xyz, v.position);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  if (fellCut(i.lp)) { discard; }
+  let N = flatNormal(i.eye);
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+const fellLeafPool = [];   // { mat, d (the tree using it, or null) }
+function fellLeafMat(d) {
+  let s = fellLeafPool.find(q => !q.d);
+  if (!s) { s = fellLeafPool.length < 4 ? { mat: makeFellLeafMat(), d: null } : fellLeafPool.reduce((a, b) => a.d.fallT > b.d.fallT ? a : b); if (!fellLeafPool.includes(s)) fellLeafPool.push(s); }
+  if (s.d && s.d !== d) { s.d.leafMesh.material = groundMat; s.d.leafSlot = null; }
+  s.d = d;
+  const v = s.mat.uniforms.fd.value; v.x = 0; v.y = FELL.noise; v.z = (d.x * 7.31) % 97; v.w = (d.z * 3.17) % 89;
+  return s;
+}
+// A felled tree's fall, a step on: true once it's gone. It turns as a pole of its height pivoting on its foot
+// would (its angular speed gaining 3g/2L sin(angle) a second), lands where it lies (a little short of flat: its
+// crown holds it up), bounces a little, and settles; then it sinks and its leaves dissolve.
+const FELL_REST = Math.PI / 2 - 0.1;
+function updateFaller(d, dt) {
+  let landed = false;
+  if (d.landT < 0 || d.spin !== 0) {
+    const kk = 1.5 * FELL.gravity / d.top;
+    // (in small steps: it's quickest just as it lands)
+    for (let n = 0, steps = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / steps; n < steps; n++) {
+      d.spin += kk * Math.sin(d.ang) * h; d.ang += d.spin * h;
+      if (d.ang >= FELL_REST) {
+        d.ang = FELL_REST;
+        if (d.landT < 0) { d.landT = d.fallT; landed = true; }
+        d.spin = -d.spin * FELL.bounce;
+        if (Math.abs(d.spin) < 0.35) { d.spin = 0; break; }
+      }
+    }
+    d.g.quaternion.setFromAxisAngle(d.axis, d.ang);
+  }
+  if (landed) { fellDust(d); fellLeafBurst(d); sfx.thunk(); }
+  else if (d.landT < 0) fellLeafTrail(d, dt);
+  // (the leaves' dissolving starts FELL.dissolveAt after it lands (v828), or before, when that's negative (v829: by
+  // when it's due to land, worked out as it starts to fall); the sinking FELL.hold after)
+  const tl = d.fallT - (d.landT < 0 ? d.landEst : d.landT) - FELL.dissolveAt;
+  if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.mat.uniforms.fd.value.x = clamp(tl / Math.max(0.05, FELL.dissolve), 0, 1);
+  if (d.landT < 0) return false;
+  const t = d.fallT - d.landT - FELL.hold;
+  if (t > 0) { const sk = Math.min(1, t / Math.max(0.05, FELL.sink)); d.g.position.y = d.y0 - FELL.depth * sk * sk * (3 - 2 * sk); }
+  return t >= FELL.sink && tl >= FELL.dissolve;
+}
+// (v829) leaves shed as it falls, left behind in the air by its crown and fluttering down (more the faster it's
+// going), and a burst of them thrown up as it lands: from points of its crown (d.leafPts, picked in detach)
+const fellP = new GFX.Vector3(), fellV = new GFX.Vector3();
+function fellLeafSpawn(d, kinds, vx, vy, life) {
+  const j = Math.floor(Math.random() * d.leafPts.length / 3) * 3, L = d.leafPts;
+  fellP.set(L[j], L[j + 1], L[j + 2]).applyQuaternion(d.g.quaternion);
+  // (its speed there, the crown swinging round the foot: spin × (axis × r))
+  fellV.crossVectors(d.axis, fellP).multiplyScalar(d.spin);
+  fellP.add(d.g.position);
+  let u = Math.random(), kd = kinds[0];
+  for (const q of kinds) { if (u < q.share) { kd = q; break; } u -= q.share; }
+  const gy = surfaceY(fellP.x, fellP.z);
+  fxParts.spawn({ style: GFX.FX.LEAF, x: fellP.x, y: Math.max(gy + 0.05, fellP.y), z: fellP.z, vx: fellV.x * vx[0] + vx[1] * (Math.random() - 0.5), vy: fellV.y * vx[0] + vy[0] + vy[1] * Math.random(), vz: fellV.z * vx[0] + vx[1] * (Math.random() - 0.5),
+    life: life[0] + Math.random() * life[1], size0: kd.size * (0.8 + Math.random() * 0.5), size1: kd.size, stretch: kd.w, grav: 0.13, drag: 1.8, turb: 0.5, floor: gy,
+    rot: Math.random() * 6.283, spin: (2 + Math.random() * 6) * (Math.random() < 0.5 ? -1 : 1), ramp: fxParts.tint(kd.col), tone0: 0.55 + Math.random() * 0.3, tone1: 0.6, alpha: 1 });
+}
+function fellLeafTrail(d, dt) {
+  if (!d.leafPts || FELL.trail <= 0 || FX_TUNE.on < 0.5) return;
+  const kinds = fellLeaves(d.o, d.c, d.r);
+  if (!kinds) return;
+  d.trailAcc = (d.trailAcc || 0) + dt * FELL.trail * FX_TUNE.density * 14 * Math.min(2, 0.25 + Math.abs(d.spin) * 0.6);
+  for (; d.trailAcc >= 1; d.trailAcc--) fellLeafSpawn(d, kinds, [0.15, 0.4], [0, 0.3], [1.6, 1.4]);
+}
+function fellLeafBurst(d) {
+  if (!d.leafPts || FELL.burst <= 0 || FX_TUNE.on < 0.5) return;
+  const kinds = fellLeaves(d.o, d.c, d.r);
+  if (!kinds) return;
+  for (let n = Math.round(36 * FELL.burst * FX_TUNE.density); n > 0; n--) fellLeafSpawn(d, kinds, [0, 2.4], [1.2, 1.8], [1.6, 1.2]);
+}
+// the dust thrown up as it lands: all along it, from its foot to its crown, outward to either side, in its bark's
+// colour
+function fellDust(d) {
+  if (FELL.dust <= 0) return;
+  const col = fellBark(d.o, d.c, d.r), L = d.top * 0.95, n = Math.max(3, Math.round(L * 2.6 * FELL.dust));
+  const ax = d.fx, az = d.fz, px = -az, pz = ax;
+  if (FX_TUNE.on < 0.5) { for (let q = 0; q < n; q++) { const s = (q + 0.5) / n * L; puff(d.x + ax * s, surfaceY(d.x + ax * s, d.z + az * s), d.z + az * s, col, 3, 0.9); } return; }
+  const ramp = fxParts.tint(col);
+  for (let q = 0; q < n; q++) {
+    const s = (q + 0.2 + Math.random() * 0.6) / n * L, x0 = d.x + ax * s, z0 = d.z + az * s, gy = surfaceY(x0, z0);
+    for (let m = 0; m < Math.round(3 * FX_TUNE.density); m++) {
+      const side = m % 2 ? 1 : -1, sp = (0.7 + Math.random() * 0.9) * (0.8 + 0.4 * s / L), al = (Math.random() - 0.5) * 0.6;
+      fxParts.spawn({ style: GFX.FX.PUFF, x: x0 + px * side * 0.12, y: gy + 0.1, z: z0 + pz * side * 0.12,
+        vx: (px * side + ax * al) * sp, vz: (pz * side + az * al) * sp, vy: 0.4 + Math.random() * 0.7,
+        life: 0.7 + Math.random() * 0.6, size0: 0.1 + Math.random() * 0.06, size1: 0.3 + Math.random() * 0.16, drag: 2.6, grav: -0.08, turb: 0.25, floor: gy,
+        ramp, tone0: 0.7, tone1: 0.85, alpha: 0.8 });
+    }
+  }
+}
+const bufTmpLeaf = new Buf(), bufTmpPlant = new PlantBuf(), bufTmpWeb = new Buf(), bufTmpSpider = new SpiderBuf();
 function detach(i, c, r) {
   let d = detached.get(i);
   if (d) return d;
   const o = OB[i];
-  const save = [OUT, GLOW, METAL, PRISMB];
+  // (the leaves into a buffer of their own; a swamp tree's hanging moss with them; webs and spiders, which a felled
+  // tree doesn't keep, kept out of the world's own buffers)
+  const save = [OUT, GLOW, METAL, PRISMB, LEAFB, PLANT, WEB, SPIDER];
   OUT = bufTmp; GLOW = bufTmpGlow; METAL = bufTmpMetal; PRISMB = bufTmpPrism; bufTmp.n = 0; bufTmpGlow.n = 0; bufTmpMetal.n = 0; bufTmpPrism.n = 0;
-  drawObject(o, c, r);
+  LEAFB = bufTmpLeaf; PLANT = bufTmpPlant; WEB = bufTmpWeb; SPIDER = bufTmpSpider; bufTmpLeaf.n = 0; bufTmpPlant.n = 0; bufTmpWeb.n = 0; bufTmpSpider.n = 0;
+  try { drawObject(o, c, r); } finally { [OUT, GLOW, METAL, PRISMB, LEAFB, PLANT, WEB, SPIDER] = save; }
+  if (bufTmpPlant.n) { bufTmpLeaf.need(bufTmpPlant.n); bufTmpLeaf.p.set(bufTmpPlant.p.subarray(0, bufTmpPlant.n), bufTmpLeaf.n); bufTmpLeaf.c.set(bufTmpPlant.c.subarray(0, bufTmpPlant.n), bufTmpLeaf.n); bufTmpLeaf.n += bufTmpPlant.n; }
   const [x, z] = objPos(c, r, o), y = LV[i] * STEP;
   // recentre on the trunk so it can shake and topple about its foot
-  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; }
+  let top = 0;
+  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism, bufTmpLeaf]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; if (B.p[k + 1] > top) top = B.p[k + 1]; }
   const g = new GFX.Group();
   const m = bufTmp.mesh(groundMat); if (m) g.add(m);
+  const ml = bufTmpLeaf.mesh(groundMat); if (ml) g.add(ml);
   // (and what of it glows: the fantasy ores' crystal tips, seams and embers)
   const mg = bufTmpGlow.mesh(glowMat); if (mg) g.add(mg);
   const mm = bufTmpMetal.mesh(metalMat); if (mm) g.add(mm);
   const mp = bufTmpPrism.mesh(prismMat(1, true)); if (mp) g.add(mp);
   g.position.set(x, y, z);
   scene.add(g);
-  [OUT, GLOW, METAL, PRISMB] = save;
-  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false };
+  // (points of its crown, where the leaves it sheds as it falls come from)
+  let leafPts = null;
+  if (bufTmpLeaf.n) { const nv = bufTmpLeaf.n / 3, m = Math.min(48, nv); leafPts = new Float32Array(m * 3); for (let q = 0; q < m; q++) { const v = Math.floor(Math.random() * nv) * 3; leafPts[q * 3] = bufTmpLeaf.p[v]; leafPts[q * 3 + 1] = bufTmpLeaf.p[v + 1]; leafPts[q * 3 + 2] = bufTmpLeaf.p[v + 2]; } }
+  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false, leafMesh: ml, leafPts, top: Math.max(0.5, top) };
   detached.set(i, d);
   // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
   // once took 8-20 ms, a spike on the first blow); till they swap in, the chunk's own copy stands and this one hides
@@ -23241,6 +23606,10 @@ function detach(i, c, r) {
 // RESOURCES.amount (T > Resources) scales everything gathered or dropped: these, and the hides foes leave.
 const RESOURCES = { amount: 4};
 const TOMB_BONE = 0.25;
+// (v840, Jordan) gold: people and goblins (FOE human, not undead) carry gold, paid straight into your purse as they die
+// (no pickup): their kind's base here (`other` for a kind not listed) × (1 + perLevel × (level - 1)), give or take
+// spread; goblins carry the least. See payGold, and coinFountain for the coins that burst out of them
+const GOLD = { goblin: 2, footpad: 4, poacher: 4, graveRobber: 5, bandit: 6, highwayman: 8, raider: 9, other: 4, perLevel: 0.5, spread: 0.25, merge: 2, flyY: 1.5 };
 const MEAT = { chance: 0.75 };   // (v804, Jordan) the chance a kill of wildlife (FOE def meat) drops a raw meat   // (the chance a broken gravestone drops a bone)
 const harvestCarry = { wood: 0, stone: 0, roughSandstone: 0, copperOre: 0, ironOre: 0, hide: 0, bone: 0, ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', 0])) };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
@@ -23272,6 +23641,11 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
     if (od.tree) {
       // timber: tip over away from the swing, then sink away
       d.falling = true; d.fallT = 0; d.axis = new GFX.Vector3(dirz, 0, -dirx).normalize();
+      // (it tips about its foot from a hair off upright, the last blow's push already turning it)
+      d.ang = 0.03; d.spin = FELL.push; d.landT = -1; d.y0 = d.g.position.y; d.fx = dirx; d.fz = dirz;
+      // (when it'll land, the fall stepped through ahead: for leaves set to dissolve before then)
+      { const kk = 1.5 * FELL.gravity / d.top; let a = d.ang, w = d.spin, t = 0; while (a < FELL_REST && t < 10) { w += kk * Math.sin(a) / 240; a += w / 240; t += 1 / 240; } d.landEst = t; }
+      if (d.leafMesh) { d.leafSlot = fellLeafMat(d); d.leafMesh.material = d.leafSlot.mat; }
       fallers.push(d);
       sfx.fell();
     } else {
@@ -23285,7 +23659,7 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   }
   if (!gain) return;
   const lost = addItem(res, gain);
-  if (lost < gain) floatText('+' + (gain - lost) + ' ' + ITEMS[res].name.toUpperCase(), d.x, top + 0.6, d.z, res === 'wood' ? '#e0b070' : od.ore || '#c8c6d0');
+  if (lost < gain) floatGain(res, gain - lost, d.x, top + 0.6, d.z, res === 'wood' ? '#e0b070' : od.ore || '#c8c6d0');
   if (lost) {
     // what doesn't fit falls on the ground between you and it
     const dx = d.x - H.x, dz = d.z - H.z, l = Math.hypot(dx, dz) || 1, s = Math.min(0.6, l * 0.5);
@@ -23346,10 +23720,26 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
     if (f.def.hide) leave('hide');
     if (f.def.bone && Math.random() < f.def.bone) leave('bone');
     if (f.def.meat && Math.random() < MEAT.chance) dropLoot('rawMeat', 1, f.x - 0.3, f.z + 0.15);   // (v804: one raw meat, set apart from the hide)
+    if (f.def.human && !f.def.undead) payGold(f);   // (v840: people and goblins, straight into the purse)
     // (v477) what a person had on them
     for (const [id, p, most] of f.def.loot || []) if (Math.random() < p) dropLoot(id, 1 + Math.floor(Math.random() * most), f.x + (Math.random() - 0.5) * 0.5, f.z + (Math.random() - 0.5) * 0.5);
   }
 }
+// (v840, Jordan) what a foe that carries gold (people, goblins) has on it, by GOLD; at least 1
+function goldFor(f) {
+  const base = GOLD[f.kind] ?? GOLD.other, lvl = Math.max(1, f.level || 1);
+  return Math.max(1, Math.round(base * (1 + GOLD.perLevel * (lvl - 1)) * (1 + (Math.random() * 2 - 1) * GOLD.spread)));
+}
+// paid as it dies: into the purse, a fly-up where it fell (v841, Jordan: was over your head; gold from kills within
+// GOLD.merge tiles of one still holding adds to it), and the coin fountain there
+function payGold(f) {
+  const n = goldFor(f);
+  H.gold += n; renderGold();
+  floatGain('gold', n, f.x, f.y + GOLD.flyY, f.z, '#f2c14e', { near: GOLD.merge });
+  coinFountain(f.x, f.y, f.z, n);
+  sfx.coin();
+}
+function renderGold() { const el = $('goldVal'); if (el) el.textContent = String(H.gold).padStart(3, '0'); }
 // a sword stroke: foes in the arc, and the one nearest tree or rock in front
 function swingHit(range, arc, dmg, knock) {
   let hitAny = false;
@@ -24950,9 +25340,34 @@ function cliffFlip([dx, dz]) {
   const drop = H.y - LV[n] * STEP;
   return { t: 0, dur: 0.5 + 0.06 * drop, x0: H.x, z0: H.z, y0: H.y, x1, z1, y1: LV[n] * STEP, face: [0, Math.PI / 2, Math.PI, -Math.PI / 2][d] };
 }
+// (v827, Jordan) Off an upper story's floor the same way: where the edge you push at has nothing on it (no wall,
+// window, door, fence, gate or low wall) and no floor goes on beyond it, a flip down onto the tile beyond, landing on
+// the highest floor under it or else the ground. Not into a stair, a bed or a prop that blocks, onto water or a
+// tile object, nor through a room's roof.
+function storyFlip([dx, dz]) {
+  const k = H.story, c = Math.floor(H.x), r = Math.floor(H.z), i = T(c, r);
+  if (Math.max(Math.abs(dx), Math.abs(dz)) < 0.6 || !UP[k].FL.has(i)) return null;
+  const d = Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0);
+  const gap = d === 1 ? c + 1 - H.x : d === 3 ? H.x - c : d === 2 ? r + 1 - H.z : H.z - r;
+  const nc = c + DC[d], nr = r + DR[d];
+  if (gap > 0.5 || nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1 || upWallOn(c, r, d, k)) return null;
+  const n = T(nc, nr);
+  if (UP[k].FL.has(n)) return null;
+  // the highest story under it with floor there, else the ground; nothing of a stair in between
+  let s = k - 1;
+  while (s > 0 && !UP[s].FL.has(n)) s--;
+  for (let j = s; j <= k; j++) if (stairAt.has(j * SNN + n)) return null;
+  if ((roomOf.has(s * SNN + n) && !covered(s, n)) || BEDS.has(s * SNN + n) || (PROP_AT.has(s * SNN + n) && !heroPass(s, n))) return null;
+  if (!s && (!LV[n] || WT[n] >= 2 || (OBJ[OB[n]].tile && !heroPass(0, n)))) return null;
+  const across = d & 1 ? clamp(H.z - r, 0.3, 0.7) : clamp(H.x - c, 0.3, 0.7), into = 0.8;
+  const x1 = d & 1 ? nc + (d === 1 ? into : 1 - into) : nc + across, z1 = d & 1 ? nr + across : nr + (d === 2 ? into : 1 - into);
+  const y1 = s ? storyY(s, n) + 0.06 : surfaceY(x1, z1), drop = H.y - y1;
+  if (drop < 0.5) return null;
+  return { t: 0, dur: 0.5 + 0.06 * drop, x0: H.x, z0: H.z, y0: H.y, x1, z1, y1, story: s, face: [0, Math.PI / 2, Math.PI, -Math.PI / 2][d] };
+}
 function jumpEdge(dir = moveInput()) {
-  if (mode !== 'play' || !H.alive || H.flip || H.dash >= 0 || H.lunge >= 0 || !dir) return null;
-  return cliffFlip(dir);
+  if (mode !== 'play' || !H.alive || H.flip || H.dash >= 0 || H.lunge >= 0 || !dir || H.stair) return null;
+  return H.story ? storyFlip(dir) : cliffFlip(dir);
 }
 function castJump() {
   const f = H.canJump;
@@ -26101,13 +26516,16 @@ function upJoined(k, c, r, extra = null) {
   for (const st of stairs.values()) if (st.k === k - 1 && st.land === i && LV[st.t0] === LV[i]) return true;
   return false;
 }
-// a wall, fence or door on story k: on the side of a floor on that story
+// a wall, fence or door on story k: on the side of a floor on that story, or (v825, Jordan) on top of a full-height
+// wall, window or door on the story below (fences and gates are too low to hold one up)
+const edgeVal = (ec, er, w, k) => k ? (w ? UP[k].WW : UP[k].WN).get(T(ec, er)) || 0 : (w ? WW : WN)[T(ec, er)];
 function upEdgeSpot(ec, er, w, kind, k) {
   const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1), U = UP[k];
   const fa = U.FL.has(a), fb = U.FL.has(b), there = (w ? U.WW : U.WN).get(a), upgrade = !!there && WINDOW_OF[kind] && there === KIND_VAL[WINDOW_OF[kind]];
-  let ok = (fa || fb) && (!there || upgrade) && BI[a] !== TOWN && BI[b] !== TOWN;
-  let why = there && !upgrade ? 'Something is built here already.' : !(fa || fb) ? 'Walls up here need a floor beside them.' : 'The townsfolk would rather you built outside town.';
-  if (ok && ![a, b].some(t => (t === a ? fa : fb) && claimedAt(t))) { ok = false; why = plotWhy(fa ? a : b); }
+  const below = edgeVal(ec, er, w, k - 1), onWall = !!below && !isFenceVal(below);
+  let ok = (fa || fb || onWall) && (!there || upgrade) && BI[a] !== TOWN && BI[b] !== TOWN;
+  let why = there && !upgrade ? 'Something is built here already.' : !(fa || fb || onWall) ? 'Walls up here need a floor beside them or a wall under them.' : 'The townsfolk would rather you built outside town.';
+  if (ok && ![a, b].some(t => (onWall || (t === a ? fa : fb)) && claimedAt(t))) { ok = false; why = plotWhy(fa || !fb ? a : b); }
   const sa = stairAt.get(k * SNN + a) || stairAt.get((k - 1) * SNN + a);
   if (ok && sa && (sa === stairAt.get(k * SNN + b) || sa === stairAt.get((k - 1) * SNN + b))) { ok = false; why = 'That would cut across the stairs.'; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
@@ -26206,7 +26624,7 @@ function removeUp(k) {
   pay(target.kind, -1);
   flushDirty();
   sfx.remove();
-  floatText('+' + costText(target.kind), mx, LV[T(target.c, target.r)] * STEP + k * WALL_H + 1.2, mz, '#e0b070');
+  refundGains(target.kind, mx, LV[T(target.c, target.r)] * STEP + k * WALL_H + 1.2, mz);
 }
 // a wall or door on the edge named by (ec, er, w)
 function edgeSpot(ec, er, w, kind) {
@@ -26600,7 +27018,7 @@ function updateHearths(dt) {
 // ---------- Stations ----------
 // The refining stations (V Rising's style): a saw table, a grinder, a smelter and a tanning rack, built on your
 // plot like a hearth (build mode, STATIONS). Each has a small input and a large output; whatever you put in the
-// input it can refine, it works through one at a time, REFINE.time seconds each, into the output, as long as
+// input it can refine, it works through REFINE.per at a time, REFINE.time seconds each, into one in the output, as long as
 // the output has room, whether you're there or not. F (A) by one opens it beside your pack.
 const stationMats = {
   steel: flatMat({ color: '#c8ccd4' }), teeth: flatMat({ color: '#8c8a96' }), hub: flatMat({ color: '#4a4652' }),
@@ -26646,12 +27064,17 @@ function stationFx(st) {
     const m = parts.mouth = new GFX.Mesh(mouthGeo, stationMats.embers);
     m.position.set(0, 0.26, -0.384); g.add(m);
   }
+  // (v822, Jordan: only the moving parts need to be apart) each moving part's pieces merged into one mesh for each
+  // material (bakeLeaf, as a door's are): the saw's blade, teeth and hub, the runner and its eye, each gear and its cogs.
+  // Each part turns whole, so the same look. The group is left by the scene's matrix pass while nothing on it moves
+  for (const k of ['blade', 'runner', 'big', 'small']) if (parts[k]) bakeLeaf(parts[k]);
+  g.matrixStill = true;
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   scene.add(g);
   st.fx = g; st.parts = parts;
 }
 // its moving parts set on the ground (or the floor) under it
-function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); }
+function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); st.fx.unstill(); }
 // what goes in, and what it becomes
 const refinesTo = (st, id) => id ? STATION_KIND[st.kind].refine[id] || null : null;
 // room in the output for one more of id
@@ -27406,7 +27829,9 @@ function outAdd(st, id) {
   return true;
 }
 // the input square it's working on: the first with something it can refine and room for what that makes
-const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && (outRoom(st, refinesTo(st, id)) || touching(st).some(o => boxRoom(o, refinesTo(st, id)))));
+// (v824) with REFINE.per of it in the input, counting every square of it (so two squares of one each still go)
+const inHave = (st, id) => st.inp.reduce((a, p, i) => a + (p === id ? st.inN[i] : 0), 0);
+const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && inHave(st, id) >= REFINE.per && (outRoom(st, refinesTo(st, id)) || touching(st).some(o => boxRoom(o, refinesTo(st, id)))));
 const stTiles = (c, r, n = 2) => n === 1 ? [T(c, r)] : [T(c, r), T(c + 1, r), T(c, r + 1), T(c + 1, r + 1)];
 const markTiles = (c, r, n) => { markObj(c, r); if (n > 1) { markObj(c + 1, r + 1); markObj(c + 1, r); markObj(c, r + 1); } };
 function placeStation(s) {
@@ -27543,7 +27968,7 @@ function relocateStation(st, s) {
   stations.set(T(s.c, s.r), st);
   if (tb) Object.assign(tb, { c: s.c, r: s.r, x: s.c + 1, z: s.r + 1, ry: s.ry });
   const [x, z] = stMid(st);
-  st.fx.position.set(x, surfaceY(x, z), z); st.fx.rotation.y = st.ry;
+  st.fx.position.set(x, surfaceY(x, z), z); st.fx.rotation.y = st.ry; st.fx.unstill();
   markTiles(s.c, s.r, f);
   for (const [c, r] of [[oldC, oldR], [s.c, s.r]]) { paintMapTile(c, r); markPieces(c, r); }
   flushDirty();
@@ -27595,8 +28020,14 @@ function updateStations(dt) {
     if (st.busy) {
       st.t += dt;
       if (st.t >= REFINE.time) {
-        const made = refinesTo(st, st.inp[k]);
-        st.inN[k]--; if (!st.inN[k]) st.inp[k] = null;
+        const id = st.inp[k], made = refinesTo(st, id);
+        // (v824) REFINE.per of it used up, from the square worked on first, then any other of the same
+        let need = REFINE.per;
+        for (const q of [k, ...st.inp.keys()]) {
+          if (!need || st.inp[q] !== id) continue;
+          const t = Math.min(need, st.inN[q]);
+          st.inN[q] -= t; need -= t; if (!st.inN[q]) st.inp[q] = null;
+        }
         stow(st, made);
         st.t = 0;
         if (openSt && invOpen) renderInv();
@@ -27605,6 +28036,8 @@ function updateStations(dt) {
     } else st.t = 0;
     // its parts come up to speed while it works, and run down after
     st.spin += ((st.busy ? 1 : 0) - st.spin) * (1 - Math.exp(-dt * (st.busy ? 3 : 1.2)));
+    // (v822) and stop once all but stopped (it crept on forever before, as the doors did, v781)
+    if (!st.busy && st.spin < 1e-3) st.spin = 0;
     if (st.body && st.pulse > 0) {
       // (swell and settle about its foot)
       st.pulse = Math.max(0, st.pulse - dt * 3.2);
@@ -27613,6 +28046,9 @@ function updateStations(dt) {
     }
     const p = st.parts, [mx, mz] = stMid(st), d = Math.hypot(mx - H.x, mz - H.z);
     st.fx.visible = d < 60; st.fx.scale.setScalar(st.town ? 1 : STATION_LOOK.size);   // (a town workshop's is drawn full size on its tile)
+    // (v822) its group looked at by the matrix pass only while something on it moves (matrixStill, stationFx; the
+    // scale above is the same each frame unless the size slider moves, so it's looked at then too)
+    if (st.spin > 0 || st.busy || st.fx._sz !== st.fx.scale.x) { st.fx._sz = st.fx.scale.x; st.fx.unstill(); }
     if (p.blade) p.blade.rotation.x -= dt * st.spin * 30;
     if (p.runner) p.runner.rotation.y += dt * st.spin * 2.2;
     if (p.big) { p.big.rotation.z += dt * st.spin * 1.6; p.small.rotation.z -= dt * st.spin * 1.6 * 15 / 9; }
@@ -27680,7 +28116,7 @@ function removePiece() {
       if (Math.hypot(st.c + 0.5 - H.x, st.r + 0.5 - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
       if (H.stair === st) { sfx.nope(); toast('Step off the stairs first.'); return; }
       removeStair(st); pay(st.kind, -1); flushDirty(); sfx.remove();
-      floatText('+' + costText(st.kind), st.c + 0.5, st.y0 + 1.2, st.r + 0.5, '#e0b070');
+      refundGains(st.kind, st.c + 0.5, st.y0 + 1.2, st.r + 0.5);
       return;
     }
     if (!target && FL[i]) target = { kind: FLOOR_KIND[FL[i]], c, r };
@@ -27712,7 +28148,7 @@ function removePiece() {
   markPieces(target.c, target.r);
   flushDirty();
   sfx.remove();
-  floatText('+' + costText(target.kind), mx, LV[T(target.c, target.r)] * STEP + 1.2, mz, '#e0b070');
+  refundGains(target.kind, mx, LV[T(target.c, target.r)] * STEP + 1.2, mz);
 }
 
 // ---------- Day and night (after Crafting and Conquest's sky) ----------
@@ -28987,7 +29423,10 @@ function drawFolk() {
       const f = p.rig, far = Math.max(Math.abs(p.x - cx), Math.abs(p.z - cz)) > FOLK.show;
       // (v592) and anyone in a room that can't be seen into (under its roof or a floor): not posed or drawn
       const pc = Math.floor(p.x), pr = Math.floor(p.z), shut = !far && roomOf.has(p.k * SNN + T(pc, pr)) && !interiorShown(Math.floor(pr / CH) * NC + Math.floor(pc / CH), p.k);
-      if (far || shut || (p.asleep && !p.bedPh) || p.k > view) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); continue; }
+      if (far || shut || (p.asleep && !p.bedPh) || p.k > view) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); p._pM = null; continue; }
+      // (v823) off screen, posed every few frames (POSE_LESS), so long as its bones are still where it last wrote them
+      if (p.bedPh || p._pM !== M || p._pb !== p.base || !poseWait(p, p.x, p.y, p.z)) {
+      p._pM = M; p._pb = p.base;
       if (p.bedPh) folkBedPose(p);
       else {
         f.g.position.set(p.x, p.y, p.z); f.g.rotation.set(0, p.face, 0);
@@ -29000,6 +29439,7 @@ function drawFolk() {
         const vis = p.chains[j].every(q => q.visible);
         M.set(vis ? o.matrixWorld.elements : ZERO16, (p.base + j) * 16);
       });
+      }
       if (p.bedPh && p.bedK > 0.5) continue;   // (no blob shadow on the floor under someone in bed)
       folkShadows.reserve(shown + 1);
       const sm = folkShadows.instanceMatrix, q = shown * 16;
@@ -29254,6 +29694,10 @@ function humanBones(f, shown) {
 function drawHumans() {
   for (const b of humanBatches.slice()) if (b.dirty) layHumanBatch(b);
   for (const b of humanBatches) for (const f of b.members) {
+    // (v823) off screen, every few frames (POSE_LESS), if its bones are still in the same place in the same batch
+    const M = f.hb.mat.uniforms.bones.value;
+    if (!f.down && f._pM === M && f._pb === f.hbase && poseWait(f, f.x, f.y, f.z)) continue;
+    f._pM = M; f._pb = f.hbase;
     if (!f.down) f.rig.g.updateMatrixWorld();
     humanBones(f, f.down || f.g.visible);
   }
@@ -29466,6 +29910,7 @@ function humanTick(dt) {
   }
 }
 // (v479) the T panel's spawn buttons (Crowd test): n of a kind d tiles ahead of you, side by side
+const GOLD_TEST = { fountain: 0, goblins: 0 };
 const HUMAN_SPAWN = { footpad: 0, bandit: 0, poacher: 0, raider: 0, graveRobber: 0, highwayman: 0, skeleton: 0, zombie: 0, goblin: 0, clear: 0 };
 function spawnHumansAhead(kind, n, d = 4) {
   const out = [];
@@ -29509,7 +29954,7 @@ function update(dt) {
   if (H.alive) {
     const m = H.still ? null : moveInput();   // (v494: at a boat's wheel, W and S work the sails instead)
     let vx = 0, vz = 0;
-    H.canJump = heroUp() || H.boat ? null : jumpEdge(m);
+    H.canJump = H.stair || H.boat ? null : jumpEdge(m);
     if (H.flip) {
       // the flip: across and down on an arc, turning over once, then a puff of dust where you land
       const F = H.flip;
@@ -29518,7 +29963,7 @@ function update(dt) {
       H.x = F.x0 + (F.x1 - F.x0) * u; H.z = F.z0 + (F.z1 - F.z0) * u;
       H.y = F.y0 + (F.y1 - F.y0) * u * u + 0.75 * 4 * u * (1 - u);
       H.face = Math.atan2(F.x1 - F.x0, F.z1 - F.z0);
-      if (u >= 1) { H.flip = null; H.y = surfaceY(H.x, H.z); puff(H.x, H.y, H.z, '#c8bca0', 8, 0.7); }
+      if (u >= 1) { if (F.story !== undefined) H.story = F.story; H.flip = null; H.y = heroFloorY(); puff(H.x, H.y, H.z, '#c8bca0', 8, 0.7); }
     } else if (H.dash >= 0) {
       H.dash += dt;
       // steer: the roll's heading swings round toward the way you push
@@ -29661,7 +30106,7 @@ function update(dt) {
   H.hurtT += dt;
   heroTunic.emissive.set(H.hurtT < 0.4 && Math.floor(H.hurtT * 12) % 2 === 0 ? '#a01810' : '#000000');
   heroSkin.emissive.copy(heroTunic.emissive); HERO_MAT.leather.emissive.copy(heroTunic.emissive);
-  heroShadow.position.set(H.x, (H.flip ? surfaceY(H.x, H.z) : H.y) + 0.02, H.z);
+  heroShadow.position.set(H.x, (H.flip ? heroFloorY() : H.y) + 0.02, H.z);
 
   spikes.exit(); spikes.enter('update: foes');
   // ----- foes -----
@@ -29690,11 +30135,10 @@ function update(dt) {
   for (let k = fallers.length - 1; k >= 0; k--) {
     const d = fallers[k];
     d.fallT += dt;
-    const a = Math.min(Math.PI / 2 - 0.1, d.fallT * d.fallT * 3.2);
-    d.g.quaternion.setFromAxisAngle(d.axis, a);
-    if (d.fallT > 0.9 && !d.thud) { d.thud = true; puff(d.x + d.sx * 1.2, LV[T(d.c, d.r)] * STEP, d.z + d.sz * 1.2, '#c8bca0', 10, 1.4); }
-    if (d.fallT > 1.4) d.g.position.y -= dt * 1.4;
-    if (d.fallT > 2.2) { scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1); }
+    if (updateFaller(d, dt)) {
+      scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1);
+      if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.d = null;
+    }
   }
   // (v781, Jordan's G: doors and gates the top movers) a door at rest is left alone: its swing eases toward open or shut
   // and is set there once it's within a hair, where before it crept on for a minute or more after closing (each step a
@@ -29706,6 +30150,7 @@ function update(dt) {
     d.t += (goal - d.t) * (1 - Math.exp(-dt * 10));
     if (Math.abs(goal - d.t) < 1e-3) d.t = goal;
     d.pivot.children[0].rotation.y = d.t * 1.75 * d.side * (d.flip ? -1 : 1);
+    d.pivot.unstill();   // (v821: looked at by the matrix pass this frame, see makeDoor)
   }
   for (let k = orbs.length - 1; k >= 0; k--) {
     const o = orbs[k]; o.t += dt;
@@ -31989,6 +32434,63 @@ const TUNING = [
   ['World', [
     [WORLD, 'tileHeight', 'Tile height per level (2 the default, as tall as a wall; 1 the old height, 0.5 half; ramps 3 tiles long above 1.25). Letting go rebuilds this world from scratch', 0.5, 2, 0.25, rebuildWorld],
   ]],
+  ['Fly-ups', [
+    [GAIN_FLY, 'size', 'Resource fly-ups: text size at rest, before any pulse swells it (pixels; the old fly-ups were 11)', 6, 32, 0.5],
+    [GAIN_FLY, 'hold', 'Resource fly-ups: seconds one holds still before it rises (more of the same resource from the same tile in that time adds to it and starts the hold again)', 0, 4, 0.05],
+    [GAIN_FLY, 'rise', 'Seconds it takes to rise and fade', 0.2, 3, 0.05],
+    [GAIN_FLY, 'risePx', 'How far it rises (screen pixels)', 0, 120, 1],
+    [GAIN_FLY, 'steps', 'Rise in this many steps (0 = smooth; the old fly-ups used 9)', 0, 20, 1],
+    [GAIN_FLY, 'pulse', 'Seconds the pulse lasts when more is added', 0.05, 2, 0.05],
+    [GAIN_FLY, 'pulseMix', 'Pulse: how far the +count turns toward white (%)', 0, 100, 1],
+    [GAIN_FLY, 'glow', 'Pulse: +count brightness overdrive at the peak (0 = none; 1 = twice as bright)', 0, 4, 0.05],
+    [GAIN_FLY, 'glowSize', 'Pulse: glow halo round the +count (pixels, 0 = none)', 0, 24, 0.5],
+    [GAIN_FLY, 'gap', 'Space between the +count and the name (pixels)', 0, 16, 0.5],
+    [GAIN_FLY, 'outline', 'Black outline round the text (screen pixels, stays this width as it swells; 0 = none)', 0, 3, 0.5],
+    [GAIN_FLY, 'shadowDist', 'Drop shadow: distance down and right (screen pixels)', 0, 8, 0.5],
+    [GAIN_FLY, 'shadowBlur', 'Drop shadow: blur (screen pixels; 0 = hard)', 0, 12, 0.5],
+    [GAIN_FLY, 'shadowWeight', 'Drop shadow: weight (0 = none, 1 = one black copy, more stacks copies to darken a blurred one)', 0, 4, 0.05],
+    [GAIN_FLY, 'pulseGrow', 'Pulse: how much the fly-up (text and icon) swells (× size)', 0, 2, 0.01],
+    [GAIN_FLY, 'iconSize', 'Resource icon size beside the text (pixels)', 8, 64, 1],
+    [GAIN_FLY, 'stack', 'Height between different resources\' fly-ups at one spot (tiles)', 0.1, 1, 0.01],
+  ]],
+  // (v840) gold from people and goblins, and the coin fountain as they die
+  ['Gold', [
+    [GOLD, 'goblin', 'Gold a goblin carries at level 1 (before the spread)', 0, 50, 1],
+    [GOLD, 'footpad', 'Gold a footpad carries at level 1', 0, 50, 1],
+    [GOLD, 'poacher', 'Gold a poacher carries at level 1', 0, 50, 1],
+    [GOLD, 'graveRobber', 'Gold a grave robber carries at level 1', 0, 50, 1],
+    [GOLD, 'bandit', 'Gold a bandit carries at level 1', 0, 50, 1],
+    [GOLD, 'highwayman', 'Gold a highwayman carries at level 1', 0, 50, 1],
+    [GOLD, 'raider', 'Gold a raider carries at level 1', 0, 50, 1],
+    [GOLD, 'other', 'Gold any other person carries at level 1', 0, 50, 1],
+    [GOLD, 'perLevel', 'More gold for each level over 1 (× the level 1 amount; 0.5 = level 3 carries twice as much)', 0, 2, 0.05],
+    [GOLD, 'spread', 'Give or take this share at random (0.25 = ±25%)', 0, 1, 0.05],
+    [GOLD, 'merge', 'Gold fly-ups from kills within this many tiles of one still holding add to it', 0, 10, 0.25],
+    [GOLD, 'flyY', 'Gold fly-up height over where the foe fell (tiles)', 0, 3, 0.05],
+    [COIN_FX, 'on', 'Coin fountain on (1) or off (0)', 0, 1, 1],
+    [COIN_FX, 'per', 'Coins thrown for each gold piece', 0.1, 5, 0.1],
+    [COIN_FX, 'min', 'Fewest coins a fountain throws', 0, 20, 1],
+    [COIN_FX, 'most', 'Most coins a fountain throws', 1, 200, 1],
+    [COIN_FX, 'up', 'How hard coins are thrown up (m/s)', 0, 10, 0.1],
+    [COIN_FX, 'upVar', 'Give or take on the throw up (m/s)', 0, 5, 0.1],
+    [COIN_FX, 'out', 'How far out coins are thrown (m/s, the most)', 0, 5, 0.05],
+    [COIN_FX, 'height', 'Height over the ground they burst from (m)', 0, 2, 0.05],
+    [COIN_FX, 'stagger', 'Seconds the burst takes to throw them all', 0, 1, 0.01],
+    [COIN_FX, 'spin', 'How fast coins flip (rad/s; halved each bounce)', 0, 60, 1],
+    [COIN_FX, 'bounce', 'Bounce: how much of its fall a coin keeps', 0, 0.9, 0.01],
+    [COIN_FX, 'grav', 'Gravity on coins (× g)', 0.2, 3, 0.05],
+    [COIN_FX, 'size', 'Coin radius (m)', 0.02, 0.3, 0.005],
+    [COIN_FX, 'thick', 'Coin thickness (× radius, each side)', 0.04, 0.6, 0.01],
+    [COIN_FX, 'life', 'Seconds a coin lasts', 0.5, 8, 0.1],
+    [COIN_FX, 'fadeAt', 'How far through its life a coin starts to dither out (0-1)', 0, 1, 0.01],
+    [COIN_FX, 'tone', 'Gold tone (0 dark, 1 pale)', 0, 1, 0.01],
+    [COIN_FX, 'metal', 'Metalness', 0, 1, 0.01],
+    [COIN_FX, 'rough', 'Roughness (low: tight bright glints)', 0.05, 1, 0.01],
+    [COIN_FX, 'shine', 'How much coins mirror the sky', 0, 3, 0.05],
+    [COIN_FX, 'glow', 'A little light of their own (reads at night)', 0, 2, 0.01],
+    [GOLD_TEST, 'fountain', 'A 20-gold coin fountain in front of you (pays nothing)', 'action', () => coinFountain(H.x + Math.sin(H.face) * 2.5, H.y, H.z + Math.cos(H.face) * 2.5, 20)],
+    [GOLD_TEST, 'goblins', 'Three goblins in front of you', 'action', () => spawnHumansAhead('goblin', 3)],
+  ]],
   ['Resources', [
     [RESOURCES, 'amount', 'How much everything gives: rocks, trees, ore, hides (× normal)', 'choice', [0.5, 1, 2, 4], 0.1],
     [MEAT, 'chance', 'Raw meat: chance a wildlife kill drops one', 0, 1, 0.05],
@@ -32648,6 +33150,20 @@ const TUNING = [
     [TREE_SIZE, 'fern', 'Fern size', 0.3, 3, 0.05],
     [TREE_SIZE, 'swamp', 'Swamp tree size (mossy, gnarled)', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'grave', 'Graveyard tree size (webbed, gnarled)', 0.4, 2.5, 0.05],
+  ]],
+  ['Tree felling', [
+    [FELL, 'gravity', 'Gravity (how fast it falls)', 2, 40, 0.5],
+    [FELL, 'push', 'Push from the last blow (how quick it starts)', 0, 3, 0.05],
+    [FELL, 'bounce', 'Bounce on landing', 0, 0.6, 0.01],
+    [FELL, 'dust', 'Dust along the trunk (× how much, 0 none)', 0, 3, 0.05],
+    [FELL, 'hold', 'Lies there before sinking (seconds)', 0, 2, 0.05],
+    [FELL, 'sink', 'Sinking (seconds)', 0.1, 4, 0.05],
+    [FELL, 'depth', 'How far it sinks', 0.2, 3, 0.05],
+    [FELL, 'dissolveAt', 'Leaves start dissolving (seconds after it lands; negative: before)', -2, 2, 0.05],
+    [FELL, 'dissolve', 'Leaves dissolving (seconds)', 0.1, 4, 0.05],
+    [FELL, 'noise', 'Dissolve noise size (higher: smaller holes)', 0.5, 8, 0.1],
+    [FELL, 'trail', 'Leaves shed as it falls (× how many, 0 none)', 0, 4, 0.05],
+    [FELL, 'burst', 'Leaves thrown up as it lands (× how many, 0 none)', 0, 4, 0.05],
   ]],
   ['Graveyard spiders', [
     [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],
@@ -33329,6 +33845,7 @@ const TUNING = [
   ]],
   ['Stations', [
     [REFINE, 'time', 'Seconds to refine one (saw table, grinder, smelter, tanning rack)', 0.2, 30, 0.1],
+    [REFINE, 'per', 'Raw it takes to make one refined', 1, 4, 1],
     [STATION_LOOK, 'size', 'Size (walls round its 2 x 2 tiles need it under about 1.6)', 0.5, 2.2, 0.01],
   ]],
   ['Tumble', [
@@ -33618,7 +34135,7 @@ const PROF_FOLD_KEY = 'emberwild.profFold';
 try { const f = JSON.parse(localStorage.getItem(PROF_FOLD_KEY) || '[]'); if (Array.isArray(f)) prof.folded = new Set(f); } catch (e) {}
 prof.onFold = F => { try { localStorage.setItem(PROF_FOLD_KEY, JSON.stringify([...F])); } catch (e) {} };
 const showSpikes = () => { const F = prof.folded, fh = n => `<div class="spike-head"><b class="pfold" data-fold="${n}">${F.has(n) ? '▸' : '▾'} ${n}</b></div>`;
-  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Ground pre-pass</b> <button data-gpre="1" class="${BUILD_PRE.ground ? 'on' : ''}">${BUILD_PRE.ground ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the ground's depth too (the "ground pre-pass" row), then the snow, sand and ground lit before the world, so a chasm's walls are lit only where they show; trees and plants then cover ground already lit. Off: as before v784.</div><div class="spike-head"><b>Grass pre-pass</b> <button data-grpre="1" class="${BUILD_PRE.grass ? 'on' : ''}">${BUILD_PRE.grass ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the grass tufts' depth is drawn before anything is lit (the "grass pre-pass" row), so each tuft is lit once where it shows and the ground behind it not at all; their shapes are worked out twice. Off: as before v785.</div><div class="spike-head"><b>Early sends</b> ${['Off', '3 sends', '+ after shadow map'].map((t, k) => `<button data-early="${k}" class="${EARLY_SEND.mode === k ? 'on' : ''}">${t}</button>`).join(' ')}</div><div class="gnote">3 sends (v789): the frame's passes go to the GPU after the world, after the water and at the end, so the GPU starts while the rest is still being encoded. + after shadow map (v795): a 4th, as soon as the shadow map is encoded, so the GPU draws it while the pre-passes and world are encoded. Off: all in one send at the end. Compare in the same spot: fps, "GPU: gaps between passes" and "before fx particles".</div><div class="spike-head"><b>One walk</b> <button data-onewalk="1" class="${renderer.shareWalk ? 'on' : ''}">${renderer.shareWalk ? 'On' : 'Off'}</button></div><div class="gnote">On (v795): the camera's walk of the scene and the shadow map's search for casters are one pass over it ("finding casters" then holds both, "walking the scene" drops). Off: two passes, as before. Compare "render (encode)" in the same spot.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
+  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Ground pre-pass</b> <button data-gpre="1" class="${BUILD_PRE.ground ? 'on' : ''}">${BUILD_PRE.ground ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the ground's depth too (the "ground pre-pass" row), then the snow, sand and ground lit before the world, so a chasm's walls are lit only where they show; trees and plants then cover ground already lit. Off: as before v784.</div><div class="spike-head"><b>Grass pre-pass</b> <button data-grpre="1" class="${BUILD_PRE.grass ? 'on' : ''}">${BUILD_PRE.grass ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the grass tufts' depth is drawn before anything is lit (the "grass pre-pass" row), so each tuft is lit once where it shows and the ground behind it not at all; their shapes are worked out twice. Off: as before v785.</div><div class="spike-head"><b>Early sends</b> ${['Off', '3 sends', '+ after shadow map'].map((t, k) => `<button data-early="${k}" class="${EARLY_SEND.mode === k ? 'on' : ''}">${t}</button>`).join(' ')}</div><div class="gnote">3 sends (v789): the frame's passes go to the GPU after the world, after the water and at the end, so the GPU starts while the rest is still being encoded. + after shadow map (v795): a 4th, as soon as the shadow map is encoded, so the GPU draws it while the pre-passes and world are encoded. Off: all in one send at the end. Compare in the same spot: fps, "GPU: gaps between passes" and "before fx particles".</div><div class="spike-head"><b>Pose less off screen</b> <button data-poseless="1" class="${POSE_LESS.on ? 'on' : ''}">${POSE_LESS.on ? 'On' : 'Off'}</button></div><div class="gnote">On (v823): foes, folk and people out of view have their joints' matrices made every ${POSE_LESS.every}th frame, not every frame ("rigs off screen, left this frame" in Each frame). Off: every frame. Compare "posing foes, folk and people".</div><div class="spike-head"><b>One walk</b> <button data-onewalk="1" class="${renderer.shareWalk ? 'on' : ''}">${renderer.shareWalk ? 'On' : 'Off'}</button></div><div class="gnote">On (v795): the camera's walk of the scene and the shadow map's search for casters are one pass over it ("finding casters" then holds both, "walking the scene" drops). Off: two passes, as before. Compare "render (encode)" in the same spot.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
 // (pointerdown, not click: the tables are drawn anew 4 times a second, and a click's press and release can land on
 // two different copies of a heading)
 profLive.addEventListener('pointerdown', e => { const f = e.target.closest('[data-fold]'); if (f) { prof.fold(f.dataset.fold); e.preventDefault(); } });
@@ -33629,6 +34146,7 @@ spikePanel.addEventListener('click', e => {
   if (e.target.closest('[data-bpre]')) { BUILD_PRE.on = !BUILD_PRE.on; showSpikes(); return; }
   if (e.target.closest('[data-gpre]')) { BUILD_PRE.ground = !BUILD_PRE.ground; showSpikes(); return; }
   { const b = e.target.closest('[data-early]'); if (b) { EARLY_SEND.mode = +b.dataset.early; showSpikes(); return; } }
+  { const b = e.target.closest('[data-poseless]'); if (b) { POSE_LESS.on = POSE_LESS.on ? 0 : 1; showSpikes(); return; } }
   { const b = e.target.closest('[data-onewalk]'); if (b) { renderer.shareWalk = !renderer.shareWalk; showSpikes(); return; } }
   if (e.target.closest('[data-grpre]')) { BUILD_PRE.grass = !BUILD_PRE.grass; showSpikes(); return; }
   if (e.target.closest('[data-overdraw]')) { OVERDRAW.on = !OVERDRAW.on; showSpikes(); return; }
@@ -33730,6 +34248,7 @@ function frameBody(now) {
   updateHeldPotion();
   showJumpHint();
   updateFoeBars(dt);
+  updateGains(dt);
   prof.lap('camera + foe bars');
   updateClouds(dt);
   updateWater(dt);
@@ -33794,6 +34313,13 @@ function frameBody(now) {
     // (v795) the camera's walks done in the shadow map's search for casters (one pass over the scene: its time is then
     // in "finding casters", not "walking the scene"), and the recorded lists' object blocks sent (moved or changed) and kept
     prof.count('encode: camera walks shared with the shadow map', I.shared || 0);
+    // (v823) foes, folk and people off screen whose joints were left this frame (POSE_LESS)
+    prof.count('rigs off screen, left this frame (foes, folk, people)', poseSkipped); poseSkipped = 0;
+    // (v821) the draws encoded one by one this frame (not replayed from a recorded list), by pass: the six most
+    if (I.oneBy) { let all = 0; for (const n of I.oneBy.values()) all += n;
+      prof.count('recorded lists: drawn one by one, all passes', all);
+      for (const [nm, n] of [...I.oneBy].sort((a, b) => b[1] - a[1]).slice(0, 6)) prof.count('recorded lists: drawn one by one in ' + nm, n);
+      I.oneBy.clear(); }
     prof.count('recorded lists: object blocks sent (moved or changed)', I.objSent || 0); prof.count('recorded lists: object blocks kept', I.objKept || 0);
     I.tShFind = I.tShList = I.tShOne = 0; I.shOne = I.shMoved = 0; I.shared = I.objSent = I.objKept = 0;
     // (v774) the rest of render (encode): the game's own JavaScript in it, by part

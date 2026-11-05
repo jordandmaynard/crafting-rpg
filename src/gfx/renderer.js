@@ -368,7 +368,7 @@ class Renderer {
     }
     pass.setBindGroup(0, this._frameBindGroup(), [frameOff]);
     const override = scene.overrideMaterial, clip = this.clipBelow != null;
-    let lastPipe = null;
+    let lastPipe = null, one = 0;
     const drawList = items => {
       for (const it of items) {
         const mesh = it.mesh, mat = override || mesh.material;
@@ -386,6 +386,7 @@ class Renderer {
         if (!slot) continue;
         if (inst) pass.setVertexBuffer(slot, this._instanceBuffer(mesh));
         this._draw(pass, geo, inst ? mesh.count : geo.instanceCount ?? 1);
+        one++;
       }
     };
     // (v769) with recorded draw lists, what comes before the list is drawn first, then the list (a bundle), then the rest
@@ -396,6 +397,8 @@ class Renderer {
       pass.setBindGroup(0, this._frameBindGroup(), [frameOff]); lastPipe = null;   // (a bundle leaves the pass's state cleared)
       drawList(B.rest);
     } else drawList(list);
+    // (v821) the draws encoded one by one (not in a recorded list), by the render's pass name, for the G panel
+    if (one) { const O = this.info.oneBy || (this.info.oneBy = new Map()); O.set(name, (O.get(name) || 0) + one); }
     if (!this.mergePasses) this._closePass();
     this.info.tRender += performance.now() - tR0;
     if (!this.target || (this.target.isCanvasTarget && !this.holdFlush)) this.flush();
@@ -1318,6 +1321,9 @@ class Renderer {
       p = this.device.createRenderPipeline({
         layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrameShadow, this.bglObj, info.bgl] }),
         vertex: { module: this._module(builtinCode('shadow', false, false).replace(/struct VIn[\s\S]*$/, '') + info.head + mat.shadowCode), entryPoint: 'vs', buffers },
+        // (shadowFrag: the shadowCode also has a fragment function fs, with no outputs, that may discard: a felled
+        // tree's dissolving leaves)
+        ...(mat.shadowFrag ? { fragment: { module: this._module(builtinCode('shadow', false, false).replace(/struct VIn[\s\S]*$/, '') + info.head + mat.shadowCode), entryPoint: 'fs', targets: [] } } : {}),
         primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
         depthStencil: { format: SHADOW_FORMAT, depthCompare: 'less-equal', depthWriteEnabled: true },
       });

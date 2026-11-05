@@ -231,10 +231,10 @@ export class GpuProfiler {
     // (v788) the largest gaps, by the pass they come before
     const gapRows = [...(this.gapBy || [])].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([nm, g]) => ['before ' + nm, g]);
     // (v775) the counts in groups by what they're of, each its own section: encode parts, recorded draw lists, overdraw
-    const groups = new Map([['Each frame', []], ['Encode, by part (ms)', []], ['Recorded draw lists', []], ['Moving objects (in ½ s)', []], ['Overdraw', []]]);
+    const groups = new Map([['Each frame', []], ['Encode, by part (ms)', []], ['Recorded draw lists', []], ['Moving objects (in ½ s)', []], ['Scene contents (in ½ s)', []], ['Overdraw', []]]);
     for (const [nm, n] of this.cnt || []) {
-      const g = nm.startsWith('encode:') ? 'Encode, by part (ms)' : nm.startsWith('overdraw:') ? 'Overdraw' : nm.startsWith('moving:') ? 'Moving objects (in ½ s)' : /recorded/.test(nm) ? 'Recorded draw lists' : 'Each frame';
-      groups.get(g).push([nm.replace(/^(encode|overdraw|moving): /, ''), n]);
+      const g = nm.startsWith('encode:') ? 'Encode, by part (ms)' : nm.startsWith('overdraw:') ? 'Overdraw' : nm.startsWith('moving:') ? 'Moving objects (in ½ s)' : nm.startsWith('in scene:') ? 'Scene contents (in ½ s)' : /recorded/.test(nm) ? 'Recorded draw lists' : 'Each frame';
+      groups.get(g).push([nm.replace(/^(encode|overdraw|moving|in scene): /, ''), n]);
     }
     const NOTES = { 'Each frame': "Work the pass timers can't see: each send to the GPU and each canvas drawn has its own cost in the browser's GPU process, and uploads cross to the GPU before the passes can run." };
     panel.innerHTML =

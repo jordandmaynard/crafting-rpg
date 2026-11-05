@@ -52,14 +52,14 @@ export class Object3D {
       if (o.parent) o.parent.remove(o);
       o.parent = this;
       this.children.push(o);
-      this._unstill();
+      this.unstill();
     }
     return this;
   }
   remove(...objs) {
     for (const o of objs) {
       const i = this.children.indexOf(o);
-      if (i !== -1) { o.parent = null; this.children.splice(i, 1); this._unstill(); }
+      if (i !== -1) { o.parent = null; this.children.splice(i, 1); this.unstill(); }
     }
     return this;
   }
@@ -77,7 +77,7 @@ export class Object3D {
   // (v780: nor did v778 save much, as most of them were under hidden groups, the weapons in every metal waiting in the
   // hand: a hidden group is left now too, with all under it, as neither walk goes into one)
   // (v795) this and everything over it looked at again in the next pass (see matrixStill)
-  _unstill() { for (let o = this; o; o = o.parent) o._stillOK = false; }
+  unstill() { for (let o = this; o; o = o.parent) o._stillOK = false; }
   updateMatrixWorld(hidden = false) {
     if (hidden && !this.visible && !this.castHidden) { this._mwH = true; return; }
     this._mwH = false;
