@@ -606,6 +606,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v815:** (Jordan) Jordan's Farming tuning baked in (drag guide blur 2, line 0.57, width 2.6, glow 0.45, march 15 px/s down; the rest as it was). The drag guide's line now takes the colour of what's dragged, with Jordan's glow and strength: empty bottles pale blue (Jordan's #94f3ff), wheat pale yellow, carrots orange, potatoes a pale potato tan, and a filled potion (after a dip) a pale shade of its own tint. Each crop's and the bottle's line colour is a row in T > Farming > Drag guide (the single line colour row is gone).
 
+**v816:** (Jordan's Farming tuning) A crop being planted dips deeper into the soil (sink 0.08 -> 0.40) and moves all the way to the square's middle as it goes down (center 0.6 -> 1).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
