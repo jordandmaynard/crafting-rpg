@@ -600,6 +600,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v812:** (Jordan) The drag guide's line has its own colour now (T > Farming > Drag guide: line colour; the old colour row is the shadow's), can glow (glow strength, 0 off, and how far out it reaches in px; the glow lightens what's under it, in the line's colour) and its dashes can march along it (px a second: more than 0 down toward the ground, less than 0 up). Glow and march start off (0), so it looks as v811 until they're set.
 
+**v813:** (Jordan: no busker round the fountain lately) Every large town has its busker again, and its town crier, lamplighter and sweeper; medium towns their watch, lamplighter and sweeper; hamlets their lamplighter. Two things had been losing them. Half of a town's people are kept (v448), the workers first, and since the tavern, bank and guard house got keepers the workers alone filled that half, so the street folk were all let go; they're always kept now (a large town about 22 people, a medium one 12, a hamlet 5). And a plain resident could roll a one-to-a-town job (the busker, the banker, a merchant) before the house that asks for it, block it, then not be kept; plain residents no longer roll the jobs their town asks for, and a job asked for that no roll gives is made by name.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

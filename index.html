@@ -1362,7 +1362,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 812;
+const GAME_VERSION = 813;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -28116,6 +28116,10 @@ function folkPeople(t) {
   const tiers = FOLK_TIERS[t.tier] || FOLK_TIERS[0], [lo, hi] = FOLK_PER_HOUSE[t.tier] || FOLK_PER_HOUSE[0], used = new Set(), out = [];
   // (v452) the night's watch, the lamplighter and the town's street trades: one each, in the plain houses' second places
   const extras = [...(FOLK_EXTRAS[t.tier] || FOLK_EXTRAS[0])];
+  // (v813, Jordan: no busker by the fountain) the one-to-a-town jobs this town asks for by name (its street trades,
+  // its workshops', the bank's banker): never rolled for a plain resident, who'd take the job first and then, not
+  // being kept, leave the town without one
+  const asked = new Set([...extras, ...t.houses.map(h => h.trade), ...(t.houses.some(h => h.cathedral && !h.chapel) ? ['bishop'] : [])].filter(j => FOLK_ONE.includes(j)));
   t.houses.forEach((h, hi0) => {
     if (doorFront(h) < 0 || h.clergy) return;   // (v467: the clergy's house is the clergy's alone)
     // (a bank, which has no beds, keeps only its banker)
@@ -28128,10 +28132,11 @@ function folkPeople(t) {
       for (let a = 0; a < 800; a++) {
         const e = folkKit.design(folkSeed(t.n, hi0, k, a));
         if (want ? !want.includes(e.job) : !tiers.includes(e.tier)) continue;
-        if (FOLK_ONE.includes(e.job) && used.has(e.job)) continue;
+        if (FOLK_ONE.includes(e.job) && (used.has(e.job) || !want && asked.has(e.job))) continue;
         d = e; break;
       }
-      if (!d) d = folkKit.design(folkSeed(t.n, hi0, k, 999));
+      // (v813) none rolled the job asked for: made with it by name
+      if (!d) d = folkKit.design(folkSeed(t.n, hi0, k, 999), 'town', want && want.find(j => !FOLK_ONE.includes(j) || !used.has(j)));
       // (v656, Jordan) a town walled in sandstone dresses for the desert (turbans, headscarves, long tunics, kaftans,
       // sashes: desertDress); (v659) the watch in long tabards and turban-wound helms, the cathedral's clergy as the
       // mosque's (High Cleric, Clerics, Chanters), and everyone with a desert name
@@ -28142,9 +28147,11 @@ function folkPeople(t) {
       out.push(folkPerson(t, d, hi0, k, want ? (extra ? 1 : 2) : 0, !!want && !extra && !!(h.trade || h.cathedral), folkSeed(t.n, hi0, k, 4242)));
     }
   });
-  // (v448, Jordan: half as many) FOLK.share of them kept: the tanner, smith and clergy always, the rest by lot
+  // (v448, Jordan: half as many) FOLK.share of them kept: the tanner, smith and clergy always, the rest by lot.
+  // (v813, Jordan: no busker by the fountain) the watch, the lamplighter and the street trades always too: since the
+  // tavern, bank and guard house got keepers, the workers alone filled the half and every one of them was dropped
   const n = Math.max(1, Math.round(out.length * FOLK.share));
-  const kept = new Set(out.filter(p => p.must).sort((a, b) => b.must - a.must).slice(0, Math.max(n, out.filter(p => p.must === 2).length)));
+  const kept = new Set(out.filter(p => p.must));
   for (const p of out.filter(p => !p.must).sort((a, b) => a.keep - b.keep)) { if (kept.size >= n) break; kept.add(p); }
   t.folkShare = FOLK.share;
   return t.folk = out.filter(p => kept.has(p));
