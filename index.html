@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 826;
+const GAME_VERSION = 827;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -25142,9 +25142,34 @@ function cliffFlip([dx, dz]) {
   const drop = H.y - LV[n] * STEP;
   return { t: 0, dur: 0.5 + 0.06 * drop, x0: H.x, z0: H.z, y0: H.y, x1, z1, y1: LV[n] * STEP, face: [0, Math.PI / 2, Math.PI, -Math.PI / 2][d] };
 }
+// (v827, Jordan) Off an upper story's floor the same way: where the edge you push at has nothing on it (no wall,
+// window, door, fence, gate or low wall) and no floor goes on beyond it, a flip down onto the tile beyond, landing on
+// the highest floor under it or else the ground. Not into a stair, a bed or a prop that blocks, onto water or a
+// tile object, nor through a room's roof.
+function storyFlip([dx, dz]) {
+  const k = H.story, c = Math.floor(H.x), r = Math.floor(H.z), i = T(c, r);
+  if (Math.max(Math.abs(dx), Math.abs(dz)) < 0.6 || !UP[k].FL.has(i)) return null;
+  const d = Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0);
+  const gap = d === 1 ? c + 1 - H.x : d === 3 ? H.x - c : d === 2 ? r + 1 - H.z : H.z - r;
+  const nc = c + DC[d], nr = r + DR[d];
+  if (gap > 0.5 || nc < 1 || nr < 1 || nc >= N - 1 || nr >= N - 1 || upWallOn(c, r, d, k)) return null;
+  const n = T(nc, nr);
+  if (UP[k].FL.has(n)) return null;
+  // the highest story under it with floor there, else the ground; nothing of a stair in between
+  let s = k - 1;
+  while (s > 0 && !UP[s].FL.has(n)) s--;
+  for (let j = s; j <= k; j++) if (stairAt.has(j * SNN + n)) return null;
+  if ((roomOf.has(s * SNN + n) && !covered(s, n)) || BEDS.has(s * SNN + n) || (PROP_AT.has(s * SNN + n) && !heroPass(s, n))) return null;
+  if (!s && (!LV[n] || WT[n] >= 2 || (OBJ[OB[n]].tile && !heroPass(0, n)))) return null;
+  const across = d & 1 ? clamp(H.z - r, 0.3, 0.7) : clamp(H.x - c, 0.3, 0.7), into = 0.8;
+  const x1 = d & 1 ? nc + (d === 1 ? into : 1 - into) : nc + across, z1 = d & 1 ? nr + across : nr + (d === 2 ? into : 1 - into);
+  const y1 = s ? storyY(s, n) + 0.06 : surfaceY(x1, z1), drop = H.y - y1;
+  if (drop < 0.5) return null;
+  return { t: 0, dur: 0.5 + 0.06 * drop, x0: H.x, z0: H.z, y0: H.y, x1, z1, y1, story: s, face: [0, Math.PI / 2, Math.PI, -Math.PI / 2][d] };
+}
 function jumpEdge(dir = moveInput()) {
-  if (mode !== 'play' || !H.alive || H.flip || H.dash >= 0 || H.lunge >= 0 || !dir) return null;
-  return cliffFlip(dir);
+  if (mode !== 'play' || !H.alive || H.flip || H.dash >= 0 || H.lunge >= 0 || !dir || H.stair) return null;
+  return H.story ? storyFlip(dir) : cliffFlip(dir);
 }
 function castJump() {
   const f = H.canJump;
@@ -29730,7 +29755,7 @@ function update(dt) {
   if (H.alive) {
     const m = H.still ? null : moveInput();   // (v494: at a boat's wheel, W and S work the sails instead)
     let vx = 0, vz = 0;
-    H.canJump = heroUp() || H.boat ? null : jumpEdge(m);
+    H.canJump = H.stair || H.boat ? null : jumpEdge(m);
     if (H.flip) {
       // the flip: across and down on an arc, turning over once, then a puff of dust where you land
       const F = H.flip;
@@ -29739,7 +29764,7 @@ function update(dt) {
       H.x = F.x0 + (F.x1 - F.x0) * u; H.z = F.z0 + (F.z1 - F.z0) * u;
       H.y = F.y0 + (F.y1 - F.y0) * u * u + 0.75 * 4 * u * (1 - u);
       H.face = Math.atan2(F.x1 - F.x0, F.z1 - F.z0);
-      if (u >= 1) { H.flip = null; H.y = surfaceY(H.x, H.z); puff(H.x, H.y, H.z, '#c8bca0', 8, 0.7); }
+      if (u >= 1) { if (F.story !== undefined) H.story = F.story; H.flip = null; H.y = heroFloorY(); puff(H.x, H.y, H.z, '#c8bca0', 8, 0.7); }
     } else if (H.dash >= 0) {
       H.dash += dt;
       // steer: the roll's heading swings round toward the way you push
@@ -29882,7 +29907,7 @@ function update(dt) {
   H.hurtT += dt;
   heroTunic.emissive.set(H.hurtT < 0.4 && Math.floor(H.hurtT * 12) % 2 === 0 ? '#a01810' : '#000000');
   heroSkin.emissive.copy(heroTunic.emissive); HERO_MAT.leather.emissive.copy(heroTunic.emissive);
-  heroShadow.position.set(H.x, (H.flip ? surfaceY(H.x, H.z) : H.y) + 0.02, H.z);
+  heroShadow.position.set(H.x, (H.flip ? heroFloorY() : H.y) + 0.02, H.z);
 
   spikes.exit(); spikes.enter('update: foes');
   // ----- foes -----
