@@ -562,6 +562,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v793:** (Jordan's picks W1, W2, S2; the lit haze stays as it is) The lit surfaces skip a point light where it can't reach (its light there is 0), so a pixel pays only for the lamps, torch and spell lights near it (same look). Where the browser can filter float textures (float32-filterable), the GI's ground height under a point is read in one blended look instead of four reads blended by hand, at the height field's edge as before (28 reads a pixel to 16; same look but for the texture unit's rounding of the blend). T > Shadows, ground has a third setting, 2: the ground's shadow cast by a hidden copy of each chunk's ground without its flat cells (cliffs, slopes, ramps, rough rock and the world's cut edge kept), as flat ground shades nothing a heightfield can hold under it; compare the shadow map row with 1.
 
+**v794:** (Jordan's desert town compare: shadow map 0.42 ms with the ground not casting, 0.70 with it, 0.72 with v793's copy without flat cells; cliff shadows the same) Ground shadows setting 2 taken out: nearly all the ground's casting triangles are its rough cliff faces (18 to 50 a half-cell, a flat one 2), which it kept, so it saved nothing. The G panel's drawing line says whether the GI's ground height is read in one look (v793, float32-filterable) or four.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

@@ -1350,7 +1350,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 793;
+const GAME_VERSION = 794;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8901,8 +8901,6 @@ function renderWorld() {
   encMark(null);
   // (the ground casts too unless SHADOWS.ground is off: phones, where its ~350k triangles were half the shadow map)
   if (SHADOWS.ground > 0.5) shadowLayers.enable(5); else shadowLayers.disable(5);
-  // (v793) 2: the ground casts through its cast-only copy (flat cells left out); 1: through itself
-  if (groundCastMode !== groundCastWant()) { groundCastMode = groundCastWant(); for (const ch of chunks.values()) groundCastSet(ch); }
   drawCrowds();
   drawFolk();
   drawHumans();
@@ -9231,10 +9229,6 @@ const bufWeb = new Buf();
 let GLASSB = null;
 const bufGlass = new Buf(), bufGIProxy = new Buf();
 const bufInside = new BuildBuf();   // (v592: an upper story's furniture in its rooms, see buildPieces)
-// (v793) the ground's shadow caster with its flat cells left out (SHADOWS.ground 2): while GROUND_CAST is set, what's
-// laid into bufGround goes into bufGroundCast too (see tri)
-const bufGroundCast = new Buf();
-let GROUND_CAST = false;
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new GlowBuf(), bufBuild = new BuildBuf(), bufTmp = new Buf(), bufTmpGlow = new GlowBuf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
@@ -9288,7 +9282,6 @@ function stem(geo, color, x, y, z, o, rx, ry, rz, flex) {
 function tri(a, b, c, ca, cb = ca, cc = ca, B = OUT) {
   triOne(a, b, c, ca, cb, cc, B);
   if (B.dl) triOne(a, c, b, ca, cc, cb, B);
-  if (GROUND_CAST && B === bufGround) triOne(a, b, c, ca, cb, cc, bufGroundCast);
 }
 function triOne(a, b, c, ca, cb, cc, B) {
   B.need(9);
@@ -9679,7 +9672,7 @@ function buildGround(cx, cz, ch) {
 // the same a step at a time (see streamChunks), a few rows of tiles a step; it alone draws into bufGround, so one
 // chunk's ground is built at a time
 function* groundSteps(cx, cz, ch) {
-  OUT = bufGround; bufGround.n = 0; bufGroundCast.n = 0;
+  OUT = bufGround; bufGround.n = 0;
   const gd = groundTex.image.data;
   const c0 = cx * CH, r0 = cz * CH, GW = CH * 2 + 1;
   const grid = new Float32Array(GW * GW);
@@ -9752,10 +9745,6 @@ function* groundSteps(cx, cz, ch) {
         // (a beach's hips and valleys: split through the corner that stands apart from the other three)
         if (!lifted && (BEACH[i] || SHOAL[i])) flip = beachFlip(P[n00][1], P[n10][1], P[n01][1], P[n11][1]);
         const W = CF.w, S = CF.s, q = ((r - r0) * 2 + b + 1) * W + (c - c0) * 2 + a + 1;
-        // (v793) the shadow caster keeps every cell but the flat ones (its four corners level, cut no finer): flat ground
-        // shades nothing a heightfield can hold under it, and what a cliff or slope throws is cast by its own cells
-        { const y0 = P[n00][1]; GROUND_CAST = Math.abs(P[n10][1] - y0) > 1e-6 || Math.abs(P[n01][1] - y0) > 1e-6 || Math.abs(P[n11][1] - y0) > 1e-6
-            || !!(S[q] || S[q + 1] || S[q + W] || S[q + W + 1] || S[q - 1] || S[q + W - 1] || S[q + 2 * W] || S[q + 2 * W + 1] || S[q + 2] || S[q + W + 2] || S[q - W] || S[q - W + 1]); }
         if (S[q] || S[q + 1] || S[q + W] || S[q + W + 1]) {
           roughCell([P[n00], P[n10], P[n01], P[n11]], [k00, k10, k01, k11], [q, q + 1, q + W, q + W + 1], flip, lifted);
           continue;
@@ -9770,7 +9759,6 @@ function* groundSteps(cx, cz, ch) {
         else { tri(P[n00], P[n01], P[n11], k00, k01, k11); tri(P[n00], P[n11], P[n10], k00, k11, k10); }
       }
       // the cut edge of the world
-      GROUND_CAST = true;
       for (let d = 0; d < 4; d++) {
         const nc = c + DC[d], nr = r + DR[d];
         if (nc >= 0 && nr >= 0 && nc < N && nr < N) continue;
@@ -9784,20 +9772,8 @@ function* groundSteps(cx, cz, ch) {
   }
   groundTex.regions.push([c0 * 2, r0 * 2, CH * 2, CH * 2]);
   groundTex.needsUpdate = true;
-  GROUND_CAST = false;
   ch.ground = bufGround.mesh(groundShapeMat);
   if (ch.ground) ch.ground.layers.set(5);   // drawn in a pass of its own (see renderWorld)
-  // (v793) the cast-only copy: never drawn on screen (hidden, castHidden), positions alone; which of the two casts
-  // follows SHADOWS.ground (groundCastMode)
-  ch.groundCast = null;
-  if (bufGroundCast.n) {
-    const g = new GFX.BufferGeometry();
-    g.setAttribute('position', new GFX.BufferAttribute(bufGroundCast.p.slice(0, bufGroundCast.n), 3));
-    const m = new GFX.Mesh(g, castOnlyBoth);
-    m.layers.set(5); m.visible = false; m.castHidden = true; m.receiveShadow = false;
-    ch.groundCast = m;
-  }
-  groundCastSet(ch);
   yield;
   buildBog(c0, r0, grid, GW, ch);
   if (wet) { yield; buildWater(c0, r0, grid, GW, ch); }
@@ -17284,7 +17260,7 @@ function roomsSettled(c, r) {
 // first and a few milliseconds' worth per frame; far ones are let go.
 const chunks = new Map();
 const CHUNK_KEEP = 70;
-function chunkMeshes(ch) { return [ch.ground, ch.groundCast, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.pglow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3, ch.inObj, ch.inGlow, ch.inUp1, ch.inUp2, ch.inUp3].filter(Boolean); }
+function chunkMeshes(ch) { return [ch.ground, ch.lava, ch.bog, ch.bog2, ch.grot, ch.grot2, ch.water, ch.water2, ch.obj, ch.glow, ch.pglow, ch.metal, ch.prism, ch.trunk, ch.plant, ch.canopy, ch.web, ch.spider, ch.build, ch.up1, ch.up2, ch.up3, ch.glass, ch.glass1, ch.glass2, ch.glass3, ch.inObj, ch.inGlow, ch.inUp1, ch.inUp2, ch.inUp3].filter(Boolean); }
 const chunkTime = { n: 0, ms: 0, parts: [0, 0, 0, 0] };   // (parts: the longest ground, objects band, objects' meshes, pieces + grass so far)
 // A chunk is built in three steps, each on a frame of its own when streaming (see streamChunks), so no one frame
 // pays for a whole chunk: its ground (and water, lava and bog), then what stands on it, then the pieces built on
@@ -27339,15 +27315,6 @@ function updateFog(dusk, day) {
 // nothing, and where they reach full strength
 // (v773, Jordan: softness 0.3, was 0.5: under 0.35 the shadow map is looked up once a pixel instead of 4 times, see sunShadow)
 const SHADOWS = { on: 1, strength: 1, range: 30, softness: 0.3, lowAngle: 10, fullAngle: 50, ground: MOBILE ? 0 : 1 };
-// (v793, Jordan's S2) ground 2: the ground's shadow cast by a copy without its flat cells (most of its triangles);
-// which mesh of each chunk casts, set as chunks come in and when the setting changes
-let groundCastMode = -1;
-const groundCastWant = () => Math.round(SHADOWS.ground) >= 2 ? 2 : 1;
-function groundCastSet(ch) {
-  const coarse = (groundCastMode < 0 ? groundCastWant() : groundCastMode) === 2;
-  if (ch.ground) ch.ground.castShadow = !coarse || !ch.groundCast;
-  if (ch.groundCast) ch.groundCast.castShadow = coarse;
-}
 sun.shadow.mapSize.set(MOBILE ? 1024 : 2048, MOBILE ? 1024 : 2048);   // (phones: half, v360)
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
 const shX = new GFX.Vector3(), shY = new GFX.Vector3(), shZ = new GFX.Vector3(), shC = new GFX.Vector3();
@@ -31610,7 +31577,7 @@ const TUNING = [
   ]],
   ['Shadows', [
     [SHADOWS, 'on', 'Sun and moon shadows (0 off, 1 on)', 0, 1, 1],
-    [SHADOWS, 'ground', 'The ground casts shadows (cliffs onto the land below; off by default on phones). 2: cast by a copy without its flat cells, fewer triangles', 0, 2, 1],
+    [SHADOWS, 'ground', 'The ground casts shadows (cliffs onto the land below; off by default on phones)', 0, 1, 1],
     [renderer, 'mergePasses', 'Merge render passes (fewer GPU passes; joins profiler rows; on by default on phones)', 0, 1, 1],
     [SHADOWS, 'strength', 'How much light a shadow takes away', 0, 1, 0.01],
     [SHADOWS, 'range', 'Reach round the view (tiles; smaller is sharper)', 10, 100, 1],
@@ -33249,7 +33216,7 @@ function frameBody(now) {
   // (how many draws the frame made, and how many meshes the scene holds, counted twice a second: one that climbs
   // while you stand still is a leak)
   if (!profPanel.hidden && (sceneCountT -= real) < 0) { sceneCountT = 0.5; sceneMeshes = 0; scene.traverse(o => { if (o.isMesh) sceneMeshes++; }); moverRows(); }
-  prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'} · ${renderer.info.draws} draws · ${renderer.info.passTotal || 0} render passes · ${sceneMeshes} meshes`;
+  prof.mode = `${renderer.domElement.width}×${renderer.domElement.height} · mosaic ${pxScale}px · ${ssNow > 1 ? ssNow + '× finer' : 'no anti-aliasing'} · ${renderer.info.draws} draws · ${renderer.info.passTotal || 0} render passes · ${sceneMeshes} meshes · GI ground ${renderer.hfFilter ? 'one look' : 'four reads'}`;   // (v794: whether v793's float32-filterable read is on)
   renderer.info.draws = 0; renderer.info.passTotal = 0;
   // (v768) since the last frame, the potions' own loop's work included: sends to the GPU, canvases drawn, uploads
   { const I = renderer.info;
