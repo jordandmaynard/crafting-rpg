@@ -612,6 +612,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v818:** (Jordan) With the Character page folded away, the "Click to put on or take off, drag to move" hint no longer shows under the Backpack; everything else that goes in that spot (what a hovered item is, the refine/stash/bin notes) still does.
 
+**v819:** (Jordan) The Character page moved to the Backpack's right side, its art mirrored (its strap edge now tucked under the Backpack's right edge) and everything on it shifted to stay centred on the parchment. The fold tab is on its right edge now: open, its arrow points left (in); clicking slides the page left behind the Backpack, leaving the tab sticking out on the right with its arrow pointing right. The hint/info line stays under the Backpack whether the page is out or folded. A place you'd dragged the inventory to is kept for the Backpack (it doesn't jump); the window can go off the right edge as far as leaves the folded tab on screen, so bringing the page out never moves it.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
