@@ -44,9 +44,9 @@ struct HP {
   wind: vec4f,          // the wisps' drift (tiles a second)
   glow: vec4f,          // tiles lava's glow fades over, upward; how much of the sun's light shadows take out; and
                         // how much of the sky's (for shafts with more contrast); mosaic pixels a ray, each way (block)
-  rose: array<vec4f, 6>,  // stained-glass roses the sun shines through (the game's U.roses): per rose [glass middle,
+  rose: array<vec4f, 7>,  // stained-glass roses the sun shines through (the game's U.roses): per rose [glass middle,
                           // radius], [outward normal xz, tint, on]; then [blur at the glass, blur a tile, beams, glow],
-                          // [size, grow a tile, fill, -]
+                          // [size, grow a tile, fill, -], [thrown outside (0 off), -, -, -]
 }
 @group(2) @binding(0) var<uniform> H: HP;
 `;
@@ -133,7 +133,8 @@ fn roseHaze(p: vec3f) -> vec4f {
     if (b.w < 0.5) { continue; }
     let nn = vec3f(b.x, 0.0, b.y);
     let dn = dot(L, nn);
-    if (dn < 0.02) { continue; }
+    // (v814: with the sun behind it, inside the building, its light thrown outward too, for show)
+    if (!(dn >= 0.02 || (dn <= -0.02 && H.rose[6].x > 0.0))) { continue; }
     let t = dot(a.xyz - p, nn) / dn;
     if (t < 0.0 || t > 60.0) { continue; }
     let d = p + L * t - a.xyz;
@@ -578,7 +579,7 @@ export class LitHaze {
     d.set([...f.tint, f.lift ?? 1], 52);
     d.set([...f.wind, 0], 56);
     d.set([f.lavaHeight, f.shafts, f.shadeSky, B], 60);
-    if (f.rose) d.set(f.rose.subarray(0, 24), 64);
+    if (f.rose) d.set(f.rose.subarray(0, 28), 64);
     this.device.queue.writeBuffer(this.params, 0, d);
     const ground = !!f.groundColour;
     if (ground && this._glowKey !== String(this.glowSize)) {

@@ -1362,7 +1362,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 813;
+const GAME_VERSION = 814;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -5305,7 +5305,9 @@ const chapels = [];   // (v493: medium towns' chapels, drawn and lit as a cathed
 // the gallery's front, a whole story high (bigHole its hole's radius, bigY its centre up the wall); the one-wall rose
 // (y, hole, glass) is kept for if players may build them. size and grow scaled by 0.44 / 0.81 so the light falls as
 // big as Jordan had it)
-const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, bigHole: 0.82, bigY: 0.98, bigOut: 0.05, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, size: 2.17, grow: 0.073, fill: 2 };
+// (v814, Jordan: for show) outside: when the sun is behind the rose (inside the building), its light is thrown out onto
+// the ground, the street and the walls in front of the glass too (0 off, 1 on); outFill: how bright that light is
+const ROSE = { y: 1.0, hole: 0.45, glass: 0.44, bigHole: 0.82, bigY: 0.98, bigOut: 0.05, tint: 0.6, out: -0.24, blur: 0, blur0: 0.02, haze: 1, glow: 0.6, size: 2.17, grow: 0.073, fill: 2, outside: 1, outFill: 1 };
 const roseDims = q => q && q.big ? { y: ROSE.bigY, hole: ROSE.bigHole, glass: ROSE.bigHole - 0.01, out: ROSE.bigOut } : { y: ROSE.y, hole: ROSE.hole, glass: ROSE.glass, out: ROSE.out };
 // (v442, Jordan's cathedral-stained-glass-v1 kit, art/deliveries) The rose's design: one of four 256 x 256 lossless
 // paintings beside the page (rose/*.webp; the circle r 125 round the middle opaque, outside clear), copied into the
@@ -5319,6 +5321,84 @@ const ROSE_STYLES = ['Grail with god rays', 'Knight with raised sword', 'Praying
 const ROSE_FILES = ['01-grail-god-rays', '02-knight-sun-rays', '03-praying-priestess', '04-geometric'];
 const ROSE_TEX_S = 256, ROSE_HALVES = [3, 2];   // (the styles in the texture's left and right halves)
 const roseTex = new GFX.DataTexture(new Uint8Array(ROSE_TEX_S * 2 * ROSE_TEX_S * 4), ROSE_TEX_S * 2, ROSE_TEX_S);
+// (v814) the roses' uniforms, shared by everything their light falls on (buildMat, windowMat, the ground, the cobbles):
+// U.roses as below, [6]: brightness of the light thrown outside when the sun is behind the rose (0 off)
+const ROSE_U = { roses: { value: new Float32Array(28) }, tRose: { value: roseTex } };
+// (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
+// shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
+// sun is followed back to the nearest two roses' glass, and where it passes through one, the sunlight there (the
+// shadow map's say, so whatever stands in the way still shades it) takes the colour of the pane it came through,
+// spokes and tracery ring dark. U.roses: per rose [glass centre xyz, glass radius], [outward normal xz, tint, on]
+// (v542) a design's uv (0-1 over its square) into its half of the two-design texture (h: the rose's 'on', 1 left,
+// 2 right), kept a texel inside it so the other design never bleeds in
+const ROSE_UV_WGSL = /* wgsl */ `
+fn roseUV(uv: vec2f, h: f32) -> vec2f {
+  return vec2f((clamp(uv.x, 0.002, 0.998) + select(0.0, 1.0, h > 1.5)) * 0.5, uv.y);
+}
+`;
+const ROSE_WGSL = ROSE_UV_WGSL + /* wgsl */ `
+// the light through the rose's design at (u, v) on its glass (metres from its middle), as a tint: the glass's colour
+// at full strength, dark glass and lead letting little through; w: how much of it is the rose (0 outside)
+fn roseLight(u: f32, v: f32, R: f32, h: f32) -> vec4f {
+  let uv = vec2f(0.5 + u / (2.0 * R), 0.5 - v / (2.0 * R));
+  let t = textureSampleLevel(tRose, tRoseS, roseUV(uv, h), 0.0);
+  let mx = max(t.r, max(t.g, t.b));
+  let col = mix(vec3f(0.18), t.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
+  return vec4f(col * t.a, t.a);
+}
+// the rose (U.roses[2j], [2j + 1]) a point's sunlight comes through: its tint, and how much (0 none). blurR: the light's
+// spread at the glass (metres), the taps a ring round the middle
+// (v814, Jordan: for show, when the sun is behind the rose, inside the building, its light is thrown outward too, onto
+// what's out in front of the glass: U.roses[6].x its brightness, 0 off; outOnly: only that, for the ground and the
+// cobbles, which take no light from the inside one)
+fn roseAt(w: vec3f, j: i32, taps: i32, outOnly: bool) -> vec4f {
+  let a = U.roses[j * 2]; let b = U.roses[j * 2 + 1]; let g = U.roses[4];
+  if (b.w < 0.5) { return vec4f(0.0); }
+  let L = F.sunDir.xyz;
+  let nn = vec3f(b.x, 0.0, b.y);
+  let dn = dot(L, nn);
+  if (!((dn >= 0.02 && !outOnly) || (dn <= -0.02 && U.roses[6].x > 0.0))) { return vec4f(0.0); }
+  let t = dot(a.xyz - w, nn) / dn;
+  if (t < 0.02 || t > 60.0) { return vec4f(0.0); }
+  let d = w + L * t - a.xyz;
+  let u = dot(d, vec3f(-nn.z, 0.0, nn.x)); let v = d.y;
+  // (v436: drawn bigger than it truly falls, for drama: size, and grow a tile it travels)
+  let Rs = a.w * max(U.roses[5].x + U.roses[5].y * t, 0.05);
+  let br = Rs * (g.x + g.y * t);
+  if (length(vec2f(u, v)) > Rs + br) { return vec4f(0.0); }
+  var sum = roseLight(u, v, Rs, b.w);
+  for (var k = 0; k < taps; k++) {
+    let ang = f32(k) * 6.2831853 / f32(taps);
+    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, Rs, b.w);
+    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, Rs, b.w);
+  }
+  sum /= f32(1 + taps * 2);
+  return vec4f(sum.rgb / max(sum.w, 1e-3), sum.w);
+}
+// c: the lit colour; where the sun truly comes through (the shadow map's say) it's tinted, and where the drawn light
+// reaches past that (blur, size, grow) the glass's coloured sunlight is added (fill; thrown outside, U.roses[6].x:
+// there the building itself shades it, so nearly all of it is added)
+fn roseLit(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f, outOnly: bool) -> vec3f {
+  if (F.sunDir.w < 0.5) { return c; }
+  var o = c;
+  for (var j = 0; j < 2; j++) {
+    let r = roseAt(w, j, 6, outOnly);
+    if (r.w <= 0.0) { continue; }
+    let b = U.roses[j * 2 + 1];
+    let k = r.w * b.z;
+    let s = sunShadow(w, n);
+    let fill = select(U.roses[5].z, U.roses[6].x, dot(F.sunDir.xz, b.xy) < 0.0);
+    o = o * mix(vec3f(1.0), r.rgb, k * s) + albedo * F.sunColor.rgb * sat(dot(N, F.sunDir.xyz)) * cloudShade(w.xz) * r.rgb * k * (1.0 - s) * fill;
+  }
+  return o;
+}
+fn roseApply(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f) -> vec3f { return roseLit(c, albedo, w, N, n, false); }
+// (v814) the ground and the cobbles: only the light thrown outside, and nothing at all while that's off
+fn roseOutside(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f) -> vec3f {
+  if (U.roses[6].x <= 0.0) { return c; }
+  return roseLit(c, albedo, w, N, n, true);
+}
+`;
 const roseArt = new Map();   // style -> its pixels (Uint8ClampedArray), once loaded
 function roseLoad(style) {
   if (roseArt.has(style)) return Promise.resolve(roseArt.get(style));
@@ -6902,9 +6982,9 @@ function makeCobbleTex() {
 // (v663, Jordan: in an alpine town the grout between the cobbles is frosted, packed with snow: frost blends the low
 // ground between the stones to frostC and flattens their bump there)
 const COBBLE_FROST = { amount: 0.9, col: '#dde8f4', lo: 0.12, hi: 0.62 };
-const COBBLE_U = { bump: { value: COBBLE.bump }, frost: { value: 0 }, frostC: { value: new GFX.Color(COBBLE_FROST.col) }, frostLo: { value: COBBLE_FROST.lo }, frostHi: { value: COBBLE_FROST.hi } };
+const COBBLE_U = { roses: ROSE_U.roses, tRose: ROSE_U.tRose, bump: { value: COBBLE.bump }, frost: { value: 0 }, frostC: { value: new GFX.Color(COBBLE_FROST.col) }, frostLo: { value: COBBLE_FROST.lo }, frostHi: { value: COBBLE_FROST.hi } };
 const COBBLE_FU = Object.assign({}, COBBLE_U, { frost: { value: COBBLE_FROST.amount } });
-const cobbleCode = /* wgsl */ `
+const cobbleCode = ROSE_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
@@ -6917,7 +6997,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @locatio
   let m = vec3f((t.xy * 2.0 - 1.0) * U.bump * (1.0 - fr), t.z * 2.0 - 1.0);
   let N = normalize(vec3f(1.0, 0.0, 0.0) * m.x + vec3f(0.0, 0.0, 1.0) * m.y + N0 * m.z);
   let alb = mix(i.color * mix(0.42, 1.0, t.a), U.frostC, fr);
-  let c = shadeLitN(alb, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5);
+  let c = roseOutside(shadeLitN(alb, vec3f(0.0), 0.0, 1.0, i.world, N, N0, O.emissive.w > 0.5), alb, i.world, N, N0);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`;
 const cobbleMat = new GFX.ShaderMaterial({ uniforms: COBBLE_U, vertexColors: true, lit: true, code: cobbleCode });
@@ -9969,74 +10049,11 @@ const BUILD_TEST = { shade: 0, cull: true };
 // and the water
 const EARLY_SEND = { mode: 2 };   // (0 off, 1 three sends, 2 (v795) and one after the shadow map)
 const BUILD_PRE = { on: true, ground: true, grass: true }, BUILD_PRE_F = m => !!BUILD_PRE.mats && BUILD_PRE.mats.has(m.material) && !m.material.transparent;
-const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: { value: new Float32Array(24) }, tRose: { value: roseTex } };
-// (v433, Jordan: the rose window lights the floor in its colours where the sun shines through it, and casts no
-// shadow) A projected light, worked out where it lands: for any built surface (floors, columns, walls) the ray to the
-// sun is followed back to the nearest two roses' glass, and where it passes through one, the sunlight there (the
-// shadow map's say, so whatever stands in the way still shades it) takes the colour of the pane it came through,
-// spokes and tracery ring dark. U.roses: per rose [glass centre xyz, glass radius], [outward normal xz, tint, on]
-// (v542) a design's uv (0-1 over its square) into its half of the two-design texture (h: the rose's 'on', 1 left,
-// 2 right), kept a texel inside it so the other design never bleeds in
-const ROSE_UV_WGSL = /* wgsl */ `
-fn roseUV(uv: vec2f, h: f32) -> vec2f {
-  return vec2f((clamp(uv.x, 0.002, 0.998) + select(0.0, 1.0, h > 1.5)) * 0.5, uv.y);
-}
-`;
-const ROSE_WGSL = ROSE_UV_WGSL + /* wgsl */ `
-// the light through the rose's design at (u, v) on its glass (metres from its middle), as a tint: the glass's colour
-// at full strength, dark glass and lead letting little through; w: how much of it is the rose (0 outside)
-fn roseLight(u: f32, v: f32, R: f32, h: f32) -> vec4f {
-  let uv = vec2f(0.5 + u / (2.0 * R), 0.5 - v / (2.0 * R));
-  let t = textureSampleLevel(tRose, tRoseS, roseUV(uv, h), 0.0);
-  let mx = max(t.r, max(t.g, t.b));
-  let col = mix(vec3f(0.18), t.rgb / max(mx, 1e-3) * 1.35, smoothstep(0.12, 0.45, mx));
-  return vec4f(col * t.a, t.a);
-}
-// the rose (U.roses[2j], [2j + 1]) a point's sunlight comes through: its tint, and how much (0 none). blurR: the light's
-// spread at the glass (metres), the taps a ring round the middle
-fn roseAt(w: vec3f, j: i32, taps: i32) -> vec4f {
-  let a = U.roses[j * 2]; let b = U.roses[j * 2 + 1]; let g = U.roses[4];
-  if (b.w < 0.5) { return vec4f(0.0); }
-  let L = F.sunDir.xyz;
-  let nn = vec3f(b.x, 0.0, b.y);
-  let dn = dot(L, nn);
-  if (dn < 0.02) { return vec4f(0.0); }
-  let t = dot(a.xyz - w, nn) / dn;
-  if (t < 0.02 || t > 60.0) { return vec4f(0.0); }
-  let d = w + L * t - a.xyz;
-  let u = dot(d, vec3f(-nn.z, 0.0, nn.x)); let v = d.y;
-  // (v436: drawn bigger than it truly falls, for drama: size, and grow a tile it travels)
-  let Rs = a.w * max(U.roses[5].x + U.roses[5].y * t, 0.05);
-  let br = Rs * (g.x + g.y * t);
-  if (length(vec2f(u, v)) > Rs + br) { return vec4f(0.0); }
-  var sum = roseLight(u, v, Rs, b.w);
-  for (var k = 0; k < taps; k++) {
-    let ang = f32(k) * 6.2831853 / f32(taps);
-    sum += roseLight(u + cos(ang) * br, v + sin(ang) * br, Rs, b.w);
-    sum += roseLight(u + cos(ang + 0.4) * br * 0.5, v + sin(ang + 0.4) * br * 0.5, Rs, b.w);
-  }
-  sum /= f32(1 + taps * 2);
-  return vec4f(sum.rgb / max(sum.w, 1e-3), sum.w);
-}
-// c: the lit colour; where the sun truly comes through (the shadow map's say) it's tinted, and where the drawn light
-// reaches past that (blur, size, grow) the glass's coloured sunlight is added (fill)
-fn roseApply(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f) -> vec3f {
-  if (F.sunDir.w < 0.5) { return c; }
-  var o = c;
-  for (var j = 0; j < 2; j++) {
-    let r = roseAt(w, j, 6);
-    if (r.w <= 0.0) { continue; }
-    let k = r.w * U.roses[j * 2 + 1].z;
-    let s = sunShadow(w, n);
-    o = o * mix(vec3f(1.0), r.rgb, k * s) + albedo * F.sunColor.rgb * sat(dot(N, F.sunDir.xyz)) * cloudShade(w.xz) * r.rgb * k * (1.0 - s) * U.roses[5].z;
-  }
-  return o;
-}
-`;
+const DETAIL_U = { d: { value: new GFX.Vector2(2.77, 0.85) }, tChip: { value: makeChipTex() }, cuts: CUT_U.cuts, cutN: CUT_U.cutN, roses: ROSE_U.roses, tRose: ROSE_U.tRose };
 // the nearest two roses within reach of the hero, every frame
 function updateRoses() {
   const a = DETAIL_U.roses.value; a.fill(0);
-  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow; a[20] = ROSE.size; a[21] = ROSE.grow; a[22] = ROSE.fill; a[23] = BUILD_TEST.shade;
+  a[16] = ROSE.blur0; a[17] = ROSE.blur; a[18] = ROSE.haze; a[19] = ROSE.glow; a[20] = ROSE.size; a[21] = ROSE.grow; a[22] = ROSE.fill; a[23] = BUILD_TEST.shade; a[24] = ROSE.outside > 0.5 ? ROSE.outFill : 0;
   const near = [];
   for (const list of [cathedrals, chapels]) for (const ca of list) { const q = ca.rose; if (!q) continue; const d = Math.hypot(q.x - H.x, q.z - H.z); if (d < 48) near.push([d, ca]); }
   near.sort((x, y) => x[0] - y[0]);
@@ -11363,6 +11380,7 @@ function updateGroundU() {
 }
 // the ground: lit as the other flat-shaded things are, its patches of colour rounded and its light smoothed round ramps
 const GROUND_U = {
+  roses: ROSE_U.roses, tRose: ROSE_U.tRose,   // (v814: a rose's light thrown outside, roseOutside)
   tGround: { value: groundTex },
   gsV: { value: { x: 1, y: 1.1, z: 1.2, w: 1 } },   // rounded patches on, how far their edges wander (quarter tiles), the noise's waves a tile, blend
   tDrift: { value: driftTex },
@@ -11370,7 +11388,7 @@ const GROUND_U = {
   rmp: { value: { x: 1, y: 0.3, z: 1, w: 0.4 } },   // smooth light round ramps (0-1), how far round each point it looks (tiles); the same for beaches (v631)
 };
 const groundShapeMat = new GFX.ShaderMaterial({ uniforms: GROUND_U, vertexColors: true, side: GFX.DoubleSide, lit: true,
-  code: /* wgsl */ `
+  code: ROSE_WGSL + /* wgsl */ `
 struct VOut { @builtin(position) @invariant pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = O.model * vec4f(v.position, 1.0);
@@ -11486,7 +11504,7 @@ fn gsJoin(a: u32, b: u32) -> bool {
   // (v506, Jordan) the bed under open water takes no sun shadow: a boat's shadow lies on the water and its mist, not
   // down on the bottom, where it made the boat look to be flying (the water's own surface still shows shadows)
   let wq = u32(round(textureLoad(tDrift, clamp(vec2i(floor(i.world.xz * 2.0)), vec2i(0), vec2i(${N * 2 - 1})), 0).a * 255.0));
-  let c = shadeLit(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5 && (wq & 16u) == 0u);
+  let c = roseOutside(shadeLit(albedo, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5 && (wq & 16u) == 0u), albedo, i.world, N, N);
   return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
 }`,
 });
@@ -33235,6 +33253,8 @@ const TUNING = [
     [ROSE, 'grow', 'How much bigger again its light gets a tile it travels', 0, 1, 0.005],
     [ROSE, 'fill', 'Brightness of its light where it falls past the true patch', 0, 3, 0.01],
     [ROSE, 'haze', 'Coloured beams in the lit haze', 0, 1, 0.01],
+    [ROSE, 'outside', 'Its light also thrown outside when the sun is behind the glass (0 off, 1 on)', 0, 1, 1],
+    [ROSE, 'outFill', 'Brightness of the light thrown outside', 0, 3, 0.01],
     [ROSE, 'glow', 'The glass shining with the daylight behind it', 0, 3, 0.01],
   ]],
   ['Stations', [
