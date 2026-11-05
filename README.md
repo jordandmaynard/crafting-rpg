@@ -685,6 +685,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v874:** (Jordan) The backpack holds 100 squares on five pages of 20. Five tabs down the backpack's left edge, numbered 1 to 5 (the map's bookmark art again, as the folio's tab, mirrored so the point faces out), each open its page; the open page's tab sits out further in full light, the others are tucked in a little and shaded. The count in the title is the open page's (17 / 20), and hovering a tab says how full its page is. Filling and sorting work as before, through all 100 squares in order, so page 1 fills first, then page 2, and so on. While dragging something, holding it over a tab opens that page (drop it on a square there), and letting go on a tab puts it in that page's first free square (on top of a stack of the same thing with room, if there is one). On a controller LB turns to the next page. The inventory's default place is 58 px further right, and it can't be dragged further left than leaves the tabs on screen. PACK_PAGE, PACK_PAGES, packPage, setPackPage, dropOnPage; GAME.packPage(p), GAME.dropOnPage(i, p).
 
+**v875:** (Jordan) T > Backpack tabs: the first tab's top, the spacing from tab to tab, the number's place across (its middle, from the tab's point) and how far the closed tabs stick out past the backpack's edge (the open one sticks out 74). PACK_TABS, applyPackTabs (follows the sliders live).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
