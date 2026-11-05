@@ -1437,7 +1437,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 877;
+const GAME_VERSION = 878;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -15517,6 +15517,28 @@ function sandMark(kind, c, r, w, k, on = !!SAND_BASE[kind]) {
 const isWindowVal = v => v === 13 || v === 14;
 // what a piece costs where it goes: a window over its own wall, only the glass
 const spotCost = s => s.upgrade ? WINDOW_GLASS : COST[s.kind];
+// (v878, Jordan: refining everything should never leave you short) a raw cost can be paid in its refined form too, at
+// REFINE.per raw to one refined: raw first, refined for what the raw doesn't cover, so a barrel's 6 logs can be
+// 6 logs, 4 logs and 1 plank, or 3 planks. The tooltips still name the raw cost only.
+const RAW_REFINED = { wood: 'planks', stone: 'stoneBlock' };
+// every material a cost could take (its own, and the refined forms of its raw ones)
+const costKeys = cost => { const ks = Object.keys(cost); for (const r in cost) if (RAW_REFINED[r]) ks.push(RAW_REFINED[r]); return ks; };
+// what a cost actually takes, given have(id) for each material, or null when it can't be paid
+function payable(cost, have) {
+  const out = {}, per = Math.max(1, REFINE.per);
+  for (const [r, n] of Object.entries(cost)) if (!RAW_REFINED[r]) out[r] = (out[r] || 0) + n;
+  for (const [r, n] of Object.entries(cost)) {
+    const alt = RAW_REFINED[r];
+    if (!alt) continue;
+    const a = Math.max(0, have(r));
+    if (a >= n) { out[r] = (out[r] || 0) + n; continue; }
+    // (the fewest refined that cover the rest; the raw makes up the remainder, so nothing is paid twice)
+    const k = Math.ceil((n - a) / per), raw = Math.max(0, n - k * per);
+    if (raw) out[r] = (out[r] || 0) + raw;
+    out[alt] = (out[alt] || 0) + k;
+  }
+  return Object.entries(out).every(([r, n]) => have(r) >= n) ? out : null;
+}
 const isFenceVal = v => v >= 5 && v <= 9, isDoorVal = v => v === 2 || v === 7 || v === 9 || v === 10 || v === 11;
 // an edge is named by the tile whose north (w = 0) or west (w = 1) side it is
 const edgeOf = (c, r, d) => d === 0 ? [c, r, 0] : d === 2 ? [c, r + 1, 0] : d === 3 ? [c, r, 1] : [c + 1, r, 1];
@@ -22332,10 +22354,10 @@ const refundGains = (k, x, y, z) => { for (const [r, n] of Object.entries(COST[k
 const costText = k => Object.entries(COST[k]).map(([r, n]) => COST_TAG[r] ? n + COST_TAG[r] : n + ' ' + ITEMS[r].name.toLowerCase()).join(' ');
 // a cost in words, e.g. "8 planks, 4 iron ingots" (whatever materials it names, tagged or not)
 const costWords = a => a.map(([r, n]) => n + ' ' + ITEMS[r].name.toLowerCase()).join(', ');
-const canAfford = k => Object.entries(COST[k]).every(([r, n]) => haveCount(r) >= n);
+const canAfford = k => !!payable(COST[k], haveCount);
 // a build slot's tooltip: what it costs, and what you're short of
 function costTip(name, k) {
-  const need = Object.entries(COST[k]), short = need.filter(([r, n]) => haveCount(r) < n);
+  const need = Object.entries(COST[k]), short = canAfford(k) ? [] : need.filter(([r, n]) => haveCount(r) < n);
   return titleCase(name) + ' · costs ' + costWords(need) + (short.length ? ' · missing ' + costWords(short.map(([r, n]) => [r, n - haveCount(r)])) : '');
 }
 let slotEls = [];
@@ -27360,9 +27382,9 @@ function settle(spots) {
   const have = {}, waiting = queueWaits();
   for (const s of spots) {
     const cost = spotCost(s), far = Math.hypot(s.x - H.x, s.z - H.z) > BUILD_RANGE, pl = spotPlot(s);
-    for (const r in cost) if (!(r in have)) have[r] = haveCount(r);
-    const behind = queueable(s.kind) && !s.k && !s.upgrade && Object.keys(cost).some(r => waiting.get(pl)?.has(r));
-    const afford = !behind && Object.entries(cost).every(([r, n]) => n <= have[r]), queued = buildQueue.has(spotKey(s));
+    for (const r of costKeys(cost)) if (!(r in have)) have[r] = haveCount(r);
+    const behind = queueable(s.kind) && !s.k && !s.upgrade && costKeys(cost).some(r => waiting.get(pl)?.has(r));
+    const use = behind ? null : payable(cost, r => have[r]), afford = !!use, queued = buildQueue.has(spotKey(s));
     s.go = s.ok && !far && afford;
     s.queue = s.ok && !far && !afford && queueable(s.kind) && !s.k && !s.upgrade && !queued;
     if (s.ok && far) s.why = 'Too far away to build.';
@@ -27371,7 +27393,7 @@ function settle(spots) {
       const short = Object.entries(cost).filter(([r, n]) => have[r] < n).map(([r, n]) => [r, n - Math.max(0, have[r])]);
       s.why = 'Not enough materials: costs ' + costWords(Object.entries(cost)) + (short.length ? ', missing ' + costWords(short) : '') + '.';
     }
-    if (s.go) for (const [r, n] of Object.entries(cost)) have[r] -= n;
+    if (s.go) for (const [r, n] of Object.entries(use)) have[r] -= n;
     if (s.queue) waitFor(waiting, pl, s.kind);
   }
   return spots;
@@ -27379,7 +27401,7 @@ function settle(spots) {
 // the materials each plot's queue is waiting on: plot -> Set of item ids (everything a queued piece costs)
 function waitFor(waiting, pl, kind) {
   if (!waiting.has(pl)) waiting.set(pl, new Set());
-  for (const r in COST[kind]) waiting.get(pl).add(r);
+  for (const r of costKeys(COST[kind])) waiting.get(pl).add(r);
 }
 function queueWaits() {
   const waiting = new Map();
@@ -27421,7 +27443,7 @@ function flushDirty() {
   dirtyObj.clear(); dirtyPieces.clear();
 }
 function placeSpot(s) {
-  if (!s.paid) pay(s.kind, 1, spotCost(s));
+  if (!s.paid) pay(s.kind, 1, payable(spotCost(s), haveCount) || spotCost(s));
   unqueue(spotKey(s));
   const ch = Math.floor(s.r / CH) * NC + Math.floor(s.c / CH);
   buildCount[ch]++;
@@ -27539,10 +27561,11 @@ function runBuildQueue(dt) {
     // (one that can't be paid for yet, or needs something an earlier one is waiting on, waits, and holds up
     // everything after it that needs any of the same)
     // (paid from the plot's stores, and from your pack too while you stand on that plot: Jordan, v364)
-    const sts = plotStores(q.plot), cost = Object.entries(COST[q.kind]), w = waiting.get(q.plot), onPlot = homePlot() === q.plot;
+    const sts = plotStores(q.plot), w = waiting.get(q.plot), onPlot = homePlot() === q.plot;
     const have = id => storedCount(sts, id) + (onPlot ? countItem(id) : 0);
-    if (cost.some(([id]) => w && w.has(id)) || !cost.every(([id, n]) => have(id) >= n)) { waitFor(waiting, q.plot, q.kind); continue; }
-    for (const [id, n] of cost) if (onPlot) spend(id, n); else takeStored(sts, id, n);
+    const use = costKeys(COST[q.kind]).some(id => w && w.has(id)) ? null : payable(COST[q.kind], have);
+    if (!use) { waitFor(waiting, q.plot, q.kind); continue; }
+    for (const [id, n] of Object.entries(use)) if (onPlot) spend(id, n); else takeStored(sts, id, n);
     if (onPlot && invOpen) renderInv();
     s.paid = true;
     placeSpot(s);

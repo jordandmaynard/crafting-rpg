@@ -691,6 +691,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v877:** (Jordan) New crate icon on the build bar: Jordan's symmetrical painterly wooden crate (art/deliveries/crate-build-icon-v2.png), fitted to 232 px in its cell (`atlas.py add crate ... --fit`), in the build sheet.
 
+**v878:** (Jordan) Building never punishes refining: any build cost in raw logs or stone can also be paid in planks or stone blocks at the refining ratio (REFINE.per, 2 raw to 1 refined). Raw is used first, and refined covers what the raw doesn't, with the fewest refined that cover it (a barrel's 6 logs: 6 logs, or 4 logs + 1 plank with 5 logs, or 3 planks). Works for the bar's grey-out, the ghost, drags and the build queue (`RAW_REFINED`, `payable`, `costKeys`). Tooltips still name the raw cost; the "missing" part only shows when neither covers it. Taking a piece down still gives back its raw cost.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
