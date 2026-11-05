@@ -1416,7 +1416,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 866;
+const GAME_VERSION = 867;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -20327,6 +20327,81 @@ const PAINT_REV = 820;   // (v820: Jordan's new raw meat painting)
 // browser picks the same file), so a weapon's icons show at once the first time you switch to it. The images are
 // kept so they stay decoded.
 const paintKept = new Map();
+// (v655, Jordan's missing-icons pack and torso body-type delta, art/deliveries) the twelve buildables still drawn in
+// pixels and all 32 armor pieces, painted, plus a male torso for each armor set and a female starting shirt. Packed
+// into atlases (icons/atlas/<name>-128/-256.webp, one a set) rather than a file an icon: the artifact holds at most 511
+// files. An atlas icon is still an <img class="paint"> (a clear pixel) with its cell as a background, so every place
+// that sizes, outlines or flies an icon treats it as before. image-set picks the 128 or 256 sheet by the screen's pixel
+// ratio. The buildables have their black contour painted in; the armor gets the usual runtime outline.
+// (v867, Jordan: the artifact was at 503 of 511 files) Every painted icon is in a sheet now: the 112 that were still a
+// file each (at 128 and 256) went into sets (weapons by material, abilities, actions, stations, materials, crops,
+// metals, starter), and paintImg hands out a sheet's cell. tools/atlas.py builds the sheets from each icon's cell
+// (icons/paint/<key>-256/-128.webp, kept in the repo, not published) and icons/atlas/atlas.json, and writes the block
+// below. Each sheet has its own rev (a hash of its pixels) in its URL, so replacing one painting only makes browsers
+// fetch that sheet again. A sheet's pad is a gutter round each cell (256 px units, half in the 128 sheet) of the cell's
+// own edge pixels, so a shrunk opaque ability icon never shows its neighbour's colour at its edge.
+// <atlas> (written by tools/atlas.py from icons/atlas/atlas.json: edit those, not this)
+const PAINT_ATLAS = {
+  // v655, Jordan's missing-icons pack and torso body-type delta
+  'armor-leather': { cols: 5, rows: 1, pad: 0, rev: 'db4c2746', items: true, keys: ['leatherArmor', 'leatherArmor_male', 'leatherPants', 'leatherBoots', 'leatherHelmet'] },
+  'armor-bone': { cols: 5, rows: 1, pad: 0, rev: '5e8b2a68', items: true, keys: ['boneArmor', 'boneArmor_male', 'bonePants', 'boneBoots', 'boneHelmet'] },
+  'armor-chain': { cols: 5, rows: 1, pad: 0, rev: 'c04d4cac', items: true, keys: ['chainArmor', 'chainArmor_male', 'chainPants', 'chainBoots', 'chainHelmet'] },
+  'armor-plate': { cols: 5, rows: 1, pad: 0, rev: 'c7149ff5', items: true, keys: ['plateArmor', 'plateArmor_male', 'platePants', 'plateBoots', 'plateHelmet'] },
+  'armor-verdane': { cols: 5, rows: 1, pad: 0, rev: '19cf5434', items: true, keys: ['verdaneArmor', 'verdaneArmor_male', 'verdanePants', 'verdaneBoots', 'verdaneHelmet'] },
+  'armor-caerite': { cols: 5, rows: 1, pad: 0, rev: '0748fcfb', items: true, keys: ['caeriteArmor', 'caeriteArmor_male', 'caeritePants', 'caeriteBoots', 'caeriteHelmet'] },
+  'armor-orivane': { cols: 5, rows: 1, pad: 0, rev: '1dac2e09', items: true, keys: ['orivaneArmor', 'orivaneArmor_male', 'orivanePants', 'orivaneBoots', 'orivaneHelmet'] },
+  'armor-auralith': { cols: 5, rows: 1, pad: 0, rev: '352daa9b', items: true, keys: ['auralithArmor', 'auralithArmor_male', 'auralithPants', 'auralithBoots', 'auralithHelmet'] },
+  // v655, Jordan's missing-icons pack and torso body-type delta: the twelve buildables, contour painted in
+  'build': { cols: 4, rows: 3, pad: 0, rev: '925fed5d', items: true, keys: ['woodstairs', 'stonestairs', 'woodwindow', 'stonewindow', 'fence', 'stonefence', 'ironfence', 'gate', 'irondoor', 'irongate', 'crate', 'chest'] },
+  // v855, Jordan's Emberwild_Sandstone_Icons: the sandstone build row and the sandstone blocks
+  'sandstone': { cols: 4, rows: 2, pad: 0, rev: 'b50badb8', items: true, keys: ['sandfloor', 'sandtimber', 'sandtimberwindow', 'sandwall', 'sandwindow', 'sandfence', 'sandstoneBlock'] },
+  // v864, Jordan's grilled steak and steak-and-potatoes paintings (icons/paint/src/food)
+  'food': { cols: 2, rows: 1, pad: 0, rev: 'c1d85cd0', items: true, keys: ['cookedMeat', 'meatPotatoes'] },
+  // the starting clothes, and the feminine cut of the shirt (clothShirt_female, v655 torso delta)
+  'starter': { cols: 4, rows: 1, pad: 8, rev: 'f5333820', items: true, keys: ['clothShirt', 'clothShirt_female', 'clothPants', 'clothBoots'] },
+  // the weapons of one material, like the armor sets
+  'weapons-wood': { cols: 6, rows: 1, pad: 8, rev: 'a7f3aced', keys: ['sword_wood', 'bow_wood', 'spear_wood', 'axe_wood', 'hammer_wood', 'hoe_wood'] },
+  'weapons-bone': { cols: 5, rows: 1, pad: 8, rev: '538fb160', keys: ['sword_bone', 'bow_bone', 'spear_bone', 'axe_bone', 'hammer_bone'] },
+  'weapons-copper': { cols: 5, rows: 1, pad: 8, rev: '3ba67944', keys: ['sword_copper', 'bow_copper', 'spear_copper', 'axe_copper', 'hammer_copper'] },
+  'weapons-iron': { cols: 5, rows: 1, pad: 8, rev: '016fe477', keys: ['sword_iron', 'bow_iron', 'spear_iron', 'axe_iron', 'hammer_iron'] },
+  'weapons-verdane': { cols: 5, rows: 1, pad: 8, rev: '8d87fa43', keys: ['sword_verdane', 'bow_verdane', 'spear_verdane', 'axe_verdane', 'hammer_verdane'] },
+  'weapons-caerite': { cols: 5, rows: 1, pad: 8, rev: 'e53234ae', keys: ['sword_caerite', 'bow_caerite', 'spear_caerite', 'axe_caerite', 'hammer_caerite'] },
+  'weapons-orivane': { cols: 5, rows: 1, pad: 8, rev: 'ce3f13a8', keys: ['sword_orivane', 'bow_orivane', 'spear_orivane', 'axe_orivane', 'hammer_orivane'] },
+  'weapons-auralith': { cols: 5, rows: 1, pad: 8, rev: '2cc7d6d2', keys: ['sword_auralith', 'bow_auralith', 'spear_auralith', 'axe_auralith', 'hammer_auralith'] },
+  // the weapons' abilities and the dash (opaque: the 8 px gutters keep a neighbour from bleeding in at the edges)
+  'abilities': { cols: 4, rows: 4, pad: 8, rev: 'ce2d958b', keys: ['slash', 'whirl', 'lunge', 'shoot', 'volley', 'rain', 'thrust', 'flurry', 'harpoon', 'chop', 'axethrow', 'rend', 'smash', 'groundsmash', 'charge', 'dash'] },
+  // the bar's pack/build/map and the buttons beside the backpack
+  'actions': { cols: 3, rows: 2, pad: 8, rev: '904828f3', keys: ['bag', 'hammer', 'map', 'act-trash', 'act-refine', 'act-stash'] },
+  // the build bar's painted pieces and stations
+  'stations': { cols: 5, rows: 3, pad: 8, rev: 'c89e0dea', keys: ['floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable', 'barrel', 'hearthCook'] },
+  // emptyBottle (corked) is the potions' base painting; bottleOpen is the Empty Bottle's icon
+  'materials': { cols: 5, rows: 3, pad: 8, rev: '59294f53', keys: ['stone', 'wood', 'planks', 'stoneBlock', 'bone', 'hide', 'leather', 'roughSandstone', 'sand', 'glassPane', 'boneDust', 'emptyBottle', 'bottleOpen'] },
+  // crops and kitchen goods
+  'crops': { cols: 3, rows: 2, pad: 8, rev: 'a4a0952d', keys: ['wheat', 'carrot', 'potato', 'flour', 'bread', 'rawMeat'] },
+  // ores on the top row, ingots under them
+  'metals': { cols: 6, rows: 2, pad: 8, rev: '8e48c388', keys: ['copperOre', 'ironOre', 'verdaneOre', 'caeriteOre', 'orivaneOre', 'auralithOre', 'copperIngot', 'ironIngot', 'verdaneIngot', 'caeriteIngot', 'orivaneIngot', 'auralithIngot'] },
+};
+// </atlas>
+const ATLAS_AT = {};   // icon -> [sheet, cell]
+for (const [n, a] of Object.entries(PAINT_ATLAS)) a.keys.forEach((k, i) => { ATLAS_AT[k] = [n, i]; });
+const atlasUrl = (n, px) => `icons/atlas/${n}-${px}.webp?v=${PAINT_ATLAS[n].rev}`;
+const CLEAR_PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+// a cell's place in its sheet, as CSS background (or mask) size and position percentages (the box shows the cell's
+// 256 px without its gutter: the sheet is laid over the box at sheet/256 of its size, and placed so the cell's corner,
+// gutter in, sits on the box's), and in pixels (px: the sheet's cell size, 128 or 256) for drawing it into a canvas
+function atlasCell(k) {
+  const [n, i] = ATLAS_AT[k], { cols, rows, pad } = PAINT_ATLAS[n], c = i % cols, r = Math.floor(i / cols), st = 256 + 2 * pad;
+  const w = cols * st, h = rows * st, at = (j, len) => len > 256 ? (j * st + pad) / (len - 256) * 100 : 0;
+  return { n, size: `${w / 256 * 100}% ${h / 256 * 100}%`, x: at(c, w), y: at(r, h), rect: px => [(c * st + pad) * px / 256, (r * st + pad) * px / 256, px, px] };
+}
+function atlasImg(k) {
+  const a = atlasCell(k), u1 = atlasUrl(a.n, 128), u2 = atlasUrl(a.n, 256);
+  // (fetched and decoded as the game loads, the sheet the screen will use, like the single paintings)
+  const want = (devicePixelRatio || 1) > 1 ? u2 : u1;
+  if (!paintKept.has(want)) { const im = new Image(); im.src = want; if (im.decode) im.decode().catch(() => {}); paintKept.set(want, im); }
+  const set = `url('${u1}') 1x, url('${u2}') 2x`;
+  return `<img class="paint" data-paint="${k}" src="${CLEAR_PX}" style="background-image: -webkit-image-set(${set}); background-image: image-set(${set}); background-size: ${a.size}; background-position: ${a.x}% ${a.y}%; background-repeat: no-repeat" alt="" draggable="false">`;
+}
 function preloadPaint(k, sizes) {
   const key = k + '|' + sizes;
   if (paintKept.has(key)) return;
@@ -20337,7 +20412,8 @@ function preloadPaint(k, sizes) {
   if (im.decode) im.decode().catch(() => {});
   paintKept.set(key, im);
 }
-const paintImg = (k, sizes) => (preloadPaint(k, sizes), `<img class="paint" src="icons/paint/${k}-128.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`);
+// (v867) a painting in a sheet (all of them, since v867) is its cell; the single-file form stays for one not in a sheet yet
+const paintImg = (k, sizes) => ATLAS_AT[k] ? atlasImg(k) : (preloadPaint(k, sizes), `<img class="paint" src="icons/paint/${k}-128.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`);
 for (const k of ['dash', 'bag', 'hammer', 'map', 'floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable', 'barrel']) BAR_ICON[k] = paintImg(k, 'max(66px, calc(9.8vh - 14px))');
 // (v803) the hearth is the cooking hearth now: Jordan's painting of it (icons/paint/src/build-cooking-hearth-256x256.png)
 BAR_ICON.hearth = paintImg('hearthCook', 'max(66px, calc(9.8vh - 14px))');
@@ -20381,46 +20457,8 @@ ICON.emptyBottle = paintImg('bottleOpen', 'max(34px, 5.12vh)');
 // weapons on purpose so it stands apart from them; the bar's TILL shows it too
 ICON.hoe_wood = paintImg('hoe_wood', 'max(34px, 5.12vh)');
 BAR_ICON.hoe = paintImg('hoe_wood', 'max(26px, calc(4.9vh - 14px))');
-// (v655, Jordan's missing-icons pack and torso body-type delta, art/deliveries) the twelve buildables still drawn in
-// pixels and all 32 armor pieces, painted, plus a male torso for each armor set and a female starting shirt. Packed
-// into atlases (icons/atlas/<name>-128/-256.webp, one a set) rather than a file an icon: the artifact holds at most 511
-// files. An atlas icon is still an <img class="paint"> (a clear pixel) with its cell as a background, so every place
-// that sizes, outlines or flies an icon treats it as before. image-set picks the 128 or 256 sheet by the screen's pixel
-// ratio. The buildables have their black contour painted in; the armor gets the usual runtime outline.
-const PAINT_ATLAS = {
-  'armor-leather': [5, 1, ['leatherArmor', 'leatherArmor_male', 'leatherPants', 'leatherBoots', 'leatherHelmet']],
-  'armor-bone': [5, 1, ['boneArmor', 'boneArmor_male', 'bonePants', 'boneBoots', 'boneHelmet']],
-  'armor-chain': [5, 1, ['chainArmor', 'chainArmor_male', 'chainPants', 'chainBoots', 'chainHelmet']],
-  'armor-plate': [5, 1, ['plateArmor', 'plateArmor_male', 'platePants', 'plateBoots', 'plateHelmet']],
-  'armor-verdane': [5, 1, ['verdaneArmor', 'verdaneArmor_male', 'verdanePants', 'verdaneBoots', 'verdaneHelmet']],
-  'armor-caerite': [5, 1, ['caeriteArmor', 'caeriteArmor_male', 'caeritePants', 'caeriteBoots', 'caeriteHelmet']],
-  'armor-orivane': [5, 1, ['orivaneArmor', 'orivaneArmor_male', 'orivanePants', 'orivaneBoots', 'orivaneHelmet']],
-  'armor-auralith': [5, 1, ['auralithArmor', 'auralithArmor_male', 'auralithPants', 'auralithBoots', 'auralithHelmet']],
-  'build': [4, 3, ['woodstairs', 'stonestairs', 'woodwindow', 'stonewindow', 'fence', 'stonefence', 'ironfence', 'gate', 'irondoor', 'irongate', 'crate', 'chest']],
-  'starter-fem': [1, 1, ['clothShirt_female']],
-  // (v855, Jordan's Emberwild_Sandstone_Icons: the sandstone build row and the sandstone blocks)
-  'sandstone': [4, 2, ['sandfloor', 'sandtimber', 'sandtimberwindow', 'sandwall', 'sandwindow', 'sandfence', 'sandstoneBlock']],
-  // (v864, Jordan's grilled steak and steak-and-potatoes paintings, icons/paint/src/food: the cooked dishes)
-  'food': [2, 1, ['cookedMeat', 'meatPotatoes']],
-};
-const ATLAS_AT = {};   // icon -> [atlas, cols, rows, cell]
-for (const [n, [cols, rows, keys]] of Object.entries(PAINT_ATLAS)) keys.forEach((k, i) => { ATLAS_AT[k] = [n, cols, rows, i]; });
-const atlasUrl = (n, px) => `icons/atlas/${n}-${px}.webp?v=${PAINT_REV}`;
-const CLEAR_PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-// a cell's place in its sheet, as CSS background (or mask) size and position percentages
-function atlasCell(k) {
-  const [n, cols, rows, i] = ATLAS_AT[k], c = i % cols, r = Math.floor(i / cols);
-  return { n, size: `${cols * 100}% ${rows * 100}%`, x: cols > 1 ? c / (cols - 1) * 100 : 0, y: rows > 1 ? r / (rows - 1) * 100 : 0 };
-}
-function atlasImg(k) {
-  const a = atlasCell(k), u1 = atlasUrl(a.n, 128), u2 = atlasUrl(a.n, 256);
-  // (fetched and decoded as the game loads, the sheet the screen will use, like the single paintings)
-  const want = (devicePixelRatio || 1) > 1 ? u2 : u1;
-  if (!paintKept.has(want)) { const im = new Image(); im.src = want; if (im.decode) im.decode().catch(() => {}); paintKept.set(want, im); }
-  const set = `url('${u1}') 1x, url('${u2}') 2x`;
-  return `<img class="paint" data-paint="${k}" src="${CLEAR_PX}" style="background-image: -webkit-image-set(${set}); background-image: image-set(${set}); background-size: ${a.size}; background-position: ${a.x}% ${a.y}%; background-repeat: no-repeat" alt="" draggable="false">`;
-}
-for (const k of Object.keys(ATLAS_AT)) if (!/_male$|_female$/.test(k)) { ICON[k] = atlasImg(k); if (BAR_ICON[k]) BAR_ICON[k] = ICON[k]; }
+// (the item sheets' icons are the items' own: armor, the v655 buildables, sandstone, food, starting clothes)
+for (const [n, a] of Object.entries(PAINT_ATLAS)) if (a.items) for (const k of a.keys) if (!/_male$|_female$/.test(k)) { ICON[k] = atlasImg(k); if (BAR_ICON[k]) BAR_ICON[k] = ICON[k]; }
 // a torso's icon follows your body type everywhere it's shown (pack, doll, crafting, tips): the armor sets' own
 // paintings are the feminine cut, *_male the masculine; the starting shirt's painting the masculine, clothShirt_female
 // the feminine. Called again when the body type changes in Options (setLook).
@@ -20597,23 +20635,25 @@ function potionPaint(g, out, F, tint, st = {}) {
   return { ys: ys / s, cx: cx / s, W: W / s, H: H / s };
 }
 // The icons: the painting's 128 and 256 measured once, each colour painted into both and handed to its <img> as a
-// srcset of blob images, like the single paintings (the browser picks the sheet). Until they're made a potion shows the
-// empty bottle. Made again when a value or colour is let go in T > Potion bottles, or by its Redraw button.
+// srcset of blob images, like the single paintings (the browser picks the sheet). Until they're made (a moment into the load,
+// once the corked bottle's sheet is in; v867) a potion's square is clear. Made again when a value or colour is let go in T > Potion bottles, or by its Redraw button.
 // (v741, Jordan: v729-731 made them with canvas.toBlob, which the browser only got round to while the game wasn't
 // drawing, so they changed on alt-tab: now each is encoded at once with toDataURL, and every potion <img> on screen
 // gets its new src, which the browser always redraws)
 const POTION_GEOM = {};
-const potionEmpty = n => `icons/paint/emptyBottle-${n}.webp?v=${PAINT_REV}`;
+// (v867) the corked bottle is a cell of the materials sheet: potionEmpty is its sheet, and the loader below cuts it out
+const potionEmpty = n => atlasUrl(atlasCell('emptyBottle').n, n);
 const POTION_SIZES = 'max(34px, 5.12vh)';
 const potionImgHtml = (c, u1, u2) => `<img class="paint" data-potion="${c}" src="${u1}" srcset="${u1} 128w, ${u2} 256w" sizes="${POTION_SIZES}" alt="" draggable="false">`;
-for (const [k, it] of Object.entries(POTION_ITEMS)) ICON[k] = potionImgHtml(it.potion, potionEmpty(128), potionEmpty(256));
+// (a clear pixel until the bottle's sheet is in, a moment into the load: then each potion gets its own painting)
+for (const [k, it] of Object.entries(POTION_ITEMS)) ICON[k] = potionImgHtml(it.potion, CLEAR_PX, CLEAR_PX);
 let potionUrls = [];
 for (const n of [128, 256]) {
   const im = new Image();
   im.onload = () => {
     try {
       const cv = document.createElement('canvas'); cv.width = cv.height = n;
-      const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(im, 0, 0, n, n);
+      const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(im, ...atlasCell('emptyBottle').rect(n), 0, 0, n, n);
       POTION_GEOM[n] = potionGeom(cx.getImageData(0, 0, n, n).data, n, n);
       if (POTION_GEOM[128] && POTION_GEOM[256]) potionIcons();
     } catch (e) { console.warn('potion bottles', e); }
