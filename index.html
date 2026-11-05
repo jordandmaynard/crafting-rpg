@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 818;
+const GAME_VERSION = 819;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8286,6 +8286,28 @@ function moverRows() {
   }
   for (const k of MOVER_SEEN) if (!out.has(k)) out.set(k, 0);
   for (const [k, n] of [...out].sort((a, b) => b[1] - a[1])) { MOVER_SEEN.add(k); prof.count('moving: ' + k, n); }
+  sceneRows();
+}
+// (v819, Jordan: the GPU waits longer after fighting, building and farming a while) G > Scene contents: what the
+// scene holds, by the same top-level groups, and a few of the game's own lists, to see what grows as you play
+const SCENE_SEEN = new Set();
+function sceneRows() {
+  const out = new Map();
+  let all = 0, shown = 0, tops = 0;
+  for (const top of scene.children) {
+    tops++;
+    let n = 0;
+    const walk = (o, vis) => { n++; vis = vis && o.visible; if (vis && o.isMesh) shown++; for (const c of o.children) walk(c, vis); };
+    walk(top, true);
+    all += n;
+    const k = MOVER_TAG.get(top) || (top.matrixStill ? 'world chunk meshes' : top.isLight ? 'lights' : top.isInstancedMesh ? 'instanced meshes (crowds, props)' : top.isMesh ? 'other single meshes' : 'other groups');
+    out.set(k, (out.get(k) || 0) + n);
+  }
+  prof.count('in scene: objects, all', all); prof.count('in scene: meshes showing', shown); prof.count('in scene: top-level objects', tops);
+  for (const k of SCENE_SEEN) if (!out.has(k)) out.set(k, 0);
+  for (const [k, n] of [...out].sort((a, b) => b[1] - a[1])) { SCENE_SEEN.add(k); prof.count('in scene: ' + k, n); }
+  prof.count('in scene: foes (list)', foes.length); prof.count('in scene: effects running', fxRun.live.length);
+  prof.count('in scene: planted squares', CROPS.size);
 }
 // distance haze (T > Haze): from FOG.start tiles beyond the hero to FOG.end, toward the sky's colour
 const FOG = { on: 1, start: 0, end: 31, amount: 0.8, day: '#b8c4d8', dusk: '#d8a890', night: '#020203' };
