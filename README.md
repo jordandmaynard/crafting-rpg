@@ -590,6 +590,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v807:** (Jordan) The start screen is now a small Wanderer's Kit window in the middle of the screen while the world loads: the progress bar, the seed, the version and Set Out. The title and the long how-to list are gone (a help menu in settings comes later). It reuses kit pieces: the parchment panel (panel-window.webp), the belt's XP frame and gold fill as the bar, and the crafting window's Craft button as Set Out. The loading stage text (SHAPING THE WORLD and so on) is kept for screen readers only. Space, Enter or the pad's A still set out once it's ready.
 
+**v808:** (Jordan: clicking the ground with the hoe didn't till) Fixed: the hoe shows the open hand cursor, and a click with the hand cursor was always taken as F (use what's near), so the hoe never chopped. A click now does F's job only when the cursor is actually over something to use; otherwise, with the hoe in hand, it hoes the square under the cursor. (v802's check called the hoe directly, past the mouse, which is how it was missed.)
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
