@@ -71,6 +71,7 @@ body { margin: 0; padding-left: max(16px, env(safe-area-inset-left, 0px)); paddi
 .lvl { position: absolute; right: calc(100% + 6px); top: 50%; transform: translateY(-50%); width: 30px; height: 30px; box-sizing: border-box; display: grid; place-items: center; border-radius: 50%; background: var(--panel, #282430); border: 2px solid #000; box-shadow: inset 0 0 0 2px var(--hb-fill, #e8b830), 2px 2px 0 #000; font-family: var(--display); font-size: 13px; line-height: 1; color: var(--bone); }
 .float.gain { left: 0; top: 0; animation: none; display: flex; align-items: center; gap: 4px; will-change: transform, opacity; }
 .float.gain .gi { display: flex; }
+.float.gain .gn { display: inline-block; margin-right: var(--gg, 4px); }
 .float.gain .gi:empty { display: none; }
 .float.gain .gi > img, .float.gain .gi > svg, .float.gain .gi > canvas { width: var(--gi, 22px); height: var(--gi, 22px); display: block; image-rendering: pixelated;
   filter: drop-shadow(1px 0 0 #000) drop-shadow(-1px 0 0 #000) drop-shadow(0 1px 0 #000) drop-shadow(0 -1px 0 #000); }
@@ -1390,7 +1391,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 835;
+const GAME_VERSION = 836;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -22106,12 +22107,16 @@ function floatText(text, x, y, z, color) {
 // of the same item while it's still holding adds to its count instead (the +count pulses toward white, the whole fly-up swells, for
 // GAIN_FLY.pulse seconds) and starts its hold again; a different item gets its own, stacked above any still holding
 // there. Damage, healing, XP and the like keep floatText.
-const GAIN_FLY = { hold: 1, rise: 0.9, risePx: 28, steps: 0, pulse: 0.5, pulseMix: 85, pulseGrow: 0.25, iconSize: 22, stack: 0.35 };
+// (v836, Jordan) gains merge only from the same spot: the same tile (a tree's or rock's own, or the one the hero stood on
+// for pickups and crops). A new fly-up pops in with the pulse too, and the +count can glow past white: GAIN_FLY.glow
+// overdrives its brightness at the pulse's peak, glowSize puts a halo of its color round it. gap: the space between the
+// +count and the name (pixels; the font's own space was a whole wide cell).
+const GAIN_FLY = { hold: 1, rise: 0.9, risePx: 28, steps: 0, pulse: 0.5, pulseMix: 85, pulseGrow: 0.25, glow: 1, glowSize: 6, gap: 4, iconSize: 22, stack: 0.35 };
 const gains = [], gainV = new GFX.Vector3();
-function floatGain(id, n, x, y, z, color = '#e8c08a') {
+function floatGain(id, n, x, y, z, color = '#e8c08a', at = T(Math.floor(x), Math.floor(z))) {
   if (!(n > 0) || !ITEMS[id]) return;
   const name = ITEMS[id].name.toUpperCase(), held = g => g.t < GAIN_FLY.hold;
-  const same = gains.find(g => g.id === id && held(g));
+  const same = gains.find(g => g.id === id && g.at === at && held(g));
   if (same) { same.n += n; same.t = 0; same.pulse = 1; same.num.textContent = '+' + same.n; return; }
   if (gains.length > 24) return;
   // (a gain by another still holding there stands above it)
@@ -22119,10 +22124,10 @@ function floatGain(id, n, x, y, z, color = '#e8c08a') {
   while (gains.some(g => g.slot === slot && held(g) && Math.hypot(g.x - x, g.z - z) < 1.5 && Math.abs(g.y0 - y) < 1)) slot++;
   const el = document.createElement('div');
   el.className = 'float gain';
-  el.innerHTML = `<span class="gt"><span class="gn"></span> <span class="gw"></span></span><span class="gi">${ICON[ITEMS[id].icon] || ''}</span>`;
+  el.innerHTML = `<span class="gt"><span class="gn"></span><span class="gw"></span></span><span class="gi">${ICON[ITEMS[id].icon] || ''}</span>`;
   const txt = el.firstChild, num = txt.firstChild; num.textContent = '+' + n; txt.lastChild.textContent = name; txt.style.color = color;
   $('fx').appendChild(el);
-  const g = { id, n, x, y0: y, y: y + slot * GAIN_FLY.stack, z, slot, color, el, txt, num, t: 0, pulse: 0 };
+  const g = { id, n, at, x, y0: y, y: y + slot * GAIN_FLY.stack, z, slot, color, el, txt, num, t: 0, pulse: 1 };
   gains.push(g);
   placeGain(g, cv.getBoundingClientRect());
 }
@@ -22135,8 +22140,12 @@ function placeGain(g, rect) {
   g.el.style.transform = `translate(${(rect.left + (gainV.x + 1) / 2 * rect.width).toFixed(1)}px, ${(rect.top + (1 - gainV.y) / 2 * rect.height - u * G.risePx).toFixed(1)}px) translate(-50%, -50%) scale(${(1 + G.pulseGrow * p).toFixed(3)})`;
   g.el.style.opacity = (1 - u).toFixed(3);
   g.el.style.setProperty('--gi', G.iconSize + 'px');
-  // (v835, Jordan) the whole fly-up swells about its middle (above); only the +count pulses color
-  g.num.style.color = p > 0.01 ? `color-mix(in srgb, ${g.color}, #fff ${(G.pulseMix * p).toFixed(1)}%)` : '';
+  g.el.style.setProperty('--gg', G.gap + 'px');
+  // (v835, Jordan) the whole fly-up swells about its middle (above); only the +count pulses color (and glows, v836)
+  const on = p > 0.01, c = on ? `color-mix(in srgb, ${g.color}, #fff ${(G.pulseMix * p).toFixed(1)}%)` : '';
+  g.num.style.color = c;
+  g.num.style.filter = on && G.glow > 0 ? `brightness(${(1 + G.glow * p).toFixed(3)})` : '';
+  g.num.style.textShadow = on && G.glowSize > 0 ? `2px 2px 0 #000, 0 0 ${(G.glowSize * p).toFixed(2)}px ${c}, 0 0 ${(G.glowSize * p * 0.5).toFixed(2)}px ${c}` : '';
 }
 function updateGains(dt) {
   if (!gains.length) return;
@@ -32343,12 +32352,15 @@ const TUNING = [
     [WORLD, 'tileHeight', 'Tile height per level (2 the default, as tall as a wall; 1 the old height, 0.5 half; ramps 3 tiles long above 1.25). Letting go rebuilds this world from scratch', 0.5, 2, 0.25, rebuildWorld],
   ]],
   ['Fly-ups', [
-    [GAIN_FLY, 'hold', 'Resource fly-ups: seconds one holds still before it rises (more of the same resource in that time adds to it and starts the hold again)', 0, 4, 0.05],
+    [GAIN_FLY, 'hold', 'Resource fly-ups: seconds one holds still before it rises (more of the same resource from the same tile in that time adds to it and starts the hold again)', 0, 4, 0.05],
     [GAIN_FLY, 'rise', 'Seconds it takes to rise and fade', 0.2, 3, 0.05],
     [GAIN_FLY, 'risePx', 'How far it rises (screen pixels)', 0, 120, 1],
     [GAIN_FLY, 'steps', 'Rise in this many steps (0 = smooth; the old fly-ups used 9)', 0, 20, 1],
     [GAIN_FLY, 'pulse', 'Seconds the pulse lasts when more is added', 0.05, 2, 0.05],
     [GAIN_FLY, 'pulseMix', 'Pulse: how far the +count turns toward white (%)', 0, 100, 1],
+    [GAIN_FLY, 'glow', 'Pulse: +count brightness overdrive at the peak (0 = none; 1 = twice as bright)', 0, 4, 0.05],
+    [GAIN_FLY, 'glowSize', 'Pulse: glow halo round the +count (pixels, 0 = none)', 0, 24, 0.5],
+    [GAIN_FLY, 'gap', 'Space between the +count and the name (pixels)', 0, 16, 0.5],
     [GAIN_FLY, 'pulseGrow', 'Pulse: how much the fly-up (text and icon) swells (× size)', 0, 2, 0.01],
     [GAIN_FLY, 'iconSize', 'Resource icon size beside the text (pixels)', 8, 64, 1],
     [GAIN_FLY, 'stack', 'Height between different resources\' fly-ups at one spot (tiles)', 0.1, 1, 0.01],
