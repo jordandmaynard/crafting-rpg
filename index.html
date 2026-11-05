@@ -1416,7 +1416,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 864;
+const GAME_VERSION = 865;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8442,6 +8442,80 @@ const maskRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, m
 maskRT.depthTexture = new GFX.DepthTexture(1, 1); maskRT.depthTexture.type = GFX.UnsignedIntType;
 maskRT.colorFormat = 'rgba8unorm';
 if (MOBILE) proxyRT.colorFormat = 'rgba8unorm';
+// (v865, Jordan) the foe under the mouse (or your pad's aim, as pickFoe finds it) has its outline drawn in
+// FOE_HOVER.color instead of black, with a glow round it: glow, how bright (0 none), size, how many mosaic pixels out it
+// reaches. The foe alone is drawn again into hoverRT (its depth only matters), and the outline pass strokes red the
+// stroked pixels where that depth is the picture's own (the foe shows there, not hidden behind a wall or tree), and
+// lays the glow round them. T > Enemy hover outline.
+const FOE_HOVER = { on: 1, color: '#ff2a1a', glow: 0.6, size: 3 };
+const hoverRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
+hoverRT.depthTexture = new GFX.DepthTexture(1, 1); hoverRT.depthTexture.type = GFX.UnsignedIntType;
+hoverRT.colorFormat = 'rgba8unorm';
+const hoverScene = new GFX.Scene();
+const hoverMat = new GFX.MeshBasicMaterial({ color: '#ffffff', side: GFX.DoubleSide });
+const HOVER_BONES = 64;
+const HOVER_FOLK_WGSL = /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f }
+@vertex fn vs(v: VIn) -> VOut {
+  let k = u32(v.bone + 0.5) * 4u;
+  let m = mat4x4f(U.bones[k], U.bones[k + 1u], U.bones[k + 2u], U.bones[k + 3u]);
+  return VOut(F.viewProj * (m * vec4f(v.position, 1.0)));
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f { return vec4f(1.0); }`;
+const hoverFolkMat = new GFX.ShaderMaterial({ uniforms: { bones: { value: new Float32Array(HOVER_BONES * 16) } }, attributes: { bone: 'f32' }, code: HOVER_FOLK_WGSL, side: GFX.DoubleSide });
+hoverMat.noBundle = hoverFolkMat.noBundle = true;
+let hoverFoe = null, hoverShown = null, hoverMeshes = [];
+const hoverBox = { x0: 0, y0: 0, x1: -1, y1: -1 }, hoverTint = new GFX.Color();
+// the meshes that draw foe f alone: a crowd foe's pieces, each on its joint, or a person's baked mesh on its own bones
+function hoverBuild(f) {
+  for (const m of hoverMeshes) { hoverScene.remove(m); if (m.userData.own) m.geometry.dispose(); }
+  hoverMeshes = []; hoverShown = f;
+  if (!f) return;
+  const add = (geo, mat, own) => {
+    const m = new GFX.Mesh(geo, mat);
+    m.matrixAutoUpdate = false; m.frustumCulled = false; m.castShadow = m.receiveShadow = false; m.userData.own = own;
+    hoverScene.add(m); hoverMeshes.push(m);
+    return m;
+  };
+  if (f.crowd) { for (const pc of f.crowd.pieces) add(pc.mesh.geometry, hoverMat, false).userData.joint = pc.joint; return; }
+  const P = f.folk, M = P && P.mesh;
+  if (!M || P.bones.length > HOVER_BONES) return;
+  const geo = new GFX.BufferGeometry();
+  geo.setAttribute('position', new GFX.BufferAttribute(Float32Array.from(M.pos), 3));
+  geo.setAttribute('bone', new GFX.BufferAttribute(Float32Array.from(M.bone), 1));
+  geo.setIndex(new GFX.BufferAttribute(Uint32Array.from(M.idx), 1));
+  add(geo, hoverFolkMat, true);
+}
+// draw the hovered foe into hoverRT and find its box on screen (mosaic pixels, room left for the glow); says whether
+// there's one to draw
+function drawHoverMask() {
+  const f = FOE_HOVER.on > 0.5 && hoverFoe && hoverFoe.hp > 0 && foes.includes(hoverFoe) && hoverFoe.g.visible ? hoverFoe : null;
+  if (f !== hoverShown) hoverBuild(f);
+  if (!f || !hoverMeshes.length) return false;
+  if (f.crowd) for (const m of hoverMeshes) m.matrix.copy(f.joints[m.userData.joint].matrixWorld);
+  else {
+    const P = f.folk, B = hoverFolkMat.uniforms.bones.value;
+    P.bones.forEach((o, j) => B.set(P.chains[j].every(q => q.visible) ? o.matrixWorld.elements : ZERO16, j * 16));
+  }
+  // its box: the corners round it, from its feet to over its head, projected (one behind the camera: the whole screen)
+  const res = outlineMat.uniforms.res.value, p = f.g.position, r = (f.def.rad || 0.4) * 2 + 0.7, top = foeTop(f) + 0.7;
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, behind = false;
+  for (let k = 0; k < 8; k++) {
+    v3.set(p.x + (k & 1 ? r : -r), k & 2 ? top : p.y - 0.3, p.z + (k & 4 ? r : -r)).project(camera);
+    if (v3.z > 1 || v3.z < -1) { behind = true; break; }
+    const sx = (v3.x + 1) / 2 * res.x, sy = (1 - v3.y) / 2 * res.y;
+    x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+  }
+  if (behind) { x0 = y0 = 0; x1 = res.x; y1 = res.y; }
+  if (x1 < 0 || y1 < 0 || x0 > res.x || y0 > res.y) return false;
+  Object.assign(hoverBox, { x0: Math.floor(x0), y0: Math.floor(y0), x1: Math.ceil(x1), y1: Math.ceil(y1) });
+  renderer.setRenderTarget(hoverRT);
+  renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.passName = 'hovered foe';
+  camera.layers.set(0); renderer.render(hoverScene, camera);
+  renderer.setClearColor('#0b0912', 1);
+  return true;
+}
 const reflCam = new GFX.PerspectiveCamera(VIEW.fov, 1, 1, 400);
 // the water level to mirror in: the boat you're on, else the boat or dock nearest the camera's target (within
 // PROXY_NEAR tiles); null when there's none
@@ -8517,7 +8591,9 @@ const outlineMat = new GFX.ShaderMaterial({
     span: { value: 1 }, dist: { value: 0.6 }, thick: { value: 1 }, strength: { value: 1 }, color: { value: new GFX.Color() },
     ss: { value: 1 }, persp: { value: 0 }, near: { value: 1 }, far: { value: 2 }, fogNear: { value: 1e5 }, fogFar: { value: 1e5 + 1 },
     gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 },
-    tHeat: { value: heatRT.texture }, useHeat: { value: 0 }, odView: { value: 0 } },
+    tHeat: { value: heatRT.texture }, useHeat: { value: 0 }, odView: { value: 0 },
+    tHover: { value: hoverRT.depthTexture }, hovOn: { value: 0 }, hovCol: { value: { x: 1, y: 0.16, z: 0.1, w: 0.6 } }, hovBox: { value: { x: 0, y: 0, z: -1, w: -1 } },
+    hovB: { value: { x: 3, y: 0, z: 0.25, w: 0 } } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -8526,11 +8602,34 @@ struct VOut { @builtin(position) pos: vec4f }
 fn mid(px: vec2f) -> vec2i { return vec2i(clamp(px, vec2f(0.0), U.res - 1.0) * U.ss + floor(U.ss * 0.5)); }
 // depth back from the near plane in world units (empty sky reads as far): linear for the orthographic
 // camera, unprojected for the perspective one
-fn depthAt(px: vec2f) -> f32 {
-  let d = textureLoad(tDepth, mid(px), 0);
+fn linDepth(d: f32) -> f32 {
   if (U.persp < 0.5) { return d * U.span; }
   let z = d * 2.0 - 1.0;
   return 2.0 * U.near * U.far / (U.far + U.near - z * (U.far - U.near)) - U.near;
+}
+fn depthAt(px: vec2f) -> f32 { return linDepth(textureLoad(tDepth, mid(px), 0)); }
+// (v865) is the hovered foe what shows at mosaic pixel px? (drawn into tHover there, and no nearer than the picture's
+// own depth by more than hovB.z tiles: not hidden behind anything)
+fn hovAt(px: vec2f) -> bool {
+  if (px.x < U.hovBox.x || px.y < U.hovBox.y || px.x > U.hovBox.z || px.y > U.hovBox.w || px.x < 0.0 || px.y < 0.0 || px.x >= U.res.x || px.y >= U.res.y) { return false; }
+  let d = textureLoad(tHover, mid(px), 0);
+  if (d >= 0.99999) { return false; }
+  return linDepth(d) <= depthAt(px) + U.hovB.z;
+}
+// how much of the hovered foe's glow lies on mosaic pixel px: none on the foe itself, fading out hovB.x pixels round it
+fn hovGlow(px: vec2f) -> f32 {
+  let R = U.hovB.x;
+  if (R < 0.5 || px.x < U.hovBox.x - R || px.y < U.hovBox.y - R || px.x > U.hovBox.z + R || px.y > U.hovBox.w + R || hovAt(px)) { return 0.0; }
+  var g = 0.0;
+  for (var dy = -6; dy <= 6; dy++) {
+    for (var dx = -6; dx <= 6; dx++) {
+      let o = vec2f(f32(dx), f32(dy)); let l = length(o);
+      if (l > R + 0.5 || l < 0.5) { continue; }
+      let k = 1.0 - l / (R + 1.0);
+      if (k > g && hovAt(px + o)) { g = k; }
+    }
+  }
+  return g * g;
 }
 fn edgeHash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
 fn edgeNoise(p: vec2f) -> f32 {
@@ -8599,11 +8698,16 @@ fn odHeat(n: f32) -> vec3f {
         if (depthAt(px + o) - t > U.dist) { e = 1.0; }
       }
     }
-    col = mix(col, U.color, e * U.strength * haze);
+    // (v865) the hovered foe's strokes in its colour
+    var lc = U.color;
+    if (U.hovOn > 0.5 && e > 0.0 && hovAt(px)) { lc = U.hovCol.xyz; }
+    col = mix(col, lc, e * U.strength * haze);
   }
   col = hazeApply(col, px);
   if (U.edgeA.w > 0.5) { col = mix(col, U.edgeB.xyz, edgeFog(px)); }
   col = postExpose(col) + bloomAt(px);
+  // (v865) the glow round the hovered foe
+  if (U.hovOn > 0.5 && U.hovCol.w > 0.0) { col += U.hovCol.xyz * (U.hovCol.w * hovGlow(px)); }
   // the grade (T > Picture): the black point taken out (white kept), contrast round the pivot, saturation
   col = max(col - U.gBlack, vec3f(0.0)) / max(1.0 - U.gBlack, 0.05);
   col = max((col - U.gPivot) * U.gContrast + U.gPivot, vec3f(0.0));
@@ -9288,6 +9392,15 @@ function renderWorld() {
     renderer.setClearColor('#0b0912', 1);
   }
   const u = outlineMat.uniforms;
+  // (v865) the hovered foe's outline colour and glow
+  const hovOn = !od && drawHoverMask();
+  u.hovOn.value = hovOn ? 1 : 0;
+  if (hovOn) {
+    hoverTint.set(FOE_HOVER.color);
+    Object.assign(u.hovCol.value, { x: hoverTint.r, y: hoverTint.g, z: hoverTint.b, w: Math.max(0, FOE_HOVER.glow) });
+    Object.assign(u.hovBox.value, { x: hoverBox.x0, y: hoverBox.y0, z: hoverBox.x1, w: hoverBox.y1 });
+    u.hovB.value.x = Math.max(0, Math.min(6, Math.round(FOE_HOVER.size)));
+  }
   u.useDepth.value = depthOn ? 1 : 0; u.grassLine.value = GRASS.outline; u.driftLine.value = DRIFT.outline;
   u.span.value = camera.far - camera.near; u.dist.value = OUTLINE.distance; u.thick.value = Math.round(OUTLINE.thickness);
   u.ss.value = ssNow; u.persp.value = camera === perspCam ? 1 : 0; u.near.value = camera.near; u.far.value = camera.far;
@@ -25714,7 +25827,7 @@ function updateFoeBars(dt) {
     else if (f.barAge >= HPBAR.delay) f.shownHp += (hp - f.shownHp) * (1 - Math.exp(-HPBAR.trailRate * dt));
     if (f.barHeat) f.barHeat *= Math.exp(-HPBAR.flashFade * dt);
   }
-  const hov = pickFoe();
+  const hov = hoverFoe = pickFoe();
   if (hov) { hov.barT = HPBAR.hold; barFoes.add(hov); }
   const rect = cv.getBoundingClientRect();
   for (const f of barFoes) {
@@ -31437,7 +31550,7 @@ function resize() {
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   ssNow = ssFor(px);
   renderer.setSize(rw, rh, false);
-  outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); proxyRT.setSize(rw * ssNow, rh * ssNow); maskRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
+  outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); proxyRT.setSize(rw * ssNow, rh * ssNow); maskRT.setSize(rw * ssNow, rh * ssNow); hoverRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
   { const sw = rw * px + 'px', sh = rh * px + 'px'; if (cv.style.width !== sw) cv.style.width = sw; if (cv.style.height !== sh) cv.style.height = sh; }
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
@@ -34391,6 +34504,12 @@ const TUNING = [
     [OUTLINE, 'strength', 'Strength', 0, 1, 0.01],
     [OUTLINE, 'color', 'Outline colour', 'color'],
   ]],
+  ['Enemy hover outline', [
+    [FOE_HOVER, 'on', 'Colour the outline of the foe under the mouse (0 off, 1 on)', 0, 1, 1],
+    [FOE_HOVER, 'color', 'Outline colour', 'color'],
+    [FOE_HOVER, 'glow', 'Glow (how bright, 0 none)', 0, 3, 0.05],
+    [FOE_HOVER, 'size', 'Glow size (mosaic pixels)', 0, 6, 1],
+  ]],
 ];
 const TUNE_CLOSED_KEY = 'emberwild.tuneClosed';
 const tuneClosed = (() => { try { return new Set(JSON.parse(localStorage.getItem(TUNE_CLOSED_KEY) || '[]')); } catch (err) { return new Set(); } })();
@@ -35113,7 +35232,7 @@ window.GAME = {
   matTris: () => { const out = {}; scene.traverse(o => { if (!o.isMesh || !o.visible || !o.geometry || !o.geometry.attributes.position) return; const k = (typeof worldPart === 'function' ? worldPart(o) : 'x') + (o.layers.mask === 1 ? '' : ' L' + o.layers.mask); const n = o.geometry.attributes.position.count / 3; out[k] = (out[k] || 0) + Math.round(n); }); return out; },
   // (v565) effects: play one from FX_LIB d tiles ahead, and what's live
   fx: (name, d = 3) => !!fxTry(name, d), fxState: () => ({ live: fxRun.live.length, lights: fxRun.lights.length, now: fxParts.now, busy: fxParts.busy }),
-  compileShaders: () => { for (const m of [windowMat, outlineMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, fxParts.clearMat, fxParts.solidMat, fxParts.domeMat, glowMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
+  compileShaders: () => { for (const m of [windowMat, outlineMat, hoverFolkMat, trunkMat, plantMat, grassMat, driftMat, groundShapeMat, waterMulMat, waterAddMat, bogMulMat, bogAddMat, sprayMat, smokeMat, fxParts.clearMat, fxParts.solidMat, fxParts.domeMat, glowMat, ambMat, heatMat, spiderMat, lavaMat, groundHaze.material, lootMat('material')]) renderer._pipeline('shader', m, !!m.vertexColors, renderer.format); },
   get: () => ({ seed: SEED, ready: !$('start').disabled, started, x: H.x, z: H.z, y: H.y, hp: H.hp, wood: H.wood, stone: H.stone, kills: H.kills, mode, foes: foes.length, rooms: rooms.size, buildings: buildings.size, chunks: chunks.size, fps, genMs, chunkMs: chunkTime.ms / Math.max(1, chunkTime.n), chunksBuilt: chunkTime.n, clock, region: regionName, towns: towns.map(t => [t.c, t.r, t.name, (t.arm || []).map(a => a === Infinity ? -1 : a)]), reached: connectStats.reached }),
   stats: () => {
     const lv = new Array(MAXL + 1).fill(0), bi = new Array(BIOMES.length).fill(0), sh = new Array(LIFT.length).fill(0), ob = {};
