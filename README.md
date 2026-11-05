@@ -662,6 +662,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v852:** (Jordan: the icon reference shots were too bright to paint from) The studio has its own lights now, dimmer than the character view's: ICON_REF.sky 0.6 (was 0.95) and ICON_REF.sun 0.95 (was 1.5), both on sliders under T > Icon reference.
 **v853:** (Jordan) In the loading map, each new mosaic level fades in: the old level is copied onto a canvas over the map (#loadMapOld) and faded out over 0.6 s (GEN_MOSAIC.fade), from 8 x 8 blocks through to the hard pixel map and then the smooth one. The fade is a compositor opacity animation, so it keeps going while the world is being worked out.
+**v854:** (Jordan) The loading map's mosaic levels are 32, 16, 8, 4 and 2 tiles a block (GEN_MOSAIC.levels, each a fifth of the bar up to the map being painted), then 1 (the map itself) and the smooth pass, each fading in over the last.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
