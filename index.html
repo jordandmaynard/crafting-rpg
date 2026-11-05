@@ -1407,7 +1407,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 855;
+const GAME_VERSION = 856;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -31430,11 +31430,12 @@ const fogCtx = fogCv.getContext('2d');   // (kept on the GPU; anything that asks
 const MAP_RGB = PAL.map(p => [p.a.r * 255, p.a.g * 255, p.a.b * 255]);
 MAP_RGB[GRAVE] = [96, 94, 106];
 // (tileCls: what the colour is, for the smooth map's edges: 0 ground, 1 road or path, 2 river or lake, 3 sea,
-// 4 cliff rim, 5 built)
-let tileCls = 0;
+// 4 cliff rim, 5 built; tileRel: how much of its brightness is the old height relief, its level, ramp and cliff rim,
+// 0 when none, which the map's light (v856) can take back out: see mapColOf)
+let tileCls = 0, tileRel = 0;
 function tileRGB(i) {
   const c = i % N, r = (i - c) / N, L = LV[i];
-  tileCls = 0;
+  tileCls = 0; tileRel = 0;
   if (BR[i]) { tileCls = 5; return [150, 108, 62]; }
   if (CY[i]) return [34, 26, 24];
   if (LAVA[i]) return [232, 92, 30];
@@ -31446,19 +31447,20 @@ function tileRGB(i) {
   if (BEACH[i]) { if (BDIRT[i]) { R = 140; Gc = 104; B = 66; } else { R = 222; Gc = 196; B = 136; } }
   // (cyan, halfway in brightness between the beach and the water; the second row halfway between that and the sea)
   if (SHOAL[i]) { tileCls = 2; return WT[i] === 2 ? (SHOAL[i] & 512 ? [63, 137, 160] : [80, 170, 182]) : SHOAL[i] & 512 ? [61, 130, 152] : [80, 170, 182]; }
-  let f = 0.72 + L * 0.05;
+  let f = 0.72 + L * 0.05, rel = f;
   const o = OB[i];
   if (OBJ[o].tree) f *= 0.78;
-  if (o === O.HOUSE) { R = 168; Gc = 72; B = 58; f = 1; tileCls = 5; }
-  if (o === O.SHRINE) { R = 230; Gc = 220; B = 160; f = 1; }
-  if (SH[i]) f *= 1.08;
+  if (o === O.HOUSE) { R = 168; Gc = 72; B = 58; f = 1; rel = 0; tileCls = 5; }
+  if (o === O.SHRINE) { R = 230; Gc = 220; B = 160; f = 1; rel = 0; }
+  if (SH[i]) { f *= 1.08; rel *= 1.08; }
   // cliff edges a shade darker so the terraces read
-  if (!BEACH[i] && c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) { f *= 0.72; if (!tileCls) tileCls = 4; }
-  if (FIELD[i]) { if (fieldGrows(i) && cropOf(i) !== 'wheat') { R = 92; Gc = 130; B = 52; } else if (fieldGrows(i)) { R = 176; Gc = 146; B = 70; } else { R = 112; Gc = 76; B = 44; } f = 1; tileCls = 0; }   // ((v802) a bare tilled square of yours brown)
-  if (GROT[i] === 1) { R = 90; Gc = 220; B = 200; f = 1; }
-  if (OB[i] === O.STATUE || OB[i] === O.STATUEX) { R = 150; Gc = 112; B = 64; f = 1; }
-  if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; tileCls = 5; }
-  if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; tileCls = 5; }
+  if (!BEACH[i] && c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) { f *= 0.72; rel *= 0.72; if (!tileCls) tileCls = 4; }
+  if (FIELD[i]) { if (fieldGrows(i) && cropOf(i) !== 'wheat') { R = 92; Gc = 130; B = 52; } else if (fieldGrows(i)) { R = 176; Gc = 146; B = 70; } else { R = 112; Gc = 76; B = 44; } f = 1; rel = 0; tileCls = 0; }   // ((v802) a bare tilled square of yours brown)
+  if (GROT[i] === 1) { R = 90; Gc = 220; B = 200; f = 1; rel = 0; }
+  if (OB[i] === O.STATUE || OB[i] === O.STATUEX) { R = 150; Gc = 112; B = 64; f = 1; rel = 0; }
+  if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; rel = 0; tileCls = 5; }
+  if (WN[i] || WW[i]) { R = 74; Gc = 48; B = 32; f = 1; rel = 0; tileCls = 5; }
+  tileRel = rel;
   // structures stay hard pixels on the smooth map (v396): towns, farms and their fields, built floors, walls and
   // fences, bridges, and anything built (OBJ built: houses, wells, shrines, obelisks, stations, crates...)
   if (BI[i] === TOWN || FARM[i] || FIELD[i] || FL[i] || OBJ[o].built) tileCls = 5;
@@ -31477,21 +31479,138 @@ function mapKeyOf(i, R, Gc, B) {
   if (tileCls === 3 && WT[i] !== 2 && WT[i] !== 3) { R = 38; Gc = 90; B = 122; }
   mapKey[i * 4] = R; mapKey[i * 4 + 1] = Gc; mapKey[i * 4 + 2] = B; mapKey[i * 4 + 3] = tileCls;
 }
+// (v856) a tile's colour for the smooth map: with its height relief (tileRel) taken back out, and the relief in alpha
+// (relief / 1.5, 255 when it has none), so the shader can put as much of it back as T > Map light says
+function mapColOf(i, R, Gc, B) {
+  const k = tileRel ? 1 / tileRel : 1;
+  mapCol[i * 4] = Math.min(255, R * k); mapCol[i * 4 + 1] = Math.min(255, Gc * k); mapCol[i * 4 + 2] = Math.min(255, B * k);
+  mapCol[i * 4 + 3] = tileRel ? Math.round(tileRel / 1.5 * 255) : 255;
+}
+// The map's light (v856, Jordan: the map lit from the top left instead of higher ground drawn lighter). The smooth map
+// shader lights each pixel from a height map of the ground: a normal from the heights round it (Lambert, flat ground 1)
+// and a shadow cast from higher ground toward the light, marched over the heights. on 0 is the old relief.
+// angle: where the light comes from, degrees clockwise from north (map up); height: its height over the horizon
+// (degrees); strength: 0 unlit .. 1; relief: the heights times this for the light; soft: tiles the normal is taken
+// across; bright: the most a slope facing the light gets (times flat ground); dark: what a slope facing away keeps;
+// shadow: how dark a cast shadow is (0 none); reach: tiles a shadow reaches; tint: how much of the old higher-is-lighter
+// relief stays (1 all of it); neutral: flat ground's brightness without it; turn 1: the minimap's light from the top
+// left of the screen as the camera turns (0: from the map's top left)
+const MAP_LIGHT = { on: 1, angle: 315, height: 35, strength: 1, relief: 1, soft: 0.5, bright: 1.4, dark: 0.35, shadow: 0.45, reach: 24, tint: 0.3, neutral: 0.9, turn: 1 };
+// the ground's height at every half-tile point, as the 3D ground is drawn (a cliff's face sloping down over the lower
+// tile's outer half), but water, lava and swamp pools at their surface and a bridge at its deck
+function mapSurf(i, c, r, u, v) {
+  if (BR[i]) return LV[i] * STEP;
+  if (SHOAL[i]) return LV[i] * STEP - 0.1;
+  if (!LV[i]) { if (WT[i] >= 2 || WL[i]) return WL[i] * STEP - (LAVA[i] ? LAVA_DROP : 0.1); }
+  else if (WT[i] === 1) return LV[i] * STEP - BOG_SURF;
+  return tileSurf(c, r, u, v);
+}
+// (2N by 2N half floats, texel (x2, z2) at world (x2 / 2, z2 / 2); made once the map is painted)
+let mapHeights = null;
+const toHalf = (() => {
+  const f = new Float32Array(1), u = new Uint32Array(f.buffer);
+  return v => {
+    f[0] = v; const x = u[0], sg = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112;
+    return e <= 0 ? sg : e >= 31 ? sg | 0x7c00 : sg | (e << 10) | ((x >>> 13) & 0x3ff);
+  };
+})();
+// (a point on a tile's border takes the highest of the tiles that meet there, as pointH does, but worked out a row of
+// tiles at a time: each tile's nine points, its corners, edge middles and middle, with one value for a tile that's
+// level all over: flat ground, water, a bridge)
+function mapFlatH(i) {
+  if (BR[i]) return LV[i] * STEP;
+  if (SHOAL[i]) return LV[i] * STEP - 0.1;
+  if (!LV[i]) return WT[i] >= 2 || WL[i] ? WL[i] * STEP - (LAVA[i] ? LAVA_DROP : 0.1) : NaN;
+  if (WT[i] === 1) return LV[i] * STEP - BOG_SURF;
+  return SH[i] || BEACH[i] ? NaN : LV[i] * STEP;
+}
+function buildMapHeights() {
+  const M = 2 * N, U9 = [0, 0.5, 1], F16 = typeof Float16Array === 'function';
+  const out = mapHeights || (F16 ? new Float16Array(M * M) : new Uint16Array(M * M));
+  let top = new Float32Array(M).fill(-1e9), mid = new Float32Array(M), bot = new Float32Array(M);
+  for (let r = 0; r < N; r++) {
+    mid.fill(-1e9); bot.fill(-1e9);
+    for (let c = 0; c < N; c++) {
+      const i = r * N + c, m = MCUT[i], x = 2 * c, f = mapFlatH(i);
+      if (!m && f === f) {
+        if (f > top[x]) top[x] = f; if (f > mid[x]) mid[x] = f; if (f > bot[x]) bot[x] = f;
+        if (f > top[x + 1]) top[x + 1] = f; mid[x + 1] = f; if (f > bot[x + 1]) bot[x + 1] = f;
+        if (x + 2 < M) { if (f > top[x + 2]) top[x + 2] = f; if (f > mid[x + 2]) mid[x + 2] = f; if (f > bot[x + 2]) bot[x + 2] = f; }
+        continue;
+      }
+      for (let a = 0; a < 3; a++) {
+        if (m && ((m & 1 && a === 0) || (m & 4 && a === 2))) continue;
+        const row = a === 0 ? top : a === 1 ? mid : bot;
+        for (let b = 0; b < 3; b++) {
+          if (x + b >= M || (m && ((m & 2 && b === 2) || (m & 8 && b === 0)))) continue;
+          const y = mapSurf(i, c, r, U9[b], U9[a]);
+          if (y > row[x + b]) row[x + b] = y;
+        }
+      }
+    }
+    const o0 = 2 * r * M, o1 = o0 + M;
+    if (F16) { out.set(top, o0); out.set(mid, o1); }
+    else for (let x = 0; x < M; x++) { out[o0 + x] = toHalf(top[x]); out[o1 + x] = toHalf(mid[x]); }
+    const t = top; top = bot; bot = t;
+  }
+  mapHeights = out;
+}
 // The smooth map (v393; on WebGPU since v411, was a WebGL2 canvas): a fragment shader over the map's tile colours
 // (mapCol) and keys (mapKey), drawn into a small WebGPU canvas of its own on the game's device, which the minimap
 // and the big map then copy from (the minimap without waiting, through createImageBitmap)
 const smoothMap = (() => {
-  let cv = null, ctx = null, dev = null, pipe = null, bind = null, ubuf = null, texC = null, texK = null, failed = false, full = true, tiles = [];
-  const ub = new Float32Array(16), ubi = new Int32Array(ub.buffer);
+  let cv = null, ctx = null, dev = null, pipe = null, bind = null, ubuf = null, texC = null, texK = null, texH = null, failed = false, full = true, hFull = true, tiles = [];
+  const ub = new Float32Array(32), ubi = new Int32Array(ub.buffer);
   const WGSL = /* wgsl */ `
-struct SU { a: vec4f, b: vec4f, bias0: vec4f, bias1: vec4f }   // a: org, size; b: ppt, edge, rnd, mode; bias1.zw: n
+// a: org, size; b: ppt, edge, rnd, mode; bias1.zw: n; l0: toward the light, tan of its height; l1: strength, relief,
+// soft, bright; l2: dark, shadow, reach, tint; l3: neutral, light on
+struct SU { a: vec4f, b: vec4f, bias0: vec4f, bias1: vec4f, l0: vec4f, l1: vec4f, l2: vec4f, l3: vec4f }
 @group(0) @binding(0) var<uniform> U: SU;
 @group(0) @binding(1) var C: texture_2d<f32>;
 @group(0) @binding(2) var K: texture_2d<u32>;
+@group(0) @binding(3) var HT: texture_2d<f32>;
+@group(0) @binding(4) var HS: sampler;
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let p = vec2f(select(-1.0, 3.0, vi == 1u), select(-1.0, 3.0, vi == 2u));
   return vec4f(p, 0.0, 1.0);
 }
+// (a tile's height relief, from its colour's alpha: all of it with the light off, tint of it with the light on)
+fn relF(a: f32) -> f32 {
+  if (a > 0.995) { return 1.0; }
+  return mix(U.l3.x, a * 1.5, U.l2.w);
+}
+// the ground's height at world p (tiles), times relief
+fn hAt(p: vec2f) -> f32 {
+  let m = f32(bitcast<i32>(U.bias1.z) * 2);
+  return textureSampleLevel(HT, HS, (p * 2.0 + 0.5) / m, 0.0).r * U.l1.y;
+}
+// the light at p: x on the ground (slope and cast shadow), y on water (cast shadow only)
+fn lightAt(p: vec2f, ppt: f32) -> vec2f {
+  let Ld = U.l0.xyz;
+  let e = max(U.l1.z, 0.75 / ppt);
+  let dx = (hAt(p + vec2f(e, 0.0)) - hAt(p - vec2f(e, 0.0))) / (2.0 * e);
+  let dz = (hAt(p + vec2f(0.0, e)) - hAt(p - vec2f(0.0, e))) / (2.0 * e);
+  let nrm = normalize(vec3f(-dx, 1.0, -dz));
+  let direct = max(dot(nrm, Ld), 0.0) / max(Ld.y, 1e-3);
+  // (the shadow: higher ground between here and the light, over a ray rising at the light's height; softer farther off)
+  var occ = 0.0;
+  let h0 = hAt(p);
+  let dir = normalize(Ld.xz + vec2f(1e-6, 0.0));
+  let reach = U.l2.z;
+  for (var j = 1; j <= 28; j++) {
+    let t = f32(j) / 28.0;
+    let d = reach * t * t + 0.15;
+    let over = hAt(p + dir * d) - (h0 + d * U.l0.w + 0.04);
+    occ = max(occ, clamp(over / (0.15 + d * 0.08), 0.0, 1.0));
+  }
+  // (light = what a slope facing away keeps + the direct light, which a cast shadow cuts by shadow; flat ground 1)
+  let sh = 1.0 - U.l2.y * occ;
+  let g = min(U.l2.x + (1.0 - U.l2.x) * direct * sh, U.l1.w);
+  let w = U.l2.x + (1.0 - U.l2.x) * sh;
+  let k = U.l1.x;
+  return vec2f(mix(1.0, g, k), mix(1.0, w, k));
+}
+fn isWet(c: u32) -> f32 { return select(0.0, 1.0, c == 2u || c == 3u); }
 fn biasOf(c: u32) -> f32 {
   switch c { case 0u: { return U.bias0.x; } case 1u: { return U.bias0.y; } case 2u: { return U.bias0.z; } case 3u: { return U.bias0.w; } case 4u: { return U.bias1.x; } default: { return U.bias1.y; } }
 }
@@ -31505,7 +31624,7 @@ fn biasOf(c: u32) -> f32 {
   var q = array<vec2i, 4>(i0, i0 + vec2i(1, 0), i0 + vec2i(0, 1), i0 + vec2i(1, 1));
   var w = array<f32, 4>((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
   var k: array<vec4u, 4>; var c: array<vec3f, 4>;
-  for (var j = 0; j < 4; j++) { let t = clamp(q[j], vec2i(0), hi); k[j] = textureLoad(K, t, 0); c[j] = textureLoad(C, t, 0).rgb; }
+  for (var j = 0; j < 4; j++) { let t = clamp(q[j], vec2i(0), hi); k[j] = textureLoad(K, t, 0); let cc = textureLoad(C, t, 0); c[j] = cc.rgb * relF(cc.a); }
   // (and the 4 by 4 tiles around, weighted by a cubic B-spline, for rounder lines over long gentle staircases)
   let bx = vec4f((1.0 - f.x) * (1.0 - f.x) * (1.0 - f.x), 3.0 * f.x * f.x * f.x - 6.0 * f.x * f.x + 4.0, -3.0 * f.x * f.x * f.x + 3.0 * f.x * f.x + 3.0 * f.x + 1.0, f.x * f.x * f.x) / 6.0;
   let bz = vec4f((1.0 - f.y) * (1.0 - f.y) * (1.0 - f.y), 3.0 * f.y * f.y * f.y - 6.0 * f.y * f.y + 4.0, -3.0 * f.y * f.y * f.y + 3.0 * f.y * f.y + 3.0 * f.y + 1.0, f.y * f.y * f.y) / 6.0;
@@ -31532,6 +31651,10 @@ fn biasOf(c: u32) -> f32 {
   let fw = clamp(fwidth(d), 1e-4, 2.5 / ppt) * U.b.y;
   let t = clamp(0.5 + d / max(fw, 1e-4), 0.0, 1.0);
   var res = mix(other, col[a], t);
+  // (how much of the pixel is water, for the light: water takes a cast shadow but no slope)
+  var wat = isWet(k[a].a);
+  if (e >= 0) { wat = mix(isWet(k[e].a), isWet(k[a].a), t); }
+  if (mode == 3) { res = c[nn]; wat = isWet(k[nn].a); }
   if (mode == 2) {
     // (only roads and rivers smooth: everything else as square tiles, the nearest tile that isn't road or river)
     var gg = -1;
@@ -31541,11 +31664,14 @@ fn biasOf(c: u32) -> f32 {
     if (e >= 0) { le = k[e].a == 1u || k[e].a == 2u; }
     var ground = col[a];
     if (gg >= 0) { ground = c[gg]; }
-    if (la && !le) { res = mix(ground, col[a], t); }
-    else if (!la && le) { res = mix(col[e], ground, t); }
-    else if (!la) { res = ground; }
+    var gw = 0.0;
+    if (gg >= 0) { gw = isWet(k[gg].a); }
+    if (la && !le) { res = mix(ground, col[a], t); wat = mix(gw, isWet(k[a].a), t); }
+    else if (!la && le) { res = mix(col[e], ground, t); wat = mix(isWet(k[e].a), gw, t); }
+    else if (!la) { res = ground; wat = gw; }
   }
-  if (k[nn].a == 5u) { res = c[nn]; }
+  if (k[nn].a == 5u) { res = c[nn]; wat = 0.0; }
+  if (U.l3.y > 0.5) { let li = lightAt(p, ppt); res *= mix(li.x, li.y, wat); }
   return vec4f(res, 1.0) * inside;
 }`;
   function init() {
@@ -31562,14 +31688,17 @@ fn biasOf(c: u32) -> f32 {
       pipe = dev.createRenderPipeline({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' }, fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] }, primitive: { topology: 'triangle-list' } });
       const T2 = format => dev.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       texC = T2('rgba8unorm'); texK = T2('rgba8uint');
-      ubuf = dev.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: texC.createView() }, { binding: 2, resource: texK.createView() }] });
-      full = true;
+      texH = dev.createTexture({ size: [2 * N, 2 * N], format: 'r16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      const smp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+      ubuf = dev.createBuffer({ size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: texC.createView() }, { binding: 2, resource: texK.createView() }, { binding: 3, resource: texH.createView() }, { binding: 4, resource: smp }] });
+      full = true; hFull = true;
     } catch (err) { if (err.message !== 'headless') console.warn('smooth map off:', err); failed = true; pipe = null; }
     return !!pipe;
   }
   function upload() {
     const q = dev.queue;
+    if (hFull && mapHeights) { q.writeTexture({ texture: texH }, mapHeights, { bytesPerRow: 2 * N * 2 }, [2 * N, 2 * N]); hFull = false; }
     if (full) {
       q.writeTexture({ texture: texC }, mapCol, { bytesPerRow: N * 4 }, [N, N]);
       q.writeTexture({ texture: texK }, mapKey, { bytesPerRow: N * 4 }, [N, N]);
@@ -31585,15 +31714,21 @@ fn biasOf(c: u32) -> f32 {
   return {
     // (a tile changed, or with no tile all of them)
     dirty(i) { if (i === undefined || tiles.length > 4000) full = true; else if (!full) tiles.push(i); },
-    // the map from world (x0, z0) at ppt pixels a tile into a w by h picture at the canvas's top left (null if off)
-    render(x0, z0, ppt, w, h) {
-      const mode = MAP_SMOOTH.on ? 1 : MAP_SMOOTH.lines ? 2 : 0;
+    // (the height map was made again)
+    heights() { hFull = true; },
+    // the map from world (x0, z0) at ppt pixels a tile into a w by h picture at the canvas's top left (null if off);
+    // az: where the light comes from (degrees clockwise from north), MAP_LIGHT.angle if not given
+    render(x0, z0, ppt, w, h, az) {
+      const lit = !!(MAP_LIGHT.on && mapHeights);
+      const mode = MAP_SMOOTH.on ? 1 : MAP_SMOOTH.lines ? 2 : lit ? 3 : 0;
       if (!mode || !init()) return null;
       w = Math.max(1, Math.ceil(w)); h = Math.max(1, Math.ceil(h));
       if (cv.width < w || cv.height < h) { cv.width = Math.max(cv.width, w); cv.height = Math.max(cv.height, h); }
-      if (full || tiles.length) upload();
-      const M = MAP_SMOOTH;
-      ub.set([x0, z0, w, h, ppt, M.edge, M.round, mode, 0, M.road, M.river, M.sea, M.cliff, M.build, 0, 0]);
+      if (full || tiles.length || (hFull && mapHeights)) upload();
+      const M = MAP_SMOOTH, L = MAP_LIGHT, A = (az ?? L.angle) * D2R, E = clamp(L.height, 1, 89) * D2R;
+      ub.set([x0, z0, w, h, ppt, M.edge, M.round, mode, 0, M.road, M.river, M.sea, M.cliff, M.build, 0, 0,
+        Math.sin(A) * Math.cos(E), Math.sin(E), -Math.cos(A) * Math.cos(E), Math.tan(E),
+        L.strength, L.relief, L.soft, L.bright, L.dark, L.shadow, L.reach, lit ? L.tint : 1, L.neutral, lit ? 1 : 0, 0, 0]);
       ubi[14] = N;
       dev.queue.writeBuffer(ubuf, 0, ub);
       const enc = dev.createCommandEncoder();
@@ -31607,16 +31742,18 @@ fn biasOf(c: u32) -> f32 {
 })();
 const mapSmoothLive = () => { miniT = 0; if (mapOpen) drawBigMap(); };
 mapSmoothLive.live = true;
+let mapHeightMs = 0;
 function paintMap() {
   const img = mapCtx.createImageData(N, N), d = img.data;
-  for (let i = 0; i < N * N; i++) { const [R, Gc, B] = tileRGB(i); d[i * 4] = R; d[i * 4 + 1] = Gc; d[i * 4 + 2] = B; d[i * 4 + 3] = 255; mapKeyOf(i, R, Gc, B); }
-  mapCol.set(d); smoothMap.dirty();
+  for (let i = 0; i < N * N; i++) { const [R, Gc, B] = tileRGB(i); d[i * 4] = R; d[i * 4 + 1] = Gc; d[i * 4 + 2] = B; d[i * 4 + 3] = 255; mapKeyOf(i, R, Gc, B); mapColOf(i, R, Gc, B); }
+  smoothMap.dirty();
+  { const t0 = performance.now(); buildMapHeights(); smoothMap.heights(); mapHeightMs = performance.now() - t0; }
   mapCtx.putImageData(img, 0, 0);
   fogCtx.fillStyle = '#0b0912'; fogCtx.fillRect(0, 0, N / 8, N / 8); fogSeen.fill(0);
 }
 function paintMapTile(c, r) {
   const i = T(c, r), [R, Gc, B] = tileRGB(i);
-  mapCol[i * 4] = R; mapCol[i * 4 + 1] = Gc; mapCol[i * 4 + 2] = B; mapCol[i * 4 + 3] = 255; mapKeyOf(i, R, Gc, B); smoothMap.dirty(i);
+  mapColOf(i, R, Gc, B); mapKeyOf(i, R, Gc, B); smoothMap.dirty(i);
   mapCtx.fillStyle = `rgb(${R | 0},${Gc | 0},${B | 0})`;
   mapCtx.fillRect(c, r, 1, 1);
 }
@@ -31670,14 +31807,17 @@ const miniSnap = { x: 0, z: 0, s: 0, r: 0 };
 // (v410: the smooth map comes back from its canvas as an ImageBitmap, without waiting: drawing the GPU
 // canvas straight into the 2D one held the frame up to ~30 ms while the GPU caught up. The old picture stays up
 // until the new one is in; one request at a time)
-let miniWait = 0;
+let miniWait = 0, miniLitRot = 0;
 function paintMini() {
   if (miniWait && performance.now() - miniWait < 1000) return;
   miniWait = 0;
   const W = Math.hypot(mini.width, mini.height), S = miniZoom, R = Math.ceil(W * 0.53 / S + 8 / Math.min(1, S) + 6);
   const side = Math.ceil(R * 2 * S);
   const x0 = Math.floor(H.x) - R, z0 = Math.floor(H.z) - R;
-  const smooth = smoothMap.render(x0, z0, S, side, side);
+  // (v856: lit from the top left of the screen, the way the minimap is turned now, unless T > Map light turn is 0)
+  const rot = miniRot(), az = MAP_LIGHT.turn ? MAP_LIGHT.angle - rot / D2R : MAP_LIGHT.angle;
+  miniLitRot = rot;
+  const smooth = smoothMap.render(x0, z0, S, side, side, az);
   if (smooth && typeof createImageBitmap === 'function') {
     miniWait = performance.now();
     createImageBitmap(smooth, 0, 0, side, side).then(bmp => { miniWait = 0; finishMini(bmp, x0, z0, S, R, side, true); bmp.close(); }, () => { miniWait = 0; });
@@ -31754,7 +31894,9 @@ function drawMini(dt) {
   miniDrawT = 0.05;
   // repaint when the clock says, or before the hero walks off the painted area
   const S = miniSnap.s, R = miniSnap.r, cx = miniSnap.x + R, cz = miniSnap.z + R;
-  if (!miniWait && (miniT <= 0 || S !== miniZoom || Math.max(Math.abs(H.x - cx), Math.abs(H.z - cz)) > 6 / Math.min(1, S) + 4)) { paintMini(); miniT = 0.4; }
+  // (and while the camera turns, so its light keeps coming from the screen's top left: v856)
+  const turned = MAP_LIGHT.on && MAP_LIGHT.turn && miniSnap.smooth && Math.abs(miniRot() - miniLitRot) > 2 * D2R;
+  if (!miniWait && (miniT <= 0 || turned || S !== miniZoom || Math.max(Math.abs(H.x - cx), Math.abs(H.z - cz)) > 6 / Math.min(1, S) + 4)) { paintMini(); miniT = 0.4; }
   const W = mini.width, Hh = mini.height, ctx = miniCtx;
   ctx.fillStyle = parchment() || '#efc58d'; ctx.fillRect(0, 0, W, Hh);
   ctx.save();
@@ -33897,6 +34039,21 @@ const TUNING = [
     [MAP_SMOOTH, 'sea', 'Sea wins close calls by', 0, 0.4, 0.01, mapSmoothLive],
     [MAP_SMOOTH, 'cliff', 'Cliff rims win close calls by', 0, 0.4, 0.01, mapSmoothLive],
   ]],
+  ['Map light', [
+    [MAP_LIGHT, 'on', 'Light the map (1) or the old relief, higher ground lighter (0)', 0, 1, 1, mapSmoothLive],
+    [MAP_LIGHT, 'angle', 'Light comes from (degrees clockwise from north, 315 top left)', 0, 360, 1, mapSmoothLive],
+    [MAP_LIGHT, 'height', 'Light height over the horizon (degrees)', 5, 85, 1, mapSmoothLive],
+    [MAP_LIGHT, 'strength', 'Strength (0 unlit)', 0, 1, 0.01, mapSmoothLive],
+    [MAP_LIGHT, 'relief', 'Heights times (steeper slopes, longer shadows)', 0.1, 4, 0.05, mapSmoothLive],
+    [MAP_LIGHT, 'soft', 'Softness of the slopes (tiles)', 0.1, 3, 0.05, mapSmoothLive],
+    [MAP_LIGHT, 'bright', 'Brightest a slope facing the light gets (times flat)', 1, 2.5, 0.01, mapSmoothLive],
+    [MAP_LIGHT, 'dark', 'Light a slope facing away keeps', 0, 1, 0.01, mapSmoothLive],
+    [MAP_LIGHT, 'shadow', 'Cast shadow darkness (0 none)', 0, 1, 0.01, mapSmoothLive],
+    [MAP_LIGHT, 'reach', 'Cast shadow reach (tiles)', 1, 64, 1, mapSmoothLive],
+    [MAP_LIGHT, 'tint', 'Old relief kept (higher ground lighter, 0 none, 1 all)', 0, 1, 0.01, mapSmoothLive],
+    [MAP_LIGHT, 'neutral', 'Flat ground brightness without the old relief', 0.5, 1.3, 0.01, mapSmoothLive],
+    [MAP_LIGHT, 'turn', 'Minimap lit from the screen\'s top left as the camera turns (1) or the map\'s (0)', 0, 1, 1, mapSmoothLive],
+  ]],
   ['Map names (book font)', [
     [OPTIONS, 'mapFont', 'Book font on (1) or the pixel font (0) (also in Options)', 0, 1, 1, mapFontLive],
     [MAP_FONT, 'px', 'Size (px)', 10, 40, 1, mapNamesLive],
@@ -35012,7 +35169,8 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, ROAD_LABEL },
+  mapHeightMs: () => mapHeightMs, mapHeights: () => mapHeights, buildMapHeights: () => { const t0 = performance.now(); buildMapHeights(); return performance.now() - t0; },
+  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, MAP_LIGHT, ROAD_LABEL },
   rescaleObelisks: () => rescaleObelisks(),
   // (triangles a wall type draws, and how many of each type are built in the world: [type, tris, count ground, count upper])
   wallCost: () => { const out = {}; for (let t = 1; t <= 14; t++) { const b = new BuildBuf(), save = OUT; OUT = b; try { wallPiece(500, 500, 0, t); } finally { OUT = save; } out[t] = [b.n / 9, 0, 0]; }
