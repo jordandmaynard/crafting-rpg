@@ -1406,7 +1406,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 849;
+const GAME_VERSION = 850;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8944,6 +8944,8 @@ function chunkGI(cx, cz) {
       for (const b of buildings.values()) if (b.mesh && b.tiles.some(([c, r]) => c >= cx * CH - 1 && c <= (cx + 1) * CH && r >= cz * CH - 1 && r <= (cz + 1) * CH)) roofs.push({ geo: b.mesh.geometry });
       const parts = [{ geo: geo(ch.obj), leaks: true }, { geo: geo(ch.metal), leaks: true }, { geo: geo(ch.prism), leaks: true }, { geo: geo(ch.plant), leaks: true }, { geo: geo(ch.trunk) }, { geo: geo(ch.canopy), leaks: true },
         { geo: ch.buildGI || geo(ch.build) }, { geo: geo(ch.glow), emit: 0.25 }, { geo: geo(ch.inObj), leaks: true }, { geo: geo(ch.inGlow), emit: 0.25 }, ...roofs];
+      // (v850) and the things being chopped or broken here, still standing as far as the light goes (see detach)
+      for (const d of detached.values()) if (d.giParts && Math.floor(d.c / CH) === cx && Math.floor(d.r / CH) === cz) parts.push(...d.giParts);
       job.st = GFX.rasterStart(cx, cz, job.ground);
       job.runs = parts.filter(part => GFX.rasterTris(part) > 0); job.t = 0;
       job.stage = 2;
@@ -23451,7 +23453,7 @@ function pickUpBonePile(b) {
   const d = detach(b.i, b.c, b.r);
   OB[b.i] = 0;
   paintMapTile(b.c, b.r);
-  scene.remove(d.g); detached.delete(b.i);
+  scene.remove(d.g); detached.delete(b.i); giLetGo(d);
   if (lost) dropLoot('bone', lost, b.x, b.z);
   floatGain('bone', BONE_PILE.give - lost, H.x, H.y + 1.3, H.z, '#e8c08a');
   sfx.coin();
@@ -23482,7 +23484,7 @@ let arcT = 9, ringT = 9;
 // (v826, Jordan) a felled tree topples as a pole tipping over about its foot does under gravity: slow to start, ever
 // faster, thudding down (a little bounce), dust thrown up all along it the moment it lands, the colour of its
 // bark; then it sinks into the ground as its leaves dissolve away in a smooth noise. T > Tree felling.
-const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolveAt: -0.75, dissolve: 1.3, noise: 2.6, trail: 1.25, burst: 1.6 };
+const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolveAt: -0.75, dissolve: 1.3, noise: 2.6, trail: 1.25, burst: 1.6, lightOff: 0.5 };
 // the bark a felled tree's dust takes (its trunk's own colour, by kind)
 const FELL_BARK = { [O.PINE]: '#5a3a22', [O.SNOWPINE]: '#5a3a22', [O.OAK]: '#6a4428', [O.BIRCH]: '#e8e4d8', [O.CACTUS]: '#5a8a3a', [O.PALM]: '#8a6a48', [O.BURNT]: '#1e1816' };
 // (v829) the leaves it sheds, by kind (none for the leafless ones): colour, how wide for their length (pine needles
@@ -23576,6 +23578,8 @@ function updateFaller(d, dt) {
     }
     d.g.quaternion.setFromAxisAngle(d.axis, d.ang);
   }
+  // (v850) its light goes once it's FELL.lightOff of the way down
+  if (d.giParts && d.ang >= FELL_REST * FELL.lightOff) giLetGo(d);
   if (landed) { fellDust(d); fellLeafBurst(d); sfx.thunk(); }
   else if (d.landT < 0) fellLeafTrail(d, dt);
   // (the leaves' dissolving starts FELL.dissolveAt after it lands (v828), or before, when that's negative (v829: by
@@ -23648,6 +23652,12 @@ function detach(i, c, r) {
   try { drawObject(o, c, r); } finally { [OUT, GLOW, METAL, PRISMB, LEAFB, PLANT, WEB, SPIDER] = save; }
   if (bufTmpPlant.n) { bufTmpLeaf.need(bufTmpPlant.n); bufTmpLeaf.p.set(bufTmpPlant.p.subarray(0, bufTmpPlant.n), bufTmpLeaf.n); bufTmpLeaf.c.set(bufTmpPlant.c.subarray(0, bufTmpPlant.n), bufTmpLeaf.n); bufTmpLeaf.n += bufTmpPlant.n; }
   const [x, z] = objPos(c, r, o), y = LV[i] * STEP;
+  // (v850, Jordan: the light popped on the first blow) its own copy for the light probes, where it stands, so its
+  // chunk's block, worked out again without it from the first blow, still has it (chunkGI) until it's half fallen
+  // or gone (giLetGo)
+  const giParts = [];
+  for (const [B, emit] of [[bufTmp, 0], [bufTmpLeaf, 0], [bufTmpMetal, 0], [bufTmpPrism, 0], [bufTmpGlow, 0.25]]) if (B.n)
+    giParts.push({ geo: { attributes: { position: { array: B.p.slice(0, B.n), count: B.n / 3 }, color: { array: B.c.slice(0, B.n) } }, index: null }, leaks: !emit, emit });
   // recentre on the trunk so it can shake and topple about its foot
   let top = 0;
   for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism, bufTmpLeaf]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; if (B.p[k + 1] > top) top = B.p[k + 1]; }
@@ -23663,7 +23673,7 @@ function detach(i, c, r) {
   // (points of its crown, where the leaves it sheds as it falls come from)
   let leafPts = null;
   if (bufTmpLeaf.n) { const nv = bufTmpLeaf.n / 3, m = Math.min(48, nv); leafPts = new Float32Array(m * 3); for (let q = 0; q < m; q++) { const v = Math.floor(Math.random() * nv) * 3; leafPts[q * 3] = bufTmpLeaf.p[v]; leafPts[q * 3 + 1] = bufTmpLeaf.p[v + 1]; leafPts[q * 3 + 2] = bufTmpLeaf.p[v + 2]; } }
-  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false, leafMesh: ml, leafPts, top: Math.max(0.5, top) };
+  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false, leafMesh: ml, leafPts, top: Math.max(0.5, top), giParts };
   detached.set(i, d);
   // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
   // once took 8-20 ms, a spike on the first blow); till they swap in, the chunk's own copy stands and this one hides
@@ -23671,6 +23681,14 @@ function detach(i, c, r) {
   if (ch && ch.stage === 2) { g.visible = false; if (ch.redo && bandOwner === ch) bandOwner = null; ch.redo = true; }
   else rebuildObjects(c, r);
   return d;
+}
+// a detached thing stops lighting the probes (felled tree part way down, broken rock, picked-up bones): its chunk's
+// block is worked out again without it
+function giLetGo(d) {
+  if (!d.giParts) return;
+  d.giParts = null;
+  const ch = chunks.get(Math.floor(d.r / CH) * NC + Math.floor(d.c / CH));
+  if (ch) { ch.giStale = Math.max(ch.giStale || 0, 1); ch.giJob = null; }
 }
 // Every blow takes toughness off a prop in proportion to its damage (a plain swing takes one point), and
 // each point taken off yields one wood, stone or ore, fractions carried over to the next blow.
@@ -23720,7 +23738,7 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
       fallers.push(d);
       sfx.fell();
     } else {
-      scene.remove(d.g); detached.delete(i);
+      scene.remove(d.g); detached.delete(i); giLetGo(d);
       // a gravestone sometimes turns up a bone (Jordan, v366)
       if (o === O.TOMB && Math.random() < TOMB_BONE) dropLoot('bone', 1, d.x, d.z);
       chips(d.x, top, d.z, 'stone', od.ore ? 6 : 10);
@@ -30228,7 +30246,7 @@ function update(dt) {
     const d = fallers[k];
     d.fallT += dt;
     if (updateFaller(d, dt)) {
-      scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1);
+      scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1); giLetGo(d);
       if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.d = null;
     }
   }
@@ -33277,6 +33295,7 @@ const TUNING = [
     [FELL, 'noise', 'Dissolve noise size (higher: smaller holes)', 0.5, 8, 0.1],
     [FELL, 'trail', 'Leaves shed as it falls (× how many, 0 none)', 0, 4, 0.05],
     [FELL, 'burst', 'Leaves thrown up as it lands (× how many, 0 none)', 0, 4, 0.05],
+    [FELL, 'lightOff', 'Its light (the shade under it) goes this far down its fall (0 at the first move, 1 as it lands)', 0, 1, 0.05],
   ]],
   ['Graveyard spiders', [
     [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],
