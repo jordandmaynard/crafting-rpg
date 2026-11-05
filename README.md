@@ -568,6 +568,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v796:** (Jordan's v795 shot: the GPU idle 1.6 ms before the first send; scene matrices 0.51 ms and finding casters with the camera's walk 0.59 before it) Two more cuts, same look. The shadow map is sent to the GPU as soon as it's encoded (G > Tests > Early sends > + after shadow map, now the default; 3 sends as before to compare), so the GPU draws it while the pre-passes and world are encoded. And the scene's matrix pass leaves the world's chunk meshes once made (matrixStill, scene.js: an object that with all under it never moves; adding to it has it looked at again); G row: scene matrices left, never moving.
 
+**v797:** (Jordan) Dragging an item out of the pack or the hotbar over the world (a potion held out, a bottle to fill) no longer attacks or uses what's under the cursor, and the cursor is the open 'use' hand while it's held. Jordan's tuning, filling bottles: down 0.32 (was 0.22), hold 0.25 (0.12), sink -0.13 (0.04), edge 0.29 (0.2).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
