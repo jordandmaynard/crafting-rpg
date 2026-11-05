@@ -1407,7 +1407,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 856;
+const GAME_VERSION = 857;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -31494,8 +31494,9 @@ function mapColOf(i, R, Gc, B) {
 // across; bright: the most a slope facing the light gets (times flat ground); dark: what a slope facing away keeps;
 // shadow: how dark a cast shadow is (0 none); reach: tiles a shadow reaches; tint: how much of the old higher-is-lighter
 // relief stays (1 all of it); neutral: flat ground's brightness without it; turn 1: the minimap's light from the top
-// left of the screen as the camera turns (0: from the map's top left)
-const MAP_LIGHT = { on: 1, angle: 315, height: 35, strength: 1, relief: 1, soft: 0.5, bright: 1.4, dark: 0.35, shadow: 0.45, reach: 24, tint: 0.3, neutral: 0.9, turn: 1 };
+// left of the screen as the camera turns (0: from the map's top left); straight: how far (tiles, a Gaussian's sigma) the
+// heights are blurred for which way a slope faces, so diagonal cliffs (tile staircases) light evenly along (0 off: v857)
+const MAP_LIGHT = { on: 1, angle: 315, height: 5, strength: 1, relief: 0.55, soft: 0.1, bright: 1.9, dark: 0.25, shadow: 0.46, reach: 29, tint: 0, neutral: 0.81, turn: 1, straight: 1 };
 // the ground's height at every half-tile point, as the 3D ground is drawn (a cliff's face sloping down over the lower
 // tile's outer half), but water, lava and swamp pools at their surface and a bridge at its deck
 function mapSurf(i, c, r, u, v) {
@@ -31528,6 +31529,11 @@ function buildMapHeights() {
   const M = 2 * N, U9 = [0, 0.5, 1], F16 = typeof Float16Array === 'function';
   const out = mapHeights || (F16 ? new Float16Array(M * M) : new Uint16Array(M * M));
   let top = new Float32Array(M).fill(-1e9), mid = new Float32Array(M), bot = new Float32Array(M);
+  const pTop = new Float32Array(M), pMid = new Float32Array(M), TH = mapTileH || new Float32Array(N * N);
+  // (each tile's height for the straightened slopes, its nine points weighted 1 2 1 each way, a row behind: v857)
+  const down = (r, A, B, C) => {
+    for (let c = 0, x = 0; c < N; c++, x += 2) TH[r * N + c] = (A[x] + 2 * A[x + 1] + A[Math.min(x + 2, M - 1)] + 2 * (B[x] + 2 * B[x + 1] + B[Math.min(x + 2, M - 1)]) + C[x] + 2 * C[x + 1] + C[Math.min(x + 2, M - 1)]) / 16;
+  };
   for (let r = 0; r < N; r++) {
     mid.fill(-1e9); bot.fill(-1e9);
     for (let c = 0; c < N; c++) {
@@ -31551,25 +31557,63 @@ function buildMapHeights() {
     const o0 = 2 * r * M, o1 = o0 + M;
     if (F16) { out.set(top, o0); out.set(mid, o1); }
     else for (let x = 0; x < M; x++) { out[o0 + x] = toHalf(top[x]); out[o1 + x] = toHalf(mid[x]); }
+    if (r) down(r - 1, pTop, pMid, top);
+    pTop.set(top); pMid.set(mid);
     const t = top; top = bot; bot = t;
   }
-  mapHeights = out;
+  down(N - 1, pTop, pMid, top);
+  mapHeights = out; mapTileH = TH;
+  blurMapHeights();
 }
+// (v857) the tile heights blurred (a Gaussian of MAP_LIGHT.straight tiles), for which way a slope faces
+let mapTileH = null, mapBlurH = null, mapBlurTmp = null;
+function blurMapHeights() {
+  if (!mapTileH) return;
+  const F16 = typeof Float16Array === 'function', sg = Math.max(0, MAP_LIGHT.straight), K = Math.min(10, Math.ceil(sg * 2.5));
+  const out = mapBlurH || (F16 ? new Float16Array(N * N) : new Uint16Array(N * N));
+  const W = new Float32Array(K + 1);
+  let sum = 0;
+  for (let k = 0; k <= K; k++) { W[k] = sg > 0.01 ? Math.exp(-k * k / (2 * sg * sg)) : k ? 0 : 1; sum += k ? 2 * W[k] : W[k]; }
+  for (let k = 0; k <= K; k++) W[k] /= sum;
+  const src = mapTileH, tmp = mapBlurTmp || (mapBlurTmp = new Float32Array(N * N)), row = new Float32Array(N);
+  // (across, then down; clamped at the world's edge, the middle without the clamps)
+  for (let r = 0; r < N; r++) {
+    const o = r * N;
+    for (let c = 0; c < N; c++) {
+      let v = W[0] * src[o + c];
+      if (c >= K && c < N - K) for (let k = 1; k <= K; k++) v += W[k] * (src[o + c - k] + src[o + c + k]);
+      else for (let k = 1; k <= K; k++) v += W[k] * (src[o + Math.max(0, c - k)] + src[o + Math.min(N - 1, c + k)]);
+      tmp[o + c] = v;
+    }
+  }
+  for (let r = 0; r < N; r++) {
+    const o = r * N, mid = r >= K && r < N - K;
+    for (let c = 0; c < N; c++) row[c] = W[0] * tmp[o + c];
+    for (let k = 1; k <= K; k++) {
+      const w = W[k], a = (mid ? r - k : Math.max(0, r - k)) * N, b = (mid ? r + k : Math.min(N - 1, r + k)) * N;
+      for (let c = 0; c < N; c++) row[c] += w * (tmp[a + c] + tmp[b + c]);
+    }
+    if (F16) out.set(row, o); else for (let c = 0; c < N; c++) out[o + c] = toHalf(row[c]);
+  }
+  mapBlurH = out;
+}
+const mapStraightLive = () => { blurMapHeights(); smoothMap.heights(); mapSmoothLive(); };
 // The smooth map (v393; on WebGPU since v411, was a WebGL2 canvas): a fragment shader over the map's tile colours
 // (mapCol) and keys (mapKey), drawn into a small WebGPU canvas of its own on the game's device, which the minimap
 // and the big map then copy from (the minimap without waiting, through createImageBitmap)
 const smoothMap = (() => {
-  let cv = null, ctx = null, dev = null, pipe = null, bind = null, ubuf = null, texC = null, texK = null, texH = null, failed = false, full = true, hFull = true, tiles = [];
+  let cv = null, ctx = null, dev = null, pipe = null, bind = null, ubuf = null, texC = null, texK = null, texH = null, texB = null, failed = false, full = true, hFull = true, tiles = [];
   const ub = new Float32Array(32), ubi = new Int32Array(ub.buffer);
   const WGSL = /* wgsl */ `
 // a: org, size; b: ppt, edge, rnd, mode; bias1.zw: n; l0: toward the light, tan of its height; l1: strength, relief,
-// soft, bright; l2: dark, shadow, reach, tint; l3: neutral, light on
+// soft, bright; l2: dark, shadow, reach, tint; l3: neutral, light on, straight
 struct SU { a: vec4f, b: vec4f, bias0: vec4f, bias1: vec4f, l0: vec4f, l1: vec4f, l2: vec4f, l3: vec4f }
 @group(0) @binding(0) var<uniform> U: SU;
 @group(0) @binding(1) var C: texture_2d<f32>;
 @group(0) @binding(2) var K: texture_2d<u32>;
 @group(0) @binding(3) var HT: texture_2d<f32>;
 @group(0) @binding(4) var HS: sampler;
+@group(0) @binding(5) var HB: texture_2d<f32>;
 @vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   let p = vec2f(select(-1.0, 3.0, vi == 1u), select(-1.0, 3.0, vi == 2u));
   return vec4f(p, 0.0, 1.0);
@@ -31584,13 +31628,30 @@ fn hAt(p: vec2f) -> f32 {
   let m = f32(bitcast<i32>(U.bias1.z) * 2);
   return textureSampleLevel(HT, HS, (p * 2.0 + 0.5) / m, 0.0).r * U.l1.y;
 }
+// the blurred tile heights at p (texel c's middle at c + 0.5)
+fn hbAt(p: vec2f) -> f32 {
+  return textureSampleLevel(HB, HS, p / f32(bitcast<i32>(U.bias1.z)), 0.0).r * U.l1.y;
+}
 // the light at p: x on the ground (slope and cast shadow), y on water (cast shadow only)
 fn lightAt(p: vec2f, ppt: f32) -> vec2f {
   let Ld = U.l0.xyz;
   let e = max(U.l1.z, 0.75 / ppt);
-  let dx = (hAt(p + vec2f(e, 0.0)) - hAt(p - vec2f(e, 0.0))) / (2.0 * e);
-  let dz = (hAt(p + vec2f(0.0, e)) - hAt(p - vec2f(0.0, e))) / (2.0 * e);
-  let nrm = normalize(vec3f(-dx, 1.0, -dz));
+  var gr = vec2f(hAt(p + vec2f(e, 0.0)) - hAt(p - vec2f(e, 0.0)), hAt(p + vec2f(0.0, e)) - hAt(p - vec2f(0.0, e))) / (2.0 * e);
+  // (v857, Jordan: a cliff on the diagonal is a staircase of tile edges, so its faces took turns facing toward and away
+  // from the light, a dashed line. The way a slope faces is taken from the tile heights blurred (a Gaussian, straight
+  // tiles across), which runs along the diagonal; how steep it is, and so where the cliff's line is and how thin, stays
+  // the fine one. Where the blur loses the slope, a thin ridge or gully whose sides cancel, the fine way is kept)
+  if (U.l3.z > 0.01) {
+    let gc = vec2f(hbAt(p + vec2f(0.5, 0.0)) - hbAt(p - vec2f(0.5, 0.0)), hbAt(p + vec2f(0.0, 0.5)) - hbAt(p - vec2f(0.0, 0.5)));
+    let mf = length(gr); let mc = length(gc);
+    if (mc > 1e-4 && mf > 1e-4) {
+      // (rho about 1 across a lone cliff, its half-tile slope spread over the blur; near 0 where the sides cancel)
+      let rho = mc / mf * (5.0 * U.l3.z + 1.0);
+      let dm = mix(gr / mf, gc / mc, clamp((rho - 0.2) / 0.3, 0.0, 1.0));
+      if (length(dm) > 1e-3) { gr = normalize(dm) * mf; }
+    }
+  }
+  let nrm = normalize(vec3f(-gr.x, 1.0, -gr.y));
   let direct = max(dot(nrm, Ld), 0.0) / max(Ld.y, 1e-3);
   // (the shadow: higher ground between here and the light, over a ray rising at the light's height; softer farther off)
   var occ = 0.0;
@@ -31689,16 +31750,21 @@ fn biasOf(c: u32) -> f32 {
       const T2 = format => dev.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       texC = T2('rgba8unorm'); texK = T2('rgba8uint');
       texH = dev.createTexture({ size: [2 * N, 2 * N], format: 'r16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      texB = dev.createTexture({ size: [N, N], format: 'r16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
       const smp = dev.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
       ubuf = dev.createBuffer({ size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-      bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: texC.createView() }, { binding: 2, resource: texK.createView() }, { binding: 3, resource: texH.createView() }, { binding: 4, resource: smp }] });
+      bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: texC.createView() }, { binding: 2, resource: texK.createView() }, { binding: 3, resource: texH.createView() }, { binding: 4, resource: smp }, { binding: 5, resource: texB.createView() }] });
       full = true; hFull = true;
     } catch (err) { if (err.message !== 'headless') console.warn('smooth map off:', err); failed = true; pipe = null; }
     return !!pipe;
   }
   function upload() {
     const q = dev.queue;
-    if (hFull && mapHeights) { q.writeTexture({ texture: texH }, mapHeights, { bytesPerRow: 2 * N * 2 }, [2 * N, 2 * N]); hFull = false; }
+    if (hFull && mapHeights) {
+      q.writeTexture({ texture: texH }, mapHeights, { bytesPerRow: 2 * N * 2 }, [2 * N, 2 * N]);
+      if (mapBlurH) q.writeTexture({ texture: texB }, mapBlurH, { bytesPerRow: N * 2 }, [N, N]);
+      hFull = false;
+    }
     if (full) {
       q.writeTexture({ texture: texC }, mapCol, { bytesPerRow: N * 4 }, [N, N]);
       q.writeTexture({ texture: texK }, mapKey, { bytesPerRow: N * 4 }, [N, N]);
@@ -31728,7 +31794,7 @@ fn biasOf(c: u32) -> f32 {
       const M = MAP_SMOOTH, L = MAP_LIGHT, A = (az ?? L.angle) * D2R, E = clamp(L.height, 1, 89) * D2R;
       ub.set([x0, z0, w, h, ppt, M.edge, M.round, mode, 0, M.road, M.river, M.sea, M.cliff, M.build, 0, 0,
         Math.sin(A) * Math.cos(E), Math.sin(E), -Math.cos(A) * Math.cos(E), Math.tan(E),
-        L.strength, L.relief, L.soft, L.bright, L.dark, L.shadow, L.reach, lit ? L.tint : 1, L.neutral, lit ? 1 : 0, 0, 0]);
+        L.strength, L.relief, L.soft, L.bright, L.dark, L.shadow, L.reach, lit ? L.tint : 1, L.neutral, lit ? 1 : 0, L.straight, 0]);
       ubi[14] = N;
       dev.queue.writeBuffer(ubuf, 0, ub);
       const enc = dev.createCommandEncoder();
@@ -34046,6 +34112,7 @@ const TUNING = [
     [MAP_LIGHT, 'strength', 'Strength (0 unlit)', 0, 1, 0.01, mapSmoothLive],
     [MAP_LIGHT, 'relief', 'Heights times (steeper slopes, longer shadows)', 0.1, 4, 0.05, mapSmoothLive],
     [MAP_LIGHT, 'soft', 'Softness of the slopes (tiles)', 0.1, 3, 0.05, mapSmoothLive],
+    [MAP_LIGHT, 'straight', 'Straighten stepped diagonal cliffs: blur for which way slopes face (tiles, 0 off)', 0, 4, 0.05, mapStraightLive],
     [MAP_LIGHT, 'bright', 'Brightest a slope facing the light gets (times flat)', 1, 2.5, 0.01, mapSmoothLive],
     [MAP_LIGHT, 'dark', 'Light a slope facing away keeps', 0, 1, 0.01, mapSmoothLive],
     [MAP_LIGHT, 'shadow', 'Cast shadow darkness (0 none)', 0, 1, 0.01, mapSmoothLive],
@@ -35169,7 +35236,7 @@ window.GAME = {
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
-  mapHeightMs: () => mapHeightMs, mapHeights: () => mapHeights, buildMapHeights: () => { const t0 = performance.now(); buildMapHeights(); return performance.now() - t0; },
+  mapHeightMs: () => mapHeightMs, mapHeights: () => mapHeights, buildMapHeights: () => { const t0 = performance.now(); buildMapHeights(); return performance.now() - t0; }, blurMapHeights: () => { const t0 = performance.now(); blurMapHeights(); return performance.now() - t0; },
   tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, MAP_LIGHT, ROAD_LABEL },
   rescaleObelisks: () => rescaleObelisks(),
   // (triangles a wall type draws, and how many of each type are built in the world: [type, tris, count ground, count upper])
