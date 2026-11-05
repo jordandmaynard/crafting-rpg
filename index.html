@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 828;
+const GAME_VERSION = 829;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -23285,9 +23285,23 @@ let arcT = 9, ringT = 9;
 // (v826, Jordan) a felled tree topples as a pole tipping over about its foot does under gravity: slow to start, ever
 // faster, thudding down (a little bounce), dust thrown up all along it the moment it lands, the colour of its
 // bark; then it sinks into the ground as its leaves dissolve away in a smooth noise. T > Tree felling.
-const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolveAt: 0, dissolve: 1, noise: 2.6 };
+const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolveAt: 0, dissolve: 1, noise: 2.6, trail: 1, burst: 1 };
 // the bark a felled tree's dust takes (its trunk's own colour, by kind)
 const FELL_BARK = { [O.PINE]: '#5a3a22', [O.SNOWPINE]: '#5a3a22', [O.OAK]: '#6a4428', [O.BIRCH]: '#e8e4d8', [O.CACTUS]: '#5a8a3a', [O.PALM]: '#8a6a48', [O.BURNT]: '#1e1816' };
+// (v829) the leaves it sheds, by kind (none for the leafless ones): colour, how wide for their length (pine needles
+// narrow), size, and the share of them that colour
+function fellLeaves(o, c, r) {
+  const b = BI[T(c, r)];
+  switch (o) {
+    case O.OAK: return [{ col: b === TOWN ? '#5a9a3e' : '#4f8a3a', w: 0.6, size: 0.075, share: 1 }];
+    case O.BIRCH: return [{ col: hs(c, r, 6) > 0.9 ? '#c8b84a' : '#9ab84a', w: 0.55, size: 0.06, share: 1 }];
+    case O.PINE: return [{ col: '#2f5a34', w: 0.18, size: 0.065, share: 1 }];
+    case O.SNOWPINE: return [{ col: '#2f5048', w: 0.18, size: 0.065, share: 0.6 }, { col: '#eef4fa', w: 1, size: 0.045, share: 0.4 }];
+    case O.PALM: return [{ col: '#4a8a36', w: 0.3, size: 0.09, share: 1 }];
+    case O.DEAD: return b === SWAMP ? [{ col: '#8f9c78', w: 0.3, size: 0.07, share: 0.6 }, { col: '#56702e', w: 0.6, size: 0.06, share: 0.4 }] : null;
+  }
+  return null;
+}
 const fellBark = (o, c, r) => FELL_BARK[o] || (o === O.DEAD ? (BI[T(c, r)] === SWAMP ? '#3e3a2c' : BI[T(c, r)] === GRAVE ? '#4a4448' : '#3a3030') : '#6a4428');
 // A felled tree's leaves, drawn as groundMat draws them but cut away where a smooth 3D noise (in the tree's own
 // frame, so it rides along as it falls) is under the cut: as fd.x rises from 0 to 1, holes open in the crown and
@@ -23350,6 +23364,7 @@ function fellLeafMat(d) {
 // crown holds it up), bounces a little, and settles; then it sinks and its leaves dissolve.
 const FELL_REST = Math.PI / 2 - 0.1;
 function updateFaller(d, dt) {
+  let landed = false;
   if (d.landT < 0 || d.spin !== 0) {
     const kk = 1.5 * FELL.gravity / d.top;
     // (in small steps: it's quickest just as it lands)
@@ -23357,20 +23372,52 @@ function updateFaller(d, dt) {
       d.spin += kk * Math.sin(d.ang) * h; d.ang += d.spin * h;
       if (d.ang >= FELL_REST) {
         d.ang = FELL_REST;
-        if (d.landT < 0) { d.landT = d.fallT; fellDust(d); sfx.thunk(); }
+        if (d.landT < 0) { d.landT = d.fallT; landed = true; }
         d.spin = -d.spin * FELL.bounce;
         if (Math.abs(d.spin) < 0.35) { d.spin = 0; break; }
       }
     }
     d.g.quaternion.setFromAxisAngle(d.axis, d.ang);
   }
-  if (d.landT < 0) return false;
-  // (the sinking starts FELL.hold after it lands, the leaves' dissolving FELL.dissolveAt after: v828, from the moment
-  // it lands, so it shows before the crown's under the ground)
-  const since = d.fallT - d.landT, t = since - FELL.hold, tl = since - FELL.dissolveAt;
+  if (landed) { fellDust(d); fellLeafBurst(d); sfx.thunk(); }
+  else if (d.landT < 0) fellLeafTrail(d, dt);
+  // (the leaves' dissolving starts FELL.dissolveAt after it lands (v828), or before, when that's negative (v829: by
+  // when it's due to land, worked out as it starts to fall); the sinking FELL.hold after)
+  const tl = d.fallT - (d.landT < 0 ? d.landEst : d.landT) - FELL.dissolveAt;
   if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.mat.uniforms.fd.value.x = clamp(tl / Math.max(0.05, FELL.dissolve), 0, 1);
+  if (d.landT < 0) return false;
+  const t = d.fallT - d.landT - FELL.hold;
   if (t > 0) { const sk = Math.min(1, t / Math.max(0.05, FELL.sink)); d.g.position.y = d.y0 - FELL.depth * sk * sk * (3 - 2 * sk); }
   return t >= FELL.sink && tl >= FELL.dissolve;
+}
+// (v829) leaves shed as it falls, left behind in the air by its crown and fluttering down (more the faster it's
+// going), and a burst of them thrown up as it lands: from points of its crown (d.leafPts, picked in detach)
+const fellP = new GFX.Vector3(), fellV = new GFX.Vector3();
+function fellLeafSpawn(d, kinds, vx, vy, vz, life) {
+  const j = Math.floor(Math.random() * d.leafPts.length / 3) * 3, L = d.leafPts;
+  fellP.set(L[j], L[j + 1], L[j + 2]).applyQuaternion(d.g.quaternion);
+  // (its speed there, the crown swinging round the foot: spin × (axis × r))
+  fellV.crossVectors(d.axis, fellP).multiplyScalar(d.spin);
+  fellP.add(d.g.position);
+  let u = Math.random(), kd = kinds[0];
+  for (const q of kinds) { if (u < q.share) { kd = q; break; } u -= q.share; }
+  const gy = surfaceY(fellP.x, fellP.z);
+  fxParts.spawn({ style: GFX.FX.LEAF, x: fellP.x, y: Math.max(gy + 0.05, fellP.y), z: fellP.z, vx: fellV.x * vx[0] + vx[1] * (Math.random() - 0.5), vy: fellV.y * vx[0] + vy[0] + vy[1] * Math.random(), vz: fellV.z * vx[0] + vx[1] * (Math.random() - 0.5),
+    life: life[0] + Math.random() * life[1], size0: kd.size * (0.8 + Math.random() * 0.5), size1: kd.size, stretch: kd.w, grav: 0.13, drag: 1.8, turb: 0.5, floor: gy,
+    rot: Math.random() * 6.283, spin: (2 + Math.random() * 6) * (Math.random() < 0.5 ? -1 : 1), ramp: fxParts.tint(kd.col), tone0: 0.55 + Math.random() * 0.3, tone1: 0.6, alpha: 1 });
+}
+function fellLeafTrail(d, dt) {
+  if (!d.leafPts || FELL.trail <= 0 || FX_TUNE.on < 0.5) return;
+  const kinds = fellLeaves(d.o, d.c, d.r);
+  if (!kinds) return;
+  d.trailAcc = (d.trailAcc || 0) + dt * FELL.trail * FX_TUNE.density * 14 * Math.min(2, 0.25 + Math.abs(d.spin) * 0.6);
+  for (; d.trailAcc >= 1; d.trailAcc--) fellLeafSpawn(d, kinds, [0.15, 0.4], [0, 0.3], [1.6, 1.4]);
+}
+function fellLeafBurst(d) {
+  if (!d.leafPts || FELL.burst <= 0 || FX_TUNE.on < 0.5) return;
+  const kinds = fellLeaves(d.o, d.c, d.r);
+  if (!kinds) return;
+  for (let n = Math.round(36 * FELL.burst * FX_TUNE.density); n > 0; n--) fellLeafSpawn(d, kinds, [0, 2.4], [1.2, 1.8], [1.6, 1.2]);
 }
 // the dust thrown up as it lands: all along it, from its foot to its crown, outward to either side, in its bark's
 // colour
@@ -23416,7 +23463,10 @@ function detach(i, c, r) {
   const mp = bufTmpPrism.mesh(prismMat(1, true)); if (mp) g.add(mp);
   g.position.set(x, y, z);
   scene.add(g);
-  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false, leafMesh: ml, top: Math.max(0.5, top) };
+  // (points of its crown, where the leaves it sheds as it falls come from)
+  let leafPts = null;
+  if (bufTmpLeaf.n) { const nv = bufTmpLeaf.n / 3, m = Math.min(48, nv); leafPts = new Float32Array(m * 3); for (let q = 0; q < m; q++) { const v = Math.floor(Math.random() * nv) * 3; leafPts[q * 3] = bufTmpLeaf.p[v]; leafPts[q * 3 + 1] = bufTmpLeaf.p[v + 1]; leafPts[q * 3 + 2] = bufTmpLeaf.p[v + 2]; } }
+  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false, leafMesh: ml, leafPts, top: Math.max(0.5, top) };
   detached.set(i, d);
   // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
   // once took 8-20 ms, a spike on the first blow); till they swap in, the chunk's own copy stands and this one hides
@@ -23463,6 +23513,8 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
       d.falling = true; d.fallT = 0; d.axis = new GFX.Vector3(dirz, 0, -dirx).normalize();
       // (it tips about its foot from a hair off upright, the last blow's push already turning it)
       d.ang = 0.03; d.spin = FELL.push; d.landT = -1; d.y0 = d.g.position.y; d.fx = dirx; d.fz = dirz;
+      // (when it'll land, the fall stepped through ahead: for leaves set to dissolve before then)
+      { const kk = 1.5 * FELL.gravity / d.top; let a = d.ang, w = d.spin, t = 0; while (a < FELL_REST && t < 10) { w += kk * Math.sin(a) / 240; a += w / 240; t += 1 / 240; } d.landEst = t; }
       if (d.leafMesh) { d.leafSlot = fellLeafMat(d); d.leafMesh.material = d.leafSlot.mat; }
       fallers.push(d);
       sfx.fell();
@@ -32903,9 +32955,11 @@ const TUNING = [
     [FELL, 'hold', 'Lies there before sinking (seconds)', 0, 2, 0.05],
     [FELL, 'sink', 'Sinking (seconds)', 0.1, 4, 0.05],
     [FELL, 'depth', 'How far it sinks', 0.2, 3, 0.05],
-    [FELL, 'dissolveAt', 'Leaves start dissolving (seconds after it lands)', 0, 2, 0.05],
+    [FELL, 'dissolveAt', 'Leaves start dissolving (seconds after it lands; negative: before)', -2, 2, 0.05],
     [FELL, 'dissolve', 'Leaves dissolving (seconds)', 0.1, 4, 0.05],
     [FELL, 'noise', 'Dissolve noise size (higher: smaller holes)', 0.5, 8, 0.1],
+    [FELL, 'trail', 'Leaves shed as it falls (× how many, 0 none)', 0, 4, 0.05],
+    [FELL, 'burst', 'Leaves thrown up as it lands (× how many, 0 none)', 0, 4, 0.05],
   ]],
   ['Graveyard spiders', [
     [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],

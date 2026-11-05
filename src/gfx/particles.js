@@ -25,8 +25,10 @@ import { Color } from './math.js';
 export const RAMP_N = 8, MAX_RAMPS = 64;
 const FLOATS = 32;   // a particle's record: 8 vec4f
 // how each particle is drawn
-export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14 };
-const SOLID_FROM = 8, SOLID_TO = 13;   // (the solid styles: SOLID_FROM up to, not with, SOLID_TO)
+export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14, LEAF: 15 };
+// (the solid styles: SOLID_FROM up to, not with, SOLID_TO, and LEAF, v829)
+const SOLID_FROM = 8, SOLID_TO = 13;
+const isSolid = st => (st >= SOLID_FROM && st < SOLID_TO) || st === FX.LEAF;
 
 // the particle record, shared by the compute pass and both draws
 const STRUCT = /* wgsl */ `
@@ -82,7 +84,7 @@ fn waveAt(xz: vec2f) -> f32 {
   let onFloor = p.y <= floorY + 0.002;
   // gravity (negative: it rises), and the wind on what's light (smoke, embers, sparks a little)
   v.y -= q.d.z * S.t.w * dt;
-  let windK = select(0.25, 1.0, st == ${FX.PUFF} || st == ${FX.FLAME} || st == ${FX.GLOW} || st == ${FX.SMOKE});
+  let windK = select(0.25, 1.0, st == ${FX.PUFF} || st == ${FX.FLAME} || st == ${FX.GLOW} || st == ${FX.SMOKE} || st == ${FX.LEAF});
   v += S.wind.xyz * windK * dt * select(1.0, 0.0, onFloor);
   // pulled toward its anchor
   if (q.e.x != 0.0) {
@@ -162,7 +164,7 @@ struct VOut {
   let q = parts[ii];
   let st = i32(q.g.x + 0.5);
   let k = fxLife(q);
-  if (k < 0.0 || (st >= ${SOLID_FROM} && st < ${SOLID_TO})) { return o; }
+  if (k < 0.0 || (st >= ${SOLID_FROM} && st < ${SOLID_TO}) || st == ${FX.LEAF}) { return o; }
   let corner = v.position.xy;
   let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
   let up = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
@@ -429,7 +431,7 @@ fn fxTurn(v: vec3f, n: vec3f, a: f32) -> vec3f { return v * cos(a) + cross(n, v)
   let q = parts[ii + u32(U.base.x)];
   let st = i32(q.g.x + 0.5);
   let k = fxLife(q);
-  if (k < 0.0 || st < ${SOLID_FROM} || st >= ${SOLID_TO} || (st == ${FX.DOME}) != (U.base.y > 0.5)) { return o; }
+  if (k < 0.0 || ((st < ${SOLID_FROM} || st >= ${SOLID_TO}) && st != ${FX.LEAF}) || (st == ${FX.DOME}) != (U.base.y > 0.5)) { return o; }
   let s = fxSize(q, k);
   var tone = mix(q.f.y, q.f.z, k);
   var glowK = 1.0; var rough = 0.45;
@@ -441,6 +443,18 @@ fn fxTurn(v: vec3f, n: vec3f, a: f32) -> vec3f { return v * cos(a) + cross(n, v)
     p = fxTurn(p * vec3f(0.45, 1.4, 0.3) * s, axis, q.h.x);
   } else if (st == ${FX.CHUNK}) {
     p = fxTurn(p * vec3f(1.0, 0.75, 0.9) * s, axis, q.h.x);
+  } else if (st == ${FX.LEAF}) {
+    // (v829) a leaf: a thin lozenge (stretch: how wide, for its length; 0 = 0.55), rocking side to side and
+    // tumbling as it flutters, swaying a little as it drifts, shrinking away at the end (no dither)
+    let age = U.now.x - q.a.w;
+    let wid = select(0.55, q.h.z, q.h.z > 0.0);
+    let sh = 1.0 - smoothstep(0.8, 1.0, k);
+    let air = select(1.0, 0.0, abs(q.b.y) < 1e-4 && length(q.b.xz) < 0.05);
+    var lp = p * vec3f(wid, 0.06, 1.0) * s * sh;
+    lp = fxTurn(lp, vec3f(0.0, 0.0, 1.0), 0.7 * sin(age * 5.3 + sd * 31.0) * air);
+    p = fxTurn(lp, axis, q.h.x) + vec3f(sin(age * 3.1 + sd * 17.0), 0.0, cos(age * 2.7 + sd * 23.0)) * 0.07 * air;
+    rough = 0.8;
+    fade = 1.0;
   } else if (st == ${FX.DROP}) {
     let vel = q.b.xyz; let sp = length(vel);
     let dir = select(vec3f(0.0, 1.0, 0.0), vel / max(sp, 1e-4), sp > 0.2);
@@ -630,7 +644,7 @@ export class FxParticles {
   // grav, drag, pull, swirl, turb, bounce, ramp (id), tone0, tone1, alpha, glow, ramp2 (a flame's smoke), ride (it sits
   // on the rippling surface `wave` over its floor), rot, spin, stretch, cover (or morph, for a flame) }
   spawn(p) {
-    const solid = p.style >= SOLID_FROM && p.style < SOLID_TO, dome = p.style === FX.DOME;
+    const solid = isSolid(p.style), dome = p.style === FX.DOME;
     let slot;
     if (dome) { slot = this.cap + this.solidCap + this.nextDome; this.nextDome = (this.nextDome + 1) % this.domeCap; }
     else if (solid) { slot = this.cap + this.nextSolid; this.nextSolid = (this.nextSolid + 1) % this.solidCap; }
@@ -710,7 +724,7 @@ export class FxParticles {
 // Special emitters: { bolt: { from, to, jag, segments, forks, width, life, every } } draws jagged beams, re-rolled
 // `every` seconds through the phase.
 const STYLE = { glow: FX.GLOW, spark: FX.SPARK, glint: FX.GLINT, puff: FX.PUFF, flame: FX.FLAME, ring: FX.RING, disc: FX.DISC,
-  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS };
+  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS, leaf: FX.LEAF };
 const pick = v => Array.isArray(v) ? v[0] + Math.random() * (v[1] - v[0]) : v;
 
 // A phase can also move: { move: { from, to, arc } } carries its 'head' point from one to the other across the phase
