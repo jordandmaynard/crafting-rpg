@@ -634,6 +634,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v829:** (Jordan) A falling tree sheds leaves behind its crown as it goes (more the faster it swings), and throws up a burst of them as it lands. They're a new solid particle style, FX.LEAF (particles.js): a thin lit lozenge (stretch = its width for its length: pine needles narrow), rocking and tumbling as it flutters down, taking the wind, shrinking away at the end with no dither. Colours by kind (fellLeaves): oak green (town oaks brighter), birch yellow-green or gold, pine and frost pine needles (frost pines shed snow flecks too), palm green, swamp trees their grey-green hanging moss and moss; cactus, graveyard, dead and burned trees shed none. They come from 48 points of the crown picked when the tree is detached. 'Leaves start dissolving' (FELL.dissolveAt) can now be negative, to start before it lands (by when it's due to land, worked out as it starts to fall). T > Tree felling: trail 1, burst 1.
 
+**v830:** Fix: felling a tree in v829 threw on every leaf shed (fellLeafSpawn took a stray argument, so the leaves' lifetimes were missing).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
