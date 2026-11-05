@@ -592,6 +592,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v808:** (Jordan: clicking the ground with the hoe didn't till) Fixed: the hoe shows the open hand cursor, and a click with the hand cursor was always taken as F (use what's near), so the hoe never chopped. A click now does F's job only when the cursor is actually over something to use; otherwise, with the hoe in hand, it hoes the square under the cursor. (v802's check called the hoe directly, past the mouse, which is how it was missed.)
 
+**v809:** (Jordan) The loading window is now on Jordan's painted window (ui/loading/window.webp; the original in art/deliveries/loading-window-background.png): "Emberwild" sits in its leather title band in the shared window title treatment, the top of the parchment is left empty for a picture Jordan will supply (#loadArt, 440x210 at 1080p), and the loading steps (SHAPING THE WORLD and so on) are back, above the bar. The seed and version line and Set Out stay below the bar.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
