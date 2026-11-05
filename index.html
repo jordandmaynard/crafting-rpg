@@ -921,6 +921,14 @@ body.mapOpen #optsModal { z-index: 10; }
 .map-aperture { position: absolute; left: 64px; top: 46px; width: 1224px; height: var(--mapAH, 700px); border-radius: 14px; overflow: hidden; z-index: 1; background: url("ui/map/fog-parchment-tile.webp") 0 0 / 512px 512px repeat; }
 #bigmap { position: absolute; left: 0; top: 0; width: 1224px; height: var(--mapAH, 700px); image-rendering: pixelated; cursor: grab; touch-action: none; }
 #bigmap:active { cursor: grabbing; }
+/* (v858, Jordan) the map's light switch at the opening's top left: a sun, hollow while the light is off */
+.map-sun { position: absolute; left: 18px; top: 16px; width: 72px; height: 72px; padding: 0; border: 0; border-radius: 50%%; background: none; box-shadow: none; z-index: 2; cursor: pointer; filter: drop-shadow(0 1px 1px #0009) drop-shadow(0 0 2px #0006); }
+.map-sun svg { display: block; width: 100%%; height: 100%%; overflow: visible; }
+.map-sun path, .map-sun circle { fill: #ffd21f; stroke: #ffd21f; stroke-width: 4; stroke-linejoin: round; transition: fill 0.15s; }
+.map-sun.off path, .map-sun.off circle { fill: transparent; }
+.map-sun:hover { filter: drop-shadow(0 1px 1px #0009) drop-shadow(0 0 2px #0006) brightness(1.12); }
+.map-sun:active { transform: scale(0.94); box-shadow: none; }
+.map-sun:focus-visible { outline: 2px solid #ffe2a0; outline-offset: 2px; }
 .map-title { position: absolute; left: 388px; top: -44px; width: 560px; height: 76px; z-index: 3; background: url("ui/map/title-plaque.webp") center / 100% 100%; font: 600 30px/76px var(--wk); text-align: center; letter-spacing: 0.06em; text-transform: uppercase; color: #3a2314; pointer-events: none; }
 /* (v713, Jordan) one close X for the crate, foot locker and iron chest windows, the quest board, the world map and the
    character and backpack: the world map's (ui/map/close.webp, close-focus.webp for keyboard focus, a text ×), 44 px,
@@ -1386,6 +1394,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
     </nav>
     <div class="map-aperture">
       <canvas id="bigmap" width="1224" height="700"></canvas>
+      <button class="map-sun" id="mapSun" aria-pressed="true"><svg viewBox="-50 -50 100 100" aria-hidden="true"><path d="M-6.2 -30.4L0.0 -46.0L6.2 -30.4ZM17.1 -25.8L32.5 -32.5L25.8 -17.1ZM30.4 -6.2L46.0 -0.0L30.4 6.2ZM25.8 17.1L32.5 32.5L17.1 25.8ZM6.2 30.4L0.0 46.0L-6.2 30.4ZM-17.1 25.8L-32.5 32.5L-25.8 17.1ZM-30.4 6.2L-46.0 0.0L-30.4 -6.2ZM-25.8 -17.1L-32.5 -32.5L-17.1 -25.8Z"/><circle r="23"/></svg></button>
       <div class="map-legend" aria-hidden="true">
         <img class="map-rose" src="ui/map/compass-rose.webp" alt="" draggable="false">
         <span class="rose-n">N</span><span class="rose-e">E</span><span class="rose-s">S</span><span class="rose-w">W</span>
@@ -1407,7 +1416,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 857;
+const GAME_VERSION = 858;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -31496,7 +31505,10 @@ function mapColOf(i, R, Gc, B) {
 // relief stays (1 all of it); neutral: flat ground's brightness without it; turn 1: the minimap's light from the top
 // left of the screen as the camera turns (0: from the map's top left); straight: how far (tiles, a Gaussian's sigma) the
 // heights are blurred for which way a slope faces, so diagonal cliffs (tile staircases) light evenly along (0 off: v857)
-const MAP_LIGHT = { on: 1, angle: 315, height: 5, strength: 1, relief: 0.55, soft: 0.1, bright: 1.9, dark: 0.25, shadow: 0.46, reach: 29, tint: 0, neutral: 0.81, turn: 1, straight: 1 };
+const MAP_LIGHT = { on: 1, angle: 315, height: 5, strength: 1, relief: 1.5, soft: 1.5, bright: 1.66, dark: 0.25, shadow: 0.31, reach: 29, tint: 0.32, neutral: 0.93, turn: 1, straight: 4 };
+// (v858: the map's sun button turns the light off and on, kept in the browser)
+const MAP_LIGHT_KEY = 'emberwild.mapLight';
+try { if (localStorage.getItem(MAP_LIGHT_KEY) === '0') MAP_LIGHT.on = 0; } catch (err) { /* (on) */ }
 // the ground's height at every half-tile point, as the 3D ground is drawn (a cliff's face sloping down over the lower
 // tile's outer half), but water, lava and swamp pools at their surface and a bridge at its deck
 function mapSurf(i, c, r, u, v) {
@@ -31576,6 +31588,27 @@ function blurMapHeights() {
   for (let k = 0; k <= K; k++) { W[k] = sg > 0.01 ? Math.exp(-k * k / (2 * sg * sg)) : k ? 0 : 1; sum += k ? 2 * W[k] : W[k]; }
   for (let k = 0; k <= K; k++) W[k] /= sum;
   const src = mapTileH, tmp = mapBlurTmp || (mapBlurTmp = new Float32Array(N * N)), row = new Float32Array(N);
+  // (wide blurs as three box blurs each way, running sums, the same time whatever the width: v858)
+  if (sg > 1.5) {
+    const rb = Math.max(1, Math.round((Math.sqrt(4 * sg * sg + 1) - 1) / 2)), A = new Float32Array(N * N), B = tmp;
+    const box = (from, to, stride, step) => {
+      // each line (start l * stride ... ) along step
+      for (let l = 0; l < N; l++) {
+        const o = l * stride;
+        let sum = 0;
+        for (let k = -rb; k <= rb; k++) sum += from[o + clamp(k, 0, N - 1) * step];
+        for (let k = 0; k < N; k++) {
+          to[o + k * step] = sum / (2 * rb + 1);
+          sum += from[o + Math.min(N - 1, k + rb + 1) * step] - from[o + Math.max(0, k - rb) * step];
+        }
+      }
+    };
+    box(src, A, N, 1); box(A, B, N, 1); box(B, A, N, 1);
+    box(A, B, 1, N); box(B, A, 1, N); box(A, B, 1, N);
+    if (F16) out.set(B); else for (let i = 0; i < N * N; i++) out[i] = toHalf(B[i]);
+    mapBlurH = out;
+    return;
+  }
   // (across, then down; clamped at the world's edge, the middle without the clamps)
   for (let r = 0; r < N; r++) {
     const o = r * N;
@@ -31808,6 +31841,22 @@ fn biasOf(c: u32) -> f32 {
 })();
 const mapSmoothLive = () => { miniT = 0; if (mapOpen) drawBigMap(); };
 mapSmoothLive.live = true;
+// the sun button (v858): lit, a filled sun; off, a hollow one (and the old higher-is-lighter map)
+function mapSunShow() {
+  const on = !!MAP_LIGHT.on, b = $('mapSun');
+  b.classList.toggle('off', !on); b.setAttribute('aria-pressed', String(on));
+  b.title = on ? 'Map light on (click for the flat map)' : 'Map light off (click to light the map)';
+  b.setAttribute('aria-label', b.title);
+}
+function mapLightLive() {
+  mapSunShow();
+  try { localStorage.setItem(MAP_LIGHT_KEY, MAP_LIGHT.on ? '1' : '0'); } catch (err) { /* (just this visit) */ }
+  mapSmoothLive();
+}
+mapLightLive.live = true;
+$('mapSun').addEventListener('click', e => { e.stopPropagation(); audioOn(); MAP_LIGHT.on = MAP_LIGHT.on ? 0 : 1; mapLightLive(); });
+$('mapSun').addEventListener('pointerdown', e => e.stopPropagation());
+mapSunShow();
 let mapHeightMs = 0;
 function paintMap() {
   const img = mapCtx.createImageData(N, N), d = img.data;
@@ -34106,7 +34155,7 @@ const TUNING = [
     [MAP_SMOOTH, 'cliff', 'Cliff rims win close calls by', 0, 0.4, 0.01, mapSmoothLive],
   ]],
   ['Map light', [
-    [MAP_LIGHT, 'on', 'Light the map (1) or the old relief, higher ground lighter (0)', 0, 1, 1, mapSmoothLive],
+    [MAP_LIGHT, 'on', 'Light the map (1) or the old relief, higher ground lighter (0) (also the map\'s sun)', 0, 1, 1, mapLightLive],
     [MAP_LIGHT, 'angle', 'Light comes from (degrees clockwise from north, 315 top left)', 0, 360, 1, mapSmoothLive],
     [MAP_LIGHT, 'height', 'Light height over the horizon (degrees)', 5, 85, 1, mapSmoothLive],
     [MAP_LIGHT, 'strength', 'Strength (0 unlit)', 0, 1, 0.01, mapSmoothLive],
@@ -34260,7 +34309,7 @@ const tuneLine = ([title, items]) => {
 // default isn't what the game started with (tile height and the map's book font are kept in storage, so the code's
 // defaults are named here)
 const TUNE_UNMARKED = [[SKY, 'timeOfDay']];
-const TUNE_HOMES = [[WORLD, 'tileHeight', TILE_H_DEFAULT], [OPTIONS, 'mapFont', 1]];
+const TUNE_HOMES = [[WORLD, 'tileHeight', TILE_H_DEFAULT], [OPTIONS, 'mapFont', 1], [MAP_LIGHT, 'on', 1]];
 const tuneSame = (a, b, step) => (typeof a === 'number' && typeof b === 'number' ? tuneShow(a, step) === tuneShow(b, step) : String(a).toLowerCase() === String(b).toLowerCase());
 const TUNE_UNDO_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.6A5 5 0 1 0 5 4.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2.4 1.8v4.3h4.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const tuneButton = (text, className = '') => Object.assign(document.createElement('button'), { type: 'button', textContent: text, className });
