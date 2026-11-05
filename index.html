@@ -1416,7 +1416,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 870;
+const GAME_VERSION = 871;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8452,9 +8452,9 @@ if (MOBILE) proxyRT.colorFormat = 'rgba8unorm';
 // The foes alone are drawn again into hoverRT (their depth only matters); the outline pass strokes red the stroked
 // pixels where that depth is the picture's own (the foe shows there), the mask's own edge where it's hidden, and lays
 // the glow round it. T > Enemy hover outline.
-// (v869, Jordan) barGlow: a soft glow (px, 0 none) in the colour round the small health bar of the foe under the mouse
-// and of every foe after you (v870); barStrength: how strong it is
-const FOE_HOVER = { mode: 1, color: '#ff1100', glow: 4, size: 0, through: 1, fill: 0.15, barGlow: 8, barStrength: 0.9 };   // (v867, v869: Jordan's tuning)
+// (v869, Jordan) barGlow: a soft glow (px, 0 none) in the colour round the small health bar and its level circle of
+// every foe after you (v870, v871); barStrength: how strong it is; barBright: overbright past 1 (see updateFoeBars)
+const FOE_HOVER = { mode: 1, color: '#ff1100', glow: 4, size: 0, through: 1, fill: 0.15, barGlow: 8, barStrength: 0.9, barBright: 1.5 };   // (v867, v869: Jordan's tuning)
 const hoverRT = new GFX.WebGLRenderTarget(1, 1, { minFilter: GFX.NearestFilter, magFilter: GFX.NearestFilter, depthBuffer: true });
 hoverRT.depthTexture = new GFX.DepthTexture(1, 1); hoverRT.depthTexture.type = GFX.UnsignedIntType;
 hoverRT.colorFormat = 'rgba8unorm';
@@ -25978,13 +25978,21 @@ function updateFoeBars(dt) {
   if (hov) { hov.barT = HPBAR.hold; barFoes.add(hov); }
   // (v869, Jordan) every foe after you shows its bar, held HPBAR.hold after it gives up
   if (H.alive) for (const f of foes) if (f.aggro && f.hp > 0) { f.barT = HPBAR.hold; barFoes.add(f); }
-  // (v869) the soft glow round the bar of the foe under the mouse and (v870) of every foe after you: FOE_HOVER.barGlow
+  // (v869) the soft glow round the bar, and (v871) its level circle, of every foe after you (v871, Jordan: not the foe
+  // under the mouse, which has its outline): FOE_HOVER.barGlow px, barStrength, barBright (1 the colour; past 1
+  // overbright: the glow laid on again, barBright times over, its core running toward white). The page can't draw
+  // past white, so overbright is how much and how white, not HDR. Box shadows, drawn outside the bar and the circle only.
   const G = FOE_HOVER, gr = Math.max(0, G.barGlow);
   let glowCss = '';
   if (gr > 0.05 && G.barStrength > 0) {
     hoverTint.set(G.color);
-    const a = Math.min(1, G.barStrength), rgba = k => `rgba(${Math.round(hoverTint.r * 255)}, ${Math.round(hoverTint.g * 255)}, ${Math.round(hoverTint.b * 255)}, ${(a * k).toFixed(3)})`;
-    glowCss = `0 0 ${(gr * 0.35).toFixed(1)}px ${rgba(1)}, 0 0 ${gr.toFixed(1)}px ${rgba(0.8)}, 0 0 ${(gr * 2).toFixed(1)}px ${rgba(0.45)}`;
+    const br = Math.min(8, Math.max(0, G.barBright)), full = Math.floor(br), frac = br - full, w = Math.min(1, Math.max(0, br - 1) / 3);
+    const rgba = (a, t) => `rgba(${Math.round((hoverTint.r + (1 - hoverTint.r) * t) * 255)}, ${Math.round((hoverTint.g + (1 - hoverTint.g) * t) * 255)}, ${Math.round((hoverTint.b + (1 - hoverTint.b) * t) * 255)}, ${Math.min(1, a).toFixed(3)})`;
+    const one = a => `0 0 ${(gr * 0.35).toFixed(1)}px ${rgba(a, w * 0.7)}, 0 0 ${gr.toFixed(1)}px ${rgba(a * 0.8, w * 0.25)}, 0 0 ${(gr * 2).toFixed(1)}px ${rgba(a * 0.45, 0)}`;
+    // (whole copies at full strength, then one for what's left over: brighter all the way up)
+    const sets = new Array(full).fill(one(G.barStrength));
+    if (frac > 0.01) sets.push(one(G.barStrength * frac));
+    glowCss = sets.join(', ');
   }
   const rect = cv.getBoundingClientRect();
   for (const f of barFoes) {
@@ -25999,8 +26007,12 @@ function updateFoeBars(dt) {
     const p = f.g.position;
     v3.set(p.x, foeTop(f) + HPBAR.raise, p.z).project(camera);
     if (v3.z > 1 || v3.z < -1) { f.barEl.hidden = true; continue; }   // (behind the camera: it would project mirrored)
-    const glow = f === hov || f.aggro ? glowCss : '';
-    if (f._barGlow !== glow) { f._barGlow = glow; f.barEl.style.boxShadow = glow; }
+    const glow = f.aggro ? glowCss : '';
+    if (f._barGlow !== glow) {
+      f._barGlow = glow; f.barEl.style.boxShadow = glow;
+      // (the level circle keeps its own ring and drop shadow, the glow after them)
+      f.barEl.querySelector('.lvl').style.boxShadow = glow ? 'inset 0 0 0 2px var(--hb-fill, #e8b830), 2px 2px 0 #000, ' + glow : '';
+    }
     f.barEl.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
     f.barEl.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
     drawBar(f.barEl.lastChild, f.barEl.firstChild, f);
@@ -34684,8 +34696,9 @@ const TUNING = [
     [FOE_HOVER, 'size', 'Glow size (mosaic pixels)', 0, 6, 1],
     [FOE_HOVER, 'through', 'Drawn over whatever hides it, as the hero is (0 only where it shows, 1 through)', 0, 1, 1],
     [FOE_HOVER, 'fill', 'Fill where hidden, the foe under the mouse and every foe after you (share of the colour, 0 none)', 0, 1, 0.01],
-    [FOE_HOVER, 'barGlow', 'Glow round its small health bar (px, 0 none)', 0, 30, 0.5],
+    [FOE_HOVER, 'barGlow', 'Glow round the small health bar and level of a foe after you (px, 0 none)', 0, 30, 0.5],
     [FOE_HOVER, 'barStrength', 'Health bar glow strength', 0, 1, 0.01],
+    [FOE_HOVER, 'barBright', 'Health bar glow brightness (1 the colour, more overbright toward white)', 0.1, 6, 0.05],
   ]],
 ];
 const TUNE_CLOSED_KEY = 'emberwild.tuneClosed';
