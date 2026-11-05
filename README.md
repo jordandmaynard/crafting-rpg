@@ -680,6 +680,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v869:** (Jordan) Enemy hover outline tuning: color #ff1100, glow 4, size 0, fill 0.15. The small health bar of the foe under the mouse (and in mode 2 of every foe after you) gets a soft glow in the outline colour (barGlow px, barStrength). Every foe with aggro on you always shows its small health bar, held HPBAR.hold seconds after it gives up; bars behind the camera are hidden instead of projecting mirrored.
 **v870:** (Jordan) A foe with aggro on you always shows its small health bar, its bar's red glow, and the red fill where it's hidden behind things; only the foe under the mouse gets the red outline (mode 1). The mask (hoverRT) now carries which: white outlined, grey only filled (crowd foes swap hoverMat/hoverFillMat, people set their mask shader's kind). Mode 2 outlines the foes after you as well; mode 0 turns the outline and fill off.
 **v871:** (Jordan) The small health bar's glow is for foes with aggro on you only (the foe under the mouse gets just its outline), and now goes round the level circle too. FOE_HOVER.barBright (1.5) sets how bright: past 1 the glow is laid on again (barBright times over) and its core runs toward white, as near to overbright as the page's own drawing gets.
+**v872:** (Jordan's tuning) Enemy hover outline: color #ff0000 (was #ff1100), glow 0 (was 4), fill 0.73 (was 0.15), barBright 3.05 (was 1.5).
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
