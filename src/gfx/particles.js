@@ -25,10 +25,10 @@ import { Color } from './math.js';
 export const RAMP_N = 8, MAX_RAMPS = 64;
 const FLOATS = 32;   // a particle's record: 8 vec4f
 // how each particle is drawn
-export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14, LEAF: 15 };
-// (the solid styles: SOLID_FROM up to, not with, SOLID_TO, and LEAF, v829)
+export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14, LEAF: 15, COIN: 16 };
+// (the solid styles: SOLID_FROM up to, not with, SOLID_TO, and LEAF, v829, and COIN, v840)
 const SOLID_FROM = 8, SOLID_TO = 13;
-const isSolid = st => (st >= SOLID_FROM && st < SOLID_TO) || st === FX.LEAF;
+const isSolid = st => (st >= SOLID_FROM && st < SOLID_TO) || st === FX.LEAF || st === FX.COIN;
 
 // the particle record, shared by the compute pass and both draws
 const STRUCT = /* wgsl */ `
@@ -118,6 +118,11 @@ fn waveAt(xz: vec2f) -> f32 {
   }
   if (onFloor && v.y <= 0.0) { v.x *= exp(-6.0 * dt); v.z *= exp(-6.0 * dt); q.h.y *= exp(-5.0 * dt); }
   q.h.x += q.h.y * dt;
+  // (v840) a coin come to rest on its floor stops flipping and settles flat, face up or face down, whichever is nearer
+  if (st == ${FX.COIN} && p.y <= floorY + 0.002 && v.y == 0.0) {
+    q.h.y *= exp(-12.0 * dt);
+    q.h.x = mix(q.h.x, round(q.h.x / 3.14159265) * 3.14159265, 1.0 - exp(-14.0 * dt));
+  }
   q.a = vec4f(p, q.a.w); q.b = vec4f(v, q.b.w);
   P[id.x] = q;
 }`;
@@ -164,7 +169,7 @@ struct VOut {
   let q = parts[ii];
   let st = i32(q.g.x + 0.5);
   let k = fxLife(q);
-  if (k < 0.0 || (st >= ${SOLID_FROM} && st < ${SOLID_TO}) || st == ${FX.LEAF}) { return o; }
+  if (k < 0.0 || (st >= ${SOLID_FROM} && st < ${SOLID_TO}) || st == ${FX.LEAF} || st == ${FX.COIN}) { return o; }
   let corner = v.position.xy;
   let right = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]);
   let up = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
@@ -421,25 +426,37 @@ struct VOut {
   @location(2) glow: f32,
   @location(3) fade: f32,
   @location(4) rough: f32,
+  @location(5) metal: f32,
 }
 // turn v by angle a about the unit axis n
 fn fxTurn(v: vec3f, n: vec3f, a: f32) -> vec3f { return v * cos(a) + cross(n, v) * sin(a) + n * dot(n, v) * (1.0 - cos(a)); }
 @vertex fn vs(v: VIn, @builtin(instance_index) ii: u32) -> VOut {
   var o: VOut;
   o.pos = vec4f(2.0, 2.0, 2.0, 1.0);
-  // (the dome mesh draws only domes, from its own slots on: U.base; the gem mesh everything else solid)
+  // (the dome mesh draws only domes, from its own slots on: U.base, y 1; the coin mesh only coins, y 2; the gem mesh
+  // everything else solid, y 0)
   let q = parts[ii + u32(U.base.x)];
   let st = i32(q.g.x + 0.5);
   let k = fxLife(q);
-  if (k < 0.0 || ((st < ${SOLID_FROM} || st >= ${SOLID_TO}) && st != ${FX.LEAF}) || (st == ${FX.DOME}) != (U.base.y > 0.5)) { return o; }
+  let pool = select(select(0, 1, st == ${FX.DOME}), 2, st == ${FX.COIN});
+  if (k < 0.0 || ((st < ${SOLID_FROM} || st >= ${SOLID_TO}) && st != ${FX.LEAF} && st != ${FX.COIN}) || pool != i32(U.base.y + 0.5)) { return o; }
   let s = fxSize(q, k);
   var tone = mix(q.f.y, q.f.z, k);
-  var glowK = 1.0; var rough = 0.45;
+  var glowK = 1.0; var rough = 0.45; var metal = 0.0;
   let sd = q.g.y;
   let axis = normalize(vec3f(fxHash(sd * 13.0) - 0.5, fxHash(sd * 29.0) - 0.5 + 0.01, fxHash(sd * 41.0) - 0.5));
   var p = v.position;
   var fade = 1.0 - smoothstep(0.75, 1.0, k);
-  if (st == ${FX.SHARD}) {
+  if (st == ${FX.COIN}) {
+    // (v840) a coin: a flat disc (stretch: its thickness for its radius) flipping end over end about a level axis
+    // turned by its seed, set up by its thickness so it lies on the ground once it settles flat (see the sim); metal,
+    // its shine and roughness from U.coin, dithering out over the last part of its life (U.coin.w: from how far on)
+    let ax = vec3f(cos(sd * 6.283), 0.0, sin(sd * 6.283));
+    let th = max(q.h.z, 0.04);
+    p = fxTurn(p * vec3f(s, s * th, s), ax, q.h.x) + vec3f(0.0, s * th, 0.0);
+    metal = U.coin.x; rough = U.coin.y;
+    fade = 1.0 - smoothstep(U.coin.w, 1.0, k);
+  } else if (st == ${FX.SHARD}) {
     p = fxTurn(p * vec3f(0.45, 1.4, 0.3) * s, axis, q.h.x);
   } else if (st == ${FX.CHUNK}) {
     p = fxTurn(p * vec3f(1.0, 0.75, 0.9) * s, axis, q.h.x);
@@ -501,7 +518,7 @@ fn fxTurn(v: vec3f, n: vec3f, a: f32) -> vec3f { return v * cos(a) + cross(n, v)
   o.pos = F.viewProj * vec4f(w, 1.0);
   o.w = w;
   o.col = fxRamp(q.f.x, tone);
-  o.glow = q.g.z * U.look.y * glowK; o.fade = fade * q.f.w; o.rough = rough;
+  o.glow = q.g.z * U.look.y * glowK; o.fade = fade * q.f.w; o.rough = rough; o.metal = metal;
   return o;
 }
 var<private> BAYER: array<f32, 16> = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
@@ -510,7 +527,14 @@ var<private> BAYER: array<f32, 16> = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4
   let c = vec2u(i.pos.xy) % vec2u(4u);
   if (i.fade < (BAYER[c.y * 4u + c.x] + 0.5) / 16.0) { discard; }
   let n = flatNormal(i.w - F.camPos.xyz);
-  let col = shadeLit(i.col, i.col * i.glow, 0.0, i.rough, i.w, n, true);
+  var col = shadeLit(i.col, i.col * i.glow, i.metal, i.rough, i.w, n, true);
+  // (v840) metal (coins) mirrors the sky above and the ground below, so a face catches the light as it turns (there's
+  // no picture of the world round it to mirror): U.coin.z how much
+  if (i.metal > 0.0) {
+    let R = reflect(-toEye(i.w), n);
+    let env = mix(F.hemiGround.rgb, F.hemiSky.rgb * 1.6, smoothstep(-0.25, 0.35, R.y));
+    col += i.col * i.metal * env * U.coin.z;
+  }
   return vec4f(applyFog(col, viewDepth(i.w)), 1.0);
 }`;
 
@@ -543,16 +567,28 @@ function domeGeo(seg = 10) {
   return g;
 }
 
-// The particle pool. opts: { cap (see-through slots), solidCap (solid slots), domeCap (dome slots), shared: uniforms
+// (v840) a coin: a flat twelve-sided cylinder, radius 1, from y -1 to 1 (squashed to its thickness in the shader)
+function coinGeo(seg = 12) {
+  const pos = [], P = (k, y) => { const a = k / seg * Math.PI * 2; return [Math.cos(a), y, Math.sin(a)]; };
+  for (let k = 0; k < seg; k++) {
+    const a0 = P(k, 1), a1 = P(k + 1, 1), b0 = P(k, -1), b1 = P(k + 1, -1);
+    pos.push(0, 1, 0, ...a1, ...a0, 0, -1, 0, ...b0, ...b1, ...a0, ...a1, ...b1, ...a0, ...b1, ...b0);
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  return g;
+}
+
+// The particle pool. opts: { cap (see-through slots), solidCap (solid slots), domeCap (dome slots), coinCap (coin slots), shared: uniforms
 // to share with the game ({ tRefrD, refr }: the depth behind, for soft edges) }. clearMesh, solidMesh and domeMesh
 // go into the scene where the game wants them drawn. wave: [height, length, phase] of the surface particles that
 // ride the waves sit on (see waveAt).
 export class FxParticles {
-  constructor(renderer, { cap = 8192, solidCap = 1024, domeCap = 128, shared = {} } = {}) {
+  constructor(renderer, { cap = 8192, solidCap = 1024, domeCap = 128, coinCap = 512, shared = {} } = {}) {
     this.renderer = renderer;
     const dev = this.device = renderer.device, B = GPUBufferUsage;
-    this.cap = cap; this.solidCap = solidCap; this.domeCap = domeCap;
-    const n = cap + solidCap + domeCap;
+    this.cap = cap; this.solidCap = solidCap; this.domeCap = domeCap; this.coinCap = coinCap;
+    const n = cap + solidCap + domeCap + coinCap;
     this.data = new Float32Array(n * FLOATS);
     this.buf = dev.createBuffer({ size: n * FLOATS * 4, usage: B.STORAGE | B.COPY_DST });
     this.simU = dev.createBuffer({ size: 48, usage: B.UNIFORM | B.COPY_DST });
@@ -565,16 +601,17 @@ export class FxParticles {
     this.group = dev.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [
       { binding: 0, resource: { buffer: this.simU } }, { binding: 1, resource: { buffer: this.buf } }] });
     this.now = 0;
-    this.next = 0; this.nextSolid = 0; this.nextDome = 0;
+    this.next = 0; this.nextSolid = 0; this.nextDome = 0; this.nextCoin = 0;
     this.dirty = [];          // [first slot, last slot] ranges to send
-    this.clearUntil = 0; this.solidUntil = 0; this.domeUntil = 0;   // the fx clock by which every particle of each kind is gone
+    this.clearUntil = 0; this.solidUntil = 0; this.domeUntil = 0; this.coinUntil = 0;   // the fx clock by which every particle of each kind is gone
     this.gravity = 9; this.turbScale = 0.9; this.wind = [0, 0, 0]; this.wave = [0, 1, 0];
     // ramps: names to ids, and their colours for the shaders
     this.rampIds = new Map(); this.rampData = new Float32Array(MAX_RAMPS * RAMP_N * 4);
     this.look = { x: 1, y: 1, z: 1, w: 3 };   // hard ramp steps (1) or blended (0); glow ×; size ×; light bands on soft volumes (0 smooth)
-    this.puff = { x: 6, y: 0, z: 1.1, w: 0 };   // puffs' and smoke's lumps (in their normals only): how much they bend the light, _, how many across, _
+    this.puff = { x: 6, y: 0, z: 1.1, w: 0 };
+    this.coin = { x: 0.7, y: 0.28, z: 1, w: 0.7 };   // (v840) coins: metalness, roughness, how much they mirror the sky, where they start to dither out (life 0-1)   // puffs' and smoke's lumps (in their normals only): how much they bend the light, _, how many across, _
     const U = {
-      now: { value: { x: 0, y: 0, z: 0, w: 0 } }, look: { value: this.look }, puff: { value: this.puff }, ramps: { value: this.rampData },
+      now: { value: { x: 0, y: 0, z: 0, w: 0 } }, look: { value: this.look }, puff: { value: this.puff }, coin: { value: this.coin }, ramps: { value: this.rampData },
       tRefrD: shared.tRefrD || { value: null }, refr: shared.refr || { value: 0 }, base: { value: { x: 0, y: 0 } },
     };
     this.uniforms = U;
@@ -589,6 +626,9 @@ export class FxParticles {
     // (the domes: the same shader over their own slots, base.y 1)
     this.domeMat = new ShaderMaterial({ uniforms: Object.assign({}, U, { base: { value: { x: cap + solidCap, y: 1 } } }), code: SOLID_WGSL, side: DoubleSide });
     this.domeMat.storage = { parts: { buffer: this.buf, type: 'array<FxP>' } };
+    // (the coins: the same again over theirs, base.y 2)
+    this.coinMat = new ShaderMaterial({ uniforms: Object.assign({}, U, { base: { value: { x: cap + solidCap + domeCap, y: 2 } } }), code: SOLID_WGSL, side: DoubleSide });
+    this.coinMat.storage = { parts: { buffer: this.buf, type: 'array<FxP>' } };
     const qg = quadGeo(); qg.instanceCount = n;
     const gg = gemGeo(); gg.instanceCount = n;
     this.clearMesh = new Mesh(qg, this.clearMat); this.clearMesh.frustumCulled = false;
@@ -596,6 +636,9 @@ export class FxParticles {
     const dg = domeGeo(); dg.instanceCount = domeCap;
     this.domeMesh = new Mesh(dg, this.domeMat); this.domeMesh.frustumCulled = false;
     this.domeMesh.castShadow = false; this.domeMesh.visible = false;
+    const cg = coinGeo(); cg.instanceCount = coinCap;
+    this.coinMesh = new Mesh(cg, this.coinMat); this.coinMesh.frustumCulled = false;
+    this.coinMesh.castShadow = false; this.coinMesh.visible = false;
     this.clearMesh.castShadow = this.solidMesh.castShadow = false;
     this.clearMesh.visible = this.solidMesh.visible = false;
     this.ramp('white', ['#3a3a40', '#6a6a72', '#9a9aa2', '#c0c0c8', '#dadae0', '#ececf0', '#f6f6f8', '#ffffff']);
@@ -644,9 +687,10 @@ export class FxParticles {
   // grav, drag, pull, swirl, turb, bounce, ramp (id), tone0, tone1, alpha, glow, ramp2 (a flame's smoke), ride (it sits
   // on the rippling surface `wave` over its floor), rot, spin, stretch, cover (or morph, for a flame) }
   spawn(p) {
-    const solid = isSolid(p.style), dome = p.style === FX.DOME;
+    const solid = isSolid(p.style), dome = p.style === FX.DOME, coin = p.style === FX.COIN;
     let slot;
-    if (dome) { slot = this.cap + this.solidCap + this.nextDome; this.nextDome = (this.nextDome + 1) % this.domeCap; }
+    if (coin) { slot = this.cap + this.solidCap + this.domeCap + this.nextCoin; this.nextCoin = (this.nextCoin + 1) % this.coinCap; }
+    else if (dome) { slot = this.cap + this.solidCap + this.nextDome; this.nextDome = (this.nextDome + 1) % this.domeCap; }
     else if (solid) { slot = this.cap + this.nextSolid; this.nextSolid = (this.nextSolid + 1) % this.solidCap; }
     else { slot = this.next; this.next = (this.next + 1) % this.cap; }
     const d = this.data, o = slot * FLOATS, born = this.now + (p.delay || 0), life = Math.max(0.01, p.life || 1);
@@ -661,12 +705,13 @@ export class FxParticles {
     const last = this.dirty[this.dirty.length - 1];
     if (last && last[1] === slot - 1) last[1] = slot; else this.dirty.push([slot, slot]);
     const end = born + life;
-    if (dome) this.domeUntil = Math.max(this.domeUntil, end);
+    if (coin) this.coinUntil = Math.max(this.coinUntil, end);
+    else if (dome) this.domeUntil = Math.max(this.domeUntil, end);
     else if (solid) this.solidUntil = Math.max(this.solidUntil, end); else this.clearUntil = Math.max(this.clearUntil, end);
     return slot;
   }
   // how many slots a kind has free before the oldest are taken over (only roughly: a count of what may still live)
-  get busy() { return this.now < this.clearUntil || this.now < this.solidUntil || this.now < this.domeUntil; }
+  get busy() { return this.now < this.clearUntil || this.now < this.solidUntil || this.now < this.domeUntil || this.now < this.coinUntil; }
   // step everything by dt seconds (0 holds them still): send the new ones, then the compute pass
   update(dt) {
     this.now += dt;
@@ -678,13 +723,14 @@ export class FxParticles {
     this.clearMesh.visible = this.now < this.clearUntil;
     this.solidMesh.visible = this.now < this.solidUntil;
     this.domeMesh.visible = this.now < this.domeUntil;
+    this.coinMesh.visible = this.now < this.coinUntil;
     if (!this.busy || dt <= 0) return;
     const s = this.simData;
     s[0] = this.now; s[1] = Math.min(dt, 0.05); s[2] = this.turbScale; s[3] = this.gravity;
     s[4] = this.wind[0]; s[5] = this.wind[1]; s[6] = this.wind[2];
     s[8] = this.wave[0]; s[9] = this.wave[1]; s[10] = this.wave[2];
     q.writeBuffer(this.simU, 0, s);
-    const n = this.cap + this.solidCap + this.domeCap;
+    const n = this.cap + this.solidCap + this.domeCap + this.coinCap;
     this.renderer.compute(enc => {
       const pass = enc.beginComputePass({ label: 'fx particles' });
       pass.setPipeline(this.pipeline);
@@ -697,7 +743,7 @@ export class FxParticles {
   clear() {
     this.data.fill(0);
     this.device.queue.writeBuffer(this.buf, 0, this.data);
-    this.dirty.length = 0; this.clearUntil = this.solidUntil = this.domeUntil = 0;
+    this.dirty.length = 0; this.clearUntil = this.solidUntil = this.domeUntil = this.coinUntil = 0;
   }
 }
 
@@ -724,7 +770,7 @@ export class FxParticles {
 // Special emitters: { bolt: { from, to, jag, segments, forks, width, life, every } } draws jagged beams, re-rolled
 // `every` seconds through the phase.
 const STYLE = { glow: FX.GLOW, spark: FX.SPARK, glint: FX.GLINT, puff: FX.PUFF, flame: FX.FLAME, ring: FX.RING, disc: FX.DISC,
-  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS, leaf: FX.LEAF };
+  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS, leaf: FX.LEAF, coin: FX.COIN };
 const pick = v => Array.isArray(v) ? v[0] + Math.random() * (v[1] - v[0]) : v;
 
 // A phase can also move: { move: { from, to, arc } } carries its 'head' point from one to the other across the phase

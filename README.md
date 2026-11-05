@@ -645,6 +645,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v837:** (Jordan: fly-up text hard to read, the hard shadow parted from the text as it swelled) gainShadow: a black outline (GAIN_FLY.outline, 1 px, 8 hard copies) and the drop shadow (shadowDist 2, shadowBlur 0, shadowWeight 1 = copies stacked) all held in screen pixels whatever the swell (lengths / scale). T > Fly-ups.
 **v838:** (Jordan) Resource fly-ups: GAIN_FLY.size, the text size at rest (11 px default), T > Fly-ups; the icon keeps iconSize.
 **v839:** Jordan's Fly-ups tuning: size 14 (was 11), pulseGrow 0.22 (was 0.25), glow 1.85 (was 1), glowSize 9 (was 6), outline 2 (was 1), shadowWeight 0 (was 1), iconSize 25 (was 22).
+**v840:** (Jordan) Gold: people and goblins (FOE human, not undead) pay gold straight into the purse as they die (H.gold, the folio's Gold box), no pickup. Amount (goldFor): GOLD[kind] at level 1 (goblin 2, footpad 4, poacher 4, grave robber 5, bandit 6, highwayman 8, raider 9, other 4) × (1 + perLevel 0.5 × (level - 1)), ±spread 25%. A GOLD fly-up over the hero with a stand-in coin icon (ICON.goldCoin, GAIN_KINDS): floatGain's spot 'hero' follows the hero and every gold gain while it holds merges into it. The coin fountain (coinFountain, COIN_FX): COIN_FX.per 1.5 coins a gold piece (3 to 60), new solid particle style FX.COIN in particles.js (own pool coinCap 512 and coinMesh, a 12-sided disc; flips end over end about a level axis, halves its flip at each bounce, settles flat once at rest, dithers out from fadeAt 0.72; metal 0.7, rough 0.28 and a sky mirror term, shine, from U.coin). T > Gold: amounts, coin look and motion, a test fountain and three goblins.
+
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 

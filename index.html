@@ -1391,7 +1391,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 839;
+const GAME_VERSION = 840;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9173,7 +9173,7 @@ function renderWorld() {
     if (EARLY_SEND.mode > 0) renderer.sendEarly();   // (v789: and the grass, water and the rest; a render follows)
     renderer.passName = 'hero';
     camera.layers.set(1); renderer.render(scene, camera);
-    if (fxParts.solidMesh.visible || fxParts.domeMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
+    if (fxParts.solidMesh.visible || fxParts.domeMesh.visible || fxParts.coinMesh.visible) { renderer.passName = 'effects: solid'; camera.layers.set(FX_SOLID_LAYER); renderer.render(scene, camera); }
     renderer.passName = 'swamp water, ground haze';
     camera.layers.set(3); renderer.render(scene, camera);
     if (fxParts.clearMesh.visible) { renderer.passName = 'effects'; camera.layers.set(FX_CLEAR_LAYER); renderer.render(scene, camera); }
@@ -19604,7 +19604,7 @@ lights.forEach(l => l.layers.enableAll());
 const MAX_HP = 100;
 const H = {
   x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true, story: 0, stair: null,
-  kills: 0, level: 1, xp: 0,
+  kills: 0, level: 1, xp: 0, gold: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
   cdQ: 0, cdE: 0, cdDash: 0, cdPotion: 0, toss: null, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
@@ -22114,9 +22114,19 @@ function floatText(text, x, y, z, color) {
 const GAIN_FLY = { size: 14, hold: 1, rise: 0.9, risePx: 28, steps: 0, pulse: 0.5, pulseMix: 85, pulseGrow: 0.22, glow: 1.85, glowSize: 9, gap: 4, iconSize: 25, stack: 0.35,
   outline: 2, shadowDist: 2, shadowBlur: 0, shadowWeight: 0 };   // (v839: Jordan's tuning)
 const gains = [], gainV = new GFX.Vector3();
+// (v840) gains that aren't items in the pack: gold, paid straight into the purse (its coin a stand-in till Jordan's icon)
+const GAIN_KINDS = { gold: { name: 'Gold', icon: 'goldCoin' } };
+ICON.goldCoin = '<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id="gcFace" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#fff0a8"/>'
+  + '<stop offset="0.5" stop-color="#f2c14e"/><stop offset="1" stop-color="#c88a22"/></linearGradient></defs>'
+  + '<circle cx="12.6" cy="13" r="9.4" fill="#8a5414" stroke="#3a2008" stroke-width="1.2"/><circle cx="11.6" cy="11.8" r="9" fill="url(#gcFace)" stroke="#5a3608" stroke-width="1.1"/>'
+  + '<circle cx="11.6" cy="11.8" r="6.2" fill="none" stroke="#b07a1c" stroke-width="1.1"/><path d="M10.2 8.2 h2.8 v7.4 h-2.8 z" fill="#c88a22" opacity="0.8"/>'
+  + '<ellipse cx="8.4" cy="7.6" rx="2.6" ry="1.2" fill="#fffbe0" opacity="0.85" transform="rotate(-35 8.4 7.6)"/></svg>';
+// at: the spot gains merge by (a tile), or 'hero': it stays over your head as you move and every gain of the kind
+// merges into it while it holds
 function floatGain(id, n, x, y, z, color = '#e8c08a', at = T(Math.floor(x), Math.floor(z))) {
-  if (!(n > 0) || !ITEMS[id]) return;
-  const name = ITEMS[id].name.toUpperCase(), held = g => g.t < GAIN_FLY.hold;
+  const it = ITEMS[id] || GAIN_KINDS[id];
+  if (!(n > 0) || !it) return;
+  const name = it.name.toUpperCase(), held = g => g.t < GAIN_FLY.hold;
   const same = gains.find(g => g.id === id && g.at === at && held(g));
   if (same) { same.n += n; same.t = 0; same.pulse = 1; same.num.textContent = '+' + same.n; return; }
   if (gains.length > 24) return;
@@ -22125,16 +22135,17 @@ function floatGain(id, n, x, y, z, color = '#e8c08a', at = T(Math.floor(x), Math
   while (gains.some(g => g.slot === slot && held(g) && Math.hypot(g.x - x, g.z - z) < 1.5 && Math.abs(g.y0 - y) < 1)) slot++;
   const el = document.createElement('div');
   el.className = 'float gain';
-  el.innerHTML = `<span class="gt"><span class="gn"></span><span class="gw"></span></span><span class="gi">${ICON[ITEMS[id].icon] || ''}</span>`;
+  el.innerHTML = `<span class="gt"><span class="gn"></span><span class="gw"></span></span><span class="gi">${ICON[it.icon] || ''}</span>`;
   const txt = el.firstChild, num = txt.firstChild; num.textContent = '+' + n; txt.lastChild.textContent = name; txt.style.color = color;
   $('fx').appendChild(el);
-  const g = { id, n, at, x, y0: y, y: y + slot * GAIN_FLY.stack, z, slot, color, el, txt, num, t: 0, pulse: 1 };
+  const g = { id, n, at, x, y0: y, y: y + slot * GAIN_FLY.stack, z, slot, color, el, txt, num, t: 0, pulse: 1, follow: at === 'hero' ? y - H.y : null };
   gains.push(g);
   placeGain(g, cv.getBoundingClientRect());
 }
 function placeGain(g, rect) {
   const G = GAIN_FLY, rising = Math.max(0, g.t - G.hold) / Math.max(0.01, G.rise);
   const st = Math.round(G.steps), u = Math.min(1, st > 0 ? Math.floor(rising * st + 1e-6) / st : rising);   // (v833: smooth unless steps > 0)
+  if (g.follow !== null) { g.x = H.x; g.z = H.z; g.y0 = H.y + g.follow; g.y = g.y0 + g.slot * G.stack; }   // (v840: over your head)
   gainV.set(g.x, g.y, g.z).project(camera);
   g.el.style.display = gainV.z > 1 ? 'none' : '';
   const p = g.pulse > 0 ? Math.sin(Math.PI * 0.5 * g.pulse) : 0;
@@ -22285,8 +22296,8 @@ fxParts.loadSmoke([1, 2, 3, 4].map(k => new URL(`textures/dust_${k}.png`, docume
 fxParts.ramp('soot', ['#5a544e', '#6a645e', '#7a736c', '#8a827a', '#9a9188', '#aaa197', '#bab0a6', '#cac0b6']);
 // (layers of their own, drawn in renderWorld: the solid ones after the hero, the see-through ones after the smoke
 // and haze)
-fxParts.clearMesh.layers.set(FX_CLEAR_LAYER); fxParts.solidMesh.layers.set(FX_SOLID_LAYER); fxParts.domeMesh.layers.set(FX_SOLID_LAYER);
-scene.add(fxParts.clearMesh, fxParts.solidMesh, fxParts.domeMesh);
+fxParts.clearMesh.layers.set(FX_CLEAR_LAYER); fxParts.solidMesh.layers.set(FX_SOLID_LAYER); fxParts.domeMesh.layers.set(FX_SOLID_LAYER); fxParts.coinMesh.layers.set(FX_SOLID_LAYER);
+scene.add(fxParts.clearMesh, fxParts.solidMesh, fxParts.domeMesh, fxParts.coinMesh);
 // the brightest two lights the effects ask for each frame (flares at a strike, a fireball's glow)
 const fxLights = [0, 1].map(() => { const l = addLight(new GFX.PointLight('#ffffff', 0, 5, 2)); l.visible = false; return l; });
 const fxShake = { t: 0, amp: 0, off: new GFX.Vector3() };
@@ -22605,6 +22616,30 @@ function fxChips(x, y, z, kind, n) {
     fxParts.spawn({ style: kind === 'wood' ? GFX.FX.SHARD : GFX.FX.CHUNK, x, y, z, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, vy: 2 + Math.random() * 2,
       life: 1.1 + Math.random() * 0.5, size0: 0.045, size1: 0.04, grav: 1, drag: 0.3, bounce: 0.3, floor: gy, spin: (Math.random() - 0.5) * 24,
       ramp, tone0: tone, tone1: tone });
+  }
+}
+// ---------- Coin fountain (T > Gold) ----------
+// (v840, Jordan) as a foe that carries gold dies, gold coins burst up out of it: flat discs of shiny gold metal that
+// flip as they arc out, bounce on the ground, settle flat and dither away. COIN_FX.per coins for each gold piece
+// (min to most); up/upVar how hard they're thrown up, out how far out; spin how fast they flip (rad/s, halved at
+// each bounce), bounce how much of their fall they keep; size their radius, thick their thickness for it; metal,
+// rough and shine their gold (shine: how much they mirror the sky), glow a little light of their own; fadeAt how far
+// through their life they start to dither out; stagger how long the burst takes to throw them all
+const COIN_FX = { on: 1, per: 1.5, min: 3, most: 60, up: 4.2, upVar: 1.3, out: 1.5, spin: 22, bounce: 0.45, grav: 1, size: 0.075, thick: 0.14,
+  life: 2.6, fadeAt: 0.72, stagger: 0.12, height: 0.8, metal: 0.7, rough: 0.28, shine: 1, glow: 0.12, tone: 0.6 };
+fxParts.ramp('gold', ['#3a2204', '#6a420a', '#9a6612', '#c88e1e', '#e8b232', '#f6d058', '#fde69a', '#fff8dc']);
+function coinFountain(x, y, z, gold) {
+  const C = COIN_FX;
+  if (C.on < 0.5 || FX_TUNE.on < 0.5) return;
+  const n = Math.round(clamp(gold * C.per, C.min, Math.max(C.min, C.most))), gy = surfaceY(x, z), ramp = fxParts.ramp('gold');
+  fxParts.coin.x = C.metal; fxParts.coin.y = C.rough; fxParts.coin.z = C.shine; fxParts.coin.w = C.fadeAt;   // (the coins' shared look)
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.283, out = C.out * Math.sqrt(Math.random()), ca = Math.cos(a), sa = Math.sin(a);
+    const tone = clamp(C.tone + (Math.random() - 0.5) * 0.14, 0, 1);
+    fxParts.spawn({ style: GFX.FX.COIN, x: x + ca * 0.08, y: Math.max(y, gy) + C.height, z: z + sa * 0.08, vx: ca * out, vz: sa * out,
+      vy: C.up + (Math.random() * 2 - 1) * C.upVar, delay: Math.random() * C.stagger, life: C.life * (0.85 + Math.random() * 0.3),
+      size0: C.size, size1: C.size, grav: C.grav, drag: 0.15, bounce: C.bounce, floor: gy, stretch: C.thick, rot: Math.random() * 6.283,
+      spin: (Math.random() < 0.5 ? -1 : 1) * C.spin * (0.6 + Math.random() * 0.8), ramp, tone0: tone, tone1: tone, glow: C.glow });
   }
 }
 // ---------- Fountain water effects (T > Fountain water) ----------
@@ -23561,6 +23596,10 @@ function detach(i, c, r) {
 // RESOURCES.amount (T > Resources) scales everything gathered or dropped: these, and the hides foes leave.
 const RESOURCES = { amount: 4};
 const TOMB_BONE = 0.25;
+// (v840, Jordan) gold: people and goblins (FOE human, not undead) carry gold, paid straight into your purse as they die
+// (no pickup): their kind's base here (`other` for a kind not listed) × (1 + perLevel × (level - 1)), give or take
+// spread; goblins carry the least. See payGold, and coinFountain for the coins that burst out of them
+const GOLD = { goblin: 2, footpad: 4, poacher: 4, graveRobber: 5, bandit: 6, highwayman: 8, raider: 9, other: 4, perLevel: 0.5, spread: 0.25 };
 const MEAT = { chance: 0.75 };   // (v804, Jordan) the chance a kill of wildlife (FOE def meat) drops a raw meat   // (the chance a broken gravestone drops a bone)
 const harvestCarry = { wood: 0, stone: 0, roughSandstone: 0, copperOre: 0, ironOre: 0, hide: 0, bone: 0, ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', 0])) };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
@@ -23671,10 +23710,26 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
     if (f.def.hide) leave('hide');
     if (f.def.bone && Math.random() < f.def.bone) leave('bone');
     if (f.def.meat && Math.random() < MEAT.chance) dropLoot('rawMeat', 1, f.x - 0.3, f.z + 0.15);   // (v804: one raw meat, set apart from the hide)
+    if (f.def.human && !f.def.undead) payGold(f);   // (v840: people and goblins, straight into the purse)
     // (v477) what a person had on them
     for (const [id, p, most] of f.def.loot || []) if (Math.random() < p) dropLoot(id, 1 + Math.floor(Math.random() * most), f.x + (Math.random() - 0.5) * 0.5, f.z + (Math.random() - 0.5) * 0.5);
   }
 }
+// (v840, Jordan) what a foe that carries gold (people, goblins) has on it, by GOLD; at least 1
+function goldFor(f) {
+  const base = GOLD[f.kind] ?? GOLD.other, lvl = Math.max(1, f.level || 1);
+  return Math.max(1, Math.round(base * (1 + GOLD.perLevel * (lvl - 1)) * (1 + (Math.random() * 2 - 1) * GOLD.spread)));
+}
+// paid as it dies: into the purse, a fly-up over your head (its spot is always you, so kills close together in time
+// merge however far apart they fell), and the coin fountain where it fell
+function payGold(f) {
+  const n = goldFor(f);
+  H.gold += n; renderGold();
+  floatGain('gold', n, H.x, H.y + 1.3, H.z, '#f2c14e', 'hero');
+  coinFountain(f.x, f.y, f.z, n);
+  sfx.coin();
+}
+function renderGold() { const el = $('goldVal'); if (el) el.textContent = String(H.gold).padStart(3, '0'); }
 // a sword stroke: foes in the arc, and the one nearest tree or rock in front
 function swingHit(range, arc, dmg, knock) {
   let hitAny = false;
@@ -29845,6 +29900,7 @@ function humanTick(dt) {
   }
 }
 // (v479) the T panel's spawn buttons (Crowd test): n of a kind d tiles ahead of you, side by side
+const GOLD_TEST = { fountain: 0, goblins: 0 };
 const HUMAN_SPAWN = { footpad: 0, bandit: 0, poacher: 0, raider: 0, graveRobber: 0, highwayman: 0, skeleton: 0, zombie: 0, goblin: 0, clear: 0 };
 function spawnHumansAhead(kind, n, d = 4) {
   const out = [];
@@ -32386,6 +32442,42 @@ const TUNING = [
     [GAIN_FLY, 'pulseGrow', 'Pulse: how much the fly-up (text and icon) swells (× size)', 0, 2, 0.01],
     [GAIN_FLY, 'iconSize', 'Resource icon size beside the text (pixels)', 8, 64, 1],
     [GAIN_FLY, 'stack', 'Height between different resources\' fly-ups at one spot (tiles)', 0.1, 1, 0.01],
+  ]],
+  // (v840) gold from people and goblins, and the coin fountain as they die
+  ['Gold', [
+    [GOLD, 'goblin', 'Gold a goblin carries at level 1 (before the spread)', 0, 50, 1],
+    [GOLD, 'footpad', 'Gold a footpad carries at level 1', 0, 50, 1],
+    [GOLD, 'poacher', 'Gold a poacher carries at level 1', 0, 50, 1],
+    [GOLD, 'graveRobber', 'Gold a grave robber carries at level 1', 0, 50, 1],
+    [GOLD, 'bandit', 'Gold a bandit carries at level 1', 0, 50, 1],
+    [GOLD, 'highwayman', 'Gold a highwayman carries at level 1', 0, 50, 1],
+    [GOLD, 'raider', 'Gold a raider carries at level 1', 0, 50, 1],
+    [GOLD, 'other', 'Gold any other person carries at level 1', 0, 50, 1],
+    [GOLD, 'perLevel', 'More gold for each level over 1 (× the level 1 amount; 0.5 = level 3 carries twice as much)', 0, 2, 0.05],
+    [GOLD, 'spread', 'Give or take this share at random (0.25 = ±25%)', 0, 1, 0.05],
+    [COIN_FX, 'on', 'Coin fountain on (1) or off (0)', 0, 1, 1],
+    [COIN_FX, 'per', 'Coins thrown for each gold piece', 0.1, 5, 0.1],
+    [COIN_FX, 'min', 'Fewest coins a fountain throws', 0, 20, 1],
+    [COIN_FX, 'most', 'Most coins a fountain throws', 1, 200, 1],
+    [COIN_FX, 'up', 'How hard coins are thrown up (m/s)', 0, 10, 0.1],
+    [COIN_FX, 'upVar', 'Give or take on the throw up (m/s)', 0, 5, 0.1],
+    [COIN_FX, 'out', 'How far out coins are thrown (m/s, the most)', 0, 5, 0.05],
+    [COIN_FX, 'height', 'Height over the ground they burst from (m)', 0, 2, 0.05],
+    [COIN_FX, 'stagger', 'Seconds the burst takes to throw them all', 0, 1, 0.01],
+    [COIN_FX, 'spin', 'How fast coins flip (rad/s; halved each bounce)', 0, 60, 1],
+    [COIN_FX, 'bounce', 'Bounce: how much of its fall a coin keeps', 0, 0.9, 0.01],
+    [COIN_FX, 'grav', 'Gravity on coins (× g)', 0.2, 3, 0.05],
+    [COIN_FX, 'size', 'Coin radius (m)', 0.02, 0.3, 0.005],
+    [COIN_FX, 'thick', 'Coin thickness (× radius, each side)', 0.04, 0.6, 0.01],
+    [COIN_FX, 'life', 'Seconds a coin lasts', 0.5, 8, 0.1],
+    [COIN_FX, 'fadeAt', 'How far through its life a coin starts to dither out (0-1)', 0, 1, 0.01],
+    [COIN_FX, 'tone', 'Gold tone (0 dark, 1 pale)', 0, 1, 0.01],
+    [COIN_FX, 'metal', 'Metalness', 0, 1, 0.01],
+    [COIN_FX, 'rough', 'Roughness (low: tight bright glints)', 0.05, 1, 0.01],
+    [COIN_FX, 'shine', 'How much coins mirror the sky', 0, 3, 0.05],
+    [COIN_FX, 'glow', 'A little light of their own (reads at night)', 0, 2, 0.01],
+    [GOLD_TEST, 'fountain', 'A 20-gold coin fountain in front of you (pays nothing)', 'action', () => coinFountain(H.x + Math.sin(H.face) * 2.5, H.y, H.z + Math.cos(H.face) * 2.5, 20)],
+    [GOLD_TEST, 'goblins', 'Three goblins in front of you', 'action', () => spawnHumansAhead('goblin', 3)],
   ]],
   ['Resources', [
     [RESOURCES, 'amount', 'How much everything gives: rocks, trees, ore, hides (× normal)', 'choice', [0.5, 1, 2, 4], 0.1],
