@@ -643,6 +643,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v835:** (Jordan) Resource fly-ups: the whole fly-up (text and icon) swells about its middle on a pulse again; only the +count pulses color.
 **v836:** (Jordan) Resource fly-ups merge only from the same tile (a tree's or rock's own; the hero's for pickups and crops), so two trees give two fly-ups. A new fly-up pops in with the pulse. The +count can glow past white at the pulse's peak (GAIN_FLY.glow brightness overdrive, glowSize halo). The font's wide space between the +count and the name is now a set gap (GAIN_FLY.gap, 4 px).
 **v837:** (Jordan: fly-up text hard to read, the hard shadow parted from the text as it swelled) gainShadow: a black outline (GAIN_FLY.outline, 1 px, 8 hard copies) and the drop shadow (shadowDist 2, shadowBlur 0, shadowWeight 1 = copies stacked) all held in screen pixels whatever the swell (lengths / scale). T > Fly-ups.
+**v838:** (Jordan) Resource fly-ups: GAIN_FLY.size, the text size at rest (11 px default), T > Fly-ups; the icon keeps iconSize.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
