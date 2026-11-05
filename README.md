@@ -610,6 +610,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v817:** (Jordan) The Character page folds away. A small tab on its left edge (the map's bookmark art for now, mirrored to point out) has an arrow pointing in; clicking it slides the whole Character page right, behind the Backpack, leaving only the tab sticking out past the Backpack's left edge with its arrow now pointing left. Clicking it again slides the page back out. The window never moves to make room: if it's near the left edge the page just goes partly off screen (the inventory can now be dragged left until only the tab is left on screen). Folded or not is kept between loads; while folded the paperdoll stops drawing and the pad's D-pad skips the gear squares.
 
+**v818:** (Jordan) With the Character page folded away, the "Click to put on or take off, drag to move" hint no longer shows under the Backpack; everything else that goes in that spot (what a hovered item is, the refine/stash/bin notes) still does.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
