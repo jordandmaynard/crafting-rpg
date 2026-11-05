@@ -695,6 +695,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v879:** (Jordan) Item icons in the crafting window (weapon, armor, alchemy and cooking: recipe rows, the big preview, the materials list) get the quest board's black edge, 1 screen px (`--cw1` undoes the window's `--ui` scale). Refining station slots already had the shared item edge.
 
+**v880:** (Jordan) Road names sit at the middle of their road. A road's label spots used to be its first tiles found reading the map top down, so the name landed on the road's top end (seed 201560036: The Crowreach, Wainford Path). Now `nameFeatures` gives each road spots from halfway along its tiles (`g.line`), then outward both ways in steps of a twentieth of the road (3 tiles at least), so the name only slides toward an end when the middle has no room. Both the along-the-road letters and the flat fallback use these spots.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
