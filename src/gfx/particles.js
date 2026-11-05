@@ -201,7 +201,7 @@ struct VOut {
   } else if (st == ${FX.GLOW} || st == ${FX.PLUS}) {
     cover = 0.0;
   } else if (st == ${FX.NOTE}) {
-    // (v864, Jordan: the busker's music) a musical note facing us, upright but for its turn and a slow rock to and fro;
+    // (v865, Jordan: the busker's music) a musical note facing us, upright but for its turn and a slow rock to and fro;
     // which of the four notes it is from its seed (see fs), fading in quickly and out over its last part
     let ang = q.h.x + sin(U.now.x * 2.3 + q.g.y * 31.0) * 0.28;
     let cs = cos(ang); let sn = sin(ang);
@@ -350,7 +350,7 @@ fn fxSoft(pos: vec2f, pix: vec3f, rad: f32, r2: f32) -> f32 {
   }
   return smoothstep(0.0, 0.3, vz - vb);
 }
-// (v864) the notes' pieces, as distances (negative inside): a stroke from a to b, and a note's head, a tilted oval
+// (v865) the notes' pieces, as distances (negative inside): a stroke from a to b, and a note's head, a tilted oval
 fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
   let pa = p - a; let ba = b - a;
   return length(pa - ba * sat(dot(pa, ba) / dot(ba, ba)));
@@ -423,7 +423,7 @@ fn noteDist(uv: vec2f, kind: f32) -> f32 {
     let cs = cos(i.nz.z); let sn = sin(i.nz.z);
     lit = i.col * fxLight(i.wpos, puffNormal(vec2f(uv.x * cs - uv.y * sn, uv.x * sn + uv.y * cs), i.nz)) + i.col * i.glow;
   } else if (st == ${FX.NOTE}) {
-    // (v864) a glowing note: its solid shape (bright, hiding what's behind by its cover) in a soft halo of its own
+    // (v865) a glowing note: its solid shape (bright, hiding what's behind by its cover) in a soft halo of its own
     // light that only adds, the halo fading off well before the card's edge
     let d = noteDist(uv, i.extra);
     let core = 1.0 - smoothstep(-0.025, 0.025, d);
