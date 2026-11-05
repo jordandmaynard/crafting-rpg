@@ -581,6 +581,27 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 .folio .purse .gold-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
 .folio .purse .gold-pile { width: 46px; height: 34px; flex: none; filter: drop-shadow(0 1px 1px #3a200c66); }
 .folio .purse #goldVal { font-variant-numeric: tabular-nums; }
+/* (v817, Jordan) the Character folio folds away behind the backpack: a tab on its left edge (the map's bookmark art,
+   mirrored so its point faces out, at two thirds of the map's size, tucked behind the folio's edge) slides the whole
+   folio right under the backpack (z 2 over its 1), leaving only the tab out past the backpack's left edge; its arrow
+   points in while the folio is out, out while it's away. Once slid in, the folio is hidden (.tucked) so no edge of it
+   shows round the backpack's art, and the paperdoll stops drawing. The tab is cut off at the folio's edge so the part
+   tucked under the parchment (whose art lets clicks through) can't be clicked. */
+#invGroup .folio { transition: transform 0.32s ease-in-out; }
+#invGroup.folded .folio { transform: translateX(416px); pointer-events: none; }
+#invGroup.tucked .folio { visibility: hidden; }
+#inv #invInfo { transition: left 0.32s ease-in-out; }
+#inv #invGroup.folded #invInfo { left: 416px; }
+#invGroup .fold-tab { position: absolute; left: -45px; top: 67px; z-index: -2; width: 112px; height: 55px; padding: 0; border: 0; border-radius: 0; box-shadow: none; background: none; isolation: isolate; cursor: pointer; pointer-events: auto; visibility: visible; clip-path: inset(-6px 64px -6px -6px); --bmTint: transparent; --bmTintA: 0; }
+#invGroup .fold-tab::before, #invGroup .fold-tab::after, #invGroup .fold-tab i { content: ""; position: absolute; inset: 0; pointer-events: none; background-size: 100% 100%; background-repeat: no-repeat; transform: scaleX(-1); }
+#invGroup .fold-tab::before { z-index: 0; background-image: url("ui/map/bm-face-roads.webp"); }
+#invGroup .fold-tab i { z-index: 1; background-color: var(--bmTint); opacity: var(--bmTintA); mask: url("ui/map/bm-mask.webp") center / 100% 100% no-repeat; -webkit-mask: url("ui/map/bm-mask.webp") center / 100% 100% no-repeat; }
+#invGroup .fold-tab::after { z-index: 2; background-image: url("ui/map/bm-frame.webp"); }
+#invGroup .fold-tab svg { position: absolute; z-index: 3; left: 19px; top: 16px; width: 18px; height: 23px; pointer-events: none; overflow: visible; filter: drop-shadow(0 1px 1px #160c06); transition: transform 0.32s ease-in-out; }
+#invGroup.folded .fold-tab svg { transform: scaleX(-1); }
+#invGroup .fold-tab:hover { border: 0; --bmTint: #ffe5ac; --bmTintA: 0.14; }
+#invGroup .fold-tab:active { transform: none; box-shadow: none; --bmTint: #211811; --bmTintA: 0.16; }
+#invGroup .fold-tab:focus-visible { outline: 2px solid #ffe2a0; outline-offset: -4px; }
 .character-preview { position: absolute; left: 118px; top: 198px; width: 200px; height: 292px; pointer-events: none; image-rendering: pixelated; }
 #doll { position: absolute; inset: 0; display: block; }
 .gear-item { position: absolute; width: 84px; text-align: center; }
@@ -1208,6 +1229,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
 <div id="inv" hidden>
   <section class="wk" id="invGroup" aria-label="Character and backpack">
     <div class="folio">
+      <button class="fold-tab" id="foldTab" type="button" aria-expanded="true" title="Fold the character page away"><i></i><svg viewBox="0 0 18 23" aria-hidden="true"><path d="M2 2 L16 11.5 L2 21 Z" fill="#f1dfb7" stroke="#3a200c" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
       <img class="shell" src="ui/inventory-character.webp" alt="" draggable="false">
       <h1 class="live-title folio-title invDrag" id="invBar">Character</h1>
       <div class="stats"><div id="armorVal"></div><div id="maxHpVal"></div><div id="dpsVal"></div></div>
@@ -1362,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 816;
+const GAME_VERSION = 817;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -19445,7 +19467,7 @@ function renderDoll() {
   // (v450) and in Options, the hero from the front, for the look
   if (optsOpen && $('lookView').offsetParent) renderHeroView($('lookView'), lookTarget, H.face, 1);
   const cv = $('dollView');
-  if (!invOpen || !cv.offsetParent) return;
+  if (!invOpen || !cv.offsetParent || folioTucked) return;
   if (!DOLL_VIEW.idle) { renderHeroView(cv, dollTarget, yaw + DOLL_VIEW.turn, uiScale()); return; }
   const back = idleDollPose();
   try { renderHeroView(cv, dollTarget, H.face + DOLL_VIEW.idleTurn, uiScale()); } finally { back(); }
@@ -21177,6 +21199,11 @@ function litActs() {
 // invPack: whether the folio and backpack show with it (a refining station opens on its own, its counts come from the
 // plot's stores; Tab then brings the pack up beside it)
 let invOpen = false, invPack = true, invFocus = ['gear', 'weapon'], invHover = null, invPress = null;
+// (v817) the Character folio folded away behind the backpack (the tab on its left edge), kept between loads; folded,
+// the pad's home square is the backpack's first instead of the weapon
+let folioFolded = false, folioTucked = false, folioFoldN = 0;
+try { folioFolded = folioTucked = localStorage.getItem('emberwild.folioFold') === '1'; } catch (e) {}
+const invHome = () => folioFolded ? ['pack', 0] : ['gear', 'weapon'];
 const cellKey = c => c[0] + ':' + c[1];
 function itemInfo(c) {
   const id = cellGet(c);
@@ -21292,7 +21319,7 @@ function showInfo() {
   // (a station's square under the mouse when its window closes: forgotten, there's nothing to say about it: v356 fix)
   const gone = c => c && (c[0] === 'in' || c[0] === 'out' || c[0] === 'box') && !openSt;
   if (gone(invHover)) invHover = null;
-  if (gone(invFocus)) invFocus = ['gear', 'weapon'];
+  if (gone(invFocus)) invFocus = invHome();
   const c = PAD.on ? invFocus : invHover;
   $('invInfo').innerHTML = c ? itemInfo(c) : '<span class="kb-only">Click to put on or take off, drag to move.</span><span class="pad-only">D-pad picks, A puts on or takes off, B closes.</span>';
 }
@@ -21304,7 +21331,7 @@ function toggleInv(open = !invOpen || !invPack) {
   // (already open with only a station up: show the pack beside it)
   if (open && invOpen) { invPack = true; renderInv(); placeInv(); renderModes(); return; }
   invOpen = open; $('inv').hidden = !open;
-  if (open) { if (openSt) invFocus = [isStore(openSt) ? 'box' : 'in', 0]; else if (invFocus[0] === 'in' || invFocus[0] === 'out' || invFocus[0] === 'box') invFocus = ['gear', 'weapon']; renderInv(); placeInv(); }
+  if (open) { if (openSt) invFocus = [isStore(openSt) ? 'box' : 'in', 0]; else if (invFocus[0] === 'in' || invFocus[0] === 'out' || invFocus[0] === 'box' || (folioFolded && invFocus[0] === 'gear')) invFocus = invHome(); renderInv(); placeInv(); }
   else { invPress = null; $('dragIcon').hidden = true; openSt = null; invPack = true; }
   renderModes();
 }
@@ -21312,14 +21339,14 @@ function toggleInv(open = !invOpen || !invPack) {
 // you leave each is kept. One the skin anchors to a corner is placed by its left and top once it's been dragged (its
 // scale then taken about that corner). The minimap stays put.
 const DRAG_SKIP = '.cell, button, input, select, textarea, a, .invAct, #trash, .cw-recipes, .cw-materials, .cw-scroll, .map-aperture';
-function dragWindow(el, key, scaled, fixTop) {
+function dragWindow(el, key, scaled, fixTop, minLeft) {
   let pos = null, grab = null;
   try { pos = JSON.parse(localStorage.getItem(key)); } catch (e) { pos = null; }
   const place = () => {
     if (!Array.isArray(pos)) { for (const p of ['left', 'top', 'right', 'transform', 'transformOrigin']) el.style[p] = ''; return; }
     const r = el.getBoundingClientRect(), w = r.width, h = r.height;
     el.style.right = 'auto'; el.style.transformOrigin = 'top left'; el.style.transform = scaled ? 'scale(var(--ui))' : 'none';
-    el.style.left = clamp(pos[0], 0, Math.max(0, innerWidth - w)) + 'px';
+    el.style.left = clamp(pos[0], minLeft ? minLeft() : 0, Math.max(0, innerWidth - w)) + 'px';
     el.style.top = (fixTop ? fixTop(h) : clamp(pos[1], 0, Math.max(0, innerHeight - h))) + 'px';
   };
   el.addEventListener('pointerdown', e => {
@@ -21335,7 +21362,9 @@ function dragWindow(el, key, scaled, fixTop) {
   addEventListener('resize', () => { if (Array.isArray(pos) && el.offsetParent) place(); });
   return { place };
 }
-const invDrag = dragWindow($('invGroup'), 'emberwild.invPos2', true), stDrag = dragWindow($('station'), 'emberwild.stPos', true);
+// (v817, Jordan) the inventory may go off the left edge as far as leaves the fold tab on screen (the folio folded:
+// the tab's point at x 371 of the group), folded or not, so bringing the folio out never moves the window
+const invDrag = dragWindow($('invGroup'), 'emberwild.invPos2', true, null, () => -371 * uiScale()), stDrag = dragWindow($('station'), 'emberwild.stPos', true);
 const storeDrag = dragWindow($('storeCol'), 'emberwild.storePos', true), craftDrag = dragWindow($('craft'), 'emberwild.craftPos2', true);
 const placeInv = () => invDrag.place();
 // a window that changes size (a crate's or a chest's) has its 9-slice frame drawn once at its size into an image, so
@@ -21363,12 +21392,28 @@ function panelSkin(el) {
   el.style.backgroundImage = `url(${url})`; el.dataset.skin = key;
 }
 $('invClose').addEventListener('click', () => toggleInv(false));
+// (v817, Jordan) the fold tab: the folio slides in behind the backpack (CSS .folded) and, once there, is hidden
+// (.tucked, so nothing of it shows round the backpack and the paperdoll stops drawing); brought out, it's shown first
+function setFolioFold(on, slide = true) {
+  const g = $('invGroup'), tab = $('foldTab'), n = ++folioFoldN;
+  folioFolded = on;
+  g.classList.toggle('folded', on);
+  tab.setAttribute('aria-expanded', String(!on));
+  tab.title = on ? 'Bring the character page out' : 'Fold the character page away';
+  if (!on || !slide || !invOpen) { folioTucked = on; g.classList.toggle('tucked', on); }
+  else setTimeout(() => { if (n === folioFoldN && folioFolded) { folioTucked = true; g.classList.add('tucked'); } }, 340);
+  if (on) { if (invFocus[0] === 'gear') invFocus = invHome(); if (invHover && invHover[0] === 'gear') invHover = null; }
+  try { localStorage.setItem('emberwild.folioFold', on ? '1' : '0'); } catch (e) {}
+  if (invOpen) renderInv();
+}
+setFolioFold(folioFolded, false);
+$('foldTab').addEventListener('click', () => { audioOn(); setFolioFold(!folioFolded); });
 $('stClose').addEventListener('click', () => { audioOn(); closeStation(); });
 $('storeClose').addEventListener('click', () => { audioOn(); closeStation(); });
 // the D-pad moves to the nearest square that way
 function navInv(dx, dy) {
-  const els = [...document.querySelectorAll('#inv .cell')], cur = els.find(e => e.dataset.cell === cellKey(invFocus));
-  if (!cur) { invFocus = ['gear', 'weapon']; renderInv(); return; }
+  const els = [...document.querySelectorAll('#inv .cell')].filter(e => !folioFolded || !e.closest('#doll')), cur = els.find(e => e.dataset.cell === cellKey(invFocus));
+  if (!cur) { invFocus = invHome(); renderInv(); return; }
   const r0 = cur.getBoundingClientRect(), x0 = r0.left + r0.width / 2, y0 = r0.top + r0.height / 2;
   let best = null, bs = 1e9;
   for (const e of els) {
