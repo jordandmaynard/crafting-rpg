@@ -624,6 +624,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v824:** (Jordan) Refining takes two raw for one refined at every station (two logs a plank, two stones a block, two ores an ingot, two hides a leather, two wheat a flour, two sandstone a sand, two sand a glass pane, two bones a bone dust); a square holding one waits for another, and two squares of one each still go. REFINE (R) sends raw out in pairs. T > Stations: Raw it takes to make one refined (REFINE.per). Every refined cost in building and crafting was halved to match, odd ones rounded up (door 5 -> 3 planks, gate 3 -> 2, iron gate 3 -> 2, leather armor 5 -> 3, set chest leather 3 -> 2, set boots and helmet ingots 3 -> 2) and ones left at one. Weapons: 5 of the ingot (or 5 planks for wooden) and 2 planks of haft; hoe 3 planks. Raw costs are as they were: logs and stone (hearth, stations, log wall, wood fence, barrel) and bone (bone weapons 10, bone armor 6/4/3/3, with the halved leather).
 
+**v825:** (Jordan) On the second floor and up, a wall, window, fence or door may go either beside a floor on its story (as before) or straight on top of a wall, window or door on the story below, with no floor needed. Fences and gates below are too low to hold one up. Floor rules are unchanged.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

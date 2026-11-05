@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 824;
+const GAME_VERSION = 825;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -26172,13 +26172,16 @@ function upJoined(k, c, r, extra = null) {
   for (const st of stairs.values()) if (st.k === k - 1 && st.land === i && LV[st.t0] === LV[i]) return true;
   return false;
 }
-// a wall, fence or door on story k: on the side of a floor on that story
+// a wall, fence or door on story k: on the side of a floor on that story, or (v825, Jordan) on top of a full-height
+// wall, window or door on the story below (fences and gates are too low to hold one up)
+const edgeVal = (ec, er, w, k) => k ? (w ? UP[k].WW : UP[k].WN).get(T(ec, er)) || 0 : (w ? WW : WN)[T(ec, er)];
 function upEdgeSpot(ec, er, w, kind, k) {
   const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1), U = UP[k];
   const fa = U.FL.has(a), fb = U.FL.has(b), there = (w ? U.WW : U.WN).get(a), upgrade = !!there && WINDOW_OF[kind] && there === KIND_VAL[WINDOW_OF[kind]];
-  let ok = (fa || fb) && (!there || upgrade) && BI[a] !== TOWN && BI[b] !== TOWN;
-  let why = there && !upgrade ? 'Something is built here already.' : !(fa || fb) ? 'Walls up here need a floor beside them.' : 'The townsfolk would rather you built outside town.';
-  if (ok && ![a, b].some(t => (t === a ? fa : fb) && claimedAt(t))) { ok = false; why = plotWhy(fa ? a : b); }
+  const below = edgeVal(ec, er, w, k - 1), onWall = !!below && !isFenceVal(below);
+  let ok = (fa || fb || onWall) && (!there || upgrade) && BI[a] !== TOWN && BI[b] !== TOWN;
+  let why = there && !upgrade ? 'Something is built here already.' : !(fa || fb || onWall) ? 'Walls up here need a floor beside them or a wall under them.' : 'The townsfolk would rather you built outside town.';
+  if (ok && ![a, b].some(t => (onWall || (t === a ? fa : fb)) && claimedAt(t))) { ok = false; why = plotWhy(fa || !fb ? a : b); }
   const sa = stairAt.get(k * SNN + a) || stairAt.get((k - 1) * SNN + a);
   if (ok && sa && (sa === stairAt.get(k * SNN + b) || sa === stairAt.get((k - 1) * SNN + b))) { ok = false; why = 'That would cut across the stairs.'; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
