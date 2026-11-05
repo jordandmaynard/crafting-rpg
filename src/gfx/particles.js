@@ -25,7 +25,7 @@ import { Color } from './math.js';
 export const RAMP_N = 8, MAX_RAMPS = 64;
 const FLOATS = 32;   // a particle's record: 8 vec4f
 // how each particle is drawn
-export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14, LEAF: 15, COIN: 16 };
+export const FX = { GLOW: 0, SPARK: 1, GLINT: 2, PUFF: 3, FLAME: 4, RING: 5, DISC: 6, BEAM: 7, SHARD: 8, CRYSTAL: 9, DROP: 10, CHUNK: 11, DOME: 12, SMOKE: 13, PLUS: 14, LEAF: 15, COIN: 16, NOTE: 17 };
 // (the solid styles: SOLID_FROM up to, not with, SOLID_TO, and LEAF, v829, and COIN, v840)
 const SOLID_FROM = 8, SOLID_TO = 13;
 const isSolid = st => (st >= SOLID_FROM && st < SOLID_TO) || st === FX.LEAF || st === FX.COIN;
@@ -200,6 +200,15 @@ struct VOut {
     extra = tw; cover = 0.0;
   } else if (st == ${FX.GLOW} || st == ${FX.PLUS}) {
     cover = 0.0;
+  } else if (st == ${FX.NOTE}) {
+    // (v864, Jordan: the busker's music) a musical note facing us, upright but for its turn and a slow rock to and fro;
+    // which of the four notes it is from its seed (see fs), fading in quickly and out over its last part
+    let ang = q.h.x + sin(U.now.x * 2.3 + q.g.y * 31.0) * 0.28;
+    let cs = cos(ang); let sn = sin(ang);
+    let c2 = vec2f(corner.x * cs - corner.y * sn, corner.x * sn + corner.y * cs);
+    w = at + (right * c2.x + up * c2.y) * size;
+    fade = smoothstep(0.0, 0.1, k) * (1.0 - smoothstep(0.55, 1.0, k));
+    extra = floor(fract(q.g.y * 7.31) * 4.0);
   } else if (st == ${FX.SMOKE}) {
     // (v616, Jordan: smoke as Crafting and Conquest draws it) a soft smoke sprite (one of four, by its seed) on a card
     // turned to us round the upright, spinning by its turn; fading in over its first tenth and out over the rest
@@ -341,6 +350,33 @@ fn fxSoft(pos: vec2f, pix: vec3f, rad: f32, r2: f32) -> f32 {
   }
   return smoothstep(0.0, 0.3, vz - vb);
 }
+// (v864) the notes' pieces, as distances (negative inside): a stroke from a to b, and a note's head, a tilted oval
+fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  return length(pa - ba * sat(dot(pa, ba) / dot(ba, ba)));
+}
+fn sdHead(p: vec2f, c: vec2f, s: f32) -> f32 {
+  let d = p - c;
+  let q = vec2f(d.x * 0.94 + d.y * 0.34, -d.x * 0.34 + d.y * 0.94);
+  let r = vec2f(0.27, 0.19) * s;
+  return (length(q / r) - 1.0) * r.y;
+}
+// the note's shape at uv (-1 to 1, y up): 0 a quaver (one flag), 1 a crotchet (no flag), 2 two quavers beamed,
+// 3 two semiquavers beamed (two beams)
+fn noteDist(uv: vec2f, kind: f32) -> f32 {
+  if (kind < 0.5) {
+    let d = min(sdHead(uv, vec2f(-0.22, -0.58), 1.0), sdSeg(uv, vec2f(0.02, -0.55), vec2f(0.02, 0.78)) - 0.055);
+    return min(d, min(sdSeg(uv, vec2f(0.02, 0.76), vec2f(0.34, 0.4)) - 0.07, sdSeg(uv, vec2f(0.34, 0.4), vec2f(0.28, 0.1)) - 0.055));
+  }
+  if (kind < 1.5) {
+    return min(sdHead(uv, vec2f(-0.12, -0.58), 1.0), sdSeg(uv, vec2f(0.12, -0.55), vec2f(0.12, 0.78)) - 0.055);
+  }
+  var d = min(sdHead(uv, vec2f(-0.5, -0.62), 0.88), sdHead(uv, vec2f(0.32, -0.48), 0.88));
+  d = min(d, min(sdSeg(uv, vec2f(-0.29, -0.6), vec2f(-0.29, 0.62)), sdSeg(uv, vec2f(0.53, -0.46), vec2f(0.53, 0.76))) - 0.05);
+  d = min(d, sdSeg(uv, vec2f(-0.29, 0.6), vec2f(0.53, 0.74)) - 0.085);
+  if (kind > 2.5) { d = min(d, sdSeg(uv, vec2f(-0.29, 0.34), vec2f(0.53, 0.48)) - 0.07); }
+  return d;
+}
 @fragment fn fs(i: VOut) -> @location(0) vec4f {
   let uv = i.uv; let r2 = dot(uv, uv);
   var m = 0.0;            // how much of it is here
@@ -386,6 +422,18 @@ fn fxSoft(pos: vec2f, pix: vec3f, rad: f32, r2: f32) -> f32 {
     if (m * i.a < 1e-4) { discard; }
     let cs = cos(i.nz.z); let sn = sin(i.nz.z);
     lit = i.col * fxLight(i.wpos, puffNormal(vec2f(uv.x * cs - uv.y * sn, uv.x * sn + uv.y * cs), i.nz)) + i.col * i.glow;
+  } else if (st == ${FX.NOTE}) {
+    // (v864) a glowing note: its solid shape (bright, hiding what's behind by its cover) in a soft halo of its own
+    // light that only adds, the halo fading off well before the card's edge
+    let d = noteDist(uv, i.extra);
+    let core = 1.0 - smoothstep(-0.025, 0.025, d);
+    let edge = 1.0 - smoothstep(0.75, 1.0, max(abs(uv.x), abs(uv.y)));
+    let halo = exp(-max(d, 0.0) * 9.0) * 0.55 * edge;
+    if (core + halo < 1e-3) { discard; }
+    let soft = fxSoft(i.pos.xy, i.pix, i.rad, r2) * i.a;
+    let ac = sat(core * soft); let ah = sat(halo * soft);
+    let body = mix(i.col, vec3f(1.0), 0.3 + 0.3 * exp(-max(-d, 0.0) * 30.0)) * max(i.glow, 1.0);
+    return vec4f(body * ac + i.col * i.glow * ah * (1.0 - ac), ac * i.cover);
   } else if (st == ${FX.PLUS}) {
     // (v753) a plus sign facing us, crisp, its middle brighter (a heal's)
     let ax = abs(uv.x); let ay = abs(uv.y);
@@ -770,7 +818,7 @@ export class FxParticles {
 // Special emitters: { bolt: { from, to, jag, segments, forks, width, life, every } } draws jagged beams, re-rolled
 // `every` seconds through the phase.
 const STYLE = { glow: FX.GLOW, spark: FX.SPARK, glint: FX.GLINT, puff: FX.PUFF, flame: FX.FLAME, ring: FX.RING, disc: FX.DISC,
-  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS, leaf: FX.LEAF, coin: FX.COIN };
+  beam: FX.BEAM, shard: FX.SHARD, crystal: FX.CRYSTAL, drop: FX.DROP, chunk: FX.CHUNK, smoke: FX.SMOKE, plus: FX.PLUS, leaf: FX.LEAF, coin: FX.COIN, note: FX.NOTE };
 const pick = v => Array.isArray(v) ? v[0] + Math.random() * (v[1] - v[0]) : v;
 
 // A phase can also move: { move: { from, to, arc } } carries its 'head' point from one to the other across the phase
