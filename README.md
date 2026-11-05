@@ -564,6 +564,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v794:** (Jordan's desert town compare: shadow map 0.42 ms with the ground not casting, 0.70 with it, 0.72 with v793's copy without flat cells; cliff shadows the same) Ground shadows setting 2 taken out: nearly all the ground's casting triangles are its rough cliff faces (18 to 50 a half-cell, a flat one 2), which it kept, so it saved nothing. The G panel's drawing line says whether the GI's ground height is read in one look (v793, float32-filterable) or four.
 
+**v795:** (Jordan's v794 town shot: the GPU waiting 2.2 ms for the first send, the CPU before it the limit) Two cuts to render (encode), same look. The recorded draw lists send only the object blocks that changed since last sent: a mesh's matrix when it moved, its material's numbers when one differs (as the shadow map's list has since v786); before, every item's block went to the GPU each frame. And the camera's walk of the scene is done in the same pass as the shadow map's search for casters, the shadow map now drawn in the frame's first render (the depth pre-pass when that's on) instead of the ground's pre-pass or the world. G rows: camera walks shared with the shadow map, recorded lists' object blocks sent and kept; G > Tests > One walk switches the shared walk off to compare.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

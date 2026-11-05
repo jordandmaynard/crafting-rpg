@@ -117,9 +117,10 @@ class Renderer {
     // position must be @invariant, so both come out the same to the bit (buildMat's is)
     this.depthPrepass = false;
     this.bundleMargin = 4;   // (world units: how far out of view a mesh is still recorded, see _walk)
+    this.shareWalk = true;   // (v795) the camera's walk of the scene done with the shadow map's search for casters (see _renderShadow)
     this._chans = new Map(); this._chanIds = new WeakMap(); this._chanN = 0; this._flushNo = 0; this._walkNo = 0;
     this._time0 = performance.now();
-    this._frustum = new Frustum(); this._m = new Matrix4(); this._vp = new Matrix4(); this._v = new Vector3(); this._v2 = new Vector3();
+    this._frustum = new Frustum(); this._frustumSh = new Frustum(); this._mSh = new Matrix4(); this._m = new Matrix4(); this._vp = new Matrix4(); this._v = new Vector3(); this._v2 = new Vector3();
     this._pipelines = new Map(); this._modules = new Map();
     this._bufs = new WeakMap(); this._texs = new WeakMap(); this._rts = new WeakMap(); this._mats = new WeakMap(); this._snaps = new WeakMap();
     this.profiler = null;   // a GpuProfiler: each pass is timed under passName (render), its label (compute) or its kind
@@ -398,9 +399,9 @@ class Renderer {
   // mesh in the recording is still as recorded: in the scene and showing (this frame's walk marked it), on the
   // camera's layers and through the render's filter, with the same material, pipeline, material bind group,
   // geometry and buffers (no attribute changed). Meshes recorded but now just out of view are drawn anyway (the GPU
-  // clips them) until a fifth of the list is like that. Each frame the list's object blocks (matrices, colours) and
-  // frame are still written afresh, so moving and changing meshes are right; what's saved is the encoding of every
-  // draw. A list is recorded again when anything differs. Returns { pre, bundle, rest }: draw pre the usual way, then
+  // clips them) until a fifth of the list is like that. Each frame the list's frame is written afresh, and the object
+  // blocks (matrices, colours) of the meshes that moved or changed (v795: only those), so moving and changing meshes are
+  // right; what's saved is the encoding of every draw. A list is recorded again when anything differs. Returns { pre, bundle, rest }: draw pre the usual way, then
   // the bundle, then rest; or null to draw the whole list the usual way.
   _bundled(list, tgt, frameOff, clip, camera) {
     const ids = this._chanIds, idOf = o => { let v = ids.get(o); if (v === undefined) { v = ++this._chanN; ids.set(o, v); } return v; };
@@ -460,9 +461,23 @@ class Renderer {
     }
     if (!ok) { const W = this.info.why || (this.info.why = {}); W[why] = (W[why] || 0) + 1; }
     if (ok) {
-      const d = ch.objData;
-      for (const r of ch.items) this._objData(d, r.k * OBJ_BYTES / 4, r.mesh, r.mat);
-      this.device.queue.writeBuffer(ch.objBuf, 0, d, 0, ch.items.length * OBJ_BYTES / 4);
+      // (v795) only the object blocks that changed since they were last sent: a matrix when the mesh moved (its _mwV,
+      // as in _bundledShadow), the material's numbers when one of them differs; sent in runs (a gap of a few unchanged
+      // ones is sent along)
+      const d = ch.objData, q = this.device.queue, W = OBJ_BYTES / 4;
+      let lo = -1, hi = -1, sent = 0;
+      for (const r of ch.items) {
+        const m = r.mesh, v = m._mwV, o = r.k * W;
+        let up = this._objRest(d, o, m, r.mat);
+        if (v !== r.mv || v === 0) { r.mv = v; this._setMat(d, o, m.matrixWorld); up = true; }
+        if (!up) continue;
+        sent++;
+        if (lo < 0) lo = hi = r.k;
+        else if (r.k - hi > 8) { q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W); lo = hi = r.k; }
+        else hi = r.k;
+      }
+      if (lo >= 0) q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W);
+      this.info.objSent = (this.info.objSent || 0) + sent; this.info.objKept = (this.info.objKept || 0) + ch.items.length - sent;
       this.info.draws += ch.items.length;
       // (the frame's bind group takes turns between a few (the probe light's two sets): the same list is kept recorded
       // with each, and one not seen yet is recorded from the same list)
@@ -512,7 +527,7 @@ class Renderer {
       if (hasColor) attrs.push(geo.attributes.color);
       if (kind === 'shader') for (const n in mat.attributes) attrs.push(geo.attributes[n]);
       if (geo.index) attrs.push(geo.index);
-      const r = { mesh, mat, geo, pipe, mbg, kind, hasColor, attrs, gbs: attrs.map(a => a._gb), vers: attrs.map(a => a.version), lens: attrs.map(a => a.array.length), k, seen: 0 };
+      const r = { mesh, mat, geo, pipe, mbg, kind, hasColor, mv: mesh._mwV, attrs, gbs: attrs.map(a => a._gb), vers: attrs.map(a => a.version), lens: attrs.map(a => a.array.length), k, seen: 0 };
       items.push(r); index.set(mesh, r);
     }
     // (an item skipped above leaves its block to the next: the blocks run 0 to items.length - 1)
@@ -864,14 +879,22 @@ class Renderer {
   // a mesh's object block (its matrix and material numbers) into d at o
   _objData(d, o, mesh, mat) {
     this._setMat(d, o, mesh.matrixWorld);
+    this._objRest(d, o, mesh, mat);
+  }
+  // (v795) the block's material numbers (all but the matrix) into d at o; true if any differ from what was there
+  _objRest(d, o, mesh, mat) {
+    const t = this._objT || (this._objT = new Float32Array(12));
     const c = mat.color;
-    if (c) { d[o + 16] = c.r; d[o + 17] = c.g; d[o + 18] = c.b; } else { d[o + 16] = d[o + 17] = d[o + 18] = 1; }
-    d[o + 19] = mat.opacity;
+    if (c) { t[0] = c.r; t[1] = c.g; t[2] = c.b; } else { t[0] = t[1] = t[2] = 1; }
+    t[3] = mat.opacity;
     const e = mat.emissive, ei = mat.emissiveIntensity ?? 1;
-    if (e) { d[o + 20] = e.r * ei; d[o + 21] = e.g * ei; d[o + 22] = e.b * ei; } else { d[o + 20] = d[o + 21] = d[o + 22] = 0; }
-    d[o + 23] = mesh.receiveShadow ? 1 : 0;
-    d[o + 24] = mat.metalness ?? 0; d[o + 25] = mat.roughness ?? 1;
-    d[o + 26] = mesh.objX ?? 0; d[o + 27] = 0;   // (objX: a number of the mesh's own for its ShaderMaterial, O.pbr.z)
+    if (e) { t[4] = e.r * ei; t[5] = e.g * ei; t[6] = e.b * ei; } else { t[4] = t[5] = t[6] = 0; }
+    t[7] = mesh.receiveShadow ? 1 : 0;
+    t[8] = mat.metalness ?? 0; t[9] = mat.roughness ?? 1;
+    t[10] = mesh.objX ?? 0; t[11] = 0;   // (objX: a number of the mesh's own for its ShaderMaterial, O.pbr.z)
+    let changed = false;
+    for (let i = 0; i < 12; i++) if (d[o + 16 + i] !== t[i]) { d[o + 16 + i] = t[i]; changed = true; }
+    return changed;
   }
   // what the camera's layers can see, sorted for drawing
   // What a render draws: the scene is walked once a frame for a camera (every layer, culled and sorted), and each
@@ -881,8 +904,7 @@ class Renderer {
     if (scene.overrideMaterial) return this._walk(scene, camera, true);
     // (kept for each camera drawn this frame, so a second camera's render between two of the first's, such as the
     // game's mirrored water camera, doesn't make the scene be walked again for the first)
-    let S = this._seen;
-    if (!S || S.frame !== this._frameNo || S.scene !== scene) S = this._seen = { frame: this._frameNo, scene, by: new Map() };
+    const S = this._seenFor(scene);
     let c = S.by.get(camera);
     if (!c) { const t0 = performance.now(); c = { list: this._walk(scene, camera, false), walk: this._walkNo }; S.by.set(camera, c); this.info.tWalk += performance.now() - t0; }
     this._lastWalk = c.walk; this._lastNear = c.list.near || [];
@@ -892,17 +914,33 @@ class Renderer {
     for (const it of c.list) if (it.mesh.layers.test(L) && (!f || f(it.mesh))) out.push(it);
     return out;
   }
-  _walk(scene, camera, layered) {
+  // this frame's walks of the scene, by camera
+  _seenFor(scene) {
+    let S = this._seen;
+    if (!S || S.frame !== this._frameNo || S.scene !== scene) S = this._seen = { frame: this._frameNo, scene, by: new Map() };
+    return S;
+  }
+  // (v795) sh: the shadow map's search for casters (see _renderShadow) done in the same pass over the scene, when set:
+  // { fr, swn, SL, margin, casters, near }. What each finds is as if walked apart: the camera's walk doesn't go into a
+  // hidden object, the casters' goes into one that still casts (castHidden).
+  _walk(scene, camera, layered, sh = null) {
     const fr = this._frustum.setFromProjectionMatrix(this._m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
     // (v769) every mesh this walk finds showing, in view or not, is marked with its number (_wv): a recorded draw
     // list may go on drawing one that's just out of view, but never one that's hidden or gone from the scene
     const wn = layered ? -1 : ++this._walkNo, near = [];
     const opaque = [], clear = [], override = scene.overrideMaterial, vp = this._m, v = this._v;
-    const visit = o => {
-      if (!o.visible) return;
+    const sfr = sh && sh.fr, swn = sh ? sh.swn : 0, SL = sh && sh.SL, sm = sh ? sh.margin : 0, casters = sh && sh.casters, sNear = sh && sh.near;
+    const visit = (o, show) => {
+      if (!o.visible) { if (!sh || !o.castHidden) return; show = false; }
       // (v778) a mesh the scene's matrix pass left while hidden (scene.js _mwH), shown since: its matrices made now
       if (o._mwH) o.updateMatrixWorld();
-      if (o.isMesh && (!layered || o.layers.test(camera.layers)) && !(o.isInstancedMesh && !o.count)) {
+      if (sh && o.isMesh && o.castShadow && o.layers.test(SL) && o.material && !(o.isInstancedMesh && !o.count)) {
+        o._sv = swn;
+        const cls = !o.frustumCulled ? 2 : this._frustumClass(o, sfr, o.isInstancedMesh ? 0 : sm);
+        if (cls === 2) casters.push(o);
+        else if (cls === 1) { o._sn = swn; sNear.push(o); }
+      }
+      if (show && o.isMesh && (!layered || o.layers.test(camera.layers)) && !(o.isInstancedMesh && !o.count)) {
         const mat = override || o.material;
         if (mat && mat.visible && wn >= 0) o._wv = wn;
         // (v769) just out of view (within bundleMargin of it): kept in a recorded draw list (marked _wn and listed in
@@ -919,9 +957,9 @@ class Renderer {
         }
       }
       const ch = o.children;
-      for (let i = 0; i < ch.length; i++) visit(ch[i]);
+      for (let i = 0; i < ch.length; i++) visit(ch[i], show);
     };
-    visit(scene);
+    visit(scene, true);
     opaque.sort((a, b) => a.order - b.order || a.mid - b.mid || a.z - b.z);
     clear.sort((a, b) => a.order - b.order || b.z - a.z);
     const out = opaque.concat(clear);
@@ -965,25 +1003,34 @@ class Renderer {
     sh.matrix.multiplyMatrices(UVFIX, vp);
     const slot = this._frameSlotAlloc(), d = this.frameData, o = slot * FRAME_BYTES / 4;
     this._setMat(d, o, cam.matrixWorldInverse); this._setMat(d, o + 16, pm); this._setMat(d, o + 32, vp);
-    const fr = this._frustum.setFromProjectionMatrix(new Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const fr = this._frustumSh.setFromProjectionMatrix(this._mSh.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     const casters = [], near = [], swn = ++this._walkNo, SL = this.shadowLayers || camera.layers;
     // (castHidden: a hidden mesh that still casts, e.g. an upper story hidden while you're under it)
     // (v769: every caster found, in the sun's view or not, is marked _sv with this walk's number, for _bundledShadow)
     const I = this.info, t0 = performance.now(), margin = this.bundles ? this.bundleMargin : 0;
-    const visit = o => {
-      if (!o.visible && !o.castHidden) return;
-      if (o._mwH) o.updateMatrixWorld();
-      if (o.isMesh && o.castShadow && o.layers.test(SL) && o.material && !(o.isInstancedMesh && !o.count)) {
-        o._sv = swn;
-        // (v786: in view, near or out in one look, as in _walk)
-        const cls = !o.frustumCulled ? 2 : this._frustumClass(o, fr, o.isInstancedMesh ? 0 : margin);
-        if (cls === 2) casters.push(o);
-        else if (cls === 1) { o._sn = swn; near.push(o); }
-      }
-      const ch = o.children;
-      for (let i = 0; i < ch.length; i++) visit(ch[i]);
-    };
-    visit(scene);
+    // (v795) when this render's camera hasn't walked the scene yet this frame, its walk is done now along with this one
+    // (one pass over the scene, not two), and kept for its render, as _collect would
+    const seen = this._seenFor(scene);
+    if (this.shareWalk && !scene.overrideMaterial && !seen.by.has(camera)) {
+      const list = this._walk(scene, camera, false, { fr, swn, SL, margin, casters, near });
+      seen.by.set(camera, { list, walk: this._walkNo });
+      I.shared = (I.shared || 0) + 1;
+    } else {
+      const visit = o => {
+        if (!o.visible && !o.castHidden) return;
+        if (o._mwH) o.updateMatrixWorld();
+        if (o.isMesh && o.castShadow && o.layers.test(SL) && o.material && !(o.isInstancedMesh && !o.count)) {
+          o._sv = swn;
+          // (v786: in view, near or out in one look, as in _walk)
+          const cls = !o.frustumCulled ? 2 : this._frustumClass(o, fr, o.isInstancedMesh ? 0 : margin);
+          if (cls === 2) casters.push(o);
+          else if (cls === 1) { o._sn = swn; near.push(o); }
+        }
+        const ch = o.children;
+        for (let i = 0; i < ch.length; i++) visit(ch[i]);
+      };
+      visit(scene);
+    }
     const t1 = performance.now();
     // (v786, for the G rows: the casters found, the recorded list's time, and the time and count of those drawn one by one)
     I.tShFind = (I.tShFind || 0) + t1 - t0;
