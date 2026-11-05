@@ -117,6 +117,7 @@ class Renderer {
     // position must be @invariant, so both come out the same to the bit (buildMat's is)
     this.depthPrepass = false;
     this.bundleMargin = 4;   // (world units: how far out of view a mesh is still recorded, see _walk)
+    this.sendAfterShadow = false;   // (v795, see render)
     this.shareWalk = true;   // (v795) the camera's walk of the scene done with the shadow map's search for casters (see _renderShadow)
     this._chans = new Map(); this._chanIds = new WeakMap(); this._chanN = 0; this._flushNo = 0; this._walkNo = 0;
     this._time0 = performance.now();
@@ -330,6 +331,14 @@ class Renderer {
       this._renderShadow(scene, camera, lights.sun);
       this.info.tShadow += performance.now() - t0;
       this.shadowMap.needsUpdate = false;
+      // (v795) sendAfterShadow: the shadow map goes to the GPU now, as sendEarly does (the same frame), so the GPU draws
+      // it while this render and those after it are encoded; a clear waiting for this render's target is kept for it
+      if (this.sendAfterShadow) {
+        const pc = this._pendingClear; this._pendingClear = null;
+        this.sendEarly();
+        this._pendingClear = pc;
+        this._newEnc();
+      }
     }
     const tgt = this._targetViews(this.target);
     const frameOff = this._writeFrame(camera, lights, scene, tgt);

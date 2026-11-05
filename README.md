@@ -566,6 +566,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v795:** (Jordan's v794 town shot: the GPU waiting 2.2 ms for the first send, the CPU before it the limit) Two cuts to render (encode), same look. The recorded draw lists send only the object blocks that changed since last sent: a mesh's matrix when it moved, its material's numbers when one differs (as the shadow map's list has since v786); before, every item's block went to the GPU each frame. And the camera's walk of the scene is done in the same pass as the shadow map's search for casters, the shadow map now drawn in the frame's first render (the depth pre-pass when that's on) instead of the ground's pre-pass or the world. G rows: camera walks shared with the shadow map, recorded lists' object blocks sent and kept; G > Tests > One walk switches the shared walk off to compare.
 
+**v796:** (Jordan's v795 shot: the GPU idle 1.6 ms before the first send; scene matrices 0.51 ms and finding casters with the camera's walk 0.59 before it) Two more cuts, same look. The shadow map is sent to the GPU as soon as it's encoded (G > Tests > Early sends > + after shadow map, now the default; 3 sends as before to compare), so the GPU draws it while the pre-passes and world are encoded. And the scene's matrix pass leaves the world's chunk meshes once made (matrixStill, scene.js: an object that with all under it never moves; adding to it has it looked at again); G row: scene matrices left, never moving.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

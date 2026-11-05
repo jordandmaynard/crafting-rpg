@@ -14,7 +14,7 @@ export class Layers {
 
 let objectId = 0;
 // (v776) updateMatrixWorld's tally, for the profiler: objects looked at, and those whose world matrix was made anew
-export const MATRIX_STATS = { seen: 0, made: 0 };
+export const MATRIX_STATS = { seen: 0, made: 0, still: 0 };
 const _q = new Quaternion(), _v = new Vector3(), _m = new Matrix4(), _target = new Vector3(), _pos = new Vector3();
 const _was = new Float64Array(16);   // (v781: _updateUp's world matrix before)
 export class Object3D {
@@ -41,6 +41,10 @@ export class Object3D {
     this.userData = {};
     // (v776: updateMatrixWorld's record of what its matrices were made from, set here so every object keeps one shape)
     this._mc = undefined; this._mm = undefined; this._mwV = 0; this._mwP = undefined; this._mwPV = -1; this._mwS = 0; this._mwH = false;
+    // (v795) matrixStill: set by its maker on an object that, with all under it, is never moved again once added (the
+    // world's chunk meshes): the scene's pass then leaves it and all under it once made, while its parent stays put.
+    // Adding to or taking from it (or anything under it) has it looked at again; moving it means clearing matrixStill
+    this.matrixStill = false; this._stillOK = false;
   }
   add(...objs) {
     for (const o of objs) {
@@ -48,13 +52,14 @@ export class Object3D {
       if (o.parent) o.parent.remove(o);
       o.parent = this;
       this.children.push(o);
+      this._unstill();
     }
     return this;
   }
   remove(...objs) {
     for (const o of objs) {
       const i = this.children.indexOf(o);
-      if (i !== -1) { o.parent = null; this.children.splice(i, 1); }
+      if (i !== -1) { o.parent = null; this.children.splice(i, 1); this._unstill(); }
     }
     return this;
   }
@@ -71,6 +76,8 @@ export class Object3D {
   // renderer's walks bring it up to date if it's shown before the next pass. Not one hidden that still casts (castHidden)
   // (v780: nor did v778 save much, as most of them were under hidden groups, the weapons in every metal waiting in the
   // hand: a hidden group is left now too, with all under it, as neither walk goes into one)
+  // (v795) this and everything over it looked at again in the next pass (see matrixStill)
+  _unstill() { for (let o = this; o; o = o.parent) o._stillOK = false; }
   updateMatrixWorld(hidden = false) {
     if (hidden && !this.visible && !this.castHidden) { this._mwH = true; return; }
     this._mwH = false;
@@ -96,7 +103,12 @@ export class Object3D {
       MATRIX_STATS.made++;
     }
     const ch = this.children;
-    for (let i = 0; i < ch.length; i++) ch[i].updateMatrixWorld(hidden);
+    for (let i = 0; i < ch.length; i++) {
+      const c = ch[i];
+      if (c._stillOK && c.matrixStill && c._mwP === this && c._mwPV === this._mwV) { MATRIX_STATS.still++; continue; }
+      c.updateMatrixWorld(hidden);
+    }
+    if (this.matrixStill) this._stillOK = true;
   }
   // this object's world matrix brought up to date along with every parent's, but not its children's (counted as a
   // change, so updateMatrixWorld redoes them)
