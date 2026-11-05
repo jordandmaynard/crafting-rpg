@@ -12,6 +12,12 @@
 // round about give back.
 
 export const MAX_POINTS = 16;
+// (v793) giGround's opening, and what renderer._module puts after it with float32-filterable: the four texels read
+// blended in one look when they all lie in the height field's window (giHf's ring; linSamp repeats as it does)
+export const GI_GROUND_HEAD = 'fn giGround(xz: vec2f) -> f32 {\n  let p = xz * f32(GI_TPT) - 0.5;\n';
+export const GI_GROUND_FAST = `  { let rq = vec2i(floor(p)) - giHfOrigin(); let Sq = giHfSize();
+    if (all(rq >= vec2i(0)) && all(rq < vec2i(Sq - 1))) { return textureSampleLevel(giHfTex, linSamp, (p + 0.5) / f32(Sq), 0.0).x; } }
+`;
 export const FRAME_BYTES = 1280;  // the Frame struct (1264 bytes: 16 point lights since v411, the inside fill since v534), padded to the uniform offset alignment
 export const OBJ_BYTES = 256;     // the Obj struct (112 bytes), likewise
 
@@ -346,7 +352,9 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
     let p = F.points[i];
     let d = p.pos.xyz - w; let dist = length(d);
     var att = 1.0;
-    if (p.pos.w > 0.0 && p.color.w > 0.0) { att = pow(sat(1.0 - dist / p.pos.w), p.color.w); }
+    // (v793) out of a light's reach it adds nothing (att 0), so its shading isn't worked out (one with no falloff,
+    // color.w 0, reaches everywhere)
+    if (p.pos.w > 0.0 && p.color.w > 0.0) { if (dist >= p.pos.w) { continue; } att = pow(sat(1.0 - dist / p.pos.w), p.color.w); }
     let L = d / max(dist, 1e-5);
     let irr = sat(dot(N, L)) * p.color.rgb * att;
     col += irr * diff + irr * PI * ggx(f0, rough, N, V, L);

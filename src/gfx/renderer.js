@@ -12,7 +12,7 @@
 // @builtin(instance_index) (none at 0).
 // Projections are kept as the scene graph makes them (z from -1 to 1) and squeezed to WebGPU's 0 to 1 here.
 import { Matrix4, Vector3, Frustum, Color } from './math.js';
-import { PRELUDE, builtinCode, MAX_POINTS, FRAME_BYTES, OBJ_BYTES } from './shaders.js';
+import { PRELUDE, builtinCode, MAX_POINTS, FRAME_BYTES, OBJ_BYTES, GI_GROUND_HEAD, GI_GROUND_FAST } from './shaders.js';
 
 // (v774) the overdraw view's: one added per draw, whatever was there
 const OD_BLEND = { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' }, alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } };
@@ -63,7 +63,8 @@ export async function createRenderer() {
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('No WebGPU adapter was found.');
   // timestamp-query, where the browser has it, lets the profiler (G) time each pass
-  const device = await adapter.requestDevice({ requiredFeatures: adapter.features.has('timestamp-query') ? ['timestamp-query'] : [] });
+  // (v793) float32-filterable, where it's there, lets the GI's ground heights be read blended in one look (see _module)
+  const device = await adapter.requestDevice({ requiredFeatures: ['timestamp-query', 'float32-filterable'].filter(f => adapter.features.has(f)) });
   device.lost.then(info => console.error('WebGPU device lost:', info.message));
   device.addEventListener && device.addEventListener('uncapturederror', e => console.error('WebGPU:', e.error.message));
   const r = new Renderer(device);
@@ -128,6 +129,8 @@ class Renderer {
     this._frameNo = 0; this._keepFrame = false; this._enc = null; this._pendingClear = null; this._canvasTex = null; this._flushQueued = false;
 
     const U = GPUBufferUsage, S = GPUShaderStage;
+    // (v793) the GI height field read blended by the texture unit (giGround), when float textures can be filtered
+    this.hfFilter = !!(device.features && device.features.has('float32-filterable'));
     this.bglFrame = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: S.VERTEX | S.FRAGMENT | S.COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: FRAME_BYTES } },
       { binding: 1, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'depth' } },
@@ -136,7 +139,7 @@ class Renderer {
       { binding: 4, visibility: S.FRAGMENT | S.COMPUTE, sampler: { type: 'filtering' } },
       { binding: 5, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
       { binding: 6, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float', viewDimension: '3d' } },
-      { binding: 7, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 7, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: this.hfFilter ? 'float' : 'unfilterable-float' } },
       { binding: 8, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
       { binding: 9, visibility: S.FRAGMENT | S.COMPUTE, buffer: { type: 'read-only-storage' } },
       { binding: 10, visibility: S.FRAGMENT | S.COMPUTE, texture: { sampleType: 'float' } },
@@ -1154,6 +1157,10 @@ class Renderer {
     // (shadowTaps 5: the sun's shadow from 5 of the 17 PCF taps, for phones; set before the first draw)
     if (this.shadowTaps === 5) code = code.replace('for (var i = 0; i < 17; i++) { sum += textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + PCF[i] * r, z); }\n  return sum / 17.0;',
       [3, 5, 8, 11, 13].map(i => `sum += textureSampleCompareLevel(shadowMap, shadowSamp, s.xy + PCF[${i}] * r * 1.4, z);`).join(' ') + '\n  return sum / 5.0;');
+    // (v793, same look) the GI's ground height at a point (giGround, 4 texel reads blended by hand) read in one
+    // look blended by the texture unit, where the four texels are all in the height field's window (the same ring
+    // the reads wrap round: the sampler repeats); at its edge, the reads as before
+    if (this.hfFilter) code = code.replace(GI_GROUND_HEAD, GI_GROUND_HEAD + GI_GROUND_FAST);
     let m = this._modules.get(code);
     if (!m) {
       m = this.device.createShaderModule({ code });
