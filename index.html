@@ -1351,7 +1351,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 802;
+const GAME_VERSION = 803;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -4785,7 +4785,7 @@ function birdLive(q) {
   tagged(3, bx - fx * 0.05, by + 0.005, bz - fz * 0.05, () => part(G.box, dark, bx - fx * 0.09, by + 0.012, bz - fz * 0.09, { sx: 0.03, sy: 0.01, sz: 0.08, ry, rx: -0.2, into: 'spider' }));
 }
 // (v543, Jordan: the cooking hearth's hood poked up through the roof) its chimney carried on up from the hood's top
-// and out through the roof, as a built hearth's stack is (hearthTop): up through any floors over it to the roof of
+// and out through the roof (the built hearth's too, since v803): up through any floors over it to the roof of
 // the story it comes out on, PROP_STACK.over above the roof under it, in coursed stone with a cap
 const PROP_STACK = { over: 0.45, w: 0.6, d: 0.36 };   // (2026-11-03, Jordan: a gap behind it: 6 cm deeper, back into the wall as the hearth's stones are)
 function propStack(q) {
@@ -12494,11 +12494,7 @@ function buildSmoke() {
     const i = T(c, r);
     if (OB[i] === O.VENT) add(c + 1, LV[i] * STEP + 0.05, r + 1, 1, 0.3);
   }
-  for (const h of hearths.values()) {
-    if (Math.abs(h.c - H.x) > SMOKE_R || Math.abs(h.r - H.z) > SMOKE_R) continue;
-    const [sx, sz] = stackAt(h.c, h.r, h.side);
-    add(sx, hearthTop(h.c, h.r, h.side) + 0.05, sz, 0, 0.05);
-  }
+  // (v803: your hearth smokes out of its chimney through the GPU particles, as the town hearths do: updatePropFires)
   // (and a smelter's chimney while it works)
   for (const st of stations.values()) {
     if (st.kind !== 'smelter' || !st.busy || Math.abs(st.c - H.x) > SMOKE_R || Math.abs(st.r - H.z) > SMOKE_R) continue;
@@ -12515,7 +12511,7 @@ function buildSmoke() {
   scene.add(smokeMesh);
 }
 function updateSmoke() {
-  const key = [...hearths.values()].map(h => h.c + ',' + h.r + ',' + h.side).join(';') + '|' + [...stations.values()].filter(st => st.kind === 'smelter' && st.busy).map(st => st.c + ',' + st.r).join(';');
+  const key = [...stations.values()].filter(st => st.kind === 'smelter' && st.busy).map(st => st.c + ',' + st.r).join(';');
   if (key !== smokeKey || Math.hypot(H.x - smokeAt.x, H.z - smokeAt.z) > 8) { smokeKey = key; buildSmoke(); }
   const S = SMOKE, U = SMOKE_U;
   for (const k of ['amount', 'size', 'rate', 'life', 'rise', 'wind', 'glow']) U[k].value = S[k];
@@ -14776,7 +14772,7 @@ function drawObject(o, c, r) {
     case O.FOUNTAIN: return fountain(c, r);
     case O.PLANTER: return planter(c, r);
     case O.SHRINE: return shrine(x, z, k * 6);
-    case O.HEARTH: return hearth(x, z, c, r);
+    case O.HEARTH: return;   // (v803: drawn as a prop, from PROP_DRAW)
     case O.TANTABLE: return stations.has(T(c, r)) ? stationParts(tanTable, x + 0.5, z + 0.5, c, r) : tanTable(x, z, c, r);
     case O.WEAPONTABLE: return stations.has(T(c, r)) ? stationParts(weaponTable, x + 0.5, z + 0.5, c, r) : weaponTable(x, z, c, r);
     case O.ALCHEMY: return stationParts(alchemyTable, x + 0.5, z + 0.5, c, r);
@@ -14892,72 +14888,9 @@ function dockDeck(c, r, i) {
     part(G.cyl6, shade(CC('#4a3020'), 0.9 + hs(X, Z, 77) * 0.2), px, (bed + top) / 2, pz, { sx: 0.15, sy: top - bed, sz: 0.15 });
   }
 }
-// A hearth: a round stone firepit under a stone hood on four short pillars, and a chimney stack that
-// rises clear of any roof built over it (the fire itself is animated apart, see the fires). Against a wall
-// it is built into it as a fireplace instead (see shapeHearth).
+// (v803, Jordan) the hearth you build is the town's cooking hearth (a prop record drawn from PROP_DRAW: lightHearth);
+// the old round firepit and its fireplace form are gone. HEARTH_REACH: how near its warmth heals you
 const HEARTH_REACH = 3.5;
-// where the stack stands: over the middle of the tile, or back against the wall of a fireplace
-const FIRE_BACK = 0.3;
-const stackAt = (c, r, side) => side < 0 ? [c + 0.5, r + 0.5] : [c + 0.5 + DC[side] * FIRE_BACK, r + 0.5 + DR[side] * FIRE_BACK];
-function hearthTop(c, r, side = -1) {
-  const i = T(c, r), y = LV[i] * STEP, rm = bldOf(i);
-  if (!rm || !rm.roofY) return y + 2.4;
-  const [sx, sz] = stackAt(c, r, side);
-  let top = 0;
-  for (const [dx, dz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) top = Math.max(top, rm.roofY(sx + dx, sz + dz));
-  return Math.max(y + 2.4, top + 0.45);
-}
-function hearth(x, z, c, r) {
-  const lit = hearths.get(T(c, r));
-  if (lit && lit.side >= 0) return fireplace(x, z, c, r, lit.side);
-  const y = surfaceY(x, z), top = hearthTop(c, r), st = '#8a8694', dk = '#4e4a56';
-  part(G.cyl8, dk, x, y + 0.04, z, { sx: 0.98, sy: 0.08, sz: 0.98 });
-  for (let a = 0; a < 10; a++) {
-    const ang = a / 10 * Math.PI * 2, k = hash(c + a, r, 31);
-    part(G.box, shade(CC(st), 0.82 + k * 0.3), x + Math.sin(ang) * 0.4, y + 0.15, z + Math.cos(ang) * 0.4, { sx: 0.24, sy: 0.24 + k * 0.05, sz: 0.16, ry: ang });
-  }
-  part(G.cyl8, '#2a2226', x, y + 0.1, z, { sx: 0.62, sy: 0.06, sz: 0.62 });
-  // the hood on its pillars, and the stack
-  for (let a = 0; a < 4; a++) {
-    const ang = a / 4 * Math.PI * 2 + Math.PI / 4;
-    part(G.box, shade(CC(st), 0.9), x + Math.sin(ang) * 0.38, y + 0.55, z + Math.cos(ang) * 0.38, { sx: 0.14, sy: 0.6, sz: 0.14, ry: ang });
-  }
-  part(G.cyl8, shade(CC(st), 0.95), x, y + 0.9, z, { sx: 1.0, sy: 0.12, sz: 1.0 });
-  part(G.cone6, shade(CC(st), 0.85), x, y + 1.18, z, { sx: 0.9, sy: 0.46, sz: 0.9 });
-  const h = top - (y + 1.25);
-  part(G.box, shade(CC(st), 0.8), x, y + 1.25 + h / 2, z, { sx: 0.34, sy: h, sz: 0.34 });
-  for (let k = 0; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), x, y + 1.4 + k * 0.3, z, { sx: 0.36, sy: 0.03, sz: 0.36 });
-  part(G.box, dk, x, top + 0.04, z, { sx: 0.44, sy: 0.1, sz: 0.44 });
-  part(G.box, '#ffb050', x, y + 0.14, z, { sx: 0.3, sy: 0.04, sz: 0.3, into: 'glow' });
-}
-// the fireplace: a stone hearthstone, a firebox between two jambs under a mantel, and a chimney breast
-// against the wall narrowing into the stack. v runs from the middle of the tile back to the wall (0.5),
-// u across it.
-function fireplace(x, z, c, r, side) {
-  const y = surfaceY(x, z), top = hearthTop(c, r, side), st = '#8a8694', dk = '#4e4a56';
-  const ox = DC[side], oz = DR[side], ry = side & 1 ? Math.PI / 2 : 0;
-  // boxes are sized across (u) and deep (v), whichever way the wall runs
-  const box = (col, u, v, yy, w, hh, d, into) => part(G.box, col, x - oz * u + ox * v, yy, z + ox * u + oz * v, { sx: w, sy: hh, sz: d, ry, into });
-  box(dk, 0, 0.08, y + 0.03, 1.02, 0.06, 0.62);
-  for (let k = 0; k < 4; k++) box(shade(CC(st), 0.86 + hash(c + k, r, 33) * 0.22), -0.36 + k * 0.24, -0.2, y + 0.06, 0.22, 0.06, 0.12);
-  // the back of the firebox, and its sooty inside
-  box(shade(CC(st), 0.82), 0, FIRE_BACK + 0.04, y + 0.62, 0.94, 1.24, 0.2);
-  box('#2a2226', 0, FIRE_BACK - 0.07, y + 0.36, 0.5, 0.62, 0.02);
-  // the jambs, coursed stone
-  for (const u of [-0.36, 0.36]) for (let k = 0; k < 3; k++)
-    box(shade(CC(st), 0.84 + hash(c + k, r + (u > 0 ? 1 : 0), 34) * 0.24), u, 0.16, y + 0.14 + k * 0.25, 0.22 - (k & 1) * 0.03, 0.25, 0.44 - (k & 1) * 0.04);
-  // lintel and mantel shelf
-  box(shade(CC(st), 0.92), 0, 0.15, y + 0.82, 0.98, 0.16, 0.46);
-  box('#6a4a32', 0, 0.12, y + 0.94, 1.06, 0.07, 0.54);
-  // the breast narrowing to the stack
-  box(shade(CC(st), 0.88), 0, FIRE_BACK - 0.02, y + 1.2, 0.8, 0.46, 0.3);
-  box(shade(CC(st), 0.84), 0, FIRE_BACK, y + 1.5, 0.6, 0.16, 0.26);
-  const [sx, sz] = stackAt(c, r, side), s0 = y + 1.58, h = top - s0;
-  part(G.box, shade(CC(st), 0.8), sx, s0 + h / 2, sz, { sx: 0.36, sy: h, sz: 0.3, ry });
-  for (let k = 0; k < Math.floor(h / 0.3); k++) part(G.box, shade(CC(dk), 1.1), sx, s0 + 0.15 + k * 0.3, sz, { sx: 0.38, sy: 0.03, sz: 0.32, ry });
-  part(G.box, dk, sx, top + 0.04, sz, { sx: 0.44, sy: 0.1, sz: 0.38, ry });
-  box('#ffb050', 0, 0.1, y + 0.08, 0.36, 0.03, 0.22, 'glow');
-}
 // a waystone where a road ends: a ring of standing stones round a rune that glows
 function shrine(x, z, k) {
   const y = groundAt(x, z), stone = '#8a8696';
@@ -19949,7 +19882,9 @@ function preloadPaint(k, sizes) {
   paintKept.set(key, im);
 }
 const paintImg = (k, sizes) => (preloadPaint(k, sizes), `<img class="paint" src="icons/paint/${k}-128.webp?v=${PAINT_REV}" srcset="icons/paint/${k}-128.webp?v=${PAINT_REV} 128w, icons/paint/${k}-256.webp?v=${PAINT_REV} 256w" sizes="${sizes}" alt="" draggable="false">`);
-for (const k of ['dash', 'bag', 'hammer', 'map', 'floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'hearth', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable', 'barrel']) BAR_ICON[k] = paintImg(k, 'max(66px, calc(9.8vh - 14px))');
+for (const k of ['dash', 'bag', 'hammer', 'map', 'floor', 'stonefloor', 'logwall', 'wall', 'stonewall', 'door', 'sawtable', 'grinder', 'smelter', 'tanrack', 'table', 'weapontable', 'alchemytable', 'barrel']) BAR_ICON[k] = paintImg(k, 'max(66px, calc(9.8vh - 14px))');
+// (v803) the hearth is the cooking hearth now: Jordan's painting of it (icons/paint/src/build-cooking-hearth-256x256.png)
+BAR_ICON.hearth = paintImg('hearthCook', 'max(66px, calc(9.8vh - 14px))');
 // Every skin image (hover, pressed, selected and disabled states, the map's bookmarks, frames) is fetched and decoded as
 // the game loads, so a state shows at once the first time you hover or press it instead of flashing empty while its file
 // comes in. The names are read from this page's own text (styles and script), so a new skin file is picked up without a
@@ -23306,7 +23241,9 @@ function respawn() {
   // by your hearth if you have one (on whichever side of it is open), else by the well in the first town
   const h = hearths.values().next().value;
   let at = null;
-  if (h) for (const d of [2, 1, 3, 0]) {
+  // (v803: in front of its fire if that's open)
+  if (h) { const fc = h.c + DC[h.f], fr = h.r + DR[h.f]; if (stepOpen(h.c, h.r, h.f, false) && !OBJ[OB[T(fc, fr)]].solid) at = [h.x + DC[h.f] * 0.95, h.z + DR[h.f] * 0.95]; }
+  if (h && !at) for (const d of [2, 1, 3, 0]) {
     const n = T(h.c + DC[d], h.r + DR[d]);
     if (stepOpen(h.c, h.r, d, false) && !OBJ[OB[n]].solid) { at = [h.c + 0.5 + DC[d] * 0.85, h.r + 0.5 + DR[d] * 0.85]; break; }
   }
@@ -25914,7 +25851,7 @@ const ghostMat = new GFX.MeshBasicMaterial({ color: '#7aff9a', transparent: true
 const ghostBad = new GFX.MeshBasicMaterial({ color: '#ff6a5a', transparent: true, opacity: 0.4, depthWrite: false });
 const ghostGeo = { floor: new GFX.BoxGeometry(1, 0.08, 1), wall: new GFX.BoxGeometry(1, WALL_H, 0.22), door: new GFX.BoxGeometry(1, WALL_H, 0.12) };
 ghostGeo.stonefloor = ghostGeo.floor; ghostGeo.logwall = ghostGeo.wall; ghostGeo.stonewall = new GFX.BoxGeometry(1, WALL_H, 0.32);
-ghostGeo.hearth = new GFX.CylinderGeometry(0.5, 0.5, 0.7, 8);
+ghostGeo.hearth = new GFX.BoxGeometry(1.7, 2.1, 0.76);   // (v803: the cooking hearth)
 ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
 ghostGeo.woodwindow = ghostGeo.wall; ghostGeo.stonewindow = ghostGeo.stonewall;
 ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
@@ -26117,6 +26054,7 @@ function edgeSpot(ec, er, w, kind) {
   if (ok && stairAt.has(a) && stairAt.get(a) === stairAt.get(b)) { ok = false; why = 'That would cut across the stairs.'; }
   // (never through the middle of a station)
   if (ok && stationTile.has(a) && stationTile.get(a) === stationTile.get(b)) { ok = false; why = `That would cut through the ${KIND_SLOT[stationTile.get(a).kind].name.toLowerCase()}.`; }
+  if (ok && hearthTile.has(a) && hearthTile.get(a) === hearthTile.get(b)) { ok = false; why = 'That would cut through the hearth.'; }   // (v803: two tiles wide)
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   // keep anyone from being walled inside the wall itself (a window going into a wall already there can't)
   if (ok && !upgrade) for (const e of [H, ...foes]) {
@@ -26126,16 +26064,24 @@ function edgeSpot(ec, er, w, kind) {
   return { kind, c: ec, r: er, w, ok, why, upgrade, x: mx, z: mz, y: Math.max(LV[a], LV[b]) * STEP + (isFenceKind(kind) ? FENCE_H : WALL_H) / 2, ry: w ? Math.PI / 2 : 0 };
 }
 // a hearth claims the unclaimed plot it stands on
-function hearthSpot(c, r) {
-  const i = T(c, r), pl = PLOT[i] ? plots[PLOT[i]] : null;
-  let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile && !stairAt.has(i);
-  let why = 'A hearth needs clear, flat, dry ground.';
-  if (!pl) { ok = false; why = 'A hearth has to stand on a plot: the white outlines on the map.'; }
+// (v803, Jordan) it's the cooking hearth: two tiles wide, one deep, its fire facing you from where you place it (f:
+// the side it faces, toward you; it never turns after). The cursor's tile and the one beside it, on the side of the
+// tile the cursor's on: tiles (c, r) and (c + DC[g], r + DR[g]), g its width's way
+function hearthSpot(c, r, p) {
+  const px = p ? p.x : c + 0.5, pz = p ? p.z : r + 0.5, dx = H.x - px, dz = H.z - pz;
+  const f = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 2 : 0), g = (f + 3) & 3;
+  if ((DC[g] ? (px - c - 0.5) * DC[g] : (pz - r - 0.5) * DR[g]) < 0) { c -= DC[g]; r -= DR[g]; }
+  const i = T(c, r), i2 = T(c + DC[g], r + DR[g]), pl = PLOT[i] ? plots[PLOT[i]] : null;
+  const clear = t => LV[t] > 0 && !SH[t] && !(RIM[t] & 255) && !WT[t] && !BR[t] && !OBJ[OB[t]].solid && !OBJ[OB[t]].tile && !stairAt.has(t);
+  let ok = clear(i) && clear(i2) && LV[i] === LV[i2] && !wallOn(c, r, g);
+  let why = 'A hearth needs clear, flat, dry ground two squares wide.';
+  const x = c + 0.5 + DC[g] * 0.5, z = r + 0.5 + DR[g] * 0.5;
+  if (!pl || PLOT[i2] !== PLOT[i]) { ok = false; why = 'A hearth has to stand on a plot: the white outlines on the map.'; }
   else if (pl.claimed) { ok = false; why = 'This plot is already claimed; it has its hearth.'; }
   else if (hearths.size) { ok = false; why = 'You can only have one hearth. Take yours down to move it.'; }
-  else if (ok && standingIn(c + 0.5, r + 0.5, 0.75)) { ok = false; why = 'Something is standing in the way.'; }
-  if (ok && TILL[i]) { ok = false; why = TILL_WHY; }
-  return { kind: 'hearth', c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.35 };
+  else if (ok && standingIn(x, z, 0.9)) { ok = false; why = 'Something is standing in the way.'; }
+  if (ok && (TILL[i] || TILL[i2])) { ok = false; why = TILL_WHY; }
+  return { kind: 'hearth', c, r, f, ok, why, x, z, y: LV[i] * STEP + 1.05, ry: Math.atan2(DC[f], DR[f]) };
 }
 // where the current piece would go under the cursor, and whether it may
 function buildSpot() {
@@ -26146,7 +26092,7 @@ function buildSpot() {
   if (isStair(buildKind)) return stairSpot(c, r, stairDir(c, r), buildKind, k);
   if (isFloor(buildKind)) return k ? upFloorSpot(c, r, buildKind, k) : floorSpot(c, r, buildKind);
   if (k && (buildKind === 'hearth' || isStation(buildKind))) return { kind: buildKind, c, r, k, ok: false, why: 'Only floors, walls, fences, doors and stairs go on the upper stories.', x: c + 0.5, z: r + 0.5, y: storyY(k, T(c, r)) + 0.45 };
-  if (buildKind === 'hearth') return hearthSpot(c, r);
+  if (buildKind === 'hearth') return hearthSpot(c, r, p);
   if (isStation(buildKind)) return stationSpotAt(p, buildKind);
   // walls and doors snap to the tile side nearest the cursor
   const u = p.x - c, v = p.z - r;
@@ -26264,9 +26210,8 @@ function placeSpot(s) {
   if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
     FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH && !stationTile.has(i)) OB[i] = 0; markObj(s.c, s.r);
-    if (hearths.has(i)) shapeHearth(hearths.get(i));
     if (stationTile.has(i)) { const st = stationTile.get(i); seatStation(st); markObj(st.c, st.r); }
-  } else if (s.kind === 'hearth') lightHearth(s.c, s.r);
+  } else if (s.kind === 'hearth') lightHearth(s);
   else if (isStation(s.kind)) placeStation(s);
   else {
     (s.w ? WW : WN)[T(s.c, s.r)] = KIND_VAL[s.kind];
@@ -26274,7 +26219,6 @@ function placeSpot(s) {
     for (const i of [T(s.c, s.r), s.w ? T(s.c - 1, s.r) : T(s.c, s.r - 1)]) if (OB[i] && OB[i] !== O.HEARTH && !stationTile.has(i)) { OB[i] = 0; const c = i % N, r = (i - c) / N; markObj(c, r); }
     if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind);
     markObj(s.c, s.r); if (s.w) markObj(s.c - 1, s.r); else markObj(s.c, s.r - 1);
-    hearthsBy(s.c, s.r, s.w);
     if (!isFenceKind(s.kind)) {
       const before = rooms.size;
       refreshRooms(s.c, s.r, s.w);
@@ -26410,53 +26354,40 @@ function releaseBuild() {
   if (d && d.spots) placeMany(d.spots);
 }
 // ---------- Hearths ----------
-const hearths = new Map();   // tile -> { c, r, plot, fire }
-const fireMats = ['#ff7a2a', '#ffb43a', '#ffe68a'].map(c => new GFX.MeshBasicMaterial({ color: c }));
-const flameGeo = new GFX.ConeGeometry(0.1, 0.34, 5);
-function lightHearth(c, r) {
-  const i = T(c, r), pl = plots[PLOT[i]];
-  OB[i] = 0;
-  OB[i] = O.HEARTH; markObj(c, r);
-  const fire = new GFX.Group();
-  for (let k = 0; k < 5; k++) {
-    const m = new GFX.Mesh(flameGeo, fireMats[k % 3]);
-    const a = k / 5 * Math.PI * 2;
-    m.position.set(k ? Math.sin(a) * 0.12 : 0, 0.17, k ? Math.cos(a) * 0.12 : 0);
-    m.userData.k = k;
-    fire.add(m);
-  }
-  fire.position.set(c + 0.5, surfaceY(c + 0.5, r + 0.5), r + 0.5);
-  scene.add(fire);
-  const h = { c, r, plot: pl.id, fire, side: -1 };
-  hearths.set(i, h);
-  shapeHearth(h);
+// (v803, Jordan: two kinds of hearth was confusing) the hearth that claims your plot is the cooking hearth the towns'
+// houses have: the same prop, drawn from PROP_DRAW like theirs (its fire, embers, chimney smoke and stack come with
+// it: updatePropFires, propStack), and F by it opens the Cooking window (hearthNear finds it in PROP_AT). Both its
+// tiles hold O.HEARTH (solid, the plot's claim). It lights the ground round it as the old one did (h.lamp)
+const hearths = new Map();   // its first tile -> { c, r, f, i, i2, q (the prop), plot, x, z (its middle), lamp }
+const hearthTile = new Map();   // either of its tiles -> the same
+function lightHearth(s) {
+  const { c, r, f } = s, g = (f + 3) & 3, c2 = c + DC[g], r2 = r + DR[g], i = T(c, r), i2 = T(c2, r2), pl = plots[PLOT[i]];
+  OB[i] = OB[i2] = O.HEARTH;
+  const x = c + 0.5 + DC[g] * 0.5, z = r + 0.5 + DR[g] * 0.5;
+  const q = { id: 'hearth', look: null, wood: 'oak', key: 'hearth:0:oak', k: 0, x, y: LV[i] * STEP + 0.06, z, ry: Math.atan2(DC[f], DR[f]), f,
+    tiles: [i, i2], house: null, hang: false, rug: false, built: true };
+  PROP_AT.set(i, q); PROP_AT.set(i2, q);
+  if (!PROP_DRAW.has(i)) PROP_DRAW.set(i, []);
+  PROP_DRAW.get(i).push(q);
+  const h = { c, r, f, i, i2, q, plot: pl.id, x, z, lamp: [x + DC[f] * 0.35, z + DR[f] * 0.35, 1] };
+  hearths.set(i, h); hearthTile.set(i, h); hearthTile.set(i2, h);
+  markObj(c, r); markObj(c2, r2);
+  propFireT = 0;   // (its fire starts at once: listPropFires)
   pl.claimed = true; pl.hearth = i;
   paintPlot(pl);
-  toast('The hearth is lit. This plot is yours to build on.', 'good');
+  toast('The hearth is lit. This plot is yours to build on, and you can cook at it.', 'good');
   if (mode === 'build') renderBar();
 }
-// A wall (not a door) on a side of the hearth builds it into that wall as a fireplace. It stays on that wall
-// while the wall stands; if it comes down it moves only when just one wall is left round it, and turns back
-// into the round pit once there are none.
-function shapeHearth(h) {
-  const sides = [0, 1, 2, 3].filter(d => { const w = wallOn(h.c, h.r, d); return w && !isDoorVal(w) && !isFenceVal(w) && !isWindowVal(w); });
-  if (!sides.length) h.side = -1;
-  else if (h.side < 0 || (!sides.includes(h.side) && sides.length === 1)) h.side = sides[0];
-  // a fireplace's fire burns smaller, at the back of its firebox
-  const fp = h.side >= 0, x = h.c + 0.5 + (fp ? DC[h.side] * 0.07 : 0), z = h.r + 0.5 + (fp ? DR[h.side] * 0.07 : 0);
-  h.fire.position.set(x, surfaceY(x, z), z);
-  h.fire.scale.setScalar(fp ? 0.75 : 1);
-  markObj(h.c, h.r);
-}
-// the hearths either side of a wall that just went up or came down
-function hearthsBy(ec, er, w) {
-  for (const i of [T(ec, er), w ? T(ec - 1, er) : T(ec, er - 1)]) if (hearths.has(i)) shapeHearth(hearths.get(i));
-}
 function putOutHearth(i) {
-  const h = hearths.get(i), pl = plots[h.plot];
-  scene.remove(h.fire);
-  hearths.delete(i);
-  OB[i] = 0; markObj(h.c, h.r);
+  const h = hearthTile.get(i), pl = plots[h.plot], q = h.q;
+  if (craftAt && craftAt === q.cook) toggleCraft(null);
+  hearths.delete(h.i); hearthTile.delete(h.i); hearthTile.delete(h.i2);
+  PROP_AT.delete(h.i); PROP_AT.delete(h.i2);
+  const list = PROP_DRAW.get(h.i);
+  if (list) { list.splice(list.indexOf(q), 1); if (!list.length) PROP_DRAW.delete(h.i); }
+  propFireAcc.delete(q); propFireT = 0;
+  OB[h.i] = OB[h.i2] = 0;
+  markObj(h.c, h.r); markObj(h.i2 % N, Math.floor(h.i2 / N));
   pl.claimed = false; pl.hearth = null;
   paintPlot(pl);
   toast('The hearth goes out. The plot is no longer yours.');
@@ -26489,17 +26420,7 @@ function nearWastes(c0, r0) {
 }
 function updateHearths(dt) {
   let near = 1e9;
-  for (const h of hearths.values()) {
-    const d = Math.hypot(h.c + 0.5 - H.x, h.r + 0.5 - H.z);
-    near = Math.min(near, d);
-    h.fire.visible = d < 60;
-    if (!h.fire.visible) continue;
-    for (const m of h.fire.children) {
-      const k = m.userData.k, f = 0.75 + 0.25 * Math.sin(time * (11 + k * 3) + k * 1.7) + 0.12 * Math.sin(time * 23 + k);
-      m.scale.set(1, f * (k ? 0.8 : 1.25), 1); m.position.y = 0.12 + f * 0.06 * (k ? 0.8 : 1.25);
-    }
-    // (the chimney's smoke: see buildSmoke)
-  }
+  for (const h of hearths.values()) near = Math.min(near, Math.hypot(h.x - H.x, h.z - H.z));   // (its fire and smoke: updatePropFires)
   if (near < HEARTH_REACH && H.alive) {
     if (H.hp < MAX_HP) { H.hp = Math.min(MAX_HP, H.hp + dt * 10); renderHp(); }
     crackleT -= dt;
@@ -27487,7 +27408,7 @@ function removePiece() {
     for (let d = 0; d < 4; d++) if (dist[d] < 0.22) { const [ec, er, w] = edgeOf(c, r, d); if (unqueue('E' + edgeKey(ec, er, w))) { sfx.remove(); return; } }
     if (!FL[i] && unqueue('F' + i)) { sfx.remove(); return; }
     for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[wallOn(c, r, d)], c: ec, r: er, w }; }
-    if (!target && OB[i] === O.HEARTH) target = { kind: 'hearth', c, r };
+    if (!target && OB[i] === O.HEARTH && hearthTile.has(i)) { const h = hearthTile.get(i); target = { kind: 'hearth', c: h.c, r: h.r, x: h.x, z: h.z }; }
     if (!target && stationTile.has(i)) { const st = stationTile.get(i); target = { kind: st.kind, c: st.c, r: st.r }; }
     if (!target && stairAt.has(i)) {
       const st = stairAt.get(i);
@@ -27508,7 +27429,7 @@ function removePiece() {
   if (farmV) { sfx.nope(); toast(farmWhy(farmV)); return; }
   if ('w' in target && wildFence.has(edgeKey(target.c, target.r, target.w))) { sfx.nope(); toast('That fence belongs to the dead.'); return; }
   const flatPiece = isFloor(target.kind) || target.kind === 'hearth' || isStation(target.kind);
-  const big = isStation(target.kind) ? stFoot(target.kind) / 2 : 0.5, mx = flatPiece ? target.c + big : target.w ? target.c : target.c + 0.5, mz = flatPiece ? target.r + big : target.w ? target.r + 0.5 : target.r;
+  const big = isStation(target.kind) ? stFoot(target.kind) / 2 : 0.5, mx = target.x ?? (flatPiece ? target.c + big : target.w ? target.c : target.c + 0.5), mz = target.z ?? (flatPiece ? target.r + big : target.w ? target.r + 0.5 : target.r);
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
   buildCount[ch] = Math.max(0, buildCount[ch] - 1);
@@ -27522,7 +27443,6 @@ function removePiece() {
     if (d) { scene.remove(d.pivot); doors.delete(key); openDoors.delete(key); }
     markObj(target.c, target.r); if (target.w) markObj(target.c - 1, target.r); else markObj(target.c, target.r - 1);
     refreshRooms(target.c, target.r, target.w);
-    hearthsBy(target.c, target.r, target.w);
   }
   pay(target.kind, -1);
   paintMapTile(target.c, target.r);
@@ -27739,12 +27659,12 @@ let oreLightAt = null;
 function updateLamps() {
   const near = [];
   for (const t of towns) if (Math.hypot(t.c - H.x, t.r - H.z) < 40) near.push(...t.lamps);
-  for (const h of hearths.values()) if (Math.hypot(h.c - H.x, h.r - H.z) < 40) near.push([h.c + 0.5, h.r + 0.5, 1]);
+  for (const h of hearths.values()) if (Math.hypot(h.x - H.x, h.z - H.z) < 40) near.push(h.lamp);
   for (const g of grottos) if (GROTTO.light > 0 && Math.hypot(g.x - H.x, g.z - H.z) < 40) near.push([g.x, g.z, 2, g]);
   // the town hearths, lighting their rooms (the braziers are in t.lamps already)
   // (v613, Jordan: pale patches flickering on roofs and walls outside) a point light has no shadow, so a hearth's lit the
   // roof and walls over it from inside: it only lights its room while you're in that building
-  if (PROP_FIRE.light > 0) for (const f of propFires) if (f.hearth && (f.bld == null || f.bld === heroBld) && Math.abs(f.lx - H.x) < 30 && Math.abs(f.lz - H.z) < 30) near.push(f.lamp || (f.lamp = [f.lx, f.lz, 4, null, f.ly - heightAt(f.lx, f.lz)]));
+  if (PROP_FIRE.light > 0) for (const f of propFires) if (f.hearth && !f.q.built && (f.bld == null || f.bld === heroBld) && Math.abs(f.lx - H.x) < 30 && Math.abs(f.lz - H.z) < 30) near.push(f.lamp || (f.lamp = [f.lx, f.lz, 4, null, f.ly - heightAt(f.lx, f.lz)]));
   // the fantasy ore rocks (Verdane and up) each light the ground round them in their colour
   if (!oreLightAt) { oreLightAt = []; for (let i = 0; i < N * N; i++) if (OBJ[OB[i]].metal) { const c = i % N, r = (i - c) / N; oreLightAt.push([c + 0.5, r + 0.5, 3, i]); } }
   for (const p of oreLightAt) if (OBJ[OB[p[3]]].metal && ORE_GLOW[OBJ[OB[p[3]]].metal] > 0 && Math.abs(p[0] - H.x) < 30 && Math.abs(p[1] - H.z) < 30) near.push(p);
@@ -31027,7 +30947,7 @@ function drawMini(dt) {
   ctx.fillStyle = '#ff4a3a';
   for (const f of foes) if (f.aggro) ctx.fillRect((f.x - H.x) * Z - 2, (f.z - H.z) * Z - 2, 4, 4);
   // your hearth
-  for (const h of hearths.values()) { ctx.fillStyle = '#000'; ctx.fillRect((h.c + 0.5 - H.x) * Z - 4, (h.r + 0.5 - H.z) * Z - 4, 8, 8); ctx.fillStyle = '#ffa040'; ctx.fillRect((h.c + 0.5 - H.x) * Z - 3, (h.r + 0.5 - H.z) * Z - 3, 6, 6); }
+  for (const h of hearths.values()) { ctx.fillStyle = '#000'; ctx.fillRect((h.x - H.x) * Z - 4, (h.z - H.z) * Z - 4, 8, 8); ctx.fillStyle = '#ffa040'; ctx.fillRect((h.x - H.x) * Z - 3, (h.z - H.z) * Z - 3, 6, 6); }
   // with north locked, what the camera sees: a cone from you the way it looks
   if (northUp) {
     const a = Math.atan2(-Math.sin(yaw), -Math.cos(yaw)), L = Math.min(Hh * 0.45, 24 * Z), h = 0.62;
@@ -31267,7 +31187,7 @@ function drawBigMap() {
       else ctx.rect(x - 5, z - 5, 10, 10);
       ctx.closePath(); ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.stroke(); ctx.fillStyle = ink; ctx.fill();
     }
-    for (const h of hearths.values()) { const [x, z] = worldToBig(h.c + 0.5, h.r + 0.5); ctx.fillStyle = '#000'; ctx.fillRect(x - 6, z - 6, 12, 12); ctx.fillStyle = '#ffa040'; ctx.fillRect(x - 4.5, z - 4.5, 9, 9); }
+    for (const h of hearths.values()) { const [x, z] = worldToBig(h.x, h.z); ctx.fillStyle = '#000'; ctx.fillRect(x - 6, z - 6, 12, 12); ctx.fillStyle = '#ffa040'; ctx.fillRect(x - 4.5, z - 4.5, 9, 9); }
   }
   drawMapLabels(ctx, k, W, Hh);
   ctx.setTransform(k, 0, 0, k, 0, 0);
@@ -33889,7 +33809,7 @@ window.GAME = {
     removePiece(); forcedPick = null;
     return !(w ? WW : WN)[T(ec, er)];
   },
-  hearth: () => { const h = hearths.values().next().value; return h ? { c: h.c, r: h.r, side: h.side, fl: FL[T(h.c, h.r)], ob: OB[T(h.c, h.r)] } : null; },
+  hearth: () => { const h = hearths.values().next().value; return h ? { c: h.c, r: h.r, f: h.f, tiles: [h.i, h.i2], fl: FL[T(h.c, h.r)], ob: OB[T(h.c, h.r)] } : null; },
   surf: (x, z) => surfH(x, z),
   view: (persp, fov, aa) => { VIEW.perspective = persp; if (fov) VIEW.fov = fov; if (aa) PIXEL.antiAlias = aa; },
   // the ground the cursor would pick at a screen point
