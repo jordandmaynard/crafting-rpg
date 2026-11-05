@@ -594,6 +594,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v809:** (Jordan) The loading window is now on Jordan's painted window (ui/loading/window.webp; the original in art/deliveries/loading-window-background.png): "Emberwild" sits in its leather title band in the shared window title treatment, the top of the parchment is left empty for a picture Jordan will supply (#loadArt, 440x210 at 1080p), and the loading steps (SHAPING THE WORLD and so on) are back, above the bar. The seed and version line and Set Out stay below the bar.
 
+**v810:** (Jordan) The loading window draws the world's map as it is made, scaled down into the room at the top (228 px square at 1080p, one pixel for each 4 x 4 tiles, no names): the land rises row by row from its heights, then each step paints in what it adds (terraces, lakes and rivers, biomes, towns, roads, the wilds), and the finished map, scaled down smoothly, shows while the ground is built. The steps now say what's happening: SHAPING THE SHORES (lava, water levels, beaches) split out of LAYING ROADS, RAISING LANDMARKS (vents, farms, grottos, statues, mausoleums, willows, cabins, mills, town yards) out of GROWING THE WILDS, and the last few seconds (the towns' last pieces and the 3D ground round you) are BUILDING THE GROUND, no longer DRAWING THE MAP. drawGenMap costs about 2% of the load.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
