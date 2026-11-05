@@ -161,7 +161,8 @@ struct Frame {
   insideB: vec4f,     // its 32 x 32 tile window's first tile x, z; the heights it lights, from y0 to y1
   insideBits: array<vec4u, 8>,   // which of the window's tiles are inside: bit (z * 32 + x)
   insideC: vec4f,     // (v535) its key light's way (toward it), and the hemisphere's floor-facing share
-  insideD: vec4f,     // the key light's share, how far it evens out the light already there
+  insideD: vec4f,     // the key light's share, how far it evens out the light already there, (v861) cloud shadows off inside (1) and up to
+                      // what height
 }
 struct Obj {
   model: mat4x4f,
@@ -292,18 +293,35 @@ fn ggx(f0: vec3f, rough: f32, N: vec3f, V: vec3f, L: vec3f) -> vec3f {
 // heights), whatever the hour, so a house's inside isn't left dark by its roof's shadow and the probes' gloom
 // (v535: hemispherical, bright above and dimmer below, with a soft key light from above toward the camera, so it
 // models shapes instead of flattening them)
-fn insideFill(w: vec3f, N: vec3f) -> vec3f {
-  if (F.insideA.w <= 0.0) { return vec3f(0.0); }
+// (v861) how far world point w is within the building you're in: its tiles in the inside window, between its two
+// heights; 0 outside, 1 inside (the bottom faded in over 0.3 m, see below)
+fn insideAt(w: vec3f) -> f32 { return insideUpTo(w, F.insideB.w); }
+// (and up to height top in place of the window's own)
+fn insideUpTo(w: vec3f, top: f32) -> f32 {
   let t = vec2i(floor(w.xz - F.insideB.xy));
   // (2026-11-03, Jordan: a stair tread speckled while you were upstairs: its top sat exactly on the bottom height, so
   // pixel by pixel it fell either side; the bottom now fades in over 0.3 m instead of cutting off)
-  if (t.x < 0 || t.y < 0 || t.x > 31 || t.y > 31 || w.y < F.insideB.z - 0.15 || w.y > F.insideB.w) { return vec3f(0.0); }
+  if (t.x < 0 || t.y < 0 || t.x > 31 || t.y > 31 || w.y < F.insideB.z - 0.15 || w.y > top) { return 0.0; }
   let n = u32(t.y * 32 + t.x);
   let word = F.insideBits[n >> 7u][(n >> 5u) & 3u];
-  if (((word >> (n & 31u)) & 1u) == 0u) { return vec3f(0.0); }
+  if (((word >> (n & 31u)) & 1u) == 0u) { return 0.0; }
+  return smoothstep(F.insideB.z - 0.15, F.insideB.z + 0.15, w.y);
+}
+fn insideFill(w: vec3f, N: vec3f) -> vec3f {
+  if (F.insideA.w <= 0.0) { return vec3f(0.0); }
+  let k = insideAt(w);
+  if (k <= 0.0) { return vec3f(0.0); }
   let hemi = mix(F.insideC.w, 1.0, 0.5 + 0.5 * N.y);
   let key = 1.6 * max(dot(N, F.insideC.xyz), 0.0);
-  return F.insideA.rgb * mix(hemi, key, F.insideD.x) * smoothstep(F.insideB.z - 0.15, F.insideB.z + 0.15, w.y);
+  return F.insideA.rgb * mix(hemi, key, F.insideD.x) * k;
+}
+// (v861, Jordan: the drifting cloud shadows showed inside the building you're in, its roof off) the clouds' shade at
+// world point w: none within the building you're in, up to height insideD.w (a cathedral's nave a story higher than
+// the fill's), while insideD.z (renderer.inside.clouds) is on
+fn cloudShadeAt(w: vec3f) -> f32 {
+  let c = cloudShade(w.xz);
+  if (F.insideD.z <= 0.0 || c >= 1.0) { return c; }
+  return mix(c, 1.0, insideUpTo(w, F.insideD.w) * F.insideD.z);
 }
 // the lit colour of a surface at world point w with normal N
 fn shadeLit(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, N: vec3f, receive: bool) -> vec3f {
@@ -340,7 +358,7 @@ fn shadeLitN(albedo: vec3f, emissive: vec3f, metal: f32, rough0: f32, w: vec3f, 
   col += mix(fi, max(fi - ambSeen, vec3f(0.0)), F.insideD.y) * diff;
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
-    var lc = F.sunColor.rgb * cloudShade(w.xz);
+    var lc = F.sunColor.rgb * cloudShadeAt(w);
     // (v581: not looked up at all once shadows have faded out, cloud2.z 0)
     if (receive && F.cloud2.z > 0.001) { lc *= mix(1.0, sunShadow(w, Ng), F.cloud2.z); }
     let irr = sat(dot(N, L)) * lc;

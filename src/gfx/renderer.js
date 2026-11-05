@@ -179,7 +179,8 @@ class Renderer {
     this.clipBelow = null;
     // the inside fill (see insideFill): null, or { r, g, b (its light; 0 = off), x0, z0 (the window's first tile), y0, y1,
     // bits: a Uint32Array(32), the window's 32 x 32 tiles a bit each, row by row; key [x, y, z] toward its key light,
-    // keyShare, ground (the hemisphere's floor-facing share), even (0..1: only what it adds over the light there) }
+    // keyShare, ground (the hemisphere's floor-facing share), even (0..1: only what it adds over the light there),
+    // clouds (v861: 1, no cloud shadows within the window's tiles, from y0 up to cloudTop) }
     this.inside = null;   // a world height: the plain and lit materials draw nothing below it while set (a water mirror)
     this.gi = null;
     this._frameBGs = new Map();   // (v771) frame bind groups by what they bind, so a set the probes swap back to is the same object
@@ -867,14 +868,16 @@ class Renderer {
     const bl = this.bloom && this.bloom.view() ? this.bloom.uniforms() : null;
     for (let i = 0; i < 4; i++) d[go + 24 + i] = bl ? bl[i] : 0;
     const ins = plain ? null : this.inside, du = this._frameU || (this._frameU = new Uint32Array(d.buffer, d.byteOffset, d.length));
-    if (ins && (ins.r > 0 || ins.g > 0 || ins.b > 0)) {
-      d[go + 28] = ins.r; d[go + 29] = ins.g; d[go + 30] = ins.b; d[go + 31] = 1;
+    // (v861: the window is also written while only the clouds are kept out of it, ins.clouds, the fill off or faded)
+    const fillOn = ins && (ins.r > 0 || ins.g > 0 || ins.b > 0);
+    if (ins && (fillOn || ins.clouds > 0)) {
+      d[go + 28] = ins.r; d[go + 29] = ins.g; d[go + 30] = ins.b; d[go + 31] = fillOn ? 1 : 0;
       d[go + 32] = ins.x0; d[go + 33] = ins.z0; d[go + 34] = ins.y0; d[go + 35] = ins.y1;
       for (let i = 0; i < 32; i++) du[go + 36 + i] = ins.bits[i];
       const kd = ins.key || [0, 1, 0];
       d[go + 68] = kd[0]; d[go + 69] = kd[1]; d[go + 70] = kd[2]; d[go + 71] = ins.ground ?? 1;
-      d[go + 72] = ins.keyShare ?? 0; d[go + 73] = ins.even ?? 0; d[go + 74] = 0; d[go + 75] = 0;
-    } else d[go + 31] = 0;
+      d[go + 72] = ins.keyShare ?? 0; d[go + 73] = ins.even ?? 0; d[go + 74] = ins.clouds ?? 0; d[go + 75] = ins.cloudTop ?? ins.y1;
+    } else { d[go + 31] = 0; d[go + 74] = 0; }
     return slot * FRAME_BYTES;
   }
   _writeObj(mesh, mat) {

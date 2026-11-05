@@ -309,7 +309,7 @@ fn fxLight(w: vec3f, n: vec3f) -> vec3f {
   if (F.sunDir.w > 0.5) {
     var s = sat(dot(n, F.sunDir.xyz) * 0.6 + 0.4);
     if (U.look.w > 0.5) { s = floor(s * U.look.w + 0.5) / U.look.w; }
-    l += F.sunColor.rgb * cloudShade(w.xz) * sunShadow(w, vec3f(0.0, 1.0, 0.0)) * s;
+    l += F.sunColor.rgb * cloudShadeAt(w) * sunShadow(w, vec3f(0.0, 1.0, 0.0)) * s;
   }
   let np = i32(F.cloud2.w);
   for (var i = 0; i < ${16}; i++) {

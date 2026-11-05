@@ -1416,7 +1416,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 860;
+const GAME_VERSION = 861;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -5500,7 +5500,7 @@ fn roseLit(c: vec3f, albedo: vec3f, w: vec3f, N: vec3f, n: vec3f, outOnly: bool)
     let k = r.w * b.z;
     let s = sunShadow(w, n);
     let fill = select(U.roses[5].z, U.roses[6].x, dot(F.sunDir.xz, b.xy) < 0.0);
-    o = o * mix(vec3f(1.0), r.rgb, k * s) + albedo * F.sunColor.rgb * sat(dot(N, F.sunDir.xyz)) * cloudShade(w.xz) * r.rgb * k * (1.0 - s) * fill;
+    o = o * mix(vec3f(1.0), r.rgb, k * s) + albedo * F.sunColor.rgb * sat(dot(N, F.sunDir.xyz)) * cloudShadeAt(w) * r.rgb * k * (1.0 - s) * fill;
   }
   return o;
 }
@@ -12589,7 +12589,7 @@ fn sprayHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453);
   }
   let L = normalize(U.sunDir);
   let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
-  let light = U.skyCol * 0.9 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
+  let light = U.skyCol * 0.9 + U.sunCol * cloudShadeAt(i.wpos) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
   return vec4f(U.color * light * m * i.a, 1.0);
 }`;
 const sprayMat = new GFX.ShaderMaterial({
@@ -12693,7 +12693,7 @@ fn smokeHash(x: f32) -> f32 { return fract(sin(x * 127.1 + 311.7) * 43758.5453);
   }
   let L = normalize(U.sunDir);
   let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
-  let light = U.skyCol * 0.9 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
+  let light = U.skyCol * 0.9 + U.sunCol * cloudShadeAt(i.wpos) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
   let al = sat(m * i.a);
   return vec4f(i.col * (light + i.glow) * al, al);
 }`;
@@ -12885,7 +12885,7 @@ fn dfSpot(s: f32, n: f32) -> vec3f { let h = s + n * 3.17; return vec3f(ambHash(
   let kind = i32(i.kind + 0.5);
   let L = normalize(U.sunDir);
   let lampK = pow(sat(1.0 - length(U.lampPos - i.wpos) / U.lampRange), 2.0);
-  let light = U.skyCol * 0.9 + U.sunCol * cloudShade(i.wpos.xz) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
+  let light = U.skyCol * 0.9 + U.sunCol * cloudShadeAt(i.wpos) * max(L.y, 0.0) * sunShadow(i.wpos, vec3f(0.0, 1.0, 0.0)) * 0.9 + U.lampCol * lampK;
   if (kind == 0) {
     // the wing: a big forewing and a smaller hindwing, darker at the rim, with the dark body down the middle
     let q = vec2f(i.uv.x, i.uv.y);
@@ -17513,8 +17513,11 @@ function buildingWalls(inside) {
 // getting `ground` of it, with a key light (`key` of it) from above (`keyUp`, 0 level .. 1 straight down) and from the
 // camera's side (`keySide`, -1 its left .. 1 its right), so shapes stay modelled; `even` 0..1: only what it adds over
 // the light already there, so a gloomy ground floor and a brighter upper one end up alike.
-const INSIDE_FILL = { on: 1, amount: 0.8, color: '#ffe2bc', fade: 0.5, ground: 0.09, key: 0.67, keyUp: 0.65, keySide: -0.5, even: 1 };
-const insideFill = { r: 0, g: 0, b: 0, x0: 0, z0: 0, y0: 0, y1: 0, bits: new Uint32Array(32), key: [0, 1, 0], keyShare: 0, ground: 1, even: 0 };
+// (v861, Jordan: the drifting cloud shadows showed inside the building you're in, its roof off) `clouds` 1: none drawn
+// within its tiles on your story (the same window and heights as the fill, whether the fill is on or not; at once, as
+// the roof comes off and goes back)
+const INSIDE_FILL = { on: 1, amount: 0.8, color: '#ffe2bc', fade: 0.5, ground: 0.09, key: 0.67, keyUp: 0.65, keySide: -0.5, even: 1, clouds: 1 };
+const insideFill = { r: 0, g: 0, b: 0, x0: 0, z0: 0, y0: 0, y1: 0, bits: new Uint32Array(32), key: [0, 1, 0], keyShare: 0, ground: 1, even: 0, clouds: 0, cloudTop: 0 };
 const insideFwd = new GFX.Vector3();
 const insideCol = new GFX.Color();
 let insideK = 0, insideKey = '';
@@ -17533,7 +17536,9 @@ function updateInsideFill(dt, inBld) {
         const n = dz * 32 + dx; bits[n >> 5] |= 1 << (n & 31);
       }
       const base = LV[T(clamp(hc, 0, N - 1), clamp(hr, 0, N - 1))] * STEP + seenStory() * WALL_H;
-      Object.assign(insideFill, { x0, z0, y0: base - 0.5, y1: base + WALL_H + 0.6 });
+      // (v861: the clouds kept out up to a story higher in a cathedral, its nave open to the gallery)
+      const y1 = base + WALL_H + 0.6, cath = cathTile.has(T(clamp(hc, 0, N - 1), clamp(hr, 0, N - 1)));
+      Object.assign(insideFill, { x0, z0, y0: base - 0.5, y1, cloudTop: y1 + (cath ? WALL_H : 0) });
     }
   }
   insideCol.set(INSIDE_FILL.color);
@@ -17547,6 +17552,7 @@ function updateInsideFill(dt, inBld) {
   let kx = fx * (1 - Math.abs(side)) + fz * side, kz = fz * (1 - Math.abs(side)) - fx * side;
   const kl = Math.hypot(kx, kz) || 1; kx = kx / kl * hz; kz = kz / kl * hz;
   insideFill.key[0] = kx; insideFill.key[1] = up; insideFill.key[2] = kz;
+  insideFill.clouds = b && INSIDE_FILL.clouds > 0.5 ? 1 : 0;
   insideFill.keyShare = clamp(INSIDE_FILL.key, 0, 1); insideFill.ground = clamp(INSIDE_FILL.ground, 0, 1); insideFill.even = clamp(INSIDE_FILL.even, 0, 1);
   renderer.inside = insideFill;
 }
@@ -27439,7 +27445,7 @@ fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
   l += insideFill(w, N);
   if (F.sunDir.w > 0.5) {
     let L = F.sunDir.xyz;
-    var lc = F.sunColor.rgb * cloudShade(w.xz);
+    var lc = F.sunColor.rgb * cloudShadeAt(w);
     if (F.cloud2.z > 0.001) { lc *= mix(1.0, sunShadow(w, Ng), F.cloud2.z); }
     l += sat(dot(N, L)) * lc;
     let Hv = normalize(L + toEye(w));
@@ -33229,6 +33235,7 @@ const TUNING = [
     [BLOOM, 'knee', 'Bloom: eases in over this much', 0, 1, 0.01],
     [BLOOM, 'size', 'Bloom: how far it spreads (mosaic pixels)', 1, 30, 0.5],
     [INSIDE_FILL, 'on', 'Inside fill: light inside the building you\'re in (0 off, 1 on)', 0, 1, 1],
+    [INSIDE_FILL, 'clouds', 'Inside: no cloud shadows in the building you\'re in (0 off, 1 on)', 0, 1, 1],
     [INSIDE_FILL, 'amount', 'Inside fill: strength', 0, 3, 0.01],
     [INSIDE_FILL, 'color', 'Inside fill: colour', 'color'],
     [INSIDE_FILL, 'fade', 'Inside fill: seconds to fade in and out', 0, 3, 0.05],
