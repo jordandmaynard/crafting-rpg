@@ -620,6 +620,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v822:** (Jordan: only a refining station's moving parts need to be apart) Each moving part's pieces are merged into one mesh per material, as a door leaf's are: the saw's blade, 14 teeth and hub (16 meshes to 3), the grinder's runner and eye, each gear and its cogs (11 to 2). Each part turns whole, so no bones are needed for the same look. A station's parts no longer creep round forever after it stops (the run-down now ends at zero, as the doors' did in v781), and its group is left by the scene's matrix pass while nothing on it moves.
 
+**v823:** (Jordan's G: posing foes, folk and people 0.52 ms with 18 foes about) Foes, folk and people out of the camera's view (by more than 3 units) have their joints' matrices made and bones sent every 4th frame instead of every frame, each on a frame of its own; anything in view or near it is done every frame, and their poses are still worked out each frame, so they're right as they come into view (only an off-screen one's shadow can lag a few frames). G > Each frame: rigs off screen, left this frame; G > Tests > Pose less off screen to compare.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
