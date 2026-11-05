@@ -616,6 +616,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v820:** (Jordan) Raw Meat has Jordan's new painting, a steak marbled with fat (icons/paint/rawMeat-128/256.webp, master icons/paint/src/raw-meat-steak-painterly.png; the first painting's master is kept beside it). PAINT_REV went up to 820 so browsers fetch it, which also refetches the other painted icons once.
 
+**v821:** (Jordan's v819 Scene contents: nothing leaks; after play it's 21 foes about and more of the world loaded, and doors and gates were 2,245 of the scene's 4,537 objects) Each door or gate leaf's boards, bands, studs and bars are merged into one mesh per material when it's made (bakeLeaf, the hero's merge: the same triangles), and a door is left by the scene's matrix pass but for the frames it swings (matrixStill, unstill). Foes were already drawn in shared batches (v88, v701), so nothing there. G > Recorded draw lists: draws encoded one by one, all passes and the six passes with the most.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

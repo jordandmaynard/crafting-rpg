@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 820;
+const GAME_VERSION = 821;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -16764,6 +16764,23 @@ const ironBar = new GFX.BoxGeometry(0.03, FENCE_H - 0.12, 0.03), ironTip = new G
 const studGeo = new GFX.BoxGeometry(0.045, 0.045, 0.11);
 // kind: 'door', 'gate', 'irondoor', 'irongate' or 'tombdoor' (flip: hung at the far end, the other half of a pair)
 const bronzeMat = flatMat({ color: '#4f8a76', roughness: 0.5, metalness: 0.4 }), bronzeDkMat = flatMat({ color: '#2e5a4c', roughness: 0.6, metalness: 0.3 });
+// (v821, Jordan's G: doors and gates were 2,245 of the scene's 4,537 objects, a dozen boxes a leaf, every one looked
+// at by the matrix pass and both walks each frame) a leaf's boxes merged into one mesh for each material, as the
+// hero's are (bakeHeroParts): the same triangles in the same places
+function bakeLeaf(leaf) {
+  const by = new Map();
+  for (const p of leaf.children) {
+    const names = Object.keys(p.geometry?.attributes || {});
+    if (!p.isMesh || p.children.length || names.length !== 1 || names[0] !== 'position') continue;
+    let l = by.get(p.material); if (!l) by.set(p.material, l = []); l.push(p);
+  }
+  for (const [mat, list] of by) {
+    if (list.length < 2) continue;
+    const m = new GFX.Mesh(mergeBoxes(list), mat);
+    for (const p of list) leaf.remove(p);
+    leaf.add(m);
+  }
+}
 function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
   const gate = kind === 'gate' || kind === 'irongate';
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), y = Math.max(LV[i], LV[j]) * STEP + k * WALL_H;
@@ -16821,7 +16838,10 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
     const ring = new GFX.Mesh(new GFX.BoxGeometry(0.06, 0.06, 0.12), doorIron); ring.position.set(0.7, 0.6, 0); leaf.add(ring);
   }
   if (half) leaf.scale.x = 0.5;   // (one of a pair in a single doorway)
+  bakeLeaf(leaf);
   pivot.add(leaf);
+  // (v821) matrixStill: a door is left by the scene's matrix pass but for the frames it swings (unstill, in update)
+  pivot.matrixStill = true;
   scene.add(shadowy(pivot)); MOVER_TAG.set(pivot, 'doors and gates');
   if (k) pivot.visible = k <= shownStory;
   const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k };
@@ -19341,6 +19361,32 @@ const silMat = new GFX.MeshBasicMaterial({ color: SILHOUETTE.color, depthWrite: 
 // them all and dressHero still shows, hides and recolours them by their gear tag. Every look, every weapon and every
 // armour piece is kept, and the pose is the joints', as before; only the number of objects drops, and with it the
 // world matrices made each time the hero moves and the draws (each part had a silhouette and a shadow copy too).
+// (v780; v821 its own, for doors too) one geometry of the meshes in list (positions only, each under the same
+// parent), each placed by its own matrix in the parent's space
+function mergeBoxes(list) {
+  let nv = 0, ni = 0;
+  for (const p of list) { const g = p.geometry; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+  const pos = new Float32Array(nv * 3), idx = new (nv > 65535 ? Uint32Array : Uint16Array)(ni);
+  let ov = 0, oi = 0;
+  for (const p of list) {
+    p.updateMatrix();
+    const e = p.matrix.elements, g = p.geometry, a = g.attributes.position.array, n = a.length / 3;
+    for (let k = 0; k < n; k++) {
+      const x = a[k * 3], y = a[k * 3 + 1], z = a[k * 3 + 2], o = (ov + k) * 3;
+      pos[o] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    }
+    const src = g.index ? g.index.array : null, m = src ? src.length : n;
+    for (let k = 0; k < m; k += 3) {
+      const i0 = src ? src[k] : k, i1 = src ? src[k + 1] : k + 1, i2 = src ? src[k + 2] : k + 2;
+      idx[oi + k] = ov + i0; idx[oi + k + 1] = ov + i1; idx[oi + k + 2] = ov + i2;
+    }
+    ov += n; oi += m;
+  }
+  const geo = new GFX.BufferGeometry();
+  geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
+  geo.setIndex(new GFX.BufferAttribute(idx, 1));
+  return geo;
+}
 function bakeHeroParts(h) {
   const runs = new Map(), out = [];
   for (const p of h.parts) {
@@ -19354,27 +19400,7 @@ function bakeHeroParts(h) {
   }
   for (const { par, list } of runs.values()) {
     if (list.length === 1) { out.push(list[0]); continue; }
-    let nv = 0, ni = 0;
-    for (const p of list) { const g = p.geometry; nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
-    const pos = new Float32Array(nv * 3), idx = new (nv > 65535 ? Uint32Array : Uint16Array)(ni);
-    let ov = 0, oi = 0;
-    for (const p of list) {
-      p.updateMatrix();
-      const e = p.matrix.elements, g = p.geometry, a = g.attributes.position.array, n = a.length / 3;
-      for (let k = 0; k < n; k++) {
-        const x = a[k * 3], y = a[k * 3 + 1], z = a[k * 3 + 2], o = (ov + k) * 3;
-        pos[o] = e[0] * x + e[4] * y + e[8] * z + e[12]; pos[o + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; pos[o + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
-      }
-      const src = g.index ? g.index.array : null, m = src ? src.length : n;
-      for (let k = 0; k < m; k += 3) {
-        const i0 = src ? src[k] : k, i1 = src ? src[k + 1] : k + 1, i2 = src ? src[k + 2] : k + 2;
-        idx[oi + k] = ov + i0; idx[oi + k + 1] = ov + i1; idx[oi + k + 2] = ov + i2;
-      }
-      ov += n; oi += m;
-    }
-    const geo = new GFX.BufferGeometry();
-    geo.setAttribute('position', new GFX.BufferAttribute(pos, 3));
-    geo.setIndex(new GFX.BufferAttribute(idx, 1));
+    const geo = mergeBoxes(list);
     geo.heroBaked = true;   // (its own, so let go of when the hero's made again: rebuildHero)
     const f = list[0], mesh = new GFX.Mesh(geo, f.material);
     mesh.renderOrder = f.renderOrder; mesh.castShadow = f.castShadow; mesh.receiveShadow = f.receiveShadow;
@@ -29718,6 +29744,7 @@ function update(dt) {
     d.t += (goal - d.t) * (1 - Math.exp(-dt * 10));
     if (Math.abs(goal - d.t) < 1e-3) d.t = goal;
     d.pivot.children[0].rotation.y = d.t * 1.75 * d.side * (d.flip ? -1 : 1);
+    d.pivot.unstill();   // (v821: looked at by the matrix pass this frame, see makeDoor)
   }
   for (let k = orbs.length - 1; k >= 0; k--) {
     const o = orbs[k]; o.t += dt;
@@ -33806,6 +33833,11 @@ function frameBody(now) {
     // (v795) the camera's walks done in the shadow map's search for casters (one pass over the scene: its time is then
     // in "finding casters", not "walking the scene"), and the recorded lists' object blocks sent (moved or changed) and kept
     prof.count('encode: camera walks shared with the shadow map', I.shared || 0);
+    // (v821) the draws encoded one by one this frame (not replayed from a recorded list), by pass: the six most
+    if (I.oneBy) { let all = 0; for (const n of I.oneBy.values()) all += n;
+      prof.count('recorded lists: drawn one by one, all passes', all);
+      for (const [nm, n] of [...I.oneBy].sort((a, b) => b[1] - a[1]).slice(0, 6)) prof.count('recorded lists: drawn one by one in ' + nm, n);
+      I.oneBy.clear(); }
     prof.count('recorded lists: object blocks sent (moved or changed)', I.objSent || 0); prof.count('recorded lists: object blocks kept', I.objKept || 0);
     I.tShFind = I.tShList = I.tShOne = 0; I.shOne = I.shMoved = 0; I.shared = I.objSent = I.objKept = 0;
     // (v774) the rest of render (encode): the game's own JavaScript in it, by part
