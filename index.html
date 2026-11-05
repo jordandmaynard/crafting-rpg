@@ -1472,8 +1472,10 @@ const TILL = new Uint8Array(N * N);  // (v802) a square you hoed on your own plo
 const CROPS = new Map();            // (v802) a tilled square of yours -> what's planted in it ('wheat'); the farms' fields are all wheat
 // whether a field square grows a crop: a farm's always does, one of yours once it's planted
 const fieldGrows = i => FIELD[i] && (!TILL[i] || CROPS.has(i));
-// (v805) the crops and their grass kinds (drawn with the grass, grassMat): each its rows east-west, + 1 north-south
-const CROP_KIND = { wheat: 8, carrot: 10, potato: 12 };
+// (v805) the crops and their grass kinds (drawn with the grass, grassMat). (v865: one kind a crop, so lettuce and
+// tomatoes fit in the texture's four bits; a crop square's low bits are 7 when it's shown, + 8 when its rows run
+// north-south, where grass keeps its four quarters)
+const CROP_KIND = { wheat: 8, carrot: 9, potato: 10, lettuce: 11, tomato: 12 };
 const cropOf = i => CROPS.get(i) || 'wheat';
 const cropKind = i => CROP_KIND[cropOf(i)];
 const GROT = new Uint8Array(N * N);  // a fairy grotto: 1 its pool, 2 the mossy rock over it (see placeGrottos)
@@ -10572,7 +10574,7 @@ function grassChunk(cx, cz) {
     const i = T(c, r), b = BI[i];
     let kind = 0, mask = 0, y = 0;
     if (WT[i] === 1 && LV[i] && !BR[i]) { if (!GROT[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; } }
-    else if (FIELD[i]) { if (LV[i] && !SH[i] && fieldGrows(i)) { kind = cropKind(i) + (FIELD[i] === 2 ? 1 : 0); mask = 15; y = LV[i] * STEP + RIDGE_H; } }
+    else if (FIELD[i]) { if (LV[i] && !SH[i] && fieldGrows(i)) { kind = cropKind(i); mask = 7 | (FIELD[i] === 2 ? 8 : 0); y = LV[i] * STEP + RIDGE_H; } }
     else if (GRASS_KIND[b] && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || (townCell(c, r) === 'yard' && !townGround(i)))) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
@@ -10610,6 +10612,10 @@ const GRASS_U = {
   // (v805) carrots' and potatoes' heights, and how thick each grows (plants a tile); their leaves, the carrot's crown, the potato's flowers
   crop: { value: { x: 0.3, y: 0.24, z: 8, w: 6 } },
   cCarrotL: { value: C('#5aa83a') }, cCarrotR: { value: C('#ec7a1c') }, cPotatoL: { value: C('#3f7a34') }, cPotatoF: { value: C('#e6dcf2') },
+  // (v865) lettuce's leaves' height, the tomato's stake's, how thick each grows; lettuce's leaves and heart, the tomato's
+  // leaves, its fruit green and ripe, its stake
+  crop2: { value: { x: 0.14, y: 0.75, z: 8, w: 6 } },
+  cLettuceL: { value: C('#7cb848') }, cLettuceH: { value: C('#c6e08c') }, cTomatoL: { value: C('#3e7c2c') }, cTomatoG: { value: C('#86b03c') }, cTomatoF: { value: C('#d8321e') }, cStake: { value: C('#8a6a44') },
   bloom: { value: { x: 6, y: -0.55, z: 0, w: 0 } },       // flower heads' sides round (4 to FLOWER_SIDES), the height of their peak
 };
 const fl = k => `vec3f(${FLOWER[k].r.toFixed(3)}, ${FLOWER[k].g.toFixed(3)}, ${FLOWER[k].b.toFixed(3)})`;
@@ -10652,6 +10658,16 @@ fn bladeOf(h: u32, b: u32, variant: u32) -> Blade {
     let ph = U.crop.y * (0.7 + 0.45 * gRand(hb, 2u));
     return Blade(d * 0.02, d * ph * 0.8 * lean, ph, W * 2.6);
   }
+  if (variant == 6u) {
+    // (v865) a lettuce's outer leaves: broad, short, curling out low round its heart (the head)
+    let lh = U.crop2.x * (0.7 + 0.45 * gRand(hb, 2u));
+    return Blade(d * 0.03, d * lh * 1.1 * lean, lh, W * 2.4);
+  }
+  if (variant == 7u) {
+    // (v865) a tomato plant's leaves, a cluster at each height up its stake, reaching out and up
+    let th = 0.11 * (0.7 + 0.5 * gRand(hb, 2u));
+    return Blade(d * 0.015, d * th * 1.2 * lean, th, W * 1.6);
+  }
   if (variant == 2u) {
     let rh = U.look.w * (0.65 + 0.45 * gRand(hb, 2u));
     return Blade(d * (0.02 + 0.07 * gRand(hb, 1u)), d * rh * 0.08 * lean, rh, W * (0.9 + 0.3 * gRand(hb, 4u)));
@@ -10687,15 +10703,17 @@ fn grassColor(kind: u32) -> vec3f {
   if (vi >= 36u + 6u * u32(U.bloom.x)) { return o; }
   let t = vec4u(round(textureLoad(tGrass, tile, 0) * 255.0));
   let kind = t.r >> 4u;
-  if (kind == 0u || kind > 13u) { return o; }
-  // (a field's crop, kinds 8 on: wheat 8-9, (v805) carrots 10-11, potatoes 12-13, each pair its rows east-west then north-south)
+  if (kind == 0u || kind > 12u) { return o; }
+  // (a field's crop, kinds 8 on: wheat 8, (v805) carrots 9, potatoes 10, (v865) lettuce 11, tomatoes 12; its rows
+  // north-south when bit 3 is set)
   let wheat = kind >= 8u;
-  let crop = select(0u, (kind - 8u) / 2u, wheat);
+  let crop = select(0u, kind - 8u, wheat);
   // how thick each ground grows them, and how much of each variant (grass, flowers, reeds) it has
   var kd = array<f32, 8>(0.0, 1.0, 0.55, 0.7, 0.6, 0.45, 0.3, 0.25);
   var km = array<vec3f, 8>(vec3f(0.0), vec3f(1.0, 1.0, 0.0), vec3f(1.0, 0.25, 0.0), vec3f(1.0, 0.8, 0.0), vec3f(1.0, 0.0, 0.7), vec3f(0.0, 0.0, 1.0), vec3f(1.0, 0.0, 0.0), vec3f(1.0, 0.0, 0.0));
   let h = gHash((u32(tile.x) * 73856093u) ^ (u32(tile.y) * 19349663u) ^ (slot * 83492791u));
-  let cropD = select(select(U.crop.w, U.crop.z, crop == 1u), U.tuft.x * U.wheat.z, crop == 0u);
+  var cropDs = array<f32, 5>(U.tuft.x * U.wheat.z, U.crop.z, U.crop.w, U.crop2.z, U.crop2.w);
+  let cropD = cropDs[min(crop, 4u)];
   let dens = select(U.tuft.x * kd[min(kind, 7u)] * select(1.0, U.at.w, kind == 5u), min(cropD, 16.0), wheat);
   if (gRand(h, 0u) >= clamp(dens - f32(slot), 0.0, 1.0)) { return o; }
   // where on the tile (in a pool, away from its banks), and only on its open quarters; wheat in rows on the
@@ -10707,30 +10725,35 @@ fn grassColor(kind: u32) -> vec3f {
     let nAlong = max(1.0, ceil(min(cropD, 16.0) / 4.0));
     let along = (f32(slot >> 2u) + 0.5 + (gRand(h, 1u) - 0.5) * 0.6) / nAlong;
     let across = (f32(slot & 3u) + 0.5) / 4.0 + (gRand(h, 2u) - 0.5) * 0.03;
-    uv = select(vec2f(across, along), vec2f(along, across), (kind & 1u) == 0u);
+    let ew = ((t.r >> 3u) & 1u) == 0u;
+    uv = select(vec2f(across, along), vec2f(along, across), ew);
+    // ((v865) a tomato square's plant is one, climbing its stake on a ridge in the middle: each slot a height up it)
+    if (crop == 4u) { uv = select(vec2f(0.375, 0.5), vec2f(0.5, 0.375), ew); }
   }
   let q = u32(uv.x >= 0.5) + 2u * u32(uv.y >= 0.5);
-  if (((t.r >> q) & 1u) == 0u) { return o; }
+  if (wheat) { if ((t.r & 7u) == 0u) { return o; } } else if (((t.r >> q) & 1u) == 0u) { return o; }
   // (on a ramp, lifted to its slope there: LIFT's corners nw, ne, se, sw, a level each; fields are flat, and
   // their a is how grown the wheat is)
   var lift = array<vec4f, ${LIFT.length}>(${LIFT.map(l => `vec4f(${l.map(v => v.toFixed(5)).join(', ')})`).join(', ')});
   let lc = lift[select(min(t.a, ${LIFT.length - 1}u), 0u, wheat)];
   let grown = select(1.0, f32(t.a) / 255.0, wheat);
   let rise = (lc.x * (1.0 - uv.x) + lc.y * uv.x) * (1.0 - uv.y) + (lc.w * (1.0 - uv.x) + lc.z * uv.x) * uv.y;
-  let foot = vec3f(f32(tile.x) + uv.x, f32(t.g * 256u + t.b) / 1024.0 - 16.0 + rise * ${STEP.toFixed(6)}, f32(tile.y) + uv.y);
+  var foot = vec3f(f32(tile.x) + uv.x, f32(t.g * 256u + t.b) / 1024.0 - 16.0 + rise * ${STEP.toFixed(6)}, f32(tile.y) + uv.y);
   let fade = 1.0 - smoothstep(0.8 * U.win.w, U.win.w, length(foot.xz - U.at.xy));
   if (fade <= 0.0) { return o; }
   let wts = select(km[min(kind, 7u)] * U.share.xyz, vec3f(1.0), wheat);
   let tot = wts.x + wts.y + wts.z;
   if (tot <= 0.0) { return o; }
   let pick = gRand(h, 3u) * tot;
-  // (variants: 0 grass, 1 flower, 2 reed, 3 wheat, (v805) 4 carrot, 5 potato)
+  // (variants: 0 grass, 1 flower, 2 reed, 3 wheat, (v805) 4 carrot, 5 potato, (v865) 6 lettuce, 7 tomato)
   let variant = select(select(select(2u, 1u, pick < wts.x + wts.y), 0u, pick < wts.x), 3u + crop, wheat);
   // (wheat green as it grows, turning gold as it ripens; carrot tops a fresh green, a little deeper grown; potato
   // leaves a dark green, paler young)
   var cropC = mix(U.cWheatY, U.cWheatR, smoothstep(0.55, 1.0, grown));
   if (crop == 1u) { cropC = U.cCarrotL * mix(1.15, 1.0, grown); }
   if (crop == 2u) { cropC = U.cPotatoL * mix(1.25, 1.0, grown); }
+  if (crop == 3u) { cropC = U.cLettuceL * mix(1.2, 1.0, grown); }
+  if (crop == 4u) { cropC = U.cTomatoL * mix(1.2, 1.0, grown); }
   let baseC = select(grassColor(kind), cropC, wheat);
   let grassC = baseC * (1.0 + U.look.x * (gRand(h, 5u) * 2.0 - 1.0));
   // cut by your blade: down to a stub (see cutGrass), growing back; wheat is cut a tile at a time (reapWheat),
@@ -10741,16 +10764,22 @@ fn grassColor(kind: u32) -> vec3f {
     if (all(cuv > vec2f(0.0)) && all(cuv < vec2f(1.0))) { cut = clamp(textureSampleLevel(tCut, tCutS, cuv, 0.0).x, 0.0, 1.0); }
   }
   let hs = select(mix(1.0, U.cutS.x, cut), mix(U.wheat.y, 1.0, min(1.0, grown * 1.25)), wheat);
+  // ((v865) a tomato's leaf clusters past the first go up its stake as it grows, the plant reaching 0.9 of the stake)
+  let stakeT = variant == 7u && slot == 0u;
+  if (variant == 7u && slot > 0u) { foot.y += U.crop2.y * 0.9 * hs * f32(slot) / max(1.0, cropD); }
   var p = vec3f(0.0);
   var col = vec3f(0.0);
   if (vi < 36u) {
     // blade vi / 9: three sides from its foot (just under the ground) up to its tip
     let b = vi / 9u; let side = (vi % 9u) / 3u; let j = vi % 3u;
-    let bl = bladeOf(h, b, variant);
+    var bl = bladeOf(h, b, variant);
     var c = grassC;
     if (variant == 2u) { c = U.cReed * (0.9 + 0.2 * gRand(h, b + 20u)); }
+    // ((v865) the tomato's stake: its first slot's first blade, a thin post standing its full height from the planting on)
+    var bh = hs;
+    if (stakeT && b == 0u) { bl = Blade(vec2f(0.0), vec2f(0.0), U.crop2.y, 0.014); c = U.cStake; bh = 1.0; }
     var up = 0.0;
-    if (j == 2u) { p = vec3f(bl.off.x + bl.tip.x * hs, bl.h * hs, bl.off.y + bl.tip.y * hs); up = 1.0; }
+    if (j == 2u) { p = vec3f(bl.off.x + bl.tip.x * bh, bl.h * bh, bl.off.y + bl.tip.y * bh); up = 1.0; }
     else { let k = gRand(h, b + 10u) * 2.0944 + f32(side + j) * 2.0944; p = vec3f(bl.off.x + cos(k) * bl.w, -0.03, bl.off.y + sin(k) * bl.w); }
     col = c * mix(0.62, 1.12, up);
   } else {
@@ -10758,7 +10787,7 @@ fn grassColor(kind: u32) -> vec3f {
     // grass a fifth blade in the middle (its lower half underground), on a flower the bloom at its stem's tip, on a
     // reed a cattail near its top (on some)
     let f = (vi - 36u) / 3u; let j = (vi - 36u) % 3u;
-    let sides = select(4u, max(4u, u32(U.bloom.x)), variant == 1u);
+    let sides = select(4u, max(4u, u32(U.bloom.x)), variant == 1u || variant >= 6u);
     if (f >= 2u * sides) { return o; }
     var ctr = vec3f(0.0); var rad = 0.022 * U.tuft.z * 1.1; var top = U.tuft.y * (0.8 + 0.3 * gRand(h, 6u)); var bot = 0.05;
     var c = grassC; var lit = vec2f(0.62, 1.12);
@@ -10784,6 +10813,17 @@ fn grassColor(kind: u32) -> vec3f {
       let fl = smoothstep(0.8, 1.0, grown) * U.tuft.z;
       ctr = vec3f(0.0, U.crop.y * 0.75, 0.0); rad = 0.035 * fl; top = 0.025 * fl; bot = 0.02 * fl;
       c = U.cPotatoF; lit = vec2f(0.85, 1.1);
+    } else if (variant == 6u) {
+      // (v865) the lettuce's pale heart, a ball on the ground swelling as it grows
+      let big = (0.25 + 0.75 * smoothstep(0.1, 1.0, grown)) * U.tuft.z;
+      rad = 0.03 * big; ctr = vec3f(0.0, rad * 0.7, 0.0); top = rad * 1.1; bot = rad * 0.75;
+      c = U.cLettuceH * (1.0 + U.look.x * (gRand(h, 5u) * 2.0 - 1.0)); lit = vec2f(0.8, 1.12);
+    } else if (variant == 7u) {
+      // (v865) a tomato hanging off the stake at most of the leaf clusters (none at the foot), green, reddening as it ripens
+      let fr = smoothstep(0.45, 0.8, grown) * U.tuft.z * select(1.0, 0.0, slot == 0u || gRand(h, 8u) > 0.75);
+      let fa = gRand(h, 12u) * 6.2832;
+      rad = 0.022 * fr; ctr = vec3f(cos(fa) * 0.07, 0.05, sin(fa) * 0.07); top = rad * 0.9; bot = rad;
+      c = mix(U.cTomatoG, U.cTomatoF, smoothstep(0.75, 1.0, grown)); lit = vec2f(0.8, 1.15);
     } else if (variant == 2u) {
       let s = bladeOf(h, 0u, 2u);
       ctr = vec3f(s.off.x + s.tip.x * 0.8, s.h * 0.8, s.off.y + s.tip.y * 0.8); rad = 0.032; top = 0.07; bot = 0.07;
@@ -10817,6 +10857,7 @@ fn grassColor(kind: u32) -> vec3f {
   var flex = 1.0;
   if (variant == 2u) { flex = 0.7; }
   if (variant >= 3u) { flex = 0.8; }
+  if (variant == 7u) { flex = 0.3; }   // ((v865) tied to its stake)
   let a = min(length(bend) * flex, 1.45);
   var w = w0;
   if (a > 1e-4) {
@@ -10866,6 +10907,9 @@ function updateGrass() {
   u.cWheatY.value.set(WHEAT.youngColor); u.cWheatR.value.set(WHEAT.ripeColor); u.cWheatE.value.set(WHEAT.earColor);
   Object.assign(u.crop.value, { x: CROP_LOOK.carrotHeight, y: CROP_LOOK.potatoHeight, z: CROP_LOOK.carrotDensity, w: CROP_LOOK.potatoDensity });
   u.cCarrotL.value.set(CROP_LOOK.carrotLeaf); u.cCarrotR.value.set(CROP_LOOK.carrotRoot); u.cPotatoL.value.set(CROP_LOOK.potatoLeaf); u.cPotatoF.value.set(CROP_LOOK.potatoFlower);
+  Object.assign(u.crop2.value, { x: CROP_LOOK.lettuceHeight, y: CROP_LOOK.tomatoHeight, z: CROP_LOOK.lettuceDensity, w: CROP_LOOK.tomatoDensity });
+  u.cLettuceL.value.set(CROP_LOOK.lettuceLeaf); u.cLettuceH.value.set(CROP_LOOK.lettuceHead); u.cTomatoL.value.set(CROP_LOOK.tomatoLeaf);
+  u.cTomatoG.value.set(CROP_LOOK.tomatoGreen); u.cTomatoF.value.set(CROP_LOOK.tomatoFruit); u.cStake.value.set(CROP_LOOK.stake);
 }
 
 // Your blade cuts the grass it passes through: a swing its arc in front of you, the whirlwind a ring round you,
@@ -10885,9 +10929,11 @@ function grassColorAt(x, z) {
   const c = Math.floor(x), r = Math.floor(z);
   if (c < 0 || r < 0 || c >= N || r >= N) return null;
   const v = grassTex.image.data[T(c, r) * 4], kind = v >> 4, q = (x - c >= 0.5 ? 1 : 0) + (z - r >= 0.5 ? 2 : 0);
-  if (!kind || !(v >> q & 1)) return null;
-  if (kind >= 12) return CROP_LOOK.potatoLeaf;
-  if (kind >= 10) return CROP_LOOK.carrotLeaf;
+  if (!kind || !(kind >= 8 ? v & 7 : v >> q & 1)) return null;
+  if (kind === 12) return CROP_LOOK.tomatoLeaf;
+  if (kind === 11) return CROP_LOOK.lettuceLeaf;
+  if (kind === 10) return CROP_LOOK.potatoLeaf;
+  if (kind === 9) return CROP_LOOK.carrotLeaf;
   if (kind >= 8) return WHEAT.ripeColor;
   return kind === 2 || kind === 6 ? GRASS.forestColor : kind === 4 || kind === 5 || kind === 7 ? GRASS.swampColor : GRASS.meadowColor;
 }
@@ -10936,8 +10982,14 @@ const WHEAT = { height: 0.7, stub: 0.12, density: 1, regrow: 90, yield: 1, young
 // stubble-to-ripe clock and reaped the same way, each giving its own item. How they look growing (my guess, Jordan's
 // call): carrots a clump of feathery fronds over an orange crown that swells as they grow; potatoes low broad-leaved
 // bushes that flower pale when ripe. Heights, how thick they grow and the colours are T > Farming.
-const CROP_LOOK = { carrotHeight: 0.3, potatoHeight: 0.24, carrotDensity: 8, potatoDensity: 6, carrotLeaf: '#5aa83a', carrotRoot: '#ec7a1c', potatoLeaf: '#3f7a34', potatoFlower: '#e6dcf2' };
-const CROP_REAP = { wheat: { name: 'WHEAT', color: () => WHEAT.earColor }, carrot: { name: 'CARROTS', color: () => CROP_LOOK.carrotRoot }, potato: { name: 'POTATOES', color: () => '#d8b47a' } };
+// (v865, Jordan) lettuce and tomatoes too: lettuce low heads, a pale heart in curling outer leaves that swells as it
+// grows (my guess); tomatoes (Jordan) a stake put in when planted, the plant climbing it as it grows, its fruit green
+// then red (the leaves and fruit my guess)
+const CROP_LOOK = { carrotHeight: 0.3, potatoHeight: 0.24, carrotDensity: 8, potatoDensity: 6, carrotLeaf: '#5aa83a', carrotRoot: '#ec7a1c', potatoLeaf: '#3f7a34', potatoFlower: '#e6dcf2',
+  lettuceHeight: 0.14, lettuceDensity: 8, lettuceLeaf: '#7cb848', lettuceHead: '#c6e08c',
+  tomatoHeight: 0.75, tomatoDensity: 6, tomatoLeaf: '#3e7c2c', tomatoGreen: '#86b03c', tomatoFruit: '#d8321e', stake: '#8a6a44' };
+const CROP_REAP = { wheat: { name: 'WHEAT', color: () => WHEAT.earColor }, carrot: { name: 'CARROTS', color: () => CROP_LOOK.carrotRoot }, potato: { name: 'POTATOES', color: () => '#d8b47a' },
+  lettuce: { name: 'LETTUCE', color: () => CROP_LOOK.lettuceHead }, tomato: { name: 'TOMATOES', color: () => CROP_LOOK.tomatoFruit } };
 const wheatCut = new Map();   // a field tile cut and not yet grown back: when it was cut
 const wheatDirty = new Set();
 const cropGot = new Map();   // crop item -> how many reaped this frame
@@ -11001,7 +11053,7 @@ const FARM_ACT = { give: 0 };   // (T > Farming's action rows)
 // (lift: how high the crop hangs over the ground while dragged; down, hold, up: the dip's seconds; size: the card's
 // height; sink: how far into the soil it dips; center: the share of the way it moves on to the square's middle)
 const SEED_DRAG = { lift: 0.8, down: 0.2, hold: 0.12, up: 0.25, size: 0.42, sink: 0.4, center: 1 };   // (v816, Jordan's tuning)
-const CROP_ITEMS = { wheat: 'wheat', carrot: 'carrot', potato: 'potato' };   // an item you can plant -> the crop it grows
+const CROP_ITEMS = { wheat: 'wheat', carrot: 'carrot', potato: 'potato', lettuce: 'lettuce', tomato: 'tomato' };   // an item you can plant -> the crop it grows
 const TILL_WHY = 'That square is tilled. Hoe it bare, then hoe it again to clear it.';
 let seedDrag = null;   // { sx, sy } the pointer over the world while dragging a crop; dip
 // why the square at (c, r) can't be hoed, or null if it can
@@ -20209,7 +20261,7 @@ for (const [n, set] of Object.entries(PNG_ICONS)) for (const [k, src] of Object.
 // (and the items Jordan has repainted: the starting shirt, pants, boots and wooden sword, cut out with hard alpha,
 // sized for a pack square)
 // (PAINT_REV goes up when a painting is replaced under the same name, so browsers don't keep showing the old one)
-const PAINT_REV = 820;   // (v820: Jordan's new raw meat painting)
+const PAINT_REV = 865;   // (v820: Jordan's new raw meat painting; v865: the food atlas grew)
 // Each painting is fetched and decoded as the game loads (an off-page image with the same srcset and sizes, so the
 // browser picks the same file), so a weapon's icons show at once the first time you switch to it. The images are
 // kept so they stay decoded.
@@ -20287,8 +20339,9 @@ const PAINT_ATLAS = {
   'starter-fem': [1, 1, ['clothShirt_female']],
   // (v855, Jordan's Emberwild_Sandstone_Icons: the sandstone build row and the sandstone blocks)
   'sandstone': [4, 2, ['sandfloor', 'sandtimber', 'sandtimberwindow', 'sandwall', 'sandwindow', 'sandfence', 'sandstoneBlock']],
-  // (v864, Jordan's grilled steak and steak-and-potatoes paintings, icons/paint/src/food: the cooked dishes)
-  'food': [2, 1, ['cookedMeat', 'meatPotatoes']],
+  // (v864, Jordan's grilled steak and steak-and-potatoes paintings, icons/paint/src/food: the cooked dishes; v865 Jordan's
+  // Stew_Salad_Produce_Icons: meat stew, salad, iceberg lettuce, tomatoes)
+  'food': [4, 2, ['cookedMeat', 'meatPotatoes', 'meatStew', 'salad', 'lettuce', 'tomato']],
 };
 const ATLAS_AT = {};   // icon -> [atlas, cols, rows, cell]
 for (const [n, [cols, rows, keys]] of Object.entries(PAINT_ATLAS)) keys.forEach((k, i) => { ATLAS_AT[k] = [n, cols, rows, i]; });
@@ -20938,6 +20991,11 @@ const ITEMS = {
   // (v864, Jordan) cooked at a cooking hearth (Jordan's paintings, in the food atlas); they do nothing yet
   cookedMeat: { name: 'Cooked Meat', icon: 'cookedMeat', stack: 50, pile: true, loot: 'material', about: 'Raw meat grilled at a cooking hearth. With two potatoes it makes a plate of meat and potatoes.' },
   meatPotatoes: { name: 'Meat and Potatoes', icon: 'meatPotatoes', stack: 20, loot: 'material', about: 'Cooked meat with two potatoes, plated at a cooking hearth.' },
+  // (v865, Jordan) two more crops, and two more dishes (they do nothing yet)
+  lettuce: { name: 'Iceberg Lettuce', icon: 'lettuce', stack: 200, pile: true, loot: 'material', about: 'Kept in barrels in town and on the farms, or grown: plant one in a bare tilled square of your plot and it grows there, reaped as wheat is. With a carrot it makes a salad.' },
+  tomato: { name: 'Tomato', icon: 'tomato', stack: 200, pile: true, loot: 'material', about: 'Kept in barrels in town and on the farms, or grown: plant one in a bare tilled square of your plot and a stake goes in for it to climb, reaped as wheat is.' },
+  meatStew: { name: 'Meat Stew', icon: 'meatStew', stack: 20, loot: 'material', about: 'Cooked meat, a potato and a carrot stewed in clear water at a cooking hearth.' },
+  salad: { name: 'Salad', icon: 'salad', stack: 20, loot: 'material', about: 'Iceberg lettuce and a carrot, tossed at a cooking hearth.' },
 };
 // Armor sets past leather, each made of leather and its material at an armor crafting table: bone, copper chain
 // and iron plate, stronger in that order (armor per piece, chest, legs, boots, head). The hero wears them in
@@ -21766,7 +21824,9 @@ const RECIPES = {
   alchemy: [{ make: 'emptyBottle', cost: { glassPane: 1 } }],
   // (v801, Jordan) the town cooking hearths: bread, moved here off the smelter, from flour and a clear water potion
   // (v864, Jordan) cooked meat from raw meat, and meat and potatoes from cooked meat and two potatoes
-  cook: [{ make: 'bread', cost: { flour: 1, potion_clear: 1 } }, { make: 'cookedMeat', cost: { rawMeat: 1 } }, { make: 'meatPotatoes', cost: { cookedMeat: 1, potato: 2 } }],
+  cook: [{ make: 'bread', cost: { flour: 1, potion_clear: 1 } }, { make: 'cookedMeat', cost: { rawMeat: 1 } }, { make: 'meatPotatoes', cost: { cookedMeat: 1, potato: 2 } },
+    // (v865, Jordan) the stew's water is a clear water potion, its bottle used up
+    { make: 'meatStew', cost: { cookedMeat: 1, potato: 1, carrot: 1, potion_clear: 1 } }, { make: 'salad', cost: { lettuce: 1, carrot: 1 } }],
 };
 const WEAPON_HAFT = 2;   // (v824: 4 before refining took two raw for one)
 const TABLE_NAME = { tan: 'ARMOR CRAFTING TABLE', weapon: 'WEAPON CRAFTING TABLE', alchemy: 'ALCHEMY TABLE', cook: 'COOKING HEARTH' };
@@ -23404,6 +23464,8 @@ const plankMat = flatMat({ color: '#c89a62' }), plankGeo = new GFX.BoxGeometry(0
 const ingotMats = { copperIngot: flatMat({ color: '#e08850' }), ironIngot: flatMat({ color: '#a8aeb8' }), ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ingot', m.k === 'auralith' ? prismMat(1.1) : flatMat({ color: m.ingot })])) }, ingotGeo = new GFX.CylinderGeometry(0.06, 0.085, 0.24, 4, 1).rotateZ(Math.PI / 2).rotateX(Math.PI / 4);
 const leatherMat = flatMat({ color: '#9a6638' }), leatherGeo = new GFX.BoxGeometry(0.34, 0.03, 0.26);
 const cookedMeatMat = flatMat({ color: '#8a4320' }), cookedFat = flatMat({ color: '#e0b070' }), dishMat = flatMat({ color: '#e6dcc6' }), dishGeo = new GFX.CylinderGeometry(0.24, 0.2, 0.03, 16);
+const lettuceMat = flatMat({ color: '#8cc455' }), lettuceHeart = flatMat({ color: '#cce49a' }), tomatoMat = flatMat({ color: '#d8321e' }), stewMat = flatMat({ color: '#6a3418' });
+const bowlGeo = new GFX.CylinderGeometry(0.17, 0.11, 0.1, 16), stewGeo = new GFX.CylinderGeometry(0.15, 0.15, 0.01, 16);
 const meatMat = flatMat({ color: '#b8262a' }), meatFat = flatMat({ color: '#efe0c0' }), meatGeo = new GFX.BoxGeometry(0.3, 0.07, 0.2), fatGeo = new GFX.BoxGeometry(0.26, 0.06, 0.04);
 const sandBlockMat = flatMat({ color: '#d0a66e' }), sandstoneMat = flatMat({ color: '#c89a64' }), sandMat = flatMat({ color: '#e0c07a' }), glassMat = flatMat({ color: '#bfe4ee' }), glassGeo = new GFX.BoxGeometry(0.3, 0.02, 0.24);
 const flourMat = flatMat({ color: '#ece4d2' }), flourTie = flatMat({ color: '#a8845a' }), breadMat = flatMat({ color: '#b87a3c' }), breadTop = flatMat({ color: '#e0b878' });
@@ -23475,6 +23537,18 @@ function dropModel(id) {
     // (v864) a pale plate with the browned slab and two potatoes on it
     add(dishGeo, dishMat, 0, 0.015, 0); add(meatGeo, cookedMeatMat, -0.03, 0.065, 0.02, 0, 0.8); add(fatGeo, cookedFat, -0.02, 0.065, 0.11, 0, 0.8);
     add(pebbleGeo, potatoMat, 0.12, 0.08, -0.08, 0, 0.55); add(pebbleGeo, potatoMat, 0.02, 0.08, -0.13, 1, 0.5);
+  } else if (id === 'lettuce') {
+    // (v865) a pale green head
+    add(pebbleGeo, lettuceMat, 0, 0.09, 0, 0, 1.0); add(pebbleGeo, lettuceHeart, 0, 0.12, 0, 0.6, 0.75);
+  } else if (id === 'tomato') {
+    // (v865) three tomatoes heaped
+    add(pebbleGeo, tomatoMat, -0.07, 0.05, 0.02, 0, 0.55); add(pebbleGeo, tomatoMat, 0.07, 0.05, -0.03, 1, 0.55); add(pebbleGeo, tomatoMat, 0, 0.11, 0.01, 2, 0.5);
+  } else if (id === 'meatStew') {
+    // (v865) a bowl of brown stew
+    add(bowlGeo, dishMat, 0, 0.05, 0); add(stewGeo, stewMat, 0, 0.1, 0);
+  } else if (id === 'salad') {
+    // (v865) a plate heaped with greens, carrot coins on top
+    add(dishGeo, dishMat, 0, 0.015, 0); add(pebbleGeo, lettuceMat, 0, 0.06, 0, 0, 0.9); add(pebbleGeo, carrotMat, 0.05, 0.11, 0.03, 0, 0.3); add(pebbleGeo, carrotMat, -0.05, 0.1, -0.02, 1, 0.3);
   } else if (id === 'emptyBottle') {
     // two bottles, one lying down, corked
     for (const [x, zz, lie] of [[-0.06, 0, 0], [0.08, 0.05, 1]]) {
@@ -26048,7 +26122,7 @@ const CRATE_LOOT = {
     gearP: 0.35, gear: [['leatherHelmet', 2], ['leatherBoots', 2], ['leatherPants', 1], ['leatherArmor', 1]] },
   woodcutter: { title: "Woodcutter's Crate", n: [2, 3], mats: [['wood', 4, 4, 12], ['planks', 3, 3, 8]],
     gearP: 0.3, gear: [['axe_wood', 3], ['axe_bone', 1], ['axe_copper', 1]] },
-  goodfolk: { title: 'Goods Crate', n: [2, 4], mats: [['wheat', 1, 2, 5], ['carrot', 1, 1, 3], ['potato', 1, 1, 3], ['flour', 3, 2, 5], ['bread', 1, 1, 2], ['stone', 1, 2, 6], ['wood', 1, 2, 6], ['emptyBottle', 1, 1, 2]],
+  goodfolk: { title: 'Goods Crate', n: [2, 4], mats: [['wheat', 1, 2, 5], ['carrot', 1, 1, 3], ['lettuce', 1, 1, 3], ['tomato', 1, 1, 3], ['potato', 1, 1, 3], ['flour', 3, 2, 5], ['bread', 1, 1, 2], ['stone', 1, 2, 6], ['wood', 1, 2, 6], ['emptyBottle', 1, 1, 2]],
     gearP: 0.25, gear: [['clothShirt', 2], ['clothPants', 2], ['clothBoots', 2]] },
   ironmonger: { title: "Ironmonger's Crate", n: [2, 3], mats: [['ironOre', 3, 2, 5], ['copperOre', 3, 2, 5], ['copperIngot', 2, 1, 3], ['ironIngot', 1, 1, 2]],
     gearP: 0.3, gear: [['hammer_copper', 1], ['axe_copper', 1], ['spear_copper', 1], ['chainBoots', 1]] },
@@ -26074,7 +26148,7 @@ const CRATE_LOOT = {
     gearP: 0.1, gear: [['clothShirt', 1], ['clothPants', 1]] },
   mill: { title: 'Mill Crate', n: [2, 3], mats: [['flour', 4, 3, 8], ['wheat', 1, 3, 6], ['bread', 1, 1, 2], ['planks', 1, 2, 5]],
     gearP: 0.1, gear: [['clothShirt', 1], ['clothBoots', 1]] },
-  farm: { title: 'Farm Crate', n: [2, 3], mats: [['wheat', 1, 3, 6], ['carrot', 1, 1, 3], ['potato', 1, 1, 3], ['flour', 2, 2, 5], ['bread', 1, 1, 2], ['hide', 1, 1, 3], ['wood', 1, 2, 6]],
+  farm: { title: 'Farm Crate', n: [2, 3], mats: [['wheat', 1, 3, 6], ['carrot', 1, 1, 3], ['lettuce', 1, 1, 3], ['tomato', 1, 1, 3], ['potato', 1, 1, 3], ['flour', 2, 2, 5], ['bread', 1, 1, 2], ['hide', 1, 1, 3], ['wood', 1, 2, 6]],
     gearP: 0.15, gear: [['clothShirt', 1], ['clothPants', 1], ['axe_wood', 1], ['hoe_wood', 2]] },
   // (v712) the guard house's iron chests: 15 squares (v719), more in them, and one or two pieces of gear
   guardChest: { title: 'Guard House Chest', n: [3, 5], mats: [['bread', 1, 1, 3], ['leather', 3, 2, 4], ['hide', 2, 2, 4], ['copperIngot', 3, 2, 4], ['ironIngot', 2, 1, 3], ['ironOre', 2, 2, 5], ['planks', 1, 3, 8], ['bone', 1, 2, 4]],
@@ -26083,12 +26157,12 @@ const CRATE_LOOT = {
   // (v724, Jordan: most of the food in the barrels: for now wheat and sourdough bread; the crates', lockers' and
   // chests' food cut to a little) a barrel's 4 squares: a stack or two of food, no gear. kind + 'Barrel' if there's one
   // for the building, else barrel
-  barrel: { title: 'Barrel', n: [1, 2], mats: [['bread', 3, 2, 6], ['wheat', 2, 4, 10], ['carrot', 1, 2, 6], ['potato', 1, 2, 6]], gearP: 0, gear: [] },
-  tavernBarrel: { title: 'Tavern Barrel', n: [1, 3], mats: [['bread', 4, 4, 10], ['wheat', 2, 5, 12], ['carrot', 2, 3, 8], ['potato', 2, 3, 8], ['rawMeat', 2, 2, 6]], gearP: 0, gear: [] },
-  guardBarrel: { title: 'Guard House Barrel', n: [1, 2], mats: [['bread', 4, 3, 8], ['wheat', 1, 3, 8], ['potato', 2, 3, 8], ['carrot', 1, 2, 6], ['rawMeat', 1, 2, 5]], gearP: 0, gear: [] },
-  farmBarrel: { title: 'Farm Barrel', n: [1, 3], mats: [['wheat', 4, 8, 20], ['carrot', 3, 4, 12], ['potato', 3, 4, 12], ['bread', 2, 2, 6], ['rawMeat', 1, 2, 5]], gearP: 0, gear: [] },
-  millBarrel: { title: 'Mill Barrel', n: [1, 3], mats: [['wheat', 4, 8, 20], ['bread', 2, 2, 6], ['carrot', 1, 2, 6], ['potato', 1, 2, 6]], gearP: 0, gear: [] },
-  cabinBarrel: { title: 'Cabin Barrel', n: [1, 2], mats: [['bread', 3, 2, 6], ['wheat', 1, 3, 8], ['potato', 2, 2, 6], ['carrot', 1, 2, 5], ['rawMeat', 3, 2, 6]], gearP: 0, gear: [] },
+  barrel: { title: 'Barrel', n: [1, 2], mats: [['bread', 3, 2, 6], ['wheat', 2, 4, 10], ['carrot', 1, 2, 6], ['lettuce', 1, 2, 6], ['tomato', 1, 2, 6], ['potato', 1, 2, 6]], gearP: 0, gear: [] },
+  tavernBarrel: { title: 'Tavern Barrel', n: [1, 3], mats: [['bread', 4, 4, 10], ['wheat', 2, 5, 12], ['carrot', 2, 3, 8], ['lettuce', 2, 3, 8], ['tomato', 2, 3, 8], ['potato', 2, 3, 8], ['rawMeat', 2, 2, 6]], gearP: 0, gear: [] },
+  guardBarrel: { title: 'Guard House Barrel', n: [1, 2], mats: [['bread', 4, 3, 8], ['wheat', 1, 3, 8], ['potato', 2, 3, 8], ['carrot', 1, 2, 6], ['lettuce', 1, 2, 6], ['tomato', 1, 2, 6], ['rawMeat', 1, 2, 5]], gearP: 0, gear: [] },
+  farmBarrel: { title: 'Farm Barrel', n: [1, 3], mats: [['wheat', 4, 8, 20], ['carrot', 3, 4, 12], ['lettuce', 3, 4, 12], ['tomato', 3, 4, 12], ['potato', 3, 4, 12], ['bread', 2, 2, 6], ['rawMeat', 1, 2, 5]], gearP: 0, gear: [] },
+  millBarrel: { title: 'Mill Barrel', n: [1, 3], mats: [['wheat', 4, 8, 20], ['bread', 2, 2, 6], ['carrot', 1, 2, 6], ['lettuce', 1, 2, 6], ['tomato', 1, 2, 6], ['potato', 1, 2, 6]], gearP: 0, gear: [] },
+  cabinBarrel: { title: 'Cabin Barrel', n: [1, 2], mats: [['bread', 3, 2, 6], ['wheat', 1, 3, 8], ['potato', 2, 2, 6], ['carrot', 1, 2, 5], ['lettuce', 1, 2, 5], ['tomato', 1, 2, 5], ['rawMeat', 3, 2, 6]], gearP: 0, gear: [] },
   // (v713) a foot locker (the chest at a bed's foot): someone's own things, a stack or two of them plus one of what
   // the building's crates hold (mix), and now and then a piece of clothing or gear
   locker: { title: 'Foot Locker', n: [1, 2], mix: 1, mats: [['bread', 1, 1, 2], ['carrot', 1, 1, 2], ['potato', 1, 1, 2], ['emptyBottle', 2, 1, 2], ['leather', 2, 1, 2], ['hide', 1, 1, 2], ['flour', 1, 1, 3], ['bone', 1, 1, 2]],
@@ -27569,7 +27643,12 @@ let pcardN = 0, pcardCell = 0, pcardSig = '';
 const pcardImgs = new Map(), POTION_KINDS = Object.keys(POTION_TINT);
 // (v760) the cards' icon cells: each potion's, then the empty bottle's ('empty'); (v802) then the crops you plant, by item
 const PCARD_KINDS = [...POTION_KINDS, 'empty', ...Object.keys(CROP_ITEMS)];
-const pcardSrcs = () => PCARD_KINDS.map(k => ((ICON[k === 'empty' ? 'emptyBottle' : CROP_ITEMS[k] ? k : 'potion_' + k] || '').match(/src="([^"]+)"/) || [])[1] || '');
+// ((v865) an atlas icon's: its sheet + '#' its cell's column, row, columns, rows)
+const pcardSrcs = () => PCARD_KINDS.map(k => {
+  const id = k === 'empty' ? 'emptyBottle' : CROP_ITEMS[k] ? k : 'potion_' + k;
+  if (ATLAS_AT[id] && (ICON[id] || '').includes('data-paint="' + id + '"')) { const [n, cols, rows, i] = ATLAS_AT[id]; return `${atlasUrl(n, 256)}#${i % cols},${Math.floor(i / cols)},${cols},${rows}`; }
+  return ((ICON[id] || '').match(/src="([^"]+)"/) || [])[1] || '';
+});
 // (v757, Jordan) the 2D bottles slosh like the pack's: each one moving has a liquid of its own (potionStep), the one in
 // hand pushed by the fist's moves in the world (mapped to the screen as the pack's walk push is, x POTION_DRAW.slosh2d),
 // a flying one by where it is on the screen (x POTION_THROW.slosh; it takes over the liquid of the bottle that was in
@@ -27629,12 +27708,17 @@ function buildPotionNormals() {
 // (and the sloshing ones' empty bottle and its depth at the icons' size, potionGeoTex)
 function buildPotionAtlas(cell) {
   const srcs = pcardSrcs();
-  const ims = srcs.map(src => { let im = pcardImgs.get(src); if (!im) { im = new Image(); im.src = src; pcardImgs.set(src, im); } return im; });
+  const ims = srcs.map(src => { const u = src.split('#')[0]; let im = pcardImgs.get(u); if (!im) { im = new Image(); im.src = u; pcardImgs.set(u, im); } return im; });
   if (!ims.every(im => im.complete && im.naturalWidth)) return false;
   const n = ims.length, W = cell * n, c = document.createElement('canvas'); c.width = W; c.height = cell;
   const g = c.getContext('2d', { willReadFrequently: true });
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-  ims.forEach((im, k) => g.drawImage(im, k * cell + 1, 1, cell - 2, cell - 2));
+  ims.forEach((im, k) => {
+    const at = srcs[k].split('#')[1];
+    if (!at) { g.drawImage(im, k * cell + 1, 1, cell - 2, cell - 2); return; }
+    const [cx, cy, cols, rows] = at.split(',').map(Number), sw = im.naturalWidth / cols, sh = im.naturalHeight / rows;
+    g.drawImage(im, cx * sw, cy * sh, sw, sh, k * cell + 1, 1, cell - 2, cell - 2);
+  });
   const d = g.getImageData(0, 0, W, cell).data;
   pcardInk(d, W, cell, cell);
   const t = PCARD_U.tP.value;
@@ -27689,7 +27773,7 @@ function pcardPut(p, kind, h, neck, rot, bias, soft, S, flat, mode = 0, foot = n
 // (v815, Jordan's tuning; the line takes the colour of what's dragged: GUIDE_COLORS, a pale shade of its own main
 // colour, the filled potions' a pale shade of their tint)
 const DRAG_GUIDE = { shadow: 0.35, size: 0.9, blur: 2, line: 0.57, width: 2.6, dash: 9, on: 0.55, color: '#1a1410', glow: 0.45, glowSize: 4, march: 15 };
-const GUIDE_COLORS = { empty: '#94f3ff', wheat: '#fff09a', carrot: '#ffa64a', potato: '#f2dca6' };
+const GUIDE_COLORS = { empty: '#94f3ff', wheat: '#fff09a', carrot: '#ffa64a', potato: '#f2dca6', lettuce: '#d2f09a', tomato: '#ff7a5c' };
 const guideRgb = new GFX.Color(), guideWhite = new GFX.Color('#ffffff');
 function guideColor(kind) {
   if (GUIDE_COLORS[kind]) return guideRgb.set(GUIDE_COLORS[kind]);
@@ -33737,9 +33821,9 @@ const TUNING = [
     [WHEAT, 'earColor', 'Its ears when ripe', 'color'],
   ]],
   ['Farming', [
-    [FARM_ACT, 'give', 'Put a wooden hoe and 20 each of wheat, carrots and potatoes in your pack', 'action', () => {
-      addItem('hoe_wood', 1); addItem('wheat', 20); addItem('carrot', 20); addItem('potato', 20);
-      toast('A wooden hoe and 20 each of wheat, carrots and potatoes put in your pack.', 'good');
+    [FARM_ACT, 'give', 'Put a wooden hoe and 20 each of wheat, carrots, potatoes, lettuce and tomatoes in your pack', 'action', () => {
+      addItem('hoe_wood', 1); for (const k of ['wheat', 'carrot', 'potato', 'lettuce', 'tomato']) addItem(k, 20);
+      toast('A wooden hoe and 20 each of wheat, carrots, potatoes, lettuce and tomatoes put in your pack.', 'good');
     }],
     [CROP_LOOK, 'carrotHeight', 'Carrots: how tall the fronds grow (tiles)', 0.05, 1, 0.01],
     [CROP_LOOK, 'carrotDensity', 'Carrots: clumps to a square', 1, 16, 1],
@@ -33749,6 +33833,16 @@ const TUNING = [
     [CROP_LOOK, 'potatoDensity', 'Potatoes: plants to a square', 1, 16, 1],
     [CROP_LOOK, 'potatoLeaf', 'Potatoes: the leaves', 'color'],
     [CROP_LOOK, 'potatoFlower', 'Potatoes: the flowers when ripe', 'color'],
+    [CROP_LOOK, 'lettuceHeight', 'Lettuce: how tall the outer leaves grow (tiles)', 0.03, 0.6, 0.01],
+    [CROP_LOOK, 'lettuceDensity', 'Lettuce: heads to a square', 1, 16, 1],
+    [CROP_LOOK, 'lettuceLeaf', 'Lettuce: the outer leaves', 'color'],
+    [CROP_LOOK, 'lettuceHead', 'Lettuce: the heart', 'color'],
+    [CROP_LOOK, 'tomatoHeight', 'Tomatoes: how tall the stake stands (tiles)', 0.2, 1.5, 0.01],
+    [CROP_LOOK, 'tomatoDensity', 'Tomatoes: leaf clusters up the stake', 1, 16, 1],
+    [CROP_LOOK, 'tomatoLeaf', 'Tomatoes: the leaves', 'color'],
+    [CROP_LOOK, 'tomatoGreen', 'Tomatoes: the fruit unripe', 'color'],
+    [CROP_LOOK, 'tomatoFruit', 'Tomatoes: the fruit ripe', 'color'],
+    [CROP_LOOK, 'stake', 'Tomatoes: the stake', 'color'],
     [HOE, 'reach', 'Hoe: how far off a square can be hoed (tiles, to its middle)', 0.8, 6, 0.05],
     [HOE, 'cost', 'Hoe: planks it takes at the weapon table', 1, 30, 1],
     [HOE_POSE, 'time', 'Chop: seconds', 0.2, 2, 0.01],
@@ -33787,6 +33881,8 @@ const TUNING = [
     [GUIDE_COLORS, 'wheat', 'Drag guide: line colour, wheat', 'color'],
     [GUIDE_COLORS, 'carrot', 'Drag guide: line colour, carrots', 'color'],
     [GUIDE_COLORS, 'potato', 'Drag guide: line colour, potatoes', 'color'],
+    [GUIDE_COLORS, 'lettuce', 'Drag guide: line colour, lettuce', 'color'],
+    [GUIDE_COLORS, 'tomato', 'Drag guide: line colour, tomatoes', 'color'],
     [DRAG_GUIDE, 'glow', 'Drag guide: line glow (0 off)', 0, 4, 0.05],
     [DRAG_GUIDE, 'glowSize', 'Drag guide: how far the glow reaches (px)', 0.5, 20, 0.5],
     [DRAG_GUIDE, 'march', 'Drag guide: dashes march, px a second (+ down, - up)', -120, 120, 1],
