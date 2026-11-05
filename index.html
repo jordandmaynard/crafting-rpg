@@ -1351,7 +1351,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 801;
+const GAME_VERSION = 802;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -1403,6 +1403,10 @@ const FARM = new Uint8Array(N * N); // 1 a farm's ground: its house, yard and fi
 // bank cut away, so pointH leaves that tile out along that side and the river's bed runs right in under the wall
 const MCUT = new Uint8Array(N * N);
 const FIELD = new Uint8Array(N * N); // a wheat field on tilled earth: 1 its rows running east-west, 2 north-south
+const TILL = new Uint8Array(N * N);  // (v802) a square you hoed on your own plot (FIELD holds its rows' way too); bare until something's planted (CROPS)
+const CROPS = new Map();            // (v802) a tilled square of yours -> what's planted in it ('wheat'); the farms' fields are all wheat
+// whether a field square grows a crop: a farm's always does, one of yours once it's planted
+const fieldGrows = i => FIELD[i] && (!TILL[i] || CROPS.has(i));
 const GROT = new Uint8Array(N * N);  // a fairy grotto: 1 its pool, 2 the mossy rock over it (see placeGrottos)
 const WN = new Uint8Array(N * N);   // built piece on the tile's north edge: 1 wall, 2 door
 const WW = new Uint8Array(N * N);   // built piece on the tile's west edge
@@ -10390,7 +10394,7 @@ function grassChunk(cx, cz) {
     const i = T(c, r), b = BI[i];
     let kind = 0, mask = 0, y = 0;
     if (WT[i] === 1 && LV[i] && !BR[i]) { if (!GROT[i]) { kind = 5; mask = 15; y = LV[i] * STEP - BOG_BED; } }
-    else if (FIELD[i]) { if (LV[i] && !SH[i]) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
+    else if (FIELD[i]) { if (LV[i] && !SH[i] && fieldGrows(i)) { kind = FIELD[i] === 2 ? 9 : 8; mask = 15; y = LV[i] * STEP + RIDGE_H; } }
     else if (GRASS_KIND[b] && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !stairAt.has(i) && !BR[i] && !CY[i] && !OBJ[OB[i]].tile && (b !== TOWN || (townCell(c, r) === 'yard' && !townGround(i)))) {
       const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
       for (let q = 0; q < 4; q++) {
@@ -10725,7 +10729,7 @@ function reapWheat(x, z, r) {
   for (let rr = Math.floor(z - r); rr <= Math.floor(z + r); rr++) for (let cc = Math.floor(x - r); cc <= Math.floor(x + r); cc++) {
     if (cc < 0 || rr < 0 || cc >= N || rr >= N) continue;
     const i = T(cc, rr);
-    if (!FIELD[i] || wheatCut.has(i)) continue;
+    if (!fieldGrows(i) || wheatCut.has(i)) continue;
     const dx = Math.max(cc + 0.25 - x, 0, x - cc - 0.75), dz = Math.max(rr + 0.25 - z, 0, z - rr - 0.75);
     if (dx * dx + dz * dz > r * r) continue;
     wheatCut.set(i, time); wheatDirty.add(i);
@@ -10756,6 +10760,160 @@ function updateWheat(dt) {
   wheatDirty.clear();
   for (const [c0, r0, c1, r1] of box.values()) grassTex.regions.push([c0, r0, c1 - c0 + 1, r1 - r0 + 1]);
   if (box.size) grassTex.needsUpdate = true;
+}
+// ---------- Farming (v802, Jordan) ----------
+// The wooden hoe (ITEMS.hoe_wood) tills the squares of your plot. With it in hand a click chops it down (hoeBlow) on the
+// square under the cursor (ahead of you on a pad or touch), within HOE.reach: flat, dry, clear ground of your own plot
+// turns to the farms' tilled earth (a FIELD square, its rows running on from a tilled square beside it, else the way
+// you face; TILL marks it yours), whatever was there before (grass, sand, snow and its drifts, flowers) gone. It stays
+// bare until you plant in it. You plant the crop itself, one to a square: dragged out of a window over a bare tilled
+// square, it dips down into the soil (as bottles dip into water: SEED_DRAG) and one comes off the stack. It grows as
+// the farms' wheat does, from stubble over WHEAT.regrow, is reaped the same way (anything that cuts grass), and grows
+// back by itself, so a square is planted once. The hoe on a planted square clears it to bare tilled earth again; on a
+// bare one it puts the ground back as it was. HOE, HOE_POSE and SEED_DRAG are T > Farming.
+const HOE = { reach: 2.2, cost: 6 };
+const FARM_ACT = { give: 0 };   // (T > Farming's action rows)
+// (lift: how high the crop hangs over the ground while dragged; down, hold, up: the dip's seconds; size: the card's
+// height; sink: how far into the soil it dips; center: the share of the way it moves on to the square's middle)
+const SEED_DRAG = { lift: 0.8, down: 0.2, hold: 0.12, up: 0.25, size: 0.42, sink: 0.08, center: 0.6 };
+const CROP_ITEMS = { wheat: 'wheat' };   // an item you can plant -> the crop it grows (only wheat, yet)
+const TILL_WHY = 'That square is tilled. Hoe it bare, then hoe it again to clear it.';
+let seedDrag = null;   // { sx, sy } the pointer over the world while dragging a crop; dip
+// why the square at (c, r) can't be hoed, or null if it can
+function tillWhy(c, r) {
+  if (c < 1 || r < 1 || c >= N - 1 || r >= N - 1) return 'Nothing to hoe there.';
+  const i = T(c, r);
+  if (TILL[i]) return null;
+  if (FIELD[i] || FARM[i]) return farmWhy(FARM[i] || 1);
+  if (BI[i] === TOWN) return 'The townsfolk would rather you dug outside town.';
+  if (!claimedAt(i)) return 'You can only till your own plot.';
+  if (!LV[i] || WT[i] || LAVA[i] || BR[i] || CY[i]) return 'You can only till dry ground.';
+  if (SH[i] || (RIM[i] & 255)) return 'You can only till flat ground.';
+  if (FL[i] || stairAt.has(i) || stationTile.has(i) || OB[i] === O.HEARTH) return 'Something is built there.';
+  if (OBJ[OB[i]].solid || OBJ[OB[i]].tile) return 'Clear that away first.';
+  return null;
+}
+// the square a click with the hoe is aimed at
+function hoeTarget() {
+  const g = !TOUCH.on && !PAD.on ? pickGround(false) : null;
+  const x = g ? g.x : H.x + Math.sin(H.face) * 1.1, z = g ? g.z : H.z + Math.cos(H.face) * 1.1;
+  return [Math.floor(x), Math.floor(z)];
+}
+// a click with the hoe in hand: the chop starts (turned to the square), or it says why not
+function startHoe() {
+  if (H.hoe || H.still || H.dash >= 0 || H.flip || H.swing >= 0 || H.lunge >= 0 || H.whirl >= 0 || H.toss) return;
+  const [c, r] = hoeTarget();
+  let why = heroFloor() ? 'You can only till from the ground.' : tillWhy(c, r);
+  if (!why && Math.hypot(c + 0.5 - H.x, r + 0.5 - H.z) > HOE.reach) why = 'Too far away to hoe there.';
+  if (why) { sfx.nope(); toast(why); return; }
+  H.hoe = { t: 0, c, r, done: false };
+  if (Math.hypot(c + 0.5 - H.x, r + 0.5 - H.z) > 0.2) H.face = Math.atan2(c + 0.5 - H.x, r + 0.5 - H.z);
+  sfx.swing();
+}
+// the chop's clock: the square is hoed as the blow lands
+function hoeTick(dt) {
+  const h = H.hoe;
+  if (!h) return;
+  if (!H.alive || mode !== 'play' || weapon().kind !== 'hoe') { H.hoe = null; return; }
+  h.t += dt;
+  if (!h.done && h.t >= HOE_POSE.time * HOE_POSE.strikeEnd) { h.done = true; hoeSquare(h.c, h.r); }
+  if (h.t >= HOE_POSE.time) H.hoe = null;
+}
+function hoeSquare(c, r) {
+  if (tillWhy(c, r)) return;   // (something came to stand there mid-swing)
+  const i = T(c, r);
+  if (TILL[i] && CROPS.has(i)) { CROPS.delete(i); wheatCut.delete(i); }
+  else if (TILL[i]) { TILL[i] = 0; FIELD[i] = 0; wheatCut.delete(i); }
+  else {
+    // (its rows run on from a tilled square beside it, else along the way you face)
+    let dir = 0;
+    for (const d of [1, -1, N, -N]) if (!dir && TILL[i + d]) dir = FIELD[i + d];
+    TILL[i] = 1; FIELD[i] = dir || (Math.abs(Math.sin(H.face)) > Math.abs(Math.cos(H.face)) ? 1 : 2);
+    if (OB[i] && !OBJ[OB[i]].solid && !OBJ[OB[i]].tile) OB[i] = 0;   // (flowers and the like dug in)
+  }
+  const y = LV[i] * STEP;
+  puff(c + 0.5, y, r + 0.5, '#6e4a2c', 9, 0.8);
+  sfx.chop();
+  refreshSquare(c, r);
+}
+// a square tilled, cleared or put back: its ground's colour, the furrows (and the ends of the rows beside it), the
+// grass, wheat and drifts, and the map
+function refreshSquare(c, r) {
+  const i = T(c, r), ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH));
+  // (the ground's colour is in its mesh's vertices and in groundTex, which must agree, as groundSteps lays a flat square)
+  const gd = groundTex.image.data, Q = [];
+  for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) {
+    const k = Q[b * 2 + a] = groundColor(c, r, a, b), go = ((r * 2 + b) * N * 2 + c * 2 + a) * 4;
+    gd[go] = Math.min(255, Math.round(k.r * 127.5)); gd[go + 1] = Math.min(255, Math.round(k.g * 127.5)); gd[go + 2] = Math.min(255, Math.round(k.b * 127.5));
+    gd[go + 3] = LV[i] * 4 + 1;
+  }
+  groundTex.regions.push([c * 2, r * 2, 2, 2]); groundTex.needsUpdate = true;
+  const g = ch && ch.ground && ch.ground.geometry;
+  if (g) {
+    const P = g.attributes.position.array, K = g.attributes.color.array, y = LV[i] * STEP;
+    for (let n = 0; n + 8 < P.length; n += 9) {
+      const x = (P[n] + P[n + 3] + P[n + 6]) / 3, z = (P[n + 2] + P[n + 5] + P[n + 8]) / 3;
+      if (x < c || x > c + 1 || z < r || z > r + 1 || Math.abs(P[n + 1] - y) > 1e-3 || Math.abs(P[n + 4] - y) > 1e-3 || Math.abs(P[n + 7] - y) > 1e-3) continue;
+      const k = Q[(z - r >= 0.5 ? 2 : 0) + (x - c >= 0.5 ? 1 : 0)];
+      for (let v = 0; v < 9; v += 3) { K[n + v] = k.r; K[n + v + 1] = k.g; K[n + v + 2] = k.b; }
+    }
+    g.attributes.color.needsUpdate = true;
+    ch.giStale = Math.max(ch.giStale || 0, 2); ch.giJob = null;
+  }
+  markObj(c, r); markObj(c - 1, r); markObj(c + 1, r); markObj(c, r - 1); markObj(c, r + 1);
+  flushDirty();
+  paintMapTile(c, r);
+}
+// a square you can plant in: tilled, yours, bare
+const plantable = i => !!TILL[i] && !CROPS.has(i) && claimedAt(i);
+// one of the stack being dragged planted in the square: it starts growing from stubble, as a reaped one does
+function plantCrop(c, r, id) {
+  const cell = invPress && invPress.c, i = T(c, r);
+  if (!cell || cellGet(cell) !== id || !plantable(i)) return false;
+  CROPS.set(i, CROP_ITEMS[id]); wheatCut.set(i, time);
+  const n = cellCount(cell) - 1;
+  cellSet(cell, n > 0 ? id : null, n);
+  grassChunk(Math.floor(c / CH), Math.floor(r / CH));
+  paintMapTile(c, r);
+  puff(c + 0.5, LV[i] * STEP, r + 0.5, '#6e4a2c', 6, 0.5);
+  sfx.place();
+  if (n <= 0) {
+    // (the last one's planted: the drag is over)
+    invPress = null; seedDrag = null;
+    const drag = $('dragIcon'); drag.hidden = true; drag.style.visibility = '';
+    if (invOpen) renderInv(); else renderHot();
+    return true;
+  }
+  if (invOpen) renderInv();
+  $('inv').querySelector(`[data-cell="${cellKey(cell)}"]`)?.classList.add('held');
+  return true;
+}
+// each frame (from updateHeldPotion): the crop being dragged over the world, as a card hanging over the ground under the
+// cursor; over a bare tilled square of yours it dips down into the soil and is planted at the bottom
+function updateSeedDrag(dt, cards) {
+  const B = seedDrag, F = SEED_DRAG;
+  if (!B || !started) return;
+  if (!invPress || !invPress.dragging) { if (!B.dip) return; }
+  const id = invPress && cellGet(invPress.c);
+  if (!B.dip && (!id || !CROP_ITEMS[id] || B.sx == null)) return;
+  const p = B.dip ? B.dip.p : bottleHangAt(B.sx, B.sy, F.lift);
+  if (!p) return;
+  if (!B.dip) {
+    const c = Math.floor(p.x), r = Math.floor(p.z);
+    if (c >= 0 && r >= 0 && c < N && r < N && plantable(T(c, r))) B.dip = { p, c, r, id, t: 0, done: false };
+  }
+  let x = p.x, y = p.y, z = p.z;
+  const kind = B.dip ? B.dip.id : id;
+  if (B.dip) {
+    const d = B.dip, T1 = F.down, T2 = T1 + F.hold, T3 = T2 + F.up, low = LV[T(d.c, d.r)] * STEP + F.size * 0.5 - F.sink;
+    d.t += dt;
+    const e = d.t < T1 ? smoothstep(0, 1, d.t / Math.max(0.01, T1)) : d.t < T2 ? 1 : 1 - smoothstep(0, 1, (d.t - T2) / Math.max(0.01, F.up));
+    const k = clamp(F.center, 0, 1) * e;
+    y = p.y + (low - p.y) * e; x = p.x + (d.c + 0.5 - p.x) * k; z = p.z + (d.r + 0.5 - p.z) * k;
+    if (!d.done && d.t >= T1) { d.done = true; plantCrop(d.c, d.r, d.id); }
+    if (d.t >= T3) B.dip = null;
+  }
+  if (PCARD_KINDS.includes(kind)) cards.push([[x, y, z], kind, F.size, 0.5, 0, 0, POTION_DRAW.gripSoft, null, true]);
 }
 function updateCuts(dt) {
   const u = GRASS_U.cutV.value;
@@ -10823,7 +10981,7 @@ function driftChunk(c0, r0, ph, W, smoothQ) {
     // (v663, Jordan: in an alpine town the snow lies round the props as it does round the lamp posts, buried to
     // their knees, but for the few folk work at: SNOW_CLEAR)
     const alpProp = tg === SNOW && (OB[i] === O.PROP || OB[i] === O.PLANTER) && !SNOW_CLEAR.has(PROP_AT.get(i)?.id);
-    const open = kind && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk || alpProp)
+    const open = kind && LV[i] && !BEACH[i] && !SHOAL[i] && !WT[i] && !LAVA[i] && !PATH[i] && !FL[i] && !FIELD[i] && !BR[i] && !CY[i] && (!OBJ[OB[i]].tile || OBJ[OB[i]].sunk || alpProp)
       && !(sandy && (streetTile(i) || (PROP_AT.has(i) && !alpProp) || stairAt.has(i)));
     const o = OB[i], sol = o ? OBJ[o].solid || 0 : 0, at = sol ? objPos(c, r, o) : null;
     for (let q = 0; q < 4; q++) {
@@ -17560,6 +17718,10 @@ for (const kind of Object.keys(WEAPON_LOOK)) FANTASY.forEach((m, n) => {
     .map(([w, h, d, x, y, z, mat, rx, rz]) => [w, h, d, x, y, z, mat in FANTASY_MAT ? m.k + FANTASY_MAT[mat] : mat, rx, rz]);
 });
 const WEAPON_TIERS = METAL_TIERS;
+// (v802) the wooden hoe the hero carries (placeholder look): its haft along z from the hand, the blade square across its
+// far end, hanging toward -y (so it leads the chop down, see hoeBlow), and a knob at the butt
+const HOE_LOOK = [[0.03, 0.03, 1.0, 0, 0, 0.33, 'shaft'], [0.045, 0.045, 0.05, 0, 0, -0.17, 'woodDark'], [0.05, 0.07, 0.07, 0, -0.015, 0.84, 'woodDark'],
+  [0.17, 0.16, 0.03, 0, -0.1, 0.86, 'wood'], [0.18, 0.025, 0.034, 0, -0.18, 0.86, 'woodDark']];
 // the hero's arm from shoulder to hand, and how far it's swung back by the hip holding the spear drawn back
 const SPEAR_ARM = 0.25, SPEAR_BACK = 0.55;
 // (v450) The hero's look, from Options: the body type and a look rolled from the townsfolk designs (the skin, hair and
@@ -17815,6 +17977,10 @@ function makeHuman(L = heroLook()) {
   wear('hammer', hammer);
   look(hammerHead, 'hammer');
   hammerHead.rotation.z = -Math.PI / 2;
+  // (v802) the hoe, in the right hand like the hammer (carried on the shoulder, chopped down in both hands: hoeBlow)
+  const hoe = pivot(handR, 0, -0.05, 0.02);
+  wear('hoe', hoe);
+  for (const [w, h, d, x, y, z, m] of HOE_LOOK) box(hoe, w, h, d, x, y, z, WM[m]);
   // (v752, Jordan) a potion bottle held in the right hand, pointing out of the fist the way the sword does (along the
   // hand's z): a squat body of the potion's colour, glass shoulder and neck, a cork
   const potion = pivot(handR, 0, -0.05, 0.02);
@@ -17827,7 +17993,7 @@ function makeHuman(L = heroLook()) {
   const potion2d = pivot(handR, 0, -0.04, 0.02);
   // (v450) the look's height and build, as the townsfolk's
   g.scale.set(1.12 * L.build * (fem ? 0.98 : 1), 1.12 * L.height * (fem ? 0.97 : 1), 1.12 * L.build);
-  return { g, parts, look: L, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer, potion, potion2d };
+  return { g, parts, look: L, body, chest, legL, legR, knees, ankles, armL, armR, elbows, wrists, head, sword, bow, bowStr, nock, spear, spearShaft, axe, axeHead, hammer, hoe, potion, potion2d };
 }
 
 // (v693) a wolf's joints (the hellhound's too, built the same): the back bends at a spine pivot mid-body (the
@@ -18745,7 +18911,7 @@ function boatHelm() {
   if (!b) return;
   if (!H.helm) {
     setHelm(true); b.anchorGoal = 0; b.notch = 0; b.plankGoal = 0;
-    H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null;
+    H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = H.hoe = null;
     toast(`You take the wheel${b.livery ? ' of ' + b.livery.name.replace(/^The /, 'the ') : ''}. W and S set the speed (hold for more), A and D steer. F lets go and drops anchor.`, 'calm');
     sfx.equip();
   } else {
@@ -19274,10 +19440,10 @@ function idleDollPose() {
   const keep = o => parts.push([o, o.position.x, o.position.y, o.position.z, o.rotation.x, o.rotation.y, o.rotation.z, o.rotation.order, o.scale.x, o.scale.y, o.scale.z, o.visible]);
   keep(heroRoot);
   hero.g.traverse(keep);
-  const keys = ['moving', 'dash', 'flip', 'swing', 'whirl', 'lunge', 'bow', 'spear', 'sitK', 'helm', 'axeWind', 'cdPotion', 'toss'];
+  const keys = ['moving', 'dash', 'flip', 'swing', 'whirl', 'lunge', 'bow', 'spear', 'sitK', 'helm', 'axeWind', 'cdPotion', 'toss', 'hoe'];
   const was = keys.map(k => H[k]);
   const g = { bowUp, bowFollow, spearHeld, spearPlan, hamPlan, axPlan, mode, down: mouse.down, pad: PAD.attack, touch: TOUCH.attack };
-  Object.assign(H, { moving: false, dash: -1, flip: null, swing: -1, whirl: -1, lunge: -1, bow: null, spear: null, sitK: 0, helm: false, axeWind: -1, cdPotion: 0, toss: null });
+  Object.assign(H, { moving: false, dash: -1, flip: null, swing: -1, whirl: -1, lunge: -1, bow: null, spear: null, sitK: 0, helm: false, axeWind: -1, cdPotion: 0, toss: null, hoe: null });
   mode = 'play'; mouse.down = false; PAD.attack = false; TOUCH.attack = false; bowUp = 0;
   try { animateHero(10); heroRoot.position.set(H.x, H.y, H.z); heroRoot.visible = true; }   // (a long step, so every eased part settles at rest)
   catch (err) { /* (left as it was) */ }
@@ -19336,7 +19502,7 @@ const H = {
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
   whirl: -1, whirlTick: 0, lunge: -1, lungeHit: null, dash: -1, dashDir: [0, 1], flip: null, canJump: null,
   cdQ: 0, cdE: 0, cdDash: 0, cdPotion: 0, toss: null, invuln: 0, hurtT: 9, lastHurt: -99, walkPhase: 0, moving: false, stepF: 1, stepS: 0,
-  kx: 0, kz: 0, bow: null, spear: null,
+  kx: 0, kz: 0, bow: null, spear: null, hoe: null,
 };
 const CD = { Q: 8, E: 7 };
 // the dash is a tumble: a forward roll you can steer, untouchable the whole way, and a burst of extra run
@@ -19624,6 +19790,9 @@ const ICON = {
   lock: iconArt(['...ggg...', '..g...g..', '..g...g..', '.YYYYYYY.', '.YYYkYYY.', '.YYYkYYY.', '.YYYYYYY.'], { g: '#8c8a96', Y: '#7a6a4a', k: '#17131f' }),
 };
 for (const [t, tr] of Object.entries(TIERS)) for (const [w, [, pal]] of Object.entries(WEAPON_ART)) if (WEAPON_ART_TIER[w][t]) ICON[w + '_' + t] = iconArt(WEAPON_ART_TIER[w][t], { ...pal, ...tr.look[w] });
+// (v802) the wooden hoe's icon in pixels (stand-in only: Jordan's painting replaces it below, ICON.hoe_wood)
+ICON.hoe = ICON.hoe_wood = iconArt(['.........', '......kk.', '.....bkww', '....b..ww', '...b...ww', '..b....ee', '.b.......', 'b........', '.........'],
+  { b: '#8a5a32', k: '#5a3a22', w: '#b07a46', e: '#6a4426' });
 // (the fantasy metals' axes and hammers, till they have painted icons: the iron one in the metal's colours)
 for (const m of FANTASY) for (const w of ['axe', 'hammer']) ICON[w + '_' + m.k] = iconArt(WEAPON_ART_TIER[w].iron, { ...WEAPON_ART[w][1], ...TIERS.iron.look[w],
   w: shadeHex(m.ingot, 0.2), s: shadeHex(m.ingot, -0.4), y: shadeHex(m.ingot, 0.45), p: shadeHex(m.ingot, 0.45), g: shadeHex(m.ore, 0.3) });
@@ -19817,6 +19986,10 @@ for (const k of ['clothShirt', 'clothPants', 'clothBoots', ...['sword', 'bow', '
 // painting is every filled bottle's: the potions are painted into it (potionEmpty). Filling one at the water swaps it at
 // the bottom of the dip, under the water (fillBottles)
 ICON.emptyBottle = paintImg('bottleOpen', 'max(34px, 5.12vh)');
+// (v802) Jordan's wooden hoe painting (icons/paint/src/wooden-hoe-painterly-256x256.png), angled the other way from the
+// weapons on purpose so it stands apart from them; the bar's TILL shows it too
+ICON.hoe_wood = paintImg('hoe_wood', 'max(34px, 5.12vh)');
+BAR_ICON.hoe = paintImg('hoe_wood', 'max(26px, calc(4.9vh - 14px))');
 // (v655, Jordan's missing-icons pack and torso body-type delta, art/deliveries) the twelve buildables still drawn in
 // pixels and all 32 armor pieces, painted, plus a male torso for each armor set and a female starting shirt. Packed
 // into atlases (icons/atlas/<name>-128/-256.webp, one a set) rather than a file an icon: the artifact holds at most 511
@@ -20501,6 +20674,10 @@ const WEAPONS = {
 };
 for (const [t, tr] of Object.entries(TIERS)) for (const [w, wp] of Object.entries(WEAPONS))
   ITEMS[w + '_' + t] = { name: tr.name + ' ' + wp.name, slot: 'weapon', icon: w + '_' + t, strike: wp.strike, q: wp.q, e: wp.e, kind: w, tier: t };
+// (v802, Jordan) the wooden hoe: carried like a weapon (the hotbar, the doll's weapon square), but it never strikes: with
+// it in hand a click hoes the square of your plot under the cursor (see Farming). It has no tier.
+ITEMS.hoe_wood = { name: 'Wooden Hoe', slot: 'weapon', icon: 'hoe_wood', kind: 'hoe', strike: 'till', tool: true,
+  about: 'With it in hand, click a flat square of your plot to till it. Hoe a planted square to clear it again, and a bare one to put the ground back.' };
 // a weapon stroke's damage in what the weapon's made of (bare fists hit as they are)
 const wdmg = d => Math.round(d * (GEAR.weapon ? WEAPON_TIER[ITEMS[GEAR.weapon].tier] : 1));
 // v323+: armour cuts a blow by A / (A + armorK × attacker level), at most armorCap, as WoW and Diablo do it
@@ -20514,7 +20691,7 @@ const gapMul = g => Math.pow(1 + LEVEL_DIFF.perLevel, g);
 const armor = () => Object.values(GEAR).reduce((a, id) => a + (id && ITEMS[id].armor || 0), 0);
 const FISTS = { name: 'Bare Fists', strike: 'punch' };
 const STRIKE = { slash: { name: 'SLASH', icon: 'sword' }, punch: { name: 'PUNCH', icon: 'fist' }, shoot: { name: 'SHOOT', icon: 'bow' }, poke: { name: 'POKE', icon: 'spear' },
-  chop: { name: 'CHOP', icon: 'axe' }, smash: { name: 'SMASH', icon: 'warhammer' } };
+  chop: { name: 'CHOP', icon: 'axe' }, smash: { name: 'SMASH', icon: 'warhammer' }, till: { name: 'TILL', icon: 'hoe' } };
 const ABILITY = {
   whirl: { name: 'CLEAVE', icon: 'whirl', cast: () => castCleave() },
   lunge: { name: 'LUNGE', icon: 'lunge', cast: () => castLunge() },
@@ -20594,7 +20771,7 @@ let cursorKind = '', cursorAct = '';
 const itemDragging = () => !$('dragIcon').hidden;
 function updateCursor() {
   const w = GEAR.weapon && ITEMS[GEAR.weapon];
-  const k = itemDragging() ? 'hand' : mode !== 'play' || H.still ? '' : cursorAct ? (cursorAct === 'folk' ? 'talk' : 'hand') : w ? (CURSOR_KINDS.has(w.kind) ? w.kind : '') : 'fist';
+  const k = itemDragging() ? 'hand' : mode !== 'play' || H.still ? '' : cursorAct ? (cursorAct === 'folk' ? 'talk' : 'hand') : w ? (CURSOR_KINDS.has(w.kind) ? w.kind : w.tool ? 'hand' : '') : 'fist';
   if (k === cursorKind) return;
   if (cursorKind) document.body.classList.remove('cur-' + cursorKind);
   if (k) document.body.classList.add('cur-' + k);
@@ -20635,6 +20812,7 @@ const DRESS = {
   spear: () => !H.still && weapon().kind === 'spear',
   axe: () => !H.still && weapon().kind === 'axe',
   hammer: () => !H.still && weapon().kind === 'hammer',
+  hoe: () => !H.still && weapon().kind === 'hoe',
   potion: () => !H.still && Math.round(POTION_THROW.inHand) === 1 && !!handPotion(),
   ...Object.fromEntries(WEAPON_TIERS.map(t => ['tier_' + t, () => weapon().tier === t])),
 };
@@ -20773,7 +20951,7 @@ function clickCell(c) {
 let wornWeapon = GEAR.weapon;
 function gearChanged() {
   // a new weapon cuts off whatever the old one was doing
-  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.bow = H.spear = null; H.comboT = 0; arcT = 9; endCharge(false); }
+  if (GEAR.weapon !== wornWeapon) { wornWeapon = GEAR.weapon; H.swing = H.whirl = H.lunge = -1; H.bow = H.spear = H.hoe = null; H.comboT = 0; arcT = 9; endCharge(false); }
   dressHero(); renderBar(); renderInv();
   sfx.equip();
 }
@@ -20977,7 +21155,7 @@ function itemInfo(c) {
   if (!id && (c[0] === 'in' || c[0] === 'out')) return c[0] === 'in' ? `<b>INPUT</b> Put ${stationTakes(openSt).toLowerCase()} here, and it's refined into the output, one every ${REFINE.time} seconds.` : '<b>OUTPUT</b> What the station makes lands here. Click or drag it into your pack.';
   if (!id && c[0] === 'box') return `<b>${STATION_KIND[openSt.kind].name}</b> An empty square. Click something in your pack to put it in here.`;
   if (!id) return c[0] === 'gear' ? `<b>${GEAR_SLOTS.find(g => g.slot === c[1]).name}</b> Nothing worn here.` : '<b>PACK</b> An empty square.';
-  const it = ITEMS[id], abil = it.strike ? ` LMB ${it.strike}${it.q ? ', Q ' + it.q : ''}${it.e ? ', E ' + it.e : ''}.` : '';
+  const it = ITEMS[id], abil = it.tool ? ' ' + it.about : it.strike ? ` LMB ${it.strike}${it.q ? ', Q ' + it.q : ''}${it.e ? ', E ' + it.e : ''}.` : '';
   if (!it.slot) return `<b>${it.name.toUpperCase()} × ${cellCount(c)}</b> ${it.about} Stacks to ${it.stack}.`;
   const arm = it.armor ? ` Armor ${it.armor}.` : '';
   return `<b>${it.name.toUpperCase()}</b> ${titleCase(it.slot)}.${arm}${abil} ${c[0] === 'gear' ? 'Click to take it off.' : c[0] === 'box' ? 'Click to take it out.' : isStore(openSt) ? 'Click to put it away.' : 'Click to put it on.'}`;
@@ -21059,6 +21237,7 @@ function renderInv() {
 // the spear's thrust, a punch), times the weapon's tier, on a foe of your level
 function heroDps() {
   const w = GEAR.weapon && ITEMS[GEAR.weapon], k = w ? w.strike : 'punch';
+  if (w && w.tool) return 0;   // (a hoe never strikes)
   let d, t;
   if (SWINGS[k]) { const S = SWINGS[k]; d = S.dmg.reduce((a, b) => a + b, 0); t = S.t.slice(0, S.dmg.length).reduce((a, b) => a + b, 0); }
   else if (k === 'shoot') { d = BOW.dmg; t = BOW.time; }
@@ -21206,7 +21385,10 @@ function navInv(dx, dy) {
       const id = cellGet(invPress.c), bottle = id === 'emptyBottle' || (bottleDrag?.filled && id && ITEMS[id].potion);
       if (bottle && at === cv && mode === 'play') { bottleDrag = Object.assign(bottleDrag || {}, { sx: e.clientX, sy: e.clientY }); }
       else if (bottleDrag && !bottleDrag.dip) bottleDrag = bottleDrag.filled ? Object.assign(bottleDrag, { sx: null }) : null;
-      drag.style.visibility = bottleDrag && bottleDrag.sx != null ? 'hidden' : '';
+      // (v802) a crop over the world the same way, to plant in your tilled squares (see Farming)
+      if (id && CROP_ITEMS[id] && at === cv && mode === 'play') seedDrag = Object.assign(seedDrag || {}, { sx: e.clientX, sy: e.clientY });
+      else if (seedDrag) seedDrag.sx = null;
+      drag.style.visibility = (bottleDrag && bottleDrag.sx != null) || (seedDrag && seedDrag.sx != null) ? 'hidden' : '';
       inv.querySelectorAll('.cell.drop').forEach(c => c.classList.remove('drop'));
       if (over && fits(cellOf(over), cellGet(invPress.c))) over.classList.add('drop');
       $('trash').classList.toggle('drop', !!at?.closest('#trash'));
@@ -21217,7 +21399,7 @@ function navInv(dx, dy) {
   addEventListener('pointerup', e => {
     const p = invPress;
     if (!p) return;
-    invPress = null; drag.hidden = true; drag.style.visibility = ''; bottleDrag = null;
+    invPress = null; drag.hidden = true; drag.style.visibility = ''; bottleDrag = null; seedDrag = null;
     inv.querySelectorAll('.cell.press').forEach(c => c.classList.remove('press'));
     if (!p.dragging) { clickCell(p.c); return; }
     const at = document.elementFromPoint(e.clientX, e.clientY), over = at?.closest('#inv .cell');
@@ -21247,8 +21429,10 @@ const RECIPES = {
     ...Object.entries(ARMOR_SETS).flatMap(([k, st]) => ARMOR_PIECES.map(([n, , c]) => ({ make: k + n, cost: { leather: c.leather, [st.mat]: c.mat } }))),
   ],
   // (a weapon: its material, and planks for the haft or grip; a wooden one is all planks)
-  weapon: Object.entries(TIERS).flatMap(([t, tr]) => Object.keys(WEAPONS).map(w => ({ make: w + '_' + t,
-    get cost() { return tr.mat === 'planks' ? { planks: WEAPON_TIER.cost } : { planks: WEAPON_HAFT, [tr.mat]: WEAPON_TIER.cost }; } }))),
+  // (v802) and the wooden hoe, after the wooden weapons
+  weapon: Object.entries(TIERS).flatMap(([t, tr]) => [...Object.keys(WEAPONS).map(w => ({ make: w + '_' + t,
+    get cost() { return tr.mat === 'planks' ? { planks: WEAPON_TIER.cost } : { planks: WEAPON_HAFT, [tr.mat]: WEAPON_TIER.cost }; } })),
+    ...(t === 'wood' ? [{ make: 'hoe_wood', get cost() { return { planks: HOE.cost }; } }] : [])]),
   // (potions to come)
   alchemy: [{ make: 'emptyBottle', cost: { glassPane: 1 } }],
   // (v801, Jordan) the town cooking hearths: bread, moved here off the smelter, from flour and a clear water potion
@@ -21272,6 +21456,7 @@ const iconAt = (k, size) => (ICON[k] || '').replace(/sizes="[^"]*"/, `sizes="${s
 function craftAbout(rc) {
   const it = ITEMS[rc.make];
   if (it.tier) return `Damage ×${WEAPON_TIER[it.tier]}.`;
+  if (it.tool) return 'Tills your plot.';
   if (it.slot && it.armor != null) return `${titleCase(it.slot)}, armor ${it.armor}.`;
   return `You have ${haveCount(rc.make)}.`;
 }
@@ -23128,7 +23313,7 @@ function respawn() {
   [H.x, H.z] = at || [spawn.x, spawn.z];
   H.story = 0; H.stair = null; H.boat = null; if (H.helm) setHelm(false); if (H.seat) standUp(true);
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.barHeat = 0; H.alive = true; H.invuln = 2;
-  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
+  H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = H.hoe = null; dropHarpoon(); endCharge(false); axeThrow = null;
   renderHp();
   camTarget.set(H.x, surfaceY(H.x, H.z), H.z);
   toast(at ? 'You wake by your hearth.' : 'You wake by the well in ' + titleCase(towns[0].name) + '.', 'calm');
@@ -24643,7 +24828,7 @@ function castDash() {
   let dx = 0, dz = 0;
   const m = moveInput();
   if (m) { dx = m[0]; dz = m[1]; } else { dx = Math.sin(H.face); dz = Math.cos(H.face); }
-  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = TUMBLE.cooldown; H.invuln = Math.max(H.invuln, TUMBLE.time); H.swing = -1; H.bow = H.spear = null; H.boost = 0;
+  H.dash = 0; H.dashDir = [dx, dz]; H.cdDash = TUMBLE.cooldown; H.invuln = Math.max(H.invuln, TUMBLE.time); H.swing = -1; H.bow = H.spear = H.hoe = null; H.boost = 0;
   sfx.dash();
   puff(H.x, H.y, H.z, '#c8bca0', 6, 0.6);
 }
@@ -24672,7 +24857,7 @@ function jumpEdge(dir = moveInput()) {
 function castJump() {
   const f = H.canJump;
   if (!f || H.flip) return;
-  H.flip = f; H.canJump = null; H.swing = -1; H.bow = H.spear = null; H.invuln = Math.max(H.invuln, f.dur);
+  H.flip = f; H.canJump = null; H.swing = -1; H.bow = H.spear = H.hoe = null; H.invuln = Math.max(H.invuln, f.dur);
   sfx.dash();
 }
 // Health bars, as in V Rising: point at a monster (the mouse over it, or on a controller the one you aim at), or
@@ -25179,7 +25364,7 @@ const CRATE_LOOT = {
   mill: { title: 'Mill Crate', n: [2, 3], mats: [['flour', 4, 3, 8], ['wheat', 1, 3, 6], ['bread', 1, 1, 2], ['planks', 1, 2, 5]],
     gearP: 0.1, gear: [['clothShirt', 1], ['clothBoots', 1]] },
   farm: { title: 'Farm Crate', n: [2, 3], mats: [['wheat', 1, 3, 6], ['flour', 2, 2, 5], ['bread', 1, 1, 2], ['hide', 1, 1, 3], ['wood', 1, 2, 6]],
-    gearP: 0.15, gear: [['clothShirt', 1], ['clothPants', 1], ['axe_wood', 1]] },
+    gearP: 0.15, gear: [['clothShirt', 1], ['clothPants', 1], ['axe_wood', 1], ['hoe_wood', 2]] },
   // (v712) the guard house's iron chests: 15 squares (v719), more in them, and one or two pieces of gear
   guardChest: { title: 'Guard House Chest', n: [3, 5], mats: [['bread', 1, 1, 3], ['leather', 3, 2, 4], ['hide', 2, 2, 4], ['copperIngot', 3, 2, 4], ['ironIngot', 2, 1, 3], ['ironOre', 2, 2, 5], ['planks', 1, 3, 8], ['bone', 1, 2, 4]],
     gearP: 0.9, gearN: [1, 2], gear: [['sword_bone', 2], ['spear_bone', 2], ['bow_bone', 2], ['sword_copper', 3], ['spear_copper', 3], ['bow_copper', 2], ['hammer_copper', 1], ['axe_copper', 1],
@@ -25670,7 +25855,7 @@ function sitDown(s) {
   }
   H.seat = { q: s.q, x: s.c + 0.5, z: s.r + 0.5, face: Math.atan2(DC[f], DR[f]) };
   H.seatLift = SEAT_LIFT[s.q.id] || 0;   // (kept while you stand up, eased out with H.sitK)
-  H.swing = -1; H.bow = H.spear = null; H.moving = false;
+  H.swing = -1; H.bow = H.spear = H.hoe = null; H.moving = false;
   dressHero(); renderStats(); renderTouchLocks();
 }
 function standUp(now = false) {
@@ -25751,7 +25936,7 @@ function showGhosts(spots) {
 }
 function setMode(m) {
   mode = m;
-  H.swing = -1; H.bow = H.spear = null; drag = null; moving = null;
+  H.swing = -1; H.bow = H.spear = H.hoe = null; drag = null; moving = null;
   renderBar();
   showGhosts([]); showPlotHover(0);
   if (m === 'build') toast(PAD.on ? 'Build mode. Claim a plot with a hearth (RB), then build on it: X floors, Y walls, A doors. Hold RT and move to lay rows.'
@@ -25767,6 +25952,7 @@ function floorSpot(c, r, kind) {
   let ok = LV[i] > 0 && !SH[i] && !(RIM[i] & 255) && !WT[i] && !BR[i] && !FL[i] && (!OBJ[OB[i]].solid || OB[i] === O.HEARTH) && (!OBJ[OB[i]].tile || stationTile.has(i)) && BI[i] !== TOWN;
   let why = FL[i] ? 'There is a floor here already.' : BI[i] === TOWN ? 'The townsfolk would rather you built outside town.' : 'Floors need clear, flat, dry ground.';
   if (ok && !claimedAt(i)) { ok = false; why = plotWhy(i); }
+  if (ok && TILL[i]) { ok = false; why = TILL_WHY; }
   return { kind, c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.04 };
 }
 // ---------- Building up the stories (v369) ----------
@@ -25845,6 +26031,7 @@ function stairSpot(c, r, d, kind, k) {
   if (ok && both.some(t => UP[k + 1].FL.has(t))) { ok = false; why = 'There is a floor overhead: take it up first, or start the stairs elsewhere.'; }
   if (ok && !wallOpenAny(c, r, d, k)) { ok = false; why = 'A wall stands across where the stairs would go.'; }
   if (ok) { const t = both.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
+  if (ok && !k && both.some(t => TILL[t])) { ok = false; why = TILL_WHY; }
   const x = c + 0.5 + dx * 0.5, z = r + 0.5 + dz * 0.5;
   if (ok && [H, ...(k ? [] : foes)].some(e => (e !== H || (!H.stair && H.story === k)) && both.some(t => Math.floor(e.x) === t % N && Math.floor(e.z) === Math.floor(t / N)))) { ok = false; why = 'Something is standing in the way.'; }
   return { kind, c, r, d, k, stair: true, ok, why, x, z, y: storyY(k, t0), ry: Math.atan2(dx, dz) };
@@ -25947,6 +26134,7 @@ function hearthSpot(c, r) {
   else if (pl.claimed) { ok = false; why = 'This plot is already claimed; it has its hearth.'; }
   else if (hearths.size) { ok = false; why = 'You can only have one hearth. Take yours down to move it.'; }
   else if (ok && standingIn(c + 0.5, r + 0.5, 0.75)) { ok = false; why = 'Something is standing in the way.'; }
+  if (ok && TILL[i]) { ok = false; why = TILL_WHY; }
   return { kind: 'hearth', c, r, ok, why, x: c + 0.5, z: r + 0.5, y: LV[i] * STEP + 0.35 };
 }
 // where the current piece would go under the cursor, and whether it may
@@ -26574,14 +26762,16 @@ fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
   }
   if (U.litK > 0.0 || U.glint > 0.0) {
     // the bottle's normal on the card (x right, y up, z out of it), turned with the card, into the world
-    let nt = textureSampleLevel(tN, tNS, clamp(i.nuv, vec2f(0.0), vec2f(1.0)), 0.0).xyz * 2.0 - 1.0;
+    // ((v802) live -2: not a bottle (a crop being planted), so flat, facing the eye, with no glint)
+    let flat = i.live < -1.5;
+    let nt = select(textureSampleLevel(tN, tNS, clamp(i.nuv, vec2f(0.0), vec2f(1.0)), 0.0).xyz * 2.0 - 1.0, vec3f(0.0, 0.0, 1.0), flat);
     let sx = nt.x * i.rc.x - nt.y * i.rc.y; let sy = nt.x * i.rc.y + nt.y * i.rc.x;
     let Rw = vec3f(F.view[0][0], F.view[1][0], F.view[2][0]); let Uw = vec3f(F.view[0][1], F.view[1][1], F.view[2][1]);
     let Bw = vec3f(F.view[0][2], F.view[1][2], F.view[2][2]);
     let N = normalize(Rw * sx + Uw * sy + Bw * (max(nt.z, 0.0) + 1e-3));
     let li = pcardLight(i.wp, N, Bw);
     let f = min(li.rgb / max(U.litRef, 1e-3), vec3f(3.0));
-    rgb = rgb * mix(vec3f(1.0), f, U.litK) + vec3f(li.w * U.glint * col.a);
+    rgb = rgb * mix(vec3f(1.0), f, U.litK) + vec3f(li.w * U.glint * col.a * select(1.0, 0.0, flat));
   }
   return vec4f(rgb, col.a) * k;
 }`,
@@ -26599,9 +26789,9 @@ const pcardMesh = (() => {
 })();
 let pcardN = 0, pcardCell = 0, pcardSig = '';
 const pcardImgs = new Map(), POTION_KINDS = Object.keys(POTION_TINT);
-// (v760) the cards' icon cells: each potion's, then the empty bottle's ('empty')
-const PCARD_KINDS = [...POTION_KINDS, 'empty'];
-const pcardSrcs = () => PCARD_KINDS.map(k => ((ICON[k === 'empty' ? 'emptyBottle' : 'potion_' + k] || '').match(/src="([^"]+)"/) || [])[1] || '');
+// (v760) the cards' icon cells: each potion's, then the empty bottle's ('empty'); (v802) then the crops you plant, by item
+const PCARD_KINDS = [...POTION_KINDS, 'empty', ...Object.keys(CROP_ITEMS)];
+const pcardSrcs = () => PCARD_KINDS.map(k => ((ICON[k === 'empty' ? 'emptyBottle' : CROP_ITEMS[k] ? k : 'potion_' + k] || '').match(/src="([^"]+)"/) || [])[1] || '');
 // (v757, Jordan) the 2D bottles slosh like the pack's: each one moving has a liquid of its own (potionStep), the one in
 // hand pushed by the fist's moves in the world (mapped to the screen as the pack's walk push is, x POTION_DRAW.slosh2d),
 // a flying one by where it is on the screen (x POTION_THROW.slosh; it takes over the liquid of the bottle that was in
@@ -26689,10 +26879,11 @@ function pcardSlosh(S, x, y, dt) {
 }
 const h2a = new GFX.Vector3(), h2b = new GFX.Vector3(), h2c = new GFX.Vector3();
 // one card: hung from world point p by `neck` of its height (h tiles), turned rot (radians, on the screen), pushed
-// bias tiles back from the eye, hidden by anything more than soft nearer
-function pcardPut(p, kind, h, neck, rot, bias, soft, S) {
+// bias tiles back from the eye, hidden by anything more than soft nearer; (v802) flat: not a bottle, lit as a flat card
+// facing the eye (live -2: no bottle normals, no glint)
+function pcardPut(p, kind, h, neck, rot, bias, soft, S, flat) {
   if (pcardN >= PCARD_MAX) return;
-  const cell = Math.max(0, PCARD_KINDS.indexOf(kind)), live = S && S.slot >= 0 ? S.slot : -1, C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  const cell = Math.max(0, PCARD_KINDS.indexOf(kind)), live = flat ? -2 : S && S.slot >= 0 ? S.slot : -1, C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
   C.forEach(([a, b], v) => {
     const o = pcardN * 6 + v;
     pcardPos.set(p, o * 3);
@@ -26745,8 +26936,8 @@ function freshWaterAt(x, z) {
 }
 // where a bottle at screen point (sx, sy) hangs: the point along the eye's ray there that's lift over the ground (or
 // water) straight under it; gy that ground
-function bottleHangAt(sx, sy) {
-  const rect = cv.getBoundingClientRect(), L = BOTTLE_FILL.lift;
+function bottleHangAt(sx, sy, L = BOTTLE_FILL.lift) {
+  const rect = cv.getBoundingClientRect();
   viewRay((sx - rect.left) / rect.width * 2 - 1, -(sy - rect.top) / rect.height * 2 + 1);
   if (rayDir.y > -1e-4) return null;
   const top = (MAXL + 3) * STEP + L, at = q => [ray.x + rayDir.x * q, ray.y + rayDir.y * q, ray.z + rayDir.z * q];
@@ -26875,6 +27066,7 @@ function updateHeldPotion() {
     cards.push([f.p, f.kind, P.size, 0.5, f.rot * Math.PI / 180, 0, 0.1, S]);
   }
   updateBottleDrag(now, dt, sw, sh, want, cards);
+  updateSeedDrag(dt, cards);
   // the live cells: each moving bottle keeps its own if it can, else takes a free one (drawn afresh)
   for (const S of pcardSlots) if (S && !want.includes(S)) S.slot = -1;
   pcardSlots.fill(null);
@@ -27072,6 +27264,7 @@ function stationSpot(c, r, kind, self = null) {
   let why = `${/^[AEIOU]/.test(KIND_SLOT[kind].name) ? "An" : "A"} ${KIND_SLOT[kind].name.toLowerCase()} needs ${f === 1 ? 'a tile' : '2 x 2 tiles'} of clear, flat, dry ground.`;
   if (ok && all.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
   if (ok) { const t = all.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
+  if (ok && all.some(t => TILL[t])) { ok = false; why = TILL_WHY; }
   if (ok && standingIn(c + h, r + h, f === 1 ? 0.7 : 1.25)) { ok = false; why = 'Something is standing in the way.'; }
   const a = Math.atan2(-(H.x - c - h), -(H.z - r - h)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
   return { kind, c, r, ok, why, x: c + h, z: r + h, y: LV[i] * STEP + 0.45, ry };
@@ -29164,10 +29357,10 @@ function update(dt) {
       propsNear(0.9, (i, c, r, dx, dz) => { if (!H.lungeHit.has(i)) { H.lungeHit.add(i); strikeProp(i, c, r, dx, dz, 26); } });
       if (H.lunge > 0.42) H.lunge = -1;
     } else if (m) {
-      const slow = (H.swing >= 0 ? (H.strike === 'smash' && H.combo === 3 ? 0 : 0.45) : H.axeWind >= 0 ? 0.45 : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
+      const slow = (H.swing >= 0 ? (H.strike === 'smash' && H.combo === 3 ? 0 : 0.45) : H.hoe ? 0.3 : H.axeWind >= 0 ? 0.45 : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
       // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
-      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !(H.axeWind >= 0)) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * (1 - Math.exp(-dt * 16));
+      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !H.hoe && !(H.axeWind >= 0)) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * (1 - Math.exp(-dt * 16));
     }
     vx += H.kx; vz += H.kz;
     H.kx *= Math.exp(-dt * 9); H.kz *= Math.exp(-dt * 9);
@@ -29197,11 +29390,16 @@ function update(dt) {
         if (atkHeld) { if (!H.atkWas) { H.potArmed = true; H.potAim = 0; } else H.potAim = (H.potAim || 0) + dt; }
         else { if (H.atkWas && H.potArmed && !H.still) throwPotion(); H.potAim = 0; H.potArmed = false; }
       } else if (atkHeld && !H.atkWas && !H.still) throwPotion();
+    } else if (weapon().kind === 'hoe') {
+      // (v802) the hoe never strikes: each click hoes the square under the cursor (see Farming)
+      H.potAim = 0; H.potArmed = false;
+      if (atkHeld && !H.atkWas && !H.still) startHoe();
     } else {
       H.potAim = 0; H.potArmed = false;
       if (atkHeld && H.swing < 0 && !H.bow && !H.spear && !H.still) startSwing();
     }
     H.atkWas = atkHeld;
+    hoeTick(dt);
     if (H.bow) updateBow(dt);
     if (H.spear) updateSpear(dt);
     if (H.axeWind >= 0) updateAxeWind(dt);
@@ -29608,10 +29806,10 @@ function arcWay(phi, tau) {
   return { d: [s * V0, s * V1, c], u: [c * V0, c * V1, -s] };
 }
 const hamPose = (g, w, o = {}) => ({ g, d: w.d, u: w.u, two: 1, chestY: 0, chestX: 0, hips: 0, crouch: 0, step: 0, jump: 0, tuck: 0, ...o });
-function mixPose(a, b, t) {
+function mixPose(a, b, t, oneWay) {
   if (t <= 0) return a;
   if (t >= 1) return b;
-  const bu = dot3(a.u, b.u) < 0 ? b.u.map(v => -v) : b.u;   // (the head's the same either way round)
+  const bu = !oneWay && dot3(a.u, b.u) < 0 ? b.u.map(v => -v) : b.u;   // (the head's the same either way round; a hoe's blade isn't: oneWay)
   const o = { g: lerp3(a.g, b.g, t), d: slerp3(a.d, b.d, t), u: slerp3(a.u, bu, t) };
   for (const k of ['two', 'chestY', 'chestX', 'hips', 'crouch', 'step', 'jump', 'tuck']) o[k] = a[k] + (b[k] - a[k]) * t;
   return o;
@@ -29650,7 +29848,29 @@ function hamBlow(combo, u, rest) {
   return mixPose(rest, p, smooth(0, W * 0.7, u) * (1 - smooth(S + 0.08, 1, u)));
 }
 let hamPlan = null, hamFreeze = null, hamMiss = [0, 0];
+// (v802) The hoe, planned as the hammer is: carried on the right shoulder (its own rest), and each click a chop in both
+// hands, raised overhead then brought down hard ahead in the upright plane, gathering speed, the blade leading, crouched
+// and leaning into it; the blow lands at strikeEnd (of time, seconds), then it eases back to the shoulder. Grips are in
+// the chest's frame; raise and end are the haft's angle up from straight ahead (radians). HOE_POSE is T > Farming.
+const HOE_POSE = { time: 0.75, windup: 0.42, strikeEnd: 0.62, raise: 2.4, end: -0.95, highY: 0.34, highZ: 0.04, lowY: 0.02, lowZ: 0.2,
+  lean: 0.45, crouch: 0.3, step: 0.25, restX: -0.15, restY: 0.17, restZ: 0.13, restYaw: -2.85, restPitch: 0.66 };
+function hoeRest() {
+  const P = HOE_POSE, d = yawPitch(P.restYaw, P.restPitch);
+  return hamPose([P.restX, P.restY, P.restZ], { d, u: upright(d) }, { two: 0 });
+}
+function hoeBlow(u, rest) {
+  const P = HOE_POSE, W = P.windup, S = P.strikeEnd, high = [-0.02, P.highY, P.highZ], low = [-0.04, P.lowY, P.lowZ];
+  let p;
+  if (u < W) p = hamPose(high, arcWay(P.raise, Math.PI / 2), { chestX: -P.lean * 0.3, crouch: P.crouch * 0.3 });
+  else {
+    const k = Math.min(1, (u - W) / Math.max(0.01, S - W)), e = k * k;
+    p = hamPose(lerp3(high, low, e), arcWay(P.raise + (P.end - P.raise) * e, Math.PI / 2),
+      { chestX: -P.lean * 0.3 + P.lean * 1.3 * e, crouch: P.crouch * (0.3 + 0.7 * e), step: P.step * e });
+  }
+  return mixPose(rest, p, smooth(0, W * 0.8, u) * (1 - smooth(S + 0.12, 1, u)), true);
+}
 function hammerPlan() {
+  if (weapon().kind === 'hoe') { const rest = hoeRest(); return H.hoe ? hoeBlow(Math.min(1, H.hoe.t / HOE_POSE.time), rest) : rest; }
   const rest = hamRest();
   if (hamFreeze) {
     const [kind, u] = hamFreeze;
@@ -29717,7 +29937,7 @@ function chestFrom(obj, x, y, z) {
   return _ikV.set(x, y, z).applyMatrix4(obj.matrixWorld).applyMatrix4(_ikM);
 }
 const _hamM = new GFX.Matrix4();
-const hammerHands = () => weaponHands(hamPlan, hero.hammer);
+const hammerHands = () => weaponHands(hamPlan, weapon().kind === 'hoe' ? hero.hoe : hero.hammer);
 // the right hand onto a plan's grip and the weapon (obj, hung from the right hand) turned onto its haft way d and
 // face way u; with p.w under 1 eased between that and the pose the arm already had. Then the left hand, if two.
 function weaponHands(p, obj) {
@@ -29791,7 +30011,7 @@ const plateName = n => { const t = titleCase(n); return t.charAt(0).toUpperCase(
 function animateHero(dt) {
   const bowHeld = mode === 'play' && H.alive && !H.still && weapon().kind === 'bow' && (mouse.down || PAD.attack || TOUCH.attack) && H.dash < 0 && !H.flip;
   bowUp = H.bow || bowHeld ? Math.min(1, bowUp + dt / 0.12) : Math.max(0, bowUp - dt / 0.2);
-  hamPlan = mode === 'play' && H.alive && !H.still && weapon().kind === 'hammer' && H.dash < 0 && !H.flip ? hammerPlan() : null;
+  hamPlan = mode === 'play' && H.alive && !H.still && (weapon().kind === 'hammer' || weapon().kind === 'hoe') && H.dash < 0 && !H.flip ? hammerPlan() : null;
   axPlan = mode === 'play' && H.alive && !H.still && weapon().kind === 'axe' && H.dash < 0 && !H.flip ? axePlan() : null;
   // Three gaits blended by which way the step goes against the way you face (stepF ahead, stepS to your
   // left, the hero's +x): a forward walk, a shorter backward walk (the same swing reversed, so the planted
@@ -29929,7 +30149,7 @@ function animateHero(dt) {
   } else if (hamPlan) {
     // the hammer (hammerHands puts the arms and the hammer on it at the end): the body's part of its pose
     const p = hamPlan;
-    if (H.swing >= 0 || H.lunge >= 0) { chestY = p.chestY; chestX = p.chestX; }
+    if (H.swing >= 0 || H.lunge >= 0 || H.hoe) { chestY = p.chestY; chestX = p.chestX; }
     for (const k of [0, 1]) { legAdd[k] -= p.crouch + p.tuck * 0.5; kneeAdd[k] += p.crouch * 2 + p.tuck; }
     legAdd[0] -= p.step; legAdd[1] += p.step * 0.5;
   } else if (H.swing >= 0 && H.punch) {
@@ -30490,7 +30710,7 @@ function tileRGB(i) {
   if (SH[i]) f *= 1.08;
   // cliff edges a shade darker so the terraces read
   if (!BEACH[i] && c > 0 && r > 0 && c < N - 1 && r < N - 1 && (LV[i + 1] < L || LV[i + N] < L)) { f *= 0.72; if (!tileCls) tileCls = 4; }
-  if (FIELD[i]) { R = 176; Gc = 146; B = 70; f = 1; tileCls = 0; }
+  if (FIELD[i]) { if (fieldGrows(i)) { R = 176; Gc = 146; B = 70; } else { R = 112; Gc = 76; B = 44; } f = 1; tileCls = 0; }   // ((v802) a bare tilled square of yours brown)
   if (GROT[i] === 1) { R = 90; Gc = 220; B = 200; f = 1; }
   if (OB[i] === O.STATUE || OB[i] === O.STATUEX) { R = 150; Gc = 112; B = 64; f = 1; }
   if (FL[i]) { R = 138; Gc = 106; B = 68; f = 1; tileCls = 5; }
@@ -30849,7 +31069,7 @@ function fastTravel() {
   if (mapOpen) toggleMap();
   veilTo(() => {
     [H.x, H.z] = [t.c + 0.5, t.r + 2.5]; H.story = 0; H.stair = null; H.y = surfaceY(H.x, H.z);
-    H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = null; dropHarpoon(); endCharge(false); axeThrow = null;
+    H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = H.hoe = null; dropHarpoon(); endCharge(false); axeThrow = null;
     H.invuln = 2;
     camTarget.set(H.x, H.y, H.z);
     miniT = 0;
@@ -32318,6 +32538,38 @@ const TUNING = [
     [WHEAT, 'ripeColor', 'Colour when ripe', 'color'],
     [WHEAT, 'earColor', 'Its ears when ripe', 'color'],
   ]],
+  ['Farming', [
+    [FARM_ACT, 'give', 'Put a wooden hoe and 20 wheat in your pack', 'action', () => {
+      addItem('hoe_wood', 1); addItem('wheat', 20);
+      toast('A wooden hoe and 20 wheat put in your pack.', 'good');
+    }],
+    [HOE, 'reach', 'Hoe: how far off a square can be hoed (tiles, to its middle)', 0.8, 6, 0.05],
+    [HOE, 'cost', 'Hoe: planks it takes at the weapon table', 1, 30, 1],
+    [HOE_POSE, 'time', 'Chop: seconds', 0.2, 2, 0.01],
+    [HOE_POSE, 'windup', 'Chop: raised by (share of its time)', 0.05, 0.9, 0.01],
+    [HOE_POSE, 'strikeEnd', 'Chop: lands at (share of its time; the square is hoed then)', 0.1, 0.95, 0.01],
+    [HOE_POSE, 'raise', 'Chop: haft raised to (radians up from straight ahead)', 0.5, 3.2, 0.01],
+    [HOE_POSE, 'end', 'Chop: haft brought down to (radians)', -1.6, 0.5, 0.01],
+    [HOE_POSE, 'highY', 'Chop: hands raised, height (chest frame)', -0.2, 0.6, 0.01],
+    [HOE_POSE, 'highZ', 'Chop: hands raised, forward', -0.3, 0.5, 0.01],
+    [HOE_POSE, 'lowY', 'Chop: hands down, height', -0.4, 0.4, 0.01],
+    [HOE_POSE, 'lowZ', 'Chop: hands down, forward', -0.2, 0.6, 0.01],
+    [HOE_POSE, 'lean', 'Chop: lean into it (radians)', 0, 1.2, 0.01],
+    [HOE_POSE, 'crouch', 'Chop: crouch', 0, 1, 0.01],
+    [HOE_POSE, 'step', 'Chop: step', 0, 1, 0.01],
+    [HOE_POSE, 'restX', 'Carried: hand across', -0.4, 0.4, 0.01],
+    [HOE_POSE, 'restY', 'Carried: hand height', -0.4, 0.6, 0.01],
+    [HOE_POSE, 'restZ', 'Carried: hand forward', -0.3, 0.5, 0.01],
+    [HOE_POSE, 'restYaw', 'Carried: haft turn (radians)', -3.14, 3.14, 0.01],
+    [HOE_POSE, 'restPitch', 'Carried: haft up (radians)', -1.5, 1.5, 0.01],
+    [SEED_DRAG, 'lift', 'Planting: crop held over the ground (tiles)', 0, 3, 0.01],
+    [SEED_DRAG, 'size', 'Planting: crop card height (tiles)', 0.1, 1.5, 0.01],
+    [SEED_DRAG, 'down', 'Planting: dip down (seconds)', 0.02, 1.5, 0.01],
+    [SEED_DRAG, 'hold', 'Planting: held in the soil (seconds)', 0, 1.5, 0.01],
+    [SEED_DRAG, 'up', 'Planting: back up (seconds)', 0.02, 1.5, 0.01],
+    [SEED_DRAG, 'sink', 'Planting: how far into the soil (tiles)', -0.3, 0.6, 0.01],
+    [SEED_DRAG, 'center', 'Planting: moves on to the square\'s middle (share)', 0, 1, 0.01],
+  ]],
   ['Grass', [
     [GRASS, 'on', 'Grass tufts (1 on, 0 off)', 0, 1, 1],
     [GRASS, 'density', 'How thick: tufts a tile on a meadow (less in forest, swamp, the deep forest and graveyards)', 0, 16, 0.25],
@@ -33681,6 +33933,12 @@ window.GAME = {
   farmTile: (c, r) => ({ farm: FARM[T(c, r)], field: FIELD[T(c, r)], grass: [...grassTex.image.data.slice(T(c, r) * 4, T(c, r) * 4 + 4)], grown: wheatGrown(T(c, r)) }),
   reap: (x, z, r) => { cutGrass(x, z, r, 0, 1); },
   wheatCut: () => wheatCut.size,
+  // (v802) farming: hoe the square (c, r) as a click would (the chop run to its end), plant a crop there from the pack
+  // as a drag would, and what a square is now
+  hoeAt: (c, r) => { forcedPick = { x: c + 0.5, y: LV[T(c, r)] * STEP, z: r + 0.5, wall: null }; H.hoe = null; startHoe(); forcedPick = null; const ok = !!H.hoe; for (let k = 0; k < 40 && H.hoe; k++) hoeTick(0.05); return ok; },
+  tillWhy: (c, r) => tillWhy(c, r),
+  plantAt: (c, r, id = 'wheat') => { const k = PACK.indexOf(id); if (k < 0) return false; invPress = { c: ['pack', k], x: 0, y: 0, dragging: true }; const ok = plantCrop(c, r, id); invPress = null; return ok; },
+  farmSquare: (c, r) => { const i = T(c, r); return { till: TILL[i], field: FIELD[i], crop: CROPS.get(i) || null, grows: !!fieldGrows(i), grown: wheatGrown(i), grass: [...grassTex.image.data.slice(i * 4, i * 4 + 4)], ground: [...groundTex.image.data.slice(((r * 2) * N * 2 + c * 2) * 4, ((r * 2) * N * 2 + c * 2) * 4 + 4)] }; },
   grottos: () => grottos.map(g => ({ c: g.c, r: g.r, L: g.L, top: g.top, pool: g.pool.length, wading: g.pool.every(([c, r]) => WT[T(c, r)] === 1 && GROT[T(c, r)] === 1),
     anchor: OB[g.anchor] === O.GROTTO, built: !!(chunks.get(Math.floor(g.r / CH) * NC + Math.floor(g.c / CH)) || {}).grot, mesh: !!g.mesh })),
   statues: () => statues.map(st => ({ x: +st.x.toFixed(1), z: +st.z.toFixed(1), L: st.L, tilt: +obTilt(st).toFixed(2), size: +obSize(st).toFixed(2), anchor: OB[st.anchor] === O.STATUE, mesh: !!st.mesh, cast: !!(st.mesh && st.mesh.castShadow) })),
