@@ -636,6 +636,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v830:** Fix: felling a tree in v829 threw on every leaf shed (fellLeafSpawn took a stray argument, so the leaves' lifetimes were missing).
 
+**v831:** (Jordan) Half the desert's cacti are date palms now (k < 0.011 of the cactus share). Jordan's tuning: Tree felling dissolveAt -0.75 (was 0), dissolve 1.3 (was 1), trail 1.25 (was 1), burst 1.6 (was 1).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
