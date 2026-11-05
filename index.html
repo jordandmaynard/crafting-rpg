@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 826;
+const GAME_VERSION = 827;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -23285,7 +23285,7 @@ let arcT = 9, ringT = 9;
 // (v826, Jordan) a felled tree topples as a pole tipping over about its foot does under gravity: slow to start, ever
 // faster, thudding down (a little bounce), dust thrown up all along it the moment it lands, the colour of its
 // bark; then it sinks into the ground as its leaves dissolve away in a smooth noise. T > Tree felling.
-const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolve: 1, noise: 2.6 };
+const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolveAt: 0, dissolve: 1, noise: 2.6 };
 // the bark a felled tree's dust takes (its trunk's own colour, by kind)
 const FELL_BARK = { [O.PINE]: '#5a3a22', [O.SNOWPINE]: '#5a3a22', [O.OAK]: '#6a4428', [O.BIRCH]: '#e8e4d8', [O.CACTUS]: '#5a8a3a', [O.PALM]: '#8a6a48', [O.BURNT]: '#1e1816' };
 const fellBark = (o, c, r) => FELL_BARK[o] || (o === O.DEAD ? (BI[T(c, r)] === SWAMP ? '#3e3a2c' : BI[T(c, r)] === GRAVE ? '#4a4448' : '#3a3030') : '#6a4428');
@@ -23365,12 +23365,12 @@ function updateFaller(d, dt) {
     d.g.quaternion.setFromAxisAngle(d.axis, d.ang);
   }
   if (d.landT < 0) return false;
-  const t = d.fallT - d.landT - FELL.hold;
-  if (t <= 0) return false;
-  const sk = Math.min(1, t / Math.max(0.05, FELL.sink));
-  d.g.position.y = d.y0 - FELL.depth * sk * sk * (3 - 2 * sk);
-  if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.mat.uniforms.fd.value.x = Math.min(1, t / Math.max(0.05, FELL.dissolve));
-  return t >= Math.max(FELL.sink, FELL.dissolve);
+  // (the sinking starts FELL.hold after it lands, the leaves' dissolving FELL.dissolveAt after: v827, from the moment
+  // it lands, so it shows before the crown's under the ground)
+  const since = d.fallT - d.landT, t = since - FELL.hold, tl = since - FELL.dissolveAt;
+  if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.mat.uniforms.fd.value.x = clamp(tl / Math.max(0.05, FELL.dissolve), 0, 1);
+  if (t > 0) { const sk = Math.min(1, t / Math.max(0.05, FELL.sink)); d.g.position.y = d.y0 - FELL.depth * sk * sk * (3 - 2 * sk); }
+  return t >= FELL.sink && tl >= FELL.dissolve;
 }
 // the dust thrown up as it lands: all along it, from its foot to its crown, outward to either side, in its bark's
 // colour
@@ -32878,6 +32878,7 @@ const TUNING = [
     [FELL, 'hold', 'Lies there before sinking (seconds)', 0, 2, 0.05],
     [FELL, 'sink', 'Sinking (seconds)', 0.1, 4, 0.05],
     [FELL, 'depth', 'How far it sinks', 0.2, 3, 0.05],
+    [FELL, 'dissolveAt', 'Leaves start dissolving (seconds after it lands)', 0, 2, 0.05],
     [FELL, 'dissolve', 'Leaves dissolving (seconds)', 0.1, 4, 0.05],
     [FELL, 'noise', 'Dissolve noise size (higher: smaller holes)', 0.5, 8, 0.1],
   ]],
