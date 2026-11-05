@@ -1391,7 +1391,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 840;
+const GAME_VERSION = 841;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -22122,12 +22122,12 @@ ICON.goldCoin = '<svg viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradie
   + '<circle cx="11.6" cy="11.8" r="6.2" fill="none" stroke="#b07a1c" stroke-width="1.1"/><path d="M10.2 8.2 h2.8 v7.4 h-2.8 z" fill="#c88a22" opacity="0.8"/>'
   + '<ellipse cx="8.4" cy="7.6" rx="2.6" ry="1.2" fill="#fffbe0" opacity="0.85" transform="rotate(-35 8.4 7.6)"/></svg>';
 // at: the spot gains merge by (a tile), or 'hero': it stays over your head as you move and every gain of the kind
-// merges into it while it holds
+// merges into it while it holds, or { near: r } (v841): it merges with one of the kind still holding within r tiles
 function floatGain(id, n, x, y, z, color = '#e8c08a', at = T(Math.floor(x), Math.floor(z))) {
   const it = ITEMS[id] || GAIN_KINDS[id];
   if (!(n > 0) || !it) return;
   const name = it.name.toUpperCase(), held = g => g.t < GAIN_FLY.hold;
-  const same = gains.find(g => g.id === id && g.at === at && held(g));
+  const near = at && at.near, same = gains.find(g => g.id === id && held(g) && (near ? Math.hypot(g.x - x, g.z - z) <= near : g.at === at));
   if (same) { same.n += n; same.t = 0; same.pulse = 1; same.num.textContent = '+' + same.n; return; }
   if (gains.length > 24) return;
   // (a gain by another still holding there stands above it)
@@ -23599,7 +23599,7 @@ const TOMB_BONE = 0.25;
 // (v840, Jordan) gold: people and goblins (FOE human, not undead) carry gold, paid straight into your purse as they die
 // (no pickup): their kind's base here (`other` for a kind not listed) × (1 + perLevel × (level - 1)), give or take
 // spread; goblins carry the least. See payGold, and coinFountain for the coins that burst out of them
-const GOLD = { goblin: 2, footpad: 4, poacher: 4, graveRobber: 5, bandit: 6, highwayman: 8, raider: 9, other: 4, perLevel: 0.5, spread: 0.25 };
+const GOLD = { goblin: 2, footpad: 4, poacher: 4, graveRobber: 5, bandit: 6, highwayman: 8, raider: 9, other: 4, perLevel: 0.5, spread: 0.25, merge: 2, flyY: 1.5 };
 const MEAT = { chance: 0.75 };   // (v804, Jordan) the chance a kill of wildlife (FOE def meat) drops a raw meat   // (the chance a broken gravestone drops a bone)
 const harvestCarry = { wood: 0, stone: 0, roughSandstone: 0, copperOre: 0, ironOre: 0, hide: 0, bone: 0, ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', 0])) };
 function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
@@ -23720,12 +23720,12 @@ function goldFor(f) {
   const base = GOLD[f.kind] ?? GOLD.other, lvl = Math.max(1, f.level || 1);
   return Math.max(1, Math.round(base * (1 + GOLD.perLevel * (lvl - 1)) * (1 + (Math.random() * 2 - 1) * GOLD.spread)));
 }
-// paid as it dies: into the purse, a fly-up over your head (its spot is always you, so kills close together in time
-// merge however far apart they fell), and the coin fountain where it fell
+// paid as it dies: into the purse, a fly-up where it fell (v841, Jordan: was over your head; gold from kills within
+// GOLD.merge tiles of one still holding adds to it), and the coin fountain there
 function payGold(f) {
   const n = goldFor(f);
   H.gold += n; renderGold();
-  floatGain('gold', n, H.x, H.y + 1.3, H.z, '#f2c14e', 'hero');
+  floatGain('gold', n, f.x, f.y + GOLD.flyY, f.z, '#f2c14e', { near: GOLD.merge });
   coinFountain(f.x, f.y, f.z, n);
   sfx.coin();
 }
@@ -32455,6 +32455,8 @@ const TUNING = [
     [GOLD, 'other', 'Gold any other person carries at level 1', 0, 50, 1],
     [GOLD, 'perLevel', 'More gold for each level over 1 (× the level 1 amount; 0.5 = level 3 carries twice as much)', 0, 2, 0.05],
     [GOLD, 'spread', 'Give or take this share at random (0.25 = ±25%)', 0, 1, 0.05],
+    [GOLD, 'merge', 'Gold fly-ups from kills within this many tiles of one still holding add to it', 0, 10, 0.25],
+    [GOLD, 'flyY', 'Gold fly-up height over where the foe fell (tiles)', 0, 3, 0.05],
     [COIN_FX, 'on', 'Coin fountain on (1) or off (0)', 0, 1, 1],
     [COIN_FX, 'per', 'Coins thrown for each gold piece', 0.1, 5, 0.1],
     [COIN_FX, 'min', 'Fewest coins a fountain throws', 0, 20, 1],
