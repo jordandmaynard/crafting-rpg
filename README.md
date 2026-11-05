@@ -614,6 +614,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v819:** (Jordan: the GPU waits longer before fx particles after fighting, building and farming a while than at the start of a session) G > Scene contents: what the scene holds, twice a second while the panel's open: all objects, meshes showing, top-level objects, and objects by the same groups as Moving objects (hero, foes, doors, world chunk meshes...), plus the foes list, effects running and planted squares. A shot at the start of a session and one after playing a while show what grows.
 
+**v820:** (Jordan) Raw Meat has Jordan's new painting, a steak marbled with fat (icons/paint/rawMeat-128/256.webp, master icons/paint/src/raw-meat-steak-painterly.png; the first painting's master is kept beside it). PAINT_REV went up to 820 so browsers fetch it, which also refetches the other painted icons once.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
