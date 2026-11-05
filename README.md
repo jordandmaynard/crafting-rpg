@@ -622,6 +622,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v823:** (Jordan's G: posing foes, folk and people 0.52 ms with 18 foes about) Foes, folk and people out of the camera's view (by more than 3 units) have their joints' matrices made and bones sent every 4th frame instead of every frame, each on a frame of its own; anything in view or near it is done every frame, and their poses are still worked out each frame, so they're right as they come into view (only an off-screen one's shadow can lag a few frames). G > Each frame: rigs off screen, left this frame; G > Tests > Pose less off screen to compare.
 
+**v824:** (Jordan) Refining takes two raw for one refined at every station (two logs a plank, two stones a block, two ores an ingot, two hides a leather, two wheat a flour, two sandstone a sand, two sand a glass pane, two bones a bone dust); a square holding one waits for another, and two squares of one each still go. REFINE (R) sends raw out in pairs. T > Stations: Raw it takes to make one refined (REFINE.per). Every refined cost in building and crafting was halved to match, odd ones rounded up (door 5 -> 3 planks, gate 3 -> 2, iron gate 3 -> 2, leather armor 5 -> 3, set chest leather 3 -> 2, set boots and helmet ingots 3 -> 2) and ones left at one. Weapons: 5 of the ingot (or 5 planks for wooden) and 2 planks of haft; hoe 3 planks. Raw costs are as they were: logs and stone (hearth, stations, log wall, wood fence, barrel) and bone (bone weapons 10, bone armor 6/4/3/3, with the halved leather).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
