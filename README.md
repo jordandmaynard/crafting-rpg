@@ -574,6 +574,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v799:** (Jordan) The open bottle painting sits exactly on the corked one: scaled to 97% and moved 2.5 px left and up (art kept as empty-bottle-open-256x256-original.png), so the bulbs match within a pixel and only the cork differs (briefs/open-bottle-align-v799.png in the shared folder). Both have 1-bit alpha, and their hue, saturation, brightness and contrast already matched within 1 to 3%, so the colours are untouched. Shipped as icons/paint/bottleOpen-128/256.webp (new names, so browsers don't keep v798's).
 
+**v800:** (Jordan) The amber potion is Lightning in a Bottle: thrown, the lightning spell strikes where it breaks. The spell's wind-up (the storm cloud gathering over the spot) starts while the bottle is still in the air, timed so the bolt comes down the same frame the glass breaks; a throw shorter than the wind-up gathers faster. If the bottle breaks short of where it was aimed (on a bank or a wall), the bolt strikes there at once instead. The bolt hurts foes within 1.6 tiles for 24 with a little knock-back (my picks, T > Thrown potions: Lightning in a Bottle dmg, radius, knock). The lightning spell itself is amber and yellow now (a new 'bolt' colour ramp for its bolts, sparks, rings and glints, and warm lights and flash); its gathering cloud stays storm grey-blue. Jordan's tuning, filling bottles: down 0.3 (was 0.32), sink -0.17 (-0.13).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

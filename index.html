@@ -1350,7 +1350,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 799;
+const GAME_VERSION = 800;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -19915,10 +19915,16 @@ const POTION_EFFECT = {
   red: { heal: 30, radius: 2, splash: false, about: 'Throw it from the hotbar: it breaks and heals you, and any friend within reach, at once. It can\'t touch foes.' },
   green: { fx: 'poisonCloud', about: 'Throw it from the hotbar: it breaks into a cloud of poison gas that hurts foes inside it.',
     linger: 6, radius: 2, every: 0.5, dmg: 3 },
+  // (v800, Jordan) amber is Lightning in a Bottle: the lightning spell strikes where it breaks. Its wind-up (the cloud
+  // gathering, FX_LIB.lightning's first phase) starts while the bottle's still in the air, timed so the bolt comes down
+  // the moment the glass breaks (lead: the effect starts that early; a shorter flight gathers faster). The bolt hurts
+  // foes within reach (dmg, radius: my picks)
+  amber: { name: 'Lightning in a Bottle', fx: 'lightning', lead: true, radius: 1.6, dmg: 24, knock: 0.6,
+    about: 'Throw it from the hotbar: a bolt of lightning strikes where it breaks, hurting foes nearby.' },
 };
 // (the rest are samples: they still fly and break, with nothing let out yet. T > Potion bottles puts some in your pack)
 const POTION_ITEMS = Object.fromEntries(Object.keys(POTION_TINT).map(c => ['potion_' + c, {
-  name: c[0].toUpperCase() + c.slice(1) + ' Potion', icon: 'potion_' + c, potion: c, stack: 20, loot: 'material',
+  name: POTION_EFFECT[c]?.name || c[0].toUpperCase() + c.slice(1) + ' Potion', icon: 'potion_' + c, potion: c, stack: 20, loot: 'material',
   about: POTION_EFFECT[c] ? POTION_EFFECT[c].about : 'A sample of the filled bottle look. Thrown from the hotbar it breaks, but does nothing yet.' }]));
 // The bottle's inside, measured once from the empty bottle's painting (RGBA, w x h): how far each pixel is from the
 // glass's outside edge (a chamfer distance, in pixels of the 256 painting), its brightness, and where the bulb runs.
@@ -21828,6 +21834,8 @@ const FX_RAMPS = {
   heal: ['#06240e', '#0e4a1c', '#1a7a2e', '#2ea844', '#52cc62', '#8ae68a', '#c4f6bc', '#f4fff0'],
   poison: ['#141e06', '#24380a', '#3c5a10', '#5a7e18', '#7ea024', '#a4c43c', '#ccdf78', '#eef8c0'],
   storm: ['#0a0e2a', '#18225a', '#2a3e94', '#4a6ccc', '#7aa0ec', '#acc8fa', '#dce8ff', '#ffffff'],
+  // (v800, Jordan) the lightning's bolts, sparks and glow: amber to match the amber potion, Lightning in a Bottle
+  bolt: ['#1e1004', '#4a2a06', '#86500c', '#c27c16', '#eca42a', '#fcc85a', '#ffe8a8', '#fffbea'],
   blood: ['#1e0204', '#3a0508', '#5c0a10', '#821218', '#a81c22', '#c83a34', '#e06a5a', '#f4a294'],
   water: ['#0a2030', '#103a52', '#1a5a78', '#2a7c9c', '#4aa0bc', '#7cc2d6', '#b4e0ec', '#eaf8fc'],
   shadow: ['#06040a', '#100a18', '#1c1028', '#2a183a', '#3c2250', '#523070', '#70489a', '#9a72c8'],
@@ -21945,24 +21953,25 @@ const FX_LIB = {
     ] },
   ] },
   // a bolt out of a darkening sky onto the target: a cloud gathers over it and the ground glows, then the bolt (jagged,
-  // forking, re-struck a few times), a white flash, sparks, a scorch; it crackles as it fades
+  // forking, re-struck a few times), a white flash, sparks, a scorch; it crackles as it fades. (v800, Jordan) amber and
+  // yellow (ramp 'bolt', warm lights) to match Lightning in a Bottle; the gathering cloud stays storm grey-blue
   lightning: { phases: [
-    { name: 'gather', dur: 0.55, light: { at: { t: [0, 1, 0] }, color: '#7aa0ec', k: [0, 1.5], range: 3 }, emit: [
+    { name: 'gather', dur: 0.55, light: { at: { t: [0, 1, 0] }, color: '#f0a838', k: [0, 1.5], range: 3 }, emit: [
       { style: 'puff', rate: 26, at: { t: [0, 5.5, 0] }, shape: { disc: 1.6 }, jitter: 0.3, drag: 1, turb: 0.3, life: [1, 1.4], size: [[0.6, 1], [1.2, 1.6]], ramp: 'storm', tone: [0.15, 0.1], alpha: 0.75 },
-      { style: 'glint', rate: 20, at: { t: [0, 0.2, 0] }, shape: { ring: [0.3, 1.2] }, up: [0.5, 1.5], life: [0.25, 0.4], size: [0.12, 0.03], ramp: 'storm', tone: [1, 1], glow: 3 },
-      { style: 'disc', count: 1, at: 'target', onGround: true, size: [0.4, 1.6], life: 0.6, ramp: 'storm', tone: [0.9, 1], alpha: 0.6, cover: 0, glow: 1.5 },
+      { style: 'glint', rate: 20, at: { t: [0, 0.2, 0] }, shape: { ring: [0.3, 1.2] }, up: [0.5, 1.5], life: [0.25, 0.4], size: [0.12, 0.03], ramp: 'bolt', tone: [1, 1], glow: 3 },
+      { style: 'disc', count: 1, at: 'target', onGround: true, size: [0.4, 1.6], life: 0.6, ramp: 'bolt', tone: [0.9, 1], alpha: 0.6, cover: 0, glow: 1.5 },
     ] },
-    { name: 'strike', dur: 0.26, event: 'hit', shake: 0.6, stop: 0.05, sfx: 'hit', flash: { at: { t: [0, 2, 0] }, color: '#cfe0ff', k: 10, range: 9, life: 0.35 }, emit: [
-      { bolt: { from: { t: [0.3, 6.5, -0.2] }, to: 'target', jag: 0.7, segments: 10, forks: 0.35, width: 0.16, life: 0.09, every: 0.06 }, ramp: 'storm', glow: 4 },
-      { style: 'spark', count: 46, at: { t: [0, 0.2, 0] }, out: [3, 9], up: [2, 6], grav: 1, drag: 0.6, bounce: 0.5, floor: true, stretch: 0.07, life: [0.3, 0.8], size: 0.05, ramp: 'storm', tone: [1, 0.7], glow: 4 },
-      { style: 'ring', count: 1, at: 'target', onGround: true, size: [0.2, 2.6], life: 0.35, ramp: 'storm', tone: [1, 0.8], glow: 3, stretch: 0.2, cover: 0 },
+    { name: 'strike', dur: 0.26, event: 'hit', shake: 0.6, stop: 0.05, sfx: 'hit', flash: { at: { t: [0, 2, 0] }, color: '#ffe6b0', k: 10, range: 9, life: 0.35 }, emit: [
+      { bolt: { from: { t: [0.3, 6.5, -0.2] }, to: 'target', jag: 0.7, segments: 10, forks: 0.35, width: 0.16, life: 0.09, every: 0.06 }, ramp: 'bolt', glow: 4 },
+      { style: 'spark', count: 46, at: { t: [0, 0.2, 0] }, out: [3, 9], up: [2, 6], grav: 1, drag: 0.6, bounce: 0.5, floor: true, stretch: 0.07, life: [0.3, 0.8], size: 0.05, ramp: 'bolt', tone: [1, 0.7], glow: 4 },
+      { style: 'ring', count: 1, at: 'target', onGround: true, size: [0.2, 2.6], life: 0.35, ramp: 'bolt', tone: [1, 0.8], glow: 3, stretch: 0.2, cover: 0 },
       { style: 'disc', count: 1, at: 'target', onGround: true, size: [1.3, 1.5], life: 5, ramp: 'smoke', tone: [0, 0], alpha: 0.7, cover: 1 },
       { style: 'puff', count: 10, at: 'target', onGround: true, shape: { disc: 0.6 }, out: [0.5, 1.5], up: [0.5, 1], drag: 1.5, grav: -0.2, life: [1, 1.6], size: [[0.25, 0.4], [0.6, 0.9]], ramp: 'smoke', tone: [0.5, 0.3], alpha: 0.55 },
     ] },
-    { name: 'crackle', dur: 0.7, light: { at: { t: [0, 0.5, 0] }, color: '#9ab8ff', k: [1.5, 0], range: 4, flicker: 0.7 }, emit: [
-      { bolt: { from: { t: [0, 0.1, 0] }, to: { t: [0.9, 0.05, 0.4] }, jag: 0.25, segments: 4, forks: 0, width: 0.05, life: 0.06, every: 0.12 }, ramp: 'storm', glow: 3 },
-      { bolt: { from: { t: [0, 0.1, 0] }, to: { t: [-0.7, 0.05, -0.6] }, jag: 0.25, segments: 4, forks: 0, width: 0.05, life: 0.06, every: 0.17 }, ramp: 'storm', glow: 3 },
-      { style: 'glint', rate: [20, 0], at: 'target', onGround: true, shape: { disc: 1.4, y: [0.05, 0.4] }, life: [0.15, 0.3], size: [0.1, 0.03], ramp: 'storm', tone: [1, 1], glow: 3 },
+    { name: 'crackle', dur: 0.7, light: { at: { t: [0, 0.5, 0] }, color: '#ffc45a', k: [1.5, 0], range: 4, flicker: 0.7 }, emit: [
+      { bolt: { from: { t: [0, 0.1, 0] }, to: { t: [0.9, 0.05, 0.4] }, jag: 0.25, segments: 4, forks: 0, width: 0.05, life: 0.06, every: 0.12 }, ramp: 'bolt', glow: 3 },
+      { bolt: { from: { t: [0, 0.1, 0] }, to: { t: [-0.7, 0.05, -0.6] }, jag: 0.25, segments: 4, forks: 0, width: 0.05, life: 0.06, every: 0.17 }, ramp: 'bolt', glow: 3 },
+      { style: 'glint', rate: [20, 0], at: 'target', onGround: true, shape: { disc: 1.4, y: [0.05, 0.4] }, life: [0.15, 0.3], size: [0.1, 0.03], ramp: 'bolt', tone: [1, 1], glow: 3 },
     ] },
   ] },
   // healing: motes rise swirling round you out of a glowing ring that closes in, glints, a bloom of light
@@ -26668,7 +26677,7 @@ function pcardPut(p, kind, h, neck, rot, bias, soft, S) {
 // room. Letting go anywhere in the world puts them back where they came from, as before.
 // (v763, Jordan: a dip went into a fountain's rim) edge: how far in from the water's edge a dip must be (tiles; less in a
 // narrow trough or a small bath); center: the share of the way it moves on toward the water's middle as it goes down
-const BOTTLE_FILL = { lift: 1, down: 0.32, hold: 0.25, up: 0.3, sink: -0.13, splash: 0.45, edge: 0.29, center: 0.5 };   // (v797, Jordan's tuning)
+const BOTTLE_FILL = { lift: 1, down: 0.3, hold: 0.25, up: 0.3, sink: -0.17, splash: 0.45, edge: 0.29, center: 0.5 };   // (v800, Jordan's tuning)
 let bottleDrag = null;   // { sx, sy } the pointer over the world while dragging bottles; dip, filled, S
 // a lake or river tile (not the sea, lava or a swamp's pool)
 const freshTile = (x, z) => {
@@ -26899,14 +26908,46 @@ function potionAt(f, t, out) {
   return out;
 }
 const potP = [0, 0, 0];
+// (v800) an effect with a wind-up (Lightning in a Bottle) started early, its first phase cut to `left` seconds so what
+// follows (the strike) lands when the bottle breaks; its 'hit' hurts the foes in reach
+function potionLeadHurt(E, x, y, z) {
+  for (const f of foes.slice()) {
+    if (f.hp <= 0 || Math.hypot(f.x - x, f.z - z) > E.radius + (f.def?.rad || 0) || Math.abs(f.y - y) > 2.5) continue;
+    hurtFoe(f, E.dmg, x, z, E.knock || 0, POTION_TINT.amber);
+  }
+}
+function potionLeadFx(E, x, y, z, left) {
+  const def = FX_LIB[E.fx];
+  if (!def || FX_TUNE.on < 0.5) return null;
+  return fxRun.play({ ...def, phases: def.phases.map((p, i) => i === 0 ? { ...p, dur: Math.max(0.02, left) } : p) }, {
+    x, y, z, dir: 0, target: { x, y, z }, onEvent: name => { if (name === 'hit') potionLeadHurt(E, x, y, z); } });
+}
 function updatePotions(dt) {
   for (let k = thrown.length - 1; k >= 0; k--) {
     const f = thrown[k];
     f.t += dt / f.len;
     const t = Math.min(1, f.t), [x, y, z] = potionAt(f, t, potP);
+    // (v800) a wind-up that has to start before the bottle lands, timed to end as it breaks on the ground it was thrown at
+    const E = POTION_EFFECT[f.kind];
+    if (E?.lead && !f.fx && t < 1) {
+      const left = (1 - t) * f.len, gather = FX_LIB[E.fx]?.phases[0].dur || 0;
+      // (+ dt: the effect steps once more this frame before the bottle's next step)
+      if (left <= gather) f.fx = potionLeadFx(E, f.b[0], f.b[1], f.b[2], left + dt) || 'off';
+    }
     // (it breaks on the first thing it meets: the ground where it was thrown, or something higher on the way)
     const hit = t >= 1 || (t > 0.15 && y < surfaceY(x, z));
-    if (hit) { thrown.splice(k, 1); breakPotion(f.kind, x, Math.max(y, surfaceY(x, z)), z); continue; }
+    if (hit) {
+      thrown.splice(k, 1);
+      const by = Math.max(y, surfaceY(x, z));
+      // (broken short of where it was aimed, on a bank or a wall: the early strike is called off and it strikes here, now)
+      // (and with effects off, it hurts at once)
+      if (E?.lead && !(t >= 1 && f.fx && f.fx !== 'off')) {
+        if (f.fx && f.fx !== 'off') f.fx.stop();
+        if (!potionLeadFx(E, x, by, z, 0.02)) potionLeadHurt(E, x, by, z);
+      }
+      breakPotion(f.kind, x, by, z);
+      continue;
+    }
     f.rot += POTION_THROW.spin * dt;
     f.p[0] = x; f.p[1] = y; f.p[2] = z;
   }
@@ -26943,6 +26984,7 @@ function breakPotion(kind, x, y, z) {
     }
     return;
   }
+  if (E.lead) return;   // (its effect was started in flight, updatePotions)
   const h = E.fx ? playFx(E.fx, { x, y, z, dir: 0, target: { x, y, z } }) : null;
   if (E.linger) clouds.push({ e: E, h, x, y, z, t: 0, tick: 0.2 });
   else if (h) setTimeout(() => h.stop(), 1000);
@@ -32027,6 +32069,9 @@ const TUNING = [
     [POTION_EFFECT.green, 'radius', 'Green: cloud reach (tiles)', 0.5, 5, 0.1],
     [POTION_EFFECT.green, 'every', 'Green: hurts every (s)', 0.1, 3, 0.05],
     [POTION_EFFECT.green, 'dmg', 'Green: damage each time', 0, 50, 1],
+    [POTION_EFFECT.amber, 'dmg', 'Lightning in a Bottle: damage', 0, 100, 1],
+    [POTION_EFFECT.amber, 'radius', 'Lightning in a Bottle: reach (tiles)', 0.5, 5, 0.1],
+    [POTION_EFFECT.amber, 'knock', 'Lightning in a Bottle: knock-back', 0, 3, 0.05],
   ]],
   ['Empty gear squares', [
     [EMPTY_SLOT, 'fill', 'Inside darkness', 0, 1, 0.01, applyEmptySlot],
