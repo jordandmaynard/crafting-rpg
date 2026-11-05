@@ -661,6 +661,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v851:** (Jordan's tuning paste) Tree felling: a felled tree's light goes as it lands (FELL.lightOff 0.5 -> 1).
 
 **v852:** (Jordan: the icon reference shots were too bright to paint from) The studio has its own lights now, dimmer than the character view's: ICON_REF.sky 0.6 (was 0.95) and ICON_REF.sun 0.95 (was 1.5), both on sliders under T > Icon reference.
+**v853:** (Jordan) In the loading map, each new mosaic level fades in: the old level is copied onto a canvas over the map (#loadMapOld) and faded out over 0.6 s (GEN_MOSAIC.fade), from 8 x 8 blocks through to the hard pixel map and then the smooth one. The fade is a compositor opacity animation, so it keeps going while the world is being worked out.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 

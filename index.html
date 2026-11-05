@@ -379,6 +379,8 @@ body:not(.noUI) #showUI { display: none; }
 #intro .lw-title { position: absolute; margin: 0; text-align: center; font-family: Spectral, serif; font-size: var(--lwTS, 30px); font-weight: 700; white-space: nowrap; text-transform: none; }
 #intro .lw-art { position: absolute; }
 #intro .lw-art canvas { display: block; width: 100%; height: 100%; box-sizing: border-box; border: calc(2px * var(--lwU, 1)) solid #5a3a1e; background: #2a5a7a33; }
+/* (v853, Jordan) the last mosaic level, over the new one, fading out to show it */
+#intro .lw-art canvas.lw-old { position: absolute; inset: 0; opacity: 0; background: none; pointer-events: none; will-change: opacity; }
 #intro .lw-ctl { position: absolute; left: 50%; top: 0; width: 480px; height: 158px; transform: translateX(-50%) scale(var(--lwU, 1)); transform-origin: top center; }
 #intro .lw-stage { position: absolute; left: 20px; top: 0; width: 440px; height: 22px; text-align: center; font: 600 14px/22px Spectral, serif; letter-spacing: 0.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #intro .lw-bar { position: absolute; left: 30px; top: 24px; width: 420px; height: 32.2px; }
@@ -1334,7 +1336,7 @@ body.mapOpen #miniWrap.minimap { display: none; }
   <div class="lw" role="dialog" aria-labelledby="loadTitle" id="loadWin">
     <canvas class="lw-bg" id="loadBg" width="16" height="16" aria-hidden="true"></canvas>
     <h2 class="lw-title" id="loadTitle">Emberwild</h2>
-    <div class="lw-art" id="loadArt" aria-hidden="true"><canvas id="loadMap" width="304" height="304"></canvas></div>
+    <div class="lw-art" id="loadArt" aria-hidden="true"><canvas id="loadMap" width="304" height="304"></canvas><canvas class="lw-old" id="loadMapOld" width="16" height="16"></canvas></div>
     <div class="lw-ctl">
       <div class="lw-stage" id="loadText" aria-live="polite">SHAPING THE WORLD</div>
       <div class="lw-bar" role="progressbar" aria-label="Loading"><img class="lw-frame" src="ui/belt/xp-frame.webp" alt="" draggable="false"><div class="lw-glass"><div class="lw-clip" id="loadFill"><img src="ui/belt/xp-fill.webp" alt="" draggable="false"></div></div></div>
@@ -1406,7 +1408,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 852;
+const GAME_VERSION = 853;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -34508,14 +34510,28 @@ $('crashClose').onclick = () => { $('crashBox').hidden = true; };
 // is built, and last the finished map scaled down smoothly. A new step or a new block size draws at once, within one
 // at most every 150 ms (250 at 2 x 2). #loadMap is kept at its shown size in device pixels (layoutLoadWin)
 const genMap = $('loadMap'), genCtx = genMap.getContext('2d'), genTmp = document.createElement('canvas'), genTmpCtx = genTmp.getContext('2d');
-const GEN_MOSAIC = { start: 8, end: 2, upTo: 0.97, wait: 150, waitFine: 250 };
+const GEN_MOSAIC = { start: 8, end: 2, upTo: 0.97, wait: 150, waitFine: 250, fade: 0.6 };
 let genImg = null, genLast = 0, genStep = '', genK = 0, genPhase = 'live', genArgs = null;
+// (v853, Jordan) when the next mosaic level is ready, the old one is copied onto #loadMapOld over it and faded out
+// (GEN_MOSAIC.fade s; a compositor opacity animation, so it keeps going while the world is being worked out)
+const genOld = $('loadMapOld'), genOldCtx = genOld.getContext('2d');
+let genFade = null;
+function genFadeOld() {
+  try {
+    const D = genMap.width;
+    if (genOld.width !== D) genOld.width = genOld.height = D;
+    genOldCtx.clearRect(0, 0, D, D); genOldCtx.drawImage(genMap, 0, 0);
+    if (genFade) genFade.cancel();
+    genFade = genOld.animate([{ opacity: 1 }, { opacity: 0 }], { duration: GEN_MOSAIC.fade * 1000, easing: 'ease-in-out', fill: 'forwards' });
+  } catch (err) { /* (the picture only) */ }
+}
 const genBlock = f => clamp(GEN_MOSAIC.start - Math.floor(clamp(f / GEN_MOSAIC.upTo, 0, 0.9999) * (GEN_MOSAIC.start - GEN_MOSAIC.end + 1)), GEN_MOSAIC.end, GEN_MOSAIC.start);
 function drawGenMap(f, label, HFin, force) {
   if (genPhase !== 'live') return;
   const now = performance.now(), k = genBlock(f);
   genArgs = [f, label, HFin];
   if (!force && label === genStep && k === genK && now - genLast < (k <= 2 ? GEN_MOSAIC.waitFine : GEN_MOSAIC.wait)) return;
+  if (genK && k !== genK) genFadeOld();
   genStep = label; genLast = now; genK = k;
   try {
     const P = Math.ceil(N / k), h0 = k >> 1;
@@ -34539,7 +34555,8 @@ function drawGenMap(f, label, HFin, force) {
   } catch (err) { /* (the picture only) */ }
 }
 // the map itself (1 tile a block), hard pixels; then (smooth) the finished map scaled down smoothly
-function drawGenMapAt(smooth) {
+function drawGenMapAt(smooth, still) {
+  if (!still && genK) genFadeOld();
   genPhase = smooth ? 'smooth' : 'one';
   try {
     const D = genMap.width;
@@ -34549,7 +34566,7 @@ function drawGenMapAt(smooth) {
 }
 function redrawGenMap() {
   if (genPhase === 'live') { if (genArgs) drawGenMap(...genArgs, true); }
-  else drawGenMapAt(genPhase === 'smooth');
+  else drawGenMapAt(genPhase === 'smooth', true);
 }
 // (v847, Jordan's 11-slice kit) the loading window nearly full screen. The frame is eleven cuts from one painting (packed
 // in frame-atlas.webp, each with 2 px of its own edge round it): the corners and the compass piece keep the kit's scale,
@@ -34606,7 +34623,7 @@ function layoutLoadWin() {
   const side = Math.max(32, Math.min(ctlTop - LOAD_WIN.gap * u - y0, x1 - x0)), a = $('loadArt').style;
   a.left = (W - side) / 2 + 'px'; a.top = y0 + 'px'; a.width = a.height = side + 'px';
   const px = clamp(Math.round(side * dpr), 64, 4096);
-  if (genMap.width !== px) { genMap.width = genMap.height = px; redrawGenMap(); }
+  if (genMap.width !== px) { genMap.width = genMap.height = px; if (genFade) { genFade.cancel(); genFade = null; } redrawGenMap(); }
 }
 addEventListener('resize', layoutLoadWin);
 layoutLoadWin();
