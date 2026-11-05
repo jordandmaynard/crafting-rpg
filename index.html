@@ -1362,7 +1362,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 814;
+const GAME_VERSION = 815;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -25746,7 +25746,7 @@ function drawSeals(useD) {
     PCARD_U.litK.value = PL.strength; PCARD_U.litRef.value = PL.ref; PCARD_U.glint.value = PL.glint; PCARD_U.gloss.value = PL.gloss;
     const DG = DRAG_GUIDE;
     Object.assign(PCARD_U.guide.value, { x: DG.shadow, y: DG.line, z: DG.blur, w: DG.on }); PCARD_U.guideC.value.set(DG.color);
-    Object.assign(PCARD_U.guide2.value, { x: dragMarch, y: DG.width * dpr / 2, z: DG.glow > 0 ? DG.glowSize * dpr : 0, w: DG.glow }); PCARD_U.guideL.value.set(DG.lineColor);
+    Object.assign(PCARD_U.guide2.value, { x: dragMarch, y: DG.width * dpr / 2, z: DG.glow > 0 ? DG.glowSize * dpr : 0, w: DG.glow });
   }
   if (!sealsUp) { st.display = ''; sealsUp = true; }
   SEAL_U.cell.value = cell; SEAL_U.screen.value.set(w, h); SEAL_U.lift.value = QUEST_MARK.lift; SEAL_U.bob.value = QUEST_MARK.bob; SEAL_U.useD.value = useD ? 1 : 0;
@@ -26719,7 +26719,7 @@ const PCARD_U = { tP: { value: new GFX.DataTexture(new Uint8Array(4), 1, 1) }, t
   pfx: { value: POTION_PFX }, pbt: { value: new Float32Array(6 * 8) }, pbb: { value: new Float32Array(6 * POTION_BUB * 4) },
   litK: { value: POTION_LIT.strength }, litRef: { value: POTION_LIT.ref }, glint: { value: POTION_LIT.glint }, gloss: { value: POTION_LIT.gloss }, sbox: { value: SEAL_BOX },
   guide: { value: { x: 0.35, y: 0.45, z: 1.5, w: 0.55 } }, guideC: { value: new GFX.Color('#1a1410') },   // ((v811) DRAG_GUIDE: shadow, line, blur, dash share; shadow colour)
-  guide2: { value: { x: 0, y: 1, z: 0, w: 0 } }, guideL: { value: new GFX.Color('#1a1410') } };   // ((v812) march (dashes), half width, glow (px), glow strength; line colour)
+  guide2: { value: { x: 0, y: 1, z: 0, w: 0 } } };   // ((v812) march (dashes), half width, glow (px), glow strength)
 const pcardMat = new GFX.ShaderMaterial({
   uniforms: PCARD_U, attributes: { qm: 'vec4f', qs: 'vec4f', qb: 'vec4f' }, transparent: true, depthTest: false, depthWrite: false, side: GFX.DoubleSide,
   blending: GFX.CustomBlending, blendEquation: GFX.AddEquation, blendSrc: GFX.OneFactor, blendDst: GFX.OneMinusSrcAlphaFactor,
@@ -26727,7 +26727,7 @@ const pcardMat = new GFX.ShaderMaterial({
 struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) @interpolate(flat) vz: f32, @location(2) @interpolate(flat) soft: f32,
   @location(3) nuv: vec2f, @location(4) wp: vec3f, @location(5) @interpolate(flat) rc: vec2f,
   @location(6) @interpolate(flat) live: f32, @location(7) @interpolate(flat) pw: f32,
-  @location(8) dash: f32, @location(9) @interpolate(flat) mode: f32 }
+  @location(8) dash: f32, @location(9) @interpolate(flat) mode: f32, @location(10) @interpolate(flat) lc: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let c = F.viewProj * vec4f(v.position, 1.0);
   var o: VOut;
@@ -26754,6 +26754,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1
       let d = sb - sa; let L = max(length(d), 1e-3); let n = vec2f(-d.y, d.x) / L;
       o.pos = vec4f(sealBoxNdc(select(sb, sa, top) + n * v.qm.x * 0.5 * v.qm.z), 0.5, 1.0);
       o.nuv = vec2f(v.qm.x, 0.0);   // ((v812) across it, -1 to 1, for the glow)
+      o.lc = vec3f(v.qb.x, v.qb.z, v.qb.w);   // ((v815) its colour)
       if (ca.w <= 0.0 || cb.w <= 0.0) { o.pos = vec4f(2.0, 2.0, 0.5, 1.0); }
       o.dash = select(L, 0.0, top) / max(v.qm.w, 1.0);
       o.vz = (F.view * vec4f(select(v.qs.xyz, v.position, top), 1.0)).z;
@@ -26841,7 +26842,7 @@ fn pcardLight(w: vec3f, N: vec3f, Ng: vec3f) -> vec4f {
       if (U.guide2.z > 0.01) { let g = sat(1.0 - max(d - U.guide2.y, 0.0) / U.guide2.z); glow = U.guide2.w * g * g; }
       let al = U.guide.y * core;
       if (k <= 0.0 || al + glow <= 0.0) { discard; }
-      return vec4f(U.guideL * (al + glow * U.guide.y), al) * k;
+      return vec4f(i.lc * (al + glow * U.guide.y), al) * k;
     }
     if (k <= 0.0 || a <= 0.0) { discard; }
     return vec4f(U.guideC * a, a) * k;
@@ -26977,7 +26978,8 @@ const h2a = new GFX.Vector3(), h2b = new GFX.Vector3(), h2c = new GFX.Vector3();
 // facing the eye (live -2: no bottle normals, no glint)
 // (v811) mode 1: its shadow lying at p (h tiles across); 2: a dashed line from p down to foot (h: its width in px, rot:
 // its dashes' spacing in px)
-function pcardPut(p, kind, h, neck, rot, bias, soft, S, flat, mode = 0, foot = null) {
+// ((v815) rgb: a line's colour)
+function pcardPut(p, kind, h, neck, rot, bias, soft, S, flat, mode = 0, foot = null, rgb = null) {
   if (pcardN >= PCARD_MAX) return;
   const cell = Math.max(0, PCARD_KINDS.indexOf(kind)), live = flat ? -2 : S && S.slot >= 0 ? S.slot : -1, C = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
   C.forEach(([a, b], v) => {
@@ -26991,6 +26993,7 @@ function pcardPut(p, kind, h, neck, rot, bias, soft, S, flat, mode = 0, foot = n
       pcardQs[o * 4] = h; pcardQs[o * 4 + 1] = neck; pcardQs[o * 4 + 2] = bias; pcardQs[o * 4 + 3] = soft;
     }
     pcardQb[o * 4] = live; pcardQb[o * 4 + 1] = mode;
+    if (rgb) { pcardQb[o * 4] = rgb[0]; pcardQb[o * 4 + 2] = rgb[1]; pcardQb[o * 4 + 3] = rgb[2]; }
   });
   pcardN++;
 }
@@ -26998,14 +27001,22 @@ function pcardPut(p, kind, h, neck, rot, bias, soft, S, flat, mode = 0, foot = n
 // a faint dashed line from where it hangs straight down to the ground (or water) under it, and its shape's shadow lying
 // there. DRAG_GUIDE (T > Farming): shadow and line strength, the shadow's size (share of the card's) and blur (texels),
 // the line's width and dash spacing (CSS px) and the share of each dash drawn, their colour
-// (v812, Jordan) the line has a colour of its own (lineColor; color is the shadow's), can glow (glow: how strong,
+// (v812, Jordan) the line has a colour of its own (v815: what's dragged's, GUIDE_COLORS; color is the shadow's), can glow (glow: how strong,
 // glowSize: how far out, CSS px) and its dashes can march (march: CSS px a second, down the line; less than 0 up)
-const DRAG_GUIDE = { shadow: 0.35, size: 0.9, blur: 1.5, line: 0.45, width: 1.5, dash: 9, on: 0.55, color: '#1a1410', lineColor: '#1a1410', glow: 0, glowSize: 4, march: 0 };
+// (v815, Jordan's tuning; the line takes the colour of what's dragged: GUIDE_COLORS, a pale shade of its own main
+// colour, the filled potions' a pale shade of their tint)
+const DRAG_GUIDE = { shadow: 0.35, size: 0.9, blur: 2, line: 0.57, width: 2.6, dash: 9, on: 0.55, color: '#1a1410', glow: 0.45, glowSize: 4, march: 15 };
+const GUIDE_COLORS = { empty: '#94f3ff', wheat: '#fff09a', carrot: '#ffa64a', potato: '#f2dca6' };
+const guideRgb = new GFX.Color(), guideWhite = new GFX.Color('#ffffff');
+function guideColor(kind) {
+  if (GUIDE_COLORS[kind]) return guideRgb.set(GUIDE_COLORS[kind]);
+  return guideRgb.set(POTION_TINT[kind] || '#ffffff').lerp(guideWhite, 0.5);
+}
 let dragMarch = 0;   // (how far the dashes have marched, in dashes)
 function dragGuide(cards, pt, gy, kind, h) {
   if (!PCARD_KINDS.includes(kind) || !(pt[1] > gy)) return;
   const G = DRAG_GUIDE, dpr = Math.min(2, devicePixelRatio || 1), foot = [pt[0], gy + 0.02, pt[2]];
-  if (G.line > 0 && pt[1] - gy > 0.05) cards.push([pt, kind, (G.width + 2 * (G.glow > 0 ? G.glowSize : 0)) * dpr, 0, G.dash * dpr, 0, 0.35, null, false, 2, foot]);
+  if (G.line > 0 && pt[1] - gy > 0.05) { const L = guideColor(kind); cards.push([pt, kind, (G.width + 2 * (G.glow > 0 ? G.glowSize : 0)) * dpr, 0, G.dash * dpr, 0, 0.35, null, false, 2, foot, [L.r, L.g, L.b]]); }
   if (G.shadow > 0) cards.push([foot, kind, h * G.size, 0.5, 0, 0, 0.35, null, false, 1]);
 }
 // (v760, Jordan) filling bottles: empty bottles dragged out of a window over the world show as the 2D bottle at the
@@ -32709,7 +32720,10 @@ const TUNING = [
     [DRAG_GUIDE, 'dash', 'Drag guide: dash spacing (px)', 2, 30, 0.5],
     [DRAG_GUIDE, 'on', 'Drag guide: share of each dash drawn', 0.1, 1, 0.01],
     [DRAG_GUIDE, 'color', 'Drag guide: shadow colour', 'color'],
-    [DRAG_GUIDE, 'lineColor', 'Drag guide: line colour', 'color'],
+    [GUIDE_COLORS, 'empty', 'Drag guide: line colour, empty bottles', 'color'],
+    [GUIDE_COLORS, 'wheat', 'Drag guide: line colour, wheat', 'color'],
+    [GUIDE_COLORS, 'carrot', 'Drag guide: line colour, carrots', 'color'],
+    [GUIDE_COLORS, 'potato', 'Drag guide: line colour, potatoes', 'color'],
     [DRAG_GUIDE, 'glow', 'Drag guide: line glow (0 off)', 0, 4, 0.05],
     [DRAG_GUIDE, 'glowSize', 'Drag guide: how far the glow reaches (px)', 0.5, 20, 0.5],
     [DRAG_GUIDE, 'march', 'Drag guide: dashes march, px a second (+ down, - up)', -120, 120, 1],

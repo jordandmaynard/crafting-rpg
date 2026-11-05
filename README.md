@@ -604,6 +604,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v814:** (Jordan: the stained glass's projection outside too, when the sun is on the far side of it, for show) When the sun is behind a cathedral's or chapel's rose (inside the building), its coloured light is also thrown outward through the glass onto what's in front of it: the ground, the cobbled streets, the walls of the houses across the way, and as coloured beams in the lit haze. It only lands on surfaces that face the sun, so the facade round the glass stays dark, and it shows inside the building's own shadow. T > Stained glass: outside (0 off, 1 on; on by default) and outFill, its brightness (1, my pick). Grass blades over the ground don't take it yet. Cost: the ground and cobbles check the two nearest roses per pixel (a few dozen sums, nothing with no rose in reach or with it off) and read the glass's texture only where the light lands.
 
+**v815:** (Jordan) Jordan's Farming tuning baked in (drag guide blur 2, line 0.57, width 2.6, glow 0.45, march 15 px/s down; the rest as it was). The drag guide's line now takes the colour of what's dragged, with Jordan's glow and strength: empty bottles pale blue (Jordan's #94f3ff), wheat pale yellow, carrots orange, potatoes a pale potato tan, and a filled potion (after a dip) a pale shade of its own tint. Each crop's and the bottle's line colour is a row in T > Farming > Drag guide (the single line colour row is gone).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
