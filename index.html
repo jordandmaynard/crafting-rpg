@@ -1416,7 +1416,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 862;
+const GAME_VERSION = 863;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -19497,8 +19497,24 @@ const heroRoot = new GFX.Group();
 heroRoot.add(shadowy(hero.g));
 scene.add(heroRoot); MOVER_TAG.set(heroRoot, 'hero');
 // SILHOUETTE.steady: how much of the eye's exposure its colour takes back off (1 always as bright, 0 brightens in the dark)
-const SILHOUETTE = { color: '#4fb8b0', steady: 1 };
-const silMat = new GFX.MeshBasicMaterial({ color: SILHOUETTE.color, depthWrite: false, depthFunc: GFX.GreaterDepth });
+// (v863, Jordan: town cobbles, a flat sheet a hair over the ground, hid the hero's soles, so they showed the silhouette)
+// SILHOUETTE.lift: how far (tiles) each silhouette point is brought toward the camera before its depth is tested, so
+// only something standing more than that in front of the hero (a wall, a roof, a tree) makes it show; ground sheets,
+// decals and the ground itself right at the feet don't
+const SILHOUETTE = { color: '#4fb8b0', steady: 1, lift: 0.12 };
+const SIL_U = { lift: { value: SILHOUETTE.lift } };
+const silMat = new GFX.ShaderMaterial({ uniforms: SIL_U, depthWrite: false, depthFunc: GFX.GreaterDepth,
+  code: /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = (O.model * vec4f(v.position, 1.0)).xyz;
+  let toCam = select(normalize(F.camPos.xyz - w), -F.camDir.xyz, F.camPos.w > 0.5);
+  return VOut(F.viewProj * vec4f(w + toCam * U.lift, 1.0), w);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  return vec4f(applyFog(O.color.rgb, viewDepth(i.world)), O.color.a);
+}` });
+silMat.color = new GFX.Color(SILHOUETTE.color);
 // (each part's see-through silhouette, all on the hero's layer, then a copy of each on the world layer that draws
 // nothing but casts the hero's shadow; again whenever the hero's rebuilt for a new look: rebuildHero)
 // (v780, Jordan: draw the hero the way the people are drawn, still dressed in what's worn) The hero's few hundred boxes
@@ -28465,6 +28481,7 @@ function updateSky() {
   const ex = eyeExposure();
   heroLight.intensity = (HERO_LIGHT.day + (HERO_LIGHT.night - HERO_LIGHT.day) * (1 - d)) * Math.pow(ex, -HERO_LIGHT.steady);
   silMat.color.set(SILHOUETTE.color).multiplyScalar(Math.pow(ex, -SILHOUETTE.steady));
+  SIL_U.lift.value = SILHOUETTE.lift;
   heroLight.distance = HERO_LIGHT.range; heroLight.decay = HERO_LIGHT.decay; heroLight.color.set(HERO_LIGHT.color);
   const along = HERO_LIGHT.toward, flat = along * Math.cos(Math.PI / 6);
   heroLight.position.set(H.x + Math.sin(yaw) * flat, H.y + along * 0.5 + HERO_LIGHT.height, H.z + Math.cos(yaw) * flat);
@@ -33011,6 +33028,7 @@ const TUNING = [
     [HERO_LIGHT, 'steady', 'Steady against eye exposure (1 always as bright, 0 brightens in the dark)', 0, 1, 0.05],
     [SILHOUETTE, 'color', 'See-through silhouette colour', 'color'],
     [SILHOUETTE, 'steady', 'Silhouette steady against eye exposure', 0, 1, 0.05],
+    [SILHOUETTE, 'lift', 'Silhouette ignores what is this close in front (tiles)', 0, 0.5, 0.01],
   ]],
   ['Day & night', [
     [SKY, 'timeOfDay', 'Time of day (hours)', 0, 24, 0.1],
