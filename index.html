@@ -207,6 +207,7 @@ body.cur-fist:not(.pad) #stage canvas, #cursorWarm .cur-fist { cursor: url("ui/c
 .slot:hover { border-color: var(--dim); }
 .slot.on { border-color: var(--gold); }
 /* a build piece you can't afford: the whole icon in red (what's missing is in its tooltip) */
+.ic > [data-sand] { filter: sepia(1) saturate(1.5) hue-rotate(-6deg) brightness(1.08); }
 .slot.poor .ic > * { filter: brightness(0.75) sepia(1) saturate(9) hue-rotate(-38deg); }
 .slot.poor .name { color: #e0645a; }
 .slot.locked { opacity: 0.45; filter: grayscale(1); }
@@ -1391,7 +1392,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 842;
+const GAME_VERSION = 844;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8009,7 +8010,8 @@ def(O.PROP, { built: true, name: 'furniture', tile: true });   // (a town prop's
 // the stations you build to refine raw materials (see Stations), what each takes in and what it makes of it
 const STATION_KIND = {
   sawtable: { o: O.SAWTABLE, name: 'SAW TABLE', refine: { wood: 'planks' } },
-  grinder: { o: O.GRINDER, name: 'GRINDER', refine: { stone: 'stoneBlock', wheat: 'flour', roughSandstone: 'sand', bone: 'boneDust' } },
+  // (v843, Jordan: also: a second thing it makes from the same lot, two rough sandstone giving a sand and a sandstone block)
+  grinder: { o: O.GRINDER, name: 'GRINDER', refine: { stone: 'stoneBlock', wheat: 'flour', roughSandstone: 'sand', bone: 'boneDust' }, also: { roughSandstone: 'sandstoneBlock' } },
   smelter: { o: O.SMELTER, name: 'SMELTER', refine: { copperOre: 'copperIngot', ironOre: 'ironIngot', ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ore', m.k + 'Ingot'])), sand: 'glassPane' } },   // (v801, Jordan: bread is baked at a cooking hearth now)
   tanrack: { o: O.TANRACK, name: 'TANNING RACK', refine: { hide: 'leather' } },
   // the crafting tables you build: they refine nothing, but are used as the towns' are (craft: their recipes)
@@ -15135,26 +15137,48 @@ const WALL_H = 2;   // (a level at 2x tile height: a floor on top of walls would
 const COST = { armortable: { planks: 4, leather: 1 }, weapontable: { planks: 4, stoneBlock: 3 }, alchemytable: { planks: 4, copperIngot: 2, glassPane: 2 }, floor: { planks: 1 }, stonefloor: { stoneBlock: 1 }, wall: { planks: 1, stoneBlock: 1 }, door: { planks: 3 }, logwall: { wood: 4 }, stonewall: { stoneBlock: 2 }, hearth: { wood: 2, stone: 4 },
   fence: { wood: 1 }, stonefence: { stoneBlock: 1 }, gate: { planks: 2 }, ironfence: { ironIngot: 1 }, irongate: { ironIngot: 2 }, irondoor: { ironIngot: 3 },
   sawtable: { wood: 8, stone: 2 }, grinder: { stone: 12, wood: 4 }, smelter: { stone: 16 }, tanrack: { wood: 6 }, crate: { planks: 4 }, barrel: { wood: 6 }, chest: { ironIngot: 6 }, woodstairs: { planks: 3 }, stonestairs: { stoneBlock: 3 },
-  woodwindow: { planks: 1, stoneBlock: 1, glassPane: 1 }, stonewindow: { stoneBlock: 2, glassPane: 1 } };
+  woodwindow: { planks: 1, stoneBlock: 1, glassPane: 1 }, stonewindow: { stoneBlock: 2, glassPane: 1 },
+  // (v843, Jordan) the sandstone set: each as its stone piece, sandstone blocks for the stone blocks
+  sandfloor: { sandstoneBlock: 1 }, sandtimber: { planks: 1, sandstoneBlock: 1 }, sandtimberwindow: { planks: 1, sandstoneBlock: 1, glassPane: 1 },
+  sandwall: { sandstoneBlock: 2 }, sandwindow: { sandstoneBlock: 2, glassPane: 1 }, sandfence: { sandstoneBlock: 1 } };
 // fences and gates stand half height and never close in a room
 const FENCE_H = 0.8;
 // what's on a tile's floor: 1 planks, 2 flagstones, 3 a mausoleum's marble
-const FLOOR_KIND = [null, 'floor', 'stonefloor', 'marblefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2 };
+const FLOOR_KIND = [null, 'floor', 'stonefloor', 'marblefloor'], FLOOR_VAL = { floor: 1, stonefloor: 2, sandfloor: 2 };
 // the build menu's groups, each opening its own row of kinds
 const BUILD_CATS = { floors: ['floor', 'stonefloor', 'woodstairs', 'stonestairs'], walls: ['wall', 'woodwindow', 'logwall', 'stonewall', 'stonewindow', 'fence', 'stonefence', 'ironfence'], doors: ['door', 'gate', 'irondoor', 'irongate'],
-  stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable', 'alchemytable', 'barrel', 'crate', 'chest'] };
+  stations: ['sawtable', 'grinder', 'smelter', 'tanrack', 'armortable', 'weapontable', 'alchemytable', 'barrel', 'crate', 'chest'],
+  sandstone: ['sandfloor', 'sandtimber', 'sandtimberwindow', 'sandwall', 'sandwindow', 'sandfence'] };
 const catOf = k => Object.keys(BUILD_CATS).find(c => BUILD_CATS[c].includes(k));
-const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'woodwindow' || k === 'stonewindow' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence' || k === 'ironfence';
-const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate' || k === 'ironfence' || k === 'irongate';
+const isFloor = k => k in FLOOR_VAL, isWall = k => k === 'wall' || k === 'woodwindow' || k === 'stonewindow' || k === 'logwall' || k === 'stonewall' || k === 'fence' || k === 'stonefence' || k === 'ironfence' || (k in SAND_BASE && k !== 'sandfloor');
+const isFenceKind = k => k === 'fence' || k === 'stonefence' || k === 'gate' || k === 'ironfence' || k === 'irongate' || k === 'sandfence';
 const isDoorKind = k => k === 'door' || k === 'gate' || k === 'irondoor' || k === 'irongate';
 // what's on a tile side: 1 timber-framed wall, 2 door, 3 log palisade, 4 stone wall, 5 wooden fence,
 // 6 dry-stone wall, 7 gate, 8 iron railings, 9 iron gate, 10 iron door
 // (11 a mausoleum's bronze door, 12 its marble wall: never built by hand)
 const WALL_KIND = [null, 'wall', 'door', 'logwall', 'stonewall', 'fence', 'stonefence', 'gate', 'ironfence', 'irongate', 'irondoor', 'tombdoor', 'marblewall', 'woodwindow', 'stonewindow', 'townwall'];
-const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10, tombdoor: 11, marblewall: 12, woodwindow: 13, stonewindow: 14, townwall: 15 };
+const KIND_VAL = { wall: 1, door: 2, logwall: 3, stonewall: 4, fence: 5, stonefence: 6, gate: 7, ironfence: 8, irongate: 9, irondoor: 10, tombdoor: 11, marblewall: 12, woodwindow: 13, stonewindow: 14, townwall: 15,
+  sandtimber: 1, sandwall: 4, sandfence: 6, sandtimberwindow: 13, sandwindow: 14 };
 // (v373, Jordan: windowed walls, 13 timber and 14 stone. One goes up over a plain wall of its own sort for just the
 // glass; taken down, it gives back the wall's cost and the glass)
-const WINDOW_OF = { woodwindow: 'wall', stonewindow: 'stonewall' }, WINDOW_GLASS = { glassPane: 1 };
+const WINDOW_OF = { woodwindow: 'wall', stonewindow: 'stonewall', sandtimberwindow: 'sandtimber', sandwindow: 'sandwall' }, WINDOW_GLASS = { glassPane: 1 };
+// (v843, Jordan) The sandstone pieces: built as their stone (or timber) piece's tile value, the desert towns' look
+// (DES_T) chosen as a desert house's is, by its edge key in DESERT_WALLS (by story), and for a floor by its tile in
+// SAND_FLOORS (by story). So they're drawn, lit, roomed and roofed as the desert houses' pieces are: the ground-story
+// sandstone wall with its tile band, the plaster 'timber' wall with its pointed recess and lattice, the dry-stone
+// wall in the sand towns' stone, sandstone flags; a room walled all in sandstone gets the flat terracotta roof.
+// SAND_BASE: each one's own stone piece; SAND_OF the other way
+const SAND_BASE = { sandfloor: 'stonefloor', sandtimber: 'wall', sandtimberwindow: 'woodwindow', sandwall: 'stonewall', sandwindow: 'stonewindow', sandfence: 'stonefence' };
+const SAND_OF = Object.fromEntries(Object.entries(SAND_BASE).map(([a, b]) => [b, a]));
+const SAND_FLOORS = [new Set(), new Set(), new Set(), new Set()];
+// the kind of the piece on an edge (v: its value) or a tile's floor (f), on story k, sandstone ones told apart
+const edgeKind = (c, r, w, k, v) => { const b = WALL_KIND[v]; return SAND_OF[b] && DESERT_WALLS[k]?.has(edgeKey(c, r, w)) ? SAND_OF[b] : b; };
+const floorKind = (i, k, f) => f === 2 && SAND_FLOORS[k]?.has(i) ? 'sandfloor' : FLOOR_KIND[f];
+// a piece going up marks (or a plain one going in over it, unmarks) its edge or tile; coming down, unmarks it
+function sandMark(kind, c, r, w, k, on = !!SAND_BASE[kind]) {
+  const set = isFloor(kind) ? SAND_FLOORS[k] : DESERT_WALLS[k], key = isFloor(kind) ? T(c, r) : edgeKey(c, r, w);
+  if (on) set.add(key); else set.delete(key);
+}
 const isWindowVal = v => v === 13 || v === 14;
 // what a piece costs where it goes: a window over its own wall, only the glass
 const spotCost = s => s.upgrade ? WINDOW_GLASS : COST[s.kind];
@@ -15222,6 +15246,7 @@ function plankFloor(c, r) {
 function stoneFloor(c, r) {
   const y = LV[T(c, r)] * STEP + PDY;
   if (DESERT_TILES.has(T(c, r))) { desertFloor(c, r, y); return; }   // (v649)
+  if (SAND_FLOORS[Math.round(PDY / WALL_H)]?.has(T(c, r))) { desertFloor(c, r, y, true); return; }   // (v843: a built sandstone floor, flags on every story)
   part(G.box, '#3e3a44', c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
   for (let j = 0; j < 2; j++) {
     const off = (r * 2 + j) % 2 ? 0.25 : 0;
@@ -15632,7 +15657,7 @@ function wallPieceRaw(c, r, w, type, cut) {
   }
   if (type === 6) {
     // a dry-stone wall: rough fieldstones in two courses, flat stones laid across the top (v643: a town's in its stone)
-    const L6 = lookAt(i, j), S = L6?.S || TOWN_STONE.grey;
+    const L6 = lookAt(i, j), S = desertEdge(c, r, w) ? TOWN_STONE.sand : L6?.S || TOWN_STONE.grey;   // (v843: a built sandstone one)
     for (let row = 0; row < 2; row++) for (let n = 0; n < (row ? 4 : 3); n++) {
       const kk = hs(c * 3 + n, r * 5 + row, 56 + w), a = row ? n / 3 : (n + 0.5) / 3, moss = kk > 0.8;
       const p = at(a, y + (row ? 0.45 : 0.17));
@@ -16279,7 +16304,10 @@ function desertBand(c, r, w, y, at, ry) {
   const s = windowOutside(c, r, w) || 1, B = wallBox(at, w, ry, s), D = DES_T, b = D.band;
   const i = T(c, r), j = w ? T(c - 1, r) : T(c, r - 1), ins = s > 0 ? j : i, step = w ? N : 1;
   // (an end that is an outer corner of the house: the band runs on to meet the next wall's)
-  const e0 = DESERT_TILES.has(ins - step) ? 0 : 1, e1 = DESERT_TILES.has(ins + step) ? 0 : 1;
+  let e0 = DESERT_TILES.has(ins - step) ? 0 : 1, e1 = DESERT_TILES.has(ins + step) ? 0 : 1;
+  // (v843: a built one isn't in a house's tiles: it runs on past an end only where no sandstone wall carries on
+  // straight from it, so a run's bands meet without overlapping)
+  if (!DESERT_TILES.has(ins)) { e0 = desertEdge(c - (w ? 0 : 1), r - (w ? 1 : 0), w, 0) ? 0 : 1; e1 = desertEdge(c + (w ? 0 : 1), r + (w ? 1 : 0), w, 0) ? 0 : 1; }
   const run = (ext, o, sz, yy, sy, col, surf) => { const a0 = -e0 * ext, a1 = 1 + e1 * ext; B((a0 + a1) / 2, yy, a1 - a0, sy, o, sz, col, surf); };
   run(0.18, 0.165, 0.03, y + b + 0.08, 0.16, D.teal, SURF_SMOOTH);
   run(0.1875, 0.17, 0.035, y + b - 0.015, 0.03, D.light, SURF_STONE);
@@ -16476,8 +16504,23 @@ function desertParapet(c, r, w, y, at, ry) {
 // a building every tile of which is a desert house's
 function desertBuilding(rm) {
   if (!rm.tiles.length) return false;
-  for (const [c, r] of rm.tiles) if (!DESERT_TILES.has(T(c, r))) return false;
-  return true;
+  let all = true;
+  for (const [c, r] of rm.tiles) if (!DESERT_TILES.has(T(c, r))) { all = false; break; }
+  return all || sandBuilt(rm);
+}
+// (v843) one you built with every outer wall (doors aside) a sandstone piece
+function sandBuilt(rm) {
+  const k = rm.k || 0;
+  let n = 0;
+  for (const [c, r] of rm.tiles) for (let d = 0; d < 4; d++) {
+    if (rm.set.has(T(c + DC[d], r + DR[d]))) continue;
+    const v = roomWall(c, r, d, k);
+    if (!v || isDoorVal(v)) continue;
+    const [ec, er, w] = edgeOf(c, r, d);
+    if (!DESERT_WALLS[k].has(edgeKey(ec, er, w))) return false;
+    n++;
+  }
+  return n > 0;
 }
 // its flat roof (fy: the tiles' top, as the flat stone roof's): terracotta squares, a parapet of sandstone round its
 // outer walls with merlons along it, and on some top roofs a windcatcher at a corner
@@ -16553,9 +16596,9 @@ function windcatcher(x, z, y, seed) {
   for (const [dx, dz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) P(dx * (half - 0.02), vt + 0.17, dz * (half - 0.02), 0.12, 0.14, 0.12, D.light);
 }
 // a desert house's floor: sandstone flags on the ground story, terracotta squares upstairs and on its terraces
-function desertFloor(c, r, y) {
+function desertFloor(c, r, y, flags = false) {
   const D = DES_T;
-  if (PDY > 0) {
+  if (PDY > 0 && !flags) {
     part(G.box, D.grout, c + 0.5, y + 0.02, r + 0.5, { sx: 1, sy: 0.04, sz: 1 });
     SURF = SURF_STONE;
     for (let j = 0; j < 2; j++) for (let q = 0; q < 2; q++) {
@@ -16660,7 +16703,7 @@ function buildPieces(cx, cz, ch, only = null) {
         const i = T(c, r), f = U.FL.get(i);
         if (f) {
           // (its underside: joists, seen from below and at its open edges)
-          part(G.box, f === 2 ? (DESERT_TILES.has(i) ? '#5a3e2a' : '#4a4650') : '#3a2a1c', c + 0.5, LV[i] * STEP + PDY - 0.07, r + 0.5, { sx: 1, sy: 0.14, sz: 1 });
+          part(G.box, f === 2 ? (DESERT_TILES.has(i) || SAND_FLOORS[k].has(i) ? '#5a3e2a' : '#4a4650') : '#3a2a1c', c + 0.5, LV[i] * STEP + PDY - 0.07, r + 0.5, { sx: 1, sy: 0.14, sz: 1 });
           if (f === 2) stoneFloor(c, r); else plankFloor(c, r);
         }
         const wn = U.WN.get(i), ww = U.WW.get(i);
@@ -20110,7 +20153,7 @@ for (const [k, f] of [['sword', 'slash'], ['whirl', 'whirl'], ['lunge', 'lunge']
   ['spear', 'thrust'], ['flurry', 'flurry'], ['harpoon', 'harpoon'], ['axe', 'chop'], ['boomerang', 'axethrow'], ['rend', 'rend'],
   ['warhammer', 'smash'], ['stunsmash', 'groundsmash'], ['charge', 'charge']]) BAR_ICON[k] = paintImg(f, 'max(26px, calc(4.9vh - 14px))');
 for (const k of ['clothShirt', 'clothPants', 'clothBoots', ...['sword', 'bow', 'spear', 'axe', 'hammer'].flatMap(w => ['wood', 'bone', 'copper', 'iron', 'verdane', 'caerite', 'orivane', 'auralith'].map(t => w + '_' + t)), 'stone', 'wood', 'planks', 'stoneBlock',
-  'bone', 'hide', 'leather', 'wheat', 'carrot', 'potato', 'flour', 'bread', 'roughSandstone', 'sand', 'glassPane', 'emptyBottle', 'boneDust', 'rawMeat', ...['copper', 'iron', ...FANTASY.map(m => m.k)].flatMap(k => [k + 'Ore', k + 'Ingot'])]) ICON[k] = paintImg(k, 'max(34px, 5.12vh)');
+  'bone', 'hide', 'leather', 'wheat', 'carrot', 'potato', 'flour', 'bread', 'roughSandstone', 'sandstoneBlock', 'sand', 'glassPane', 'emptyBottle', 'boneDust', 'rawMeat', ...['copper', 'iron', ...FANTASY.map(m => m.k)].flatMap(k => [k + 'Ore', k + 'Ingot'])]) ICON[k] = paintImg(k, 'max(34px, 5.12vh)');
 // (v798, Jordan) an empty bottle is open, with no cork (bottleOpen, Jordan's painting; v799 scaled 0.97 and nudged to sit on the corked one); the corked emptyBottle
 // painting is every filled bottle's: the potions are painted into it (potionEmpty). Filling one at the water swaps it at
 // the bottom of the dip, under the water (fillBottles)
@@ -20769,7 +20812,9 @@ const ITEMS = {
   wheat: { name: 'Wheat', icon: 'wheat', stack: 200, pile: true, loot: 'material', about: 'Reaped from the meadow farms\' fields: cut it as you cut grass. A tile reaped grows back in a minute and a half.' },
   carrot: { name: 'Carrot', icon: 'carrot', stack: 200, pile: true, loot: 'material', about: 'Kept in barrels in town and on the farms, or grown: plant one in a bare tilled square of your plot and it grows there, reaped as wheat is.' },
   potato: { name: 'Potato', icon: 'potato', stack: 200, pile: true, loot: 'material', about: 'Kept in barrels in town and on the farms, or grown: plant one in a bare tilled square of your plot and it grows there, reaped as wheat is.' },
-  roughSandstone: { name: 'Rough Sandstone', icon: 'roughSandstone', stack: 200, pile: true, loot: 'material', about: 'Broken from the desert\'s sandstone rocks. A grinder grinds it into sand.' },
+  roughSandstone: { name: 'Rough Sandstone', icon: 'roughSandstone', stack: 200, pile: true, loot: 'material', about: 'Broken from the desert\'s sandstone rocks. A grinder makes every two into a sand and a sandstone block.' },
+  // (v843, Jordan: the grinder's second yield from rough sandstone; the stone blocks' painting tinted for now)
+  sandstoneBlock: { name: 'Sandstone Blocks', icon: 'sandstoneBlock', stack: 200, pile: true, loot: 'material', about: 'Cut from rough sandstone at a grinder, along with its sand. The sandstone floors, walls and fences are built of them.' },
   sand: { name: 'Sand', icon: 'sand', stack: 200, pile: true, loot: 'material', about: 'Ground from rough sandstone at a grinder. A smelter melts it into glass panes.' },
   glassPane: { name: 'Glass Pane', icon: 'glassPane', stack: 100, pile: true, loot: 'material', about: 'Melted from sand in a smelter. An alchemy table makes bottles of it.' },
   emptyBottle: { name: 'Empty Bottle', icon: 'emptyBottle', stack: 20, loot: 'material', about: 'Blown from glass at an alchemy table. Potions will go in it.' },
@@ -21779,7 +21824,9 @@ const SLOTS = {
     { id: 'cat:doors', key: '3', pad: 'A', name: 'DOORS', cat: 'doors' },
     { id: 'hearth', key: '4', pad: 'RB', name: 'HEARTH', icon: 'hearth', cost: 'hearth' },
     { id: 'cat:stations', key: '5', pad: 'LB', name: 'STATIONS', cat: 'stations' },
-    { id: 'move', key: '6', pad: 'R3', name: 'MOVE', icon: 'move' },
+    // (v843) the sandstone set's own row (on the controller, Y steps on into it from the walls' row and back)
+    { id: 'cat:sandstone', key: '6', pad: 'Y', name: 'SANDSTONE', cat: 'sandstone' },
+    { id: 'move', key: '7', pad: 'R3', name: 'MOVE', icon: 'move' },
     { id: 'remove', key: 'RMB', pad: 'LT', name: 'REMOVE', icon: 'remove' },
     { id: 'exit', key: 'B', pad: 'B', name: 'DONE', icon: 'hammer' },
   ],
@@ -21798,12 +21845,21 @@ const KIND_SLOT = {
   alchemytable: { name: 'ALCHEMY TABLE', short: 'ALCHEMY', icon: 'alchemytable' },
   crate: { name: 'WOODEN CRATE', short: 'CRATE', icon: 'crate' }, chest: { name: 'IRON CHEST', icon: 'chest' },
   barrel: { name: 'BARREL', icon: 'barrel' },
+  // (v843) the sandstone set; Jordan's icons for them come later: till then their stone pieces' icons, tinted
+  sandfloor: { name: 'SANDSTONE FLOOR', short: 'FLOOR', icon: 'sandfloor' }, sandtimber: { name: 'SANDSTONE TIMBER WALL', short: 'TIMBER WALL', icon: 'sandtimber' },
+  sandtimberwindow: { name: 'SANDSTONE TIMBER WINDOW', short: 'LATTICE', icon: 'sandtimberwindow' }, sandwall: { name: 'SANDSTONE WALL', short: 'ROCK WALL', icon: 'sandwall' },
+  sandwindow: { name: 'SANDSTONE WINDOW', short: 'ARCH WINDOW', icon: 'sandwindow' }, sandfence: { name: 'SANDSTONE FIELDSTONE WALL', short: 'FIELDSTONE', icon: 'sandfence' },
 };
 KIND_SLOT.stonefence.short = 'FIELDSTONE';
-const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawtable' };
+// (the placeholders: the stone piece's icon marked data-sand, which a CSS filter tints sandstone: '.ic > [data-sand]')
+for (const [k, b] of Object.entries(SAND_BASE)) for (const set of [BAR_ICON, ICON]) {
+  const src = set[b] || ICON[b] || BAR_ICON[b];
+  if (src) set[k] = src.replace(/^<(img|svg)\b/, `<$1 data-sand="1"`);
+}
+const catPick = { floors: 'floor', walls: 'wall', doors: 'door', stations: 'sawtable', sandstone: 'sandwall' };
 let subOpen = null;
 // costs as the bar shows them: 2W logs, 2S stone, 2P planks, 2B stone blocks, 2I iron ingots
-const COST_TAG = { wood: 'W', stone: 'S', planks: 'P', stoneBlock: 'B', ironIngot: 'I', copperIngot: 'C', ironOre: 'Io', copperOre: 'Co', leather: 'L' };
+const COST_TAG = { wood: 'W', stone: 'S', planks: 'P', stoneBlock: 'B', sandstoneBlock: 'SB', ironIngot: 'I', copperIngot: 'C', ironOre: 'Io', copperOre: 'Co', leather: 'L' };
 // (v832) what taking a piece down gives back, a resource fly-up for each material
 const refundGains = (k, x, y, z) => { for (const [r, n] of Object.entries(COST[k] || {})) floatGain(r, n, x, y, z, '#e0b070'); };
 const costText = k => Object.entries(COST[k]).map(([r, n]) => COST_TAG[r] ? n + COST_TAG[r] : n + ' ' + ITEMS[r].name.toLowerCase()).join(' ');
@@ -21839,7 +21895,7 @@ function renderBar() {
   slotEls = (mode === 'play' ? playSlots().filter(s => !TOUCH.on || !TOUCH_IDS.includes(s.id)) : noPlot ? SLOTS.build.filter(s => s.id === 'hearth' || s.id === 'exit') : SLOTS[mode]).map(s => slotEl(s, bar));
   renderTouch();
   // on the controller the group's own button steps through its row
-  const catPad = { floors: 'X', walls: 'Y', doors: 'A', stations: 'LB' };
+  const catPad = { floors: 'X', walls: 'Y', doors: 'A', stations: 'LB', sandstone: 'Y' };
   if (subOpen) BUILD_CATS[subOpen].forEach((k, n) => slotEls.push(slotEl({ id: k, key: String((n + 1) % 10), pad: catPad[subOpen], name: KIND_SLOT[k].name, short: KIND_SLOT[k].short, icon: KIND_SLOT[k].icon, cost: k }, sub)));
   sub.hidden = !subOpen;
   $('modeTag').hidden = mode !== 'build';
@@ -23228,7 +23284,7 @@ const plankMat = flatMat({ color: '#c89a62' }), plankGeo = new GFX.BoxGeometry(0
 const ingotMats = { copperIngot: flatMat({ color: '#e08850' }), ironIngot: flatMat({ color: '#a8aeb8' }), ...Object.fromEntries(FANTASY.map(m => [m.k + 'Ingot', m.k === 'auralith' ? prismMat(1.1) : flatMat({ color: m.ingot })])) }, ingotGeo = new GFX.CylinderGeometry(0.06, 0.085, 0.24, 4, 1).rotateZ(Math.PI / 2).rotateX(Math.PI / 4);
 const leatherMat = flatMat({ color: '#9a6638' }), leatherGeo = new GFX.BoxGeometry(0.34, 0.03, 0.26);
 const meatMat = flatMat({ color: '#b8262a' }), meatFat = flatMat({ color: '#efe0c0' }), meatGeo = new GFX.BoxGeometry(0.3, 0.07, 0.2), fatGeo = new GFX.BoxGeometry(0.26, 0.06, 0.04);
-const sandstoneMat = flatMat({ color: '#c89a64' }), sandMat = flatMat({ color: '#e0c07a' }), glassMat = flatMat({ color: '#bfe4ee' }), glassGeo = new GFX.BoxGeometry(0.3, 0.02, 0.24);
+const sandBlockMat = flatMat({ color: '#d0a66e' }), sandstoneMat = flatMat({ color: '#c89a64' }), sandMat = flatMat({ color: '#e0c07a' }), glassMat = flatMat({ color: '#bfe4ee' }), glassGeo = new GFX.BoxGeometry(0.3, 0.02, 0.24);
 const flourMat = flatMat({ color: '#ece4d2' }), flourTie = flatMat({ color: '#a8845a' }), breadMat = flatMat({ color: '#b87a3c' }), breadTop = flatMat({ color: '#e0b878' });
 const bottleGeo = new GFX.CylinderGeometry(0.06, 0.07, 0.16, 8), neckGeo = new GFX.CylinderGeometry(0.022, 0.026, 0.07, 6);
 const sackGeo = new GFX.IcosahedronGeometry(0.13), loafGeo = new GFX.IcosahedronGeometry(0.12), sandGeo = new GFX.ConeGeometry(0.2, 0.13, 10);
@@ -23254,8 +23310,9 @@ function dropModel(id) {
     add(logGeo, logMat, 0, 0.05, -0.07); add(logGeo, logMat, 0, 0.05, 0.07); add(logGeo, logMat, 0.02, 0.16, 0, 0.15);
   } else if (id === 'planks') {
     for (let k = 0; k < 4; k++) add(plankGeo, plankMat, 0, 0.02 + (k >> 1) * 0.036, ((k & 1) - 0.5) * 0.11 + (k >> 1) * 0.02, (k >> 1) * 0.08);
-  } else if (id === 'stoneBlock') {
-    add(blockGeo, blockMat, -0.08, 0.06, 0.02, 0.1); add(blockGeo, blockMat, 0.08, 0.06, -0.02, -0.15); add(blockGeo, blockMat, 0, 0.18, 0, 0.4);
+  } else if (id === 'stoneBlock' || id === 'sandstoneBlock') {
+    const bm = id === 'stoneBlock' ? blockMat : sandBlockMat;
+    add(blockGeo, bm, -0.08, 0.06, 0.02, 0.1); add(blockGeo, bm, 0.08, 0.06, -0.02, -0.15); add(blockGeo, bm, 0, 0.18, 0, 0.4);
   } else if (ingotMats[id]) {
     add(ingotGeo, ingotMats[id], 0, 0.045, -0.06); add(ingotGeo, ingotMats[id], 0, 0.045, 0.06); add(ingotGeo, ingotMats[id], 0, 0.12, 0, Math.PI / 2);
   } else if (id === 'leather') {
@@ -23858,7 +23915,8 @@ addEventListener('keydown', e => {
     else if (n <= 3) openCat(['floors', 'walls', 'doors'][n - 1]);
     else if (n === 4) slotAction('hearth');
     else if (n === 5) openCat('stations');
-    else if (n === 6) slotAction('move');
+    else if (n === 6) openCat('sandstone');
+    else if (n === 7) slotAction('move');
   }
   else if (mode === 'play' && /^Digit[1-8]$/.test(e.code)) useHot(+e.code.slice(5) - 1);
   if (e.code === 'KeyQ') pressAbility('q');
@@ -24165,9 +24223,12 @@ function pollPad(dt) {
   const pc = $('padCursor');
   pc.hidden = false; pc.style.left = mouse.x + 'px'; pc.style.top = mouse.y + 'px';
   const cycle = cat => {
+    // (v843: Y goes on from the walls' last into the sandstone row, and from its last back to the walls)
+    if (cat === 'walls' && subOpen === 'sandstone') cat = 'sandstone';
     if (subOpen !== cat) { openCat(cat); return; }
-    const row = BUILD_CATS[cat], k = row[(row.indexOf(buildKind) + 1) % row.length];
-    setBuildKind(k); renderBar();
+    const row = BUILD_CATS[cat], at = row.indexOf(buildKind);
+    if (at === row.length - 1 && (cat === 'walls' || cat === 'sandstone')) { const to = cat === 'walls' ? 'sandstone' : 'walls'; openCat(to); setBuildKind(BUILD_CATS[to][0]); renderBar(); return; }
+    setBuildKind(row[(at + 1) % row.length]); renderBar();
   };
   const own = ownsPlot();
   if (own && hit('X')) cycle('floors');
@@ -26430,6 +26491,7 @@ ghostGeo.hearth = new GFX.BoxGeometry(1.7, 2.1, 0.76);   // (v803: the cooking h
 ghostGeo.fence = new GFX.BoxGeometry(1, FENCE_H, 0.12); ghostGeo.gate = new GFX.BoxGeometry(1, FENCE_H, 0.1); ghostGeo.stonefence = new GFX.BoxGeometry(1, FENCE_H, 0.42);
 ghostGeo.woodwindow = ghostGeo.wall; ghostGeo.stonewindow = ghostGeo.stonewall;
 ghostGeo.ironfence = ghostGeo.gate; ghostGeo.irongate = ghostGeo.gate; ghostGeo.irondoor = ghostGeo.door;
+for (const [k, b] of Object.entries(SAND_BASE)) ghostGeo[k] = ghostGeo[b];   // (v843: the sandstone set's as their stone pieces')
 for (const k in STATION_KIND) ghostGeo[k] = new GFX.BoxGeometry(1.9, 0.9, 1.9);
 ghostGeo.crate = new GFX.BoxGeometry(CRATE_SIZE, CRATE_SIZE * 0.8, CRATE_SIZE); ghostGeo.barrel = new GFX.CylinderGeometry(BARREL_R, BARREL_R, 0.9, 12); ghostGeo.chest = new GFX.BoxGeometry(1.5, 0.75, 0.85);
 // a piece that will be queued (no materials to hand) shows white, as the queued ones themselves do
@@ -26511,7 +26573,7 @@ function upJoined(k, c, r, extra = null) {
 const edgeVal = (ec, er, w, k) => k ? (w ? UP[k].WW : UP[k].WN).get(T(ec, er)) || 0 : (w ? WW : WN)[T(ec, er)];
 function upEdgeSpot(ec, er, w, kind, k) {
   const a = T(ec, er), b = w ? T(ec - 1, er) : T(ec, er - 1), U = UP[k];
-  const fa = U.FL.has(a), fb = U.FL.has(b), there = (w ? U.WW : U.WN).get(a), upgrade = !!there && WINDOW_OF[kind] && there === KIND_VAL[WINDOW_OF[kind]];
+  const fa = U.FL.has(a), fb = U.FL.has(b), there = (w ? U.WW : U.WN).get(a), upgrade = !!there && WINDOW_OF[kind] && edgeKind(ec, er, w, k, there) === WINDOW_OF[kind];
   const below = edgeVal(ec, er, w, k - 1), onWall = !!below && !isFenceVal(below);
   let ok = (fa || fb || onWall) && (!there || upgrade) && BI[a] !== TOWN && BI[b] !== TOWN;
   let why = there && !upgrade ? 'Something is built here already.' : !(fa || fb || onWall) ? 'Walls up here need a floor beside them or a wall under them.' : 'The townsfolk would rather you built outside town.';
@@ -26572,6 +26634,7 @@ function removeStair(st) {
 // a piece on an upper story goes up
 function placeUp(s) {
   const k = s.k, U = UP[k], i = T(s.c, s.r);
+  sandMark(s.kind, s.c, s.r, s.w, k);
   if (isFloor(s.kind)) { U.FL.set(i, FLOOR_VAL[s.kind]); refreshStory(k, s.c, s.r); return; }
   (s.w ? U.WW : U.WN).set(i, KIND_VAL[s.kind]);
   if (isDoorKind(s.kind)) makeDoor(s.c, s.r, s.w, s.kind, false, k);
@@ -26587,10 +26650,10 @@ function removeUp(k) {
   if (!p) return;
   const U = UP[k], c = Math.floor(p.x), r = Math.floor(p.z), u = p.x - c, v = p.z - r, i = T(c, r), dist = [v, 1 - u, 1 - v, u];
   let target = null;
-  for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && upWallOn(c, r, d, k)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[upWallOn(c, r, d, k)], c: ec, r: er, w }; }
+  for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && upWallOn(c, r, d, k)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: edgeKind(ec, er, w, k, upWallOn(c, r, d, k)), c: ec, r: er, w }; }
   const st = !target && stairAt.get(k * SNN + i);
   if (st) target = { kind: st.kind, c: st.c, r: st.r, st };
-  if (!target && U.FL.has(i)) target = { kind: FLOOR_KIND[U.FL.get(i)], c, r };
+  if (!target && U.FL.has(i)) target = { kind: floorKind(i, k, U.FL.get(i)), c, r };
   if (!target) { sfx.nope(); return; }
   if (BI[i] === TOWN || ('w' in target && BI[T(target.c, target.r)] === TOWN)) { sfx.nope(); toast('That belongs to the townsfolk.'); return; }
   if (FARM[i] || ('w' in target && FARM[T(target.c, target.r)])) { sfx.nope(); toast(farmWhy(FARM[i] || FARM[T(target.c, target.r)])); return; }   // (v677: a mill's upper story)
@@ -26602,6 +26665,7 @@ function removeUp(k) {
   else {
     const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
     buildCount[ch] = Math.max(0, buildCount[ch] - 1);
+    sandMark(target.kind, target.c, target.r, target.w, k, false);
     if (isFloor(target.kind)) { U.FL.delete(i); refreshStory(k, c, r); }
     else {
       (target.w ? U.WW : U.WN).delete(T(target.c, target.r));
@@ -26624,7 +26688,7 @@ function edgeSpot(ec, er, w, kind) {
   // overhang the slope below a little (no doors there, they'd open onto the drop)
   const cliff = LV[a] !== LV[b], hi = LV[a] > LV[b] ? a : b, lo = hi === a ? b : a;
   const ground = cliff ? !isDoorKind(kind) && flat(hi) && LV[hi] - LV[lo] === 1 && !OBJ[OB[lo]].tile : flat(a) && flat(b);
-  const there = (w ? WW : WN)[a], upgrade = !!there && WINDOW_OF[kind] && there === KIND_VAL[WINDOW_OF[kind]];
+  const there = (w ? WW : WN)[a], upgrade = !!there && WINDOW_OF[kind] && edgeKind(ec, er, w, 0, there) === WINDOW_OF[kind];
   let ok = ground && (!there || upgrade) && BI[a] !== TOWN && BI[b] !== TOWN;
   let why = there && !upgrade ? 'Something is built here already.' : (BI[a] === TOWN || BI[b] === TOWN) ? 'The townsfolk would rather you built outside town.'
     : cliff && isDoorKind(kind) ? `A ${kind} here would open onto the drop.` : cliff ? 'Cliff-top walls need clear, flat ground on top.' : 'Walls need clear, flat ground at one height on both sides.';
@@ -26785,6 +26849,7 @@ function placeSpot(s) {
   const ch = Math.floor(s.r / CH) * NC + Math.floor(s.c / CH);
   buildCount[ch]++;
   if (s.stair || s.k) { if (s.stair) placeStair(s); else placeUp(s); markPieces(s.c, s.r); return; }
+  if (isFloor(s.kind) || isWall(s.kind)) sandMark(s.kind, s.c, s.r, s.w, 0);
   if (isFloor(s.kind)) {
     const i = T(s.c, s.r);
     FL[i] = FLOOR_VAL[s.kind]; if (OB[i] !== O.HEARTH && !stationTile.has(i)) OB[i] = 0; markObj(s.c, s.r);
@@ -27067,6 +27132,8 @@ function stationFx(st) {
 function seatStation(st) { st.fx.position.y = surfaceY(...stMid(st)); st.fx.unstill(); }
 // what goes in, and what it becomes
 const refinesTo = (st, id) => id ? STATION_KIND[st.kind].refine[id] || null : null;
+// (v843) everything a lot of id makes: what it refines to, and its also (the grinder's sandstone block beside the sand)
+const madeOf = (st, id) => { const a = refinesTo(st, id), b = STATION_KIND[st.kind].also?.[id]; return b ? [a, b] : [a]; };
 // room in the output for one more of id
 const outRoom = (st, id) => st.out.some((o, i) => o === null || (o === id && st.outN[i] < stackOf(id)));
 // the crates and chests sharing an edge with a station: what it makes goes in them first, topping up a stack in any
@@ -27821,7 +27888,17 @@ function outAdd(st, id) {
 // the input square it's working on: the first with something it can refine and room for what that makes
 // (v824) with REFINE.per of it in the input, counting every square of it (so two squares of one each still go)
 const inHave = (st, id) => st.inp.reduce((a, p, i) => a + (p === id ? st.inN[i] : 0), 0);
-const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && inHave(st, id) >= REFINE.per && (outRoom(st, refinesTo(st, id)) || touching(st).some(o => boxRoom(o, refinesTo(st, id)))));
+const workingOn = st => st.inp.findIndex((id, i) => id && st.inN[i] > 0 && inHave(st, id) >= REFINE.per && roomForAll(st, madeOf(st, id)));
+// room for one of each of ids, between its output and the crates and chests beside it: a stack of the same with room
+// takes one, anything else needs an empty square of its own (v843: two things made at once mustn't both count on one)
+function roomForAll(st, ids) {
+  if (ids.length === 1) return outRoom(st, ids[0]) || touching(st).some(o => boxRoom(o, ids[0]));
+  const rows = [[st.out, st.outN], ...touching(st).map(o => [o.box, o.boxN])];
+  let free = 0, need = 0;
+  for (const [a] of rows) for (const o of a) if (o === null) free++;
+  for (const id of ids) if (!rows.some(([a, n]) => a.some((o, i) => o === id && n[i] < stackOf(id)))) need++;
+  return need <= free;
+}
 const stTiles = (c, r, n = 2) => n === 1 ? [T(c, r)] : [T(c, r), T(c + 1, r), T(c, r + 1), T(c + 1, r + 1)];
 const markTiles = (c, r, n) => { markObj(c, r); if (n > 1) { markObj(c + 1, r + 1); markObj(c + 1, r); markObj(c, r + 1); } };
 function placeStation(s) {
@@ -28010,7 +28087,7 @@ function updateStations(dt) {
     if (st.busy) {
       st.t += dt;
       if (st.t >= REFINE.time) {
-        const id = st.inp[k], made = refinesTo(st, id);
+        const id = st.inp[k], made = madeOf(st, id);
         // (v824) REFINE.per of it used up, from the square worked on first, then any other of the same
         let need = REFINE.per;
         for (const q of [k, ...st.inp.keys()]) {
@@ -28018,7 +28095,7 @@ function updateStations(dt) {
           const t = Math.min(need, st.inN[q]);
           st.inN[q] -= t; need -= t; if (!st.inN[q]) st.inp[q] = null;
         }
-        stow(st, made);
+        for (const m of made) stow(st, m);
         st.t = 0;
         if (openSt && invOpen) renderInv();
         if (Math.hypot(st.c + 1 - H.x, st.r + 1 - H.z) < 8) sfx.coin();
@@ -28088,7 +28165,7 @@ function removePiece() {
   let target = null;
   const hit = pickGround(true);
   if (!hit) return;
-  if (hit.wall) target = { kind: WALL_KIND[hit.wall.kind], c: hit.wall.c, r: hit.wall.r, w: hit.wall.w };
+  if (hit.wall) target = { kind: edgeKind(hit.wall.c, hit.wall.r, hit.wall.w, 0, hit.wall.kind), c: hit.wall.c, r: hit.wall.r, w: hit.wall.w };
   else {
     const c = Math.floor(hit.x), r = Math.floor(hit.z), u = hit.x - c, v = hit.z - r, i = T(c, r);
     // close to a tile side with a wall on it? take the wall, else a hearth, else the floor
@@ -28096,7 +28173,7 @@ function removePiece() {
     // (a queued piece there comes off the queue first)
     for (let d = 0; d < 4; d++) if (dist[d] < 0.22) { const [ec, er, w] = edgeOf(c, r, d); if (unqueue('E' + edgeKey(ec, er, w))) { sfx.remove(); return; } }
     if (!FL[i] && unqueue('F' + i)) { sfx.remove(); return; }
-    for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: WALL_KIND[wallOn(c, r, d)], c: ec, r: er, w }; }
+    for (let d = 0; d < 4 && !target; d++) if (dist[d] < 0.22 && wallOn(c, r, d)) { const [ec, er, w] = edgeOf(c, r, d); target = { kind: edgeKind(ec, er, w, 0, wallOn(c, r, d)), c: ec, r: er, w }; }
     if (!target && OB[i] === O.HEARTH && hearthTile.has(i)) { const h = hearthTile.get(i); target = { kind: 'hearth', c: h.c, r: h.r, x: h.x, z: h.z }; }
     if (!target && stationTile.has(i)) { const st = stationTile.get(i); target = { kind: st.kind, c: st.c, r: st.r }; }
     if (!target && stairAt.has(i)) {
@@ -28109,7 +28186,7 @@ function removePiece() {
       refundGains(st.kind, st.c + 0.5, st.y0 + 1.2, st.r + 0.5);
       return;
     }
-    if (!target && FL[i]) target = { kind: FLOOR_KIND[FL[i]], c, r };
+    if (!target && FL[i]) target = { kind: floorKind(i, 0, FL[i]), c, r };
   }
   if (!target) { sfx.nope(); return; }
   const across = 'w' in target ? (target.w ? T(target.c - 1, target.r) : T(target.c, target.r - 1)) : -1;
@@ -28122,6 +28199,7 @@ function removePiece() {
   if (Math.hypot(mx - H.x, mz - H.z) > BUILD_RANGE) { sfx.nope(); toast('Too far away to take that down.'); return; }
   const ch = Math.floor(target.r / CH) * NC + Math.floor(target.c / CH);
   buildCount[ch] = Math.max(0, buildCount[ch] - 1);
+  if (isFloor(target.kind) || isWall(target.kind)) sandMark(target.kind, target.c, target.r, target.w, 0, false);
   if (isFloor(target.kind)) { const i = T(target.c, target.r); FL[i] = 0; markObj(target.c, target.r); if (stationTile.has(i)) { const st = stationTile.get(i); seatStation(st); markObj(st.c, st.r); } }
   else if (target.kind === 'hearth') putOutHearth(T(target.c, target.r));
   else if (isStation(target.kind)) takeDownStation(T(target.c, target.r));
@@ -34514,6 +34592,10 @@ window.GAME = {
   stationOut: (c, r, slot, id, n) => { const st = stations.get(T(c, r)); st.out[slot] = id; st.outN[slot] = n; },
   buildQueue: () => [...buildQueue.values()].map(q => q.kind + '@' + q.c + ',' + q.r + (q.w !== undefined ? ':' + q.w : '')),
   floorAt: (c, r) => FL[T(c, r)],
+  // (v843) the sandstone set: marks by story, the kind on side d of a tile (story k), whether a tile's building has the flat desert roof
+  sand: () => ({ walls: DESERT_WALLS.map(q => q.size), floors: SAND_FLOORS.map(q => q.size) }),
+  roofAt: (c, r) => { for (const b of buildings.values()) if (b.set.has(T(c, r))) return { desert: desertBuilding(b), built: sandBuilt(b) }; return null; },
+  edgeKindAt: (c, r, d, k = 0) => { const [ec, er, w] = edgeOf(c, r, d), v = k ? upWallOn(c, r, d, k) : wallOn(c, r, d); return v ? edgeKind(ec, er, w, k, v) : null; },
   openStation: (c, r) => { openStation(stations.get(T(c, r))); return !$('station').hidden; },
   stationClick: (k, i) => clickCell([k, i]),
   packCell: id => PACK.indexOf(id),
