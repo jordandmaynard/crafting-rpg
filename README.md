@@ -588,6 +588,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v806:** (Jordan) You set out with the wooden hoe in the hotbar's sixth square, after the five wooden weapons.
 
+**v807:** (Jordan) The start screen is now a small Wanderer's Kit window in the middle of the screen while the world loads: the progress bar, the seed, the version and Set Out. The title and the long how-to list are gone (a help menu in settings comes later). It reuses kit pieces: the parchment panel (panel-window.webp), the belt's XP frame and gold fill as the bar, and the crafting window's Craft button as Set Out. The loading stage text (SHAPING THE WORLD and so on) is kept for screen readers only. Space, Enter or the pad's A still set out once it's ready.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
