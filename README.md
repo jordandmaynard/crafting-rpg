@@ -660,6 +660,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v850:** (Jordan: a big lighting pop on the first chop, before the tree falls) The first blow detaches a tree (or rock) from its chunk, and the chunk's objects are drawn again without it, so its light-probe block was worked out again without it too and the shade under it went at once. detach now keeps a copy of its triangles where it stands (d.giParts), and chunkGI adds the detached things of a chunk to its block, so the light stays as it was while it's chopped. A felled tree lets go of it (giLetGo: the chunk's block is redone) once it's FELL.lightOff of the way down (T > Tree felling, default 0.5 of the angle); a broken rock or picked-up bone pile as it goes. A fade was left out: each step of one would retrace every probe within reach of the chunk.
 **v851:** (Jordan's tuning paste) Tree felling: a felled tree's light goes as it lands (FELL.lightOff 0.5 -> 1).
 
+**v852:** (Jordan: the icon reference shots were too bright to paint from) The studio has its own lights now, dimmer than the character view's: ICON_REF.sky 0.6 (was 0.95) and ICON_REF.sun 0.95 (was 1.5), both on sliders under T > Icon reference.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
