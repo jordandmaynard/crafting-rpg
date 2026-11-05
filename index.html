@@ -34475,41 +34475,57 @@ addEventListener('error', e => showCrash(e.error || e.message));
 addEventListener('unhandledrejection', e => showCrash(e.reason));
 $('crashCopy').onclick = () => { navigator.clipboard?.writeText($('crashText').textContent).then(() => toast('Error copied.', 'calm'), () => {}); };
 $('crashClose').onclick = () => { $('crashBox').hidden = true; };
-// (v810, Jordan) the map drawn in the loading window while the world is made, one pixel for each GEN_K x GEN_K tiles,
-// no names: while the land is first raised, from its heights row by row (the step hands its height field over), then
-// the map's own tile colours (tileRGB) as each step fills them in (a new step at once, within one at most every
-// 150 ms, 250 at the finer grain), and at the end the finished map scaled down. A drawing that fails never stops the
-// loading. (v847) 2 x 2 tiles a pixel once the map is shown over 560 device px, and the finished map drawn at its shown size
-const genMap = $('loadMap'), genCtx = genMap.getContext('2d');
-let GEN_K = 4, GEN_P = N / GEN_K, genImg = null, genLast = 0, genStep = '', genDone = false;
-function drawGenMap(label, HFin) {
-  const now = performance.now();
-  if (label === genStep && now - genLast < (GEN_K < 4 ? 250 : 150)) return;
-  genStep = label; genLast = now;
+// (v810, Jordan) the map drawn in the loading window while the world is made, no names: while the land is first raised,
+// from its heights row by row (the step hands its height field over), then the map's own tile colours (tileRGB) as each
+// step fills them in. A drawing that fails never stops the loading.
+// (v848, Jordan) in eight mosaic steps, rough to fine: blocks of 8 x 8 tiles at the start, then 7, 6 ... 2 as the
+// loading bar crosses each seventh of the way to the map (GEN_MOSAIC: progress share for each), each block one tile's
+// colour from its middle; then, once the map is painted, every tile (1, the map itself, hard pixels) while the ground
+// is built, and last the finished map scaled down smoothly. A new step or a new block size draws at once, within one
+// at most every 150 ms (250 at 2 x 2). #loadMap is kept at its shown size in device pixels (layoutLoadWin)
+const genMap = $('loadMap'), genCtx = genMap.getContext('2d'), genTmp = document.createElement('canvas'), genTmpCtx = genTmp.getContext('2d');
+const GEN_MOSAIC = { start: 8, end: 2, upTo: 0.97, wait: 150, waitFine: 250 };
+let genImg = null, genLast = 0, genStep = '', genK = 0, genPhase = 'live', genArgs = null;
+const genBlock = f => clamp(GEN_MOSAIC.start - Math.floor(clamp(f / GEN_MOSAIC.upTo, 0, 0.9999) * (GEN_MOSAIC.start - GEN_MOSAIC.end + 1)), GEN_MOSAIC.end, GEN_MOSAIC.start);
+function drawGenMap(f, label, HFin, force) {
+  if (genPhase !== 'live') return;
+  const now = performance.now(), k = genBlock(f);
+  genArgs = [f, label, HFin];
+  if (!force && label === genStep && k === genK && now - genLast < (k <= 2 ? GEN_MOSAIC.waitFine : GEN_MOSAIC.wait)) return;
+  genStep = label; genLast = now; genK = k;
   try {
-    if (genMap.width !== GEN_P) genMap.width = genMap.height = GEN_P;
-    if (!genImg || genImg.width !== GEN_P) genImg = genCtx.createImageData(GEN_P, GEN_P);
-    const d = genImg.data, m = MAP_RGB[MEADOW], h0 = GEN_K >> 1;
-    for (let y = 0; y < GEN_P; y++) for (let x = 0; x < GEN_P; x++) {
-      const i = T(x * GEN_K + h0, y * GEN_K + h0), o = (y * GEN_P + x) * 4;
+    const P = Math.ceil(N / k), h0 = k >> 1;
+    if (genTmp.width !== P) genTmp.width = genTmp.height = P;
+    if (!genImg || genImg.width !== P) genImg = genTmpCtx.createImageData(P, P);
+    const d = genImg.data, m = MAP_RGB[MEADOW];
+    for (let y = 0; y < P; y++) for (let x = 0; x < P; x++) {
+      const i = T(Math.min(N - 1, x * k + h0), Math.min(N - 1, y * k + h0)), o = (y * P + x) * 4;
       let R, Gc, B;
       if (HFin) {
         const h = HFin[i];
         if (h < 0.2) { R = 42; Gc = 90; B = 122; }
-        else { const f = 0.72 + Math.min(MAXL, 1 + Math.floor((h - 0.2) / 0.1)) * 0.05; R = m[0] * f; Gc = m[1] * f; B = m[2] * f; }
+        else { const v = 0.72 + Math.min(MAXL, 1 + Math.floor((h - 0.2) / 0.1)) * 0.05; R = m[0] * v; Gc = m[1] * v; B = m[2] * v; }
       } else [R, Gc, B] = tileRGB(i);
       d[o] = R; d[o + 1] = Gc; d[o + 2] = B; d[o + 3] = 255;
     }
-    genCtx.putImageData(genImg, 0, 0);
+    genTmpCtx.putImageData(genImg, 0, 0);
+    // (blocks kept on the tile grid: P blocks of k tiles span P * k tiles, a little past the map's edge when k doesn't divide N)
+    const D = genMap.width, span = P * k * D / N;
+    genCtx.imageSmoothingEnabled = false; genCtx.clearRect(0, 0, D, D); genCtx.drawImage(genTmp, 0, 0, P, P, 0, 0, span, span);
   } catch (err) { /* (the picture only) */ }
 }
-function drawGenMapDone() {
-  genDone = true;
+// the map itself (1 tile a block), hard pixels; then (smooth) the finished map scaled down smoothly
+function drawGenMapAt(smooth) {
+  genPhase = smooth ? 'smooth' : 'one';
   try {
-    const px = clamp(Math.round(genMap.clientWidth * (devicePixelRatio || 1)), 64, N);
-    if (genMap.width !== px) genMap.width = genMap.height = px;
-    genCtx.imageSmoothingEnabled = true; genCtx.imageSmoothingQuality = 'high'; genCtx.drawImage(mapCv, 0, 0, N, N, 0, 0, px, px);
+    const D = genMap.width;
+    genCtx.imageSmoothingEnabled = !!smooth; if (smooth) genCtx.imageSmoothingQuality = 'high';
+    genCtx.clearRect(0, 0, D, D); genCtx.drawImage(mapCv, 0, 0, N, N, 0, 0, D, D);
   } catch (err) { /* (the picture only) */ }
+}
+function redrawGenMap() {
+  if (genPhase === 'live') { if (genArgs) drawGenMap(...genArgs, true); }
+  else drawGenMapAt(genPhase === 'smooth');
 }
 // (v847, Jordan's 11-slice kit) the loading window nearly full screen. The frame is eleven cuts from one painting (packed
 // in frame-atlas.webp, each with 2 px of its own edge round it): the corners and the compass piece keep the kit's scale,
@@ -34565,16 +34581,15 @@ function layoutLoadWin() {
   box.querySelector('.lw-ctl').style.top = ctlTop + 'px';
   const side = Math.max(32, Math.min(ctlTop - LOAD_WIN.gap * u - y0, x1 - x0)), a = $('loadArt').style;
   a.left = (W - side) / 2 + 'px'; a.top = y0 + 'px'; a.width = a.height = side + 'px';
-  const k = side * dpr >= 560 ? 2 : 4;
-  if (k !== GEN_K) { GEN_K = k; GEN_P = N / k; genStep = ''; }
-  if (genDone) drawGenMapDone();
+  const px = clamp(Math.round(side * dpr), 64, 4096);
+  if (genMap.width !== px) { genMap.width = genMap.height = px; redrawGenMap(); }
 }
 addEventListener('resize', layoutLoadWin);
 layoutLoadWin();
 const genStart = performance.now();
-generate((f, label, HFin) => { $('loadFill').style.width = (f * 100).toFixed(1) + '%'; $('loadText').textContent = label; drawGenMap(label, HFin); }).then(async () => {
+generate((f, label, HFin) => { $('loadFill').style.width = (f * 100).toFixed(1) + '%'; $('loadText').textContent = label; drawGenMap(f, label, HFin); }).then(async () => {
   // (v810: the last step named for what it is, the towns' last pieces and the ground round you built, over the finished map)
-  $('loadFill').style.width = '98.5%'; $('loadText').textContent = 'BUILDING THE GROUND'; drawGenMapDone(); await nextFrame();
+  $('loadFill').style.width = '98.5%'; $('loadText').textContent = 'BUILDING THE GROUND'; drawGenMapAt(false); await nextFrame();
   finishTowns();
   H.x = spawn.x; H.z = spawn.z; H.y = surfaceY(H.x, H.z); H.face = Math.PI;
   camTarget.set(H.x, H.y, H.z);
@@ -34584,7 +34599,7 @@ generate((f, label, HFin) => { $('loadFill').style.width = (f * 100).toFixed(1) 
   updateSky();
   regionName = towns[0].name; setPlace(plateName(regionName));
   genMs = performance.now() - genStart;
-  $('loadFill').style.width = '100%'; $('loadText').textContent = 'THE WORLD AWAITS';
+  $('loadFill').style.width = '100%'; $('loadText').textContent = 'THE WORLD AWAITS'; drawGenMapAt(true);
   $('start').disabled = false; $('start').focus();
   requestAnimationFrame(frame);
 });
