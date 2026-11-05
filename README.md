@@ -572,6 +572,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v798:** (Jordan) Empty bottles are open, with no cork: Jordan's new painting (icons/paint/src/empty-bottle-open-256x256.png, shipped as emptyBottleOpen-128/256.webp) is the Empty Bottle's icon everywhere, and the held bottle over the world. The corked painting is now only for filled bottles (every potion is painted into it), so a bottle being filled at the water turns from open to corked at the bottom of its dip, under the water.
 
+**v799:** (Jordan) The open bottle painting sits exactly on the corked one: scaled to 97% and moved 2.5 px left and up (art kept as empty-bottle-open-256x256-original.png), so the bulbs match within a pixel and only the cork differs (briefs/open-bottle-align-v799.png in the shared folder). Both have 1-bit alpha, and their hue, saturation, brightness and contrast already matched within 1 to 3%, so the colours are untouched. Shipped as icons/paint/bottleOpen-128/256.webp (new names, so browsers don't keep v798's).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
