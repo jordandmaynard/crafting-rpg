@@ -1384,7 +1384,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 825;
+const GAME_VERSION = 826;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9379,6 +9379,9 @@ const bufWeb = new Buf();
 // (window glass: a mesh of its own per story with windowMat, casting no shadow; GLASSB is where glass goes while the
 // pieces are built, else into OUT with the rest. bufGIProxy: the walls as GI sees them, see buildPieces)
 let GLASSB = null;
+// (a tree's leaves: into OUT with the rest as the world is drawn, but into LEAFB of their own while a tree is drawn
+// to be felled (detach), so they can dissolve as it sinks; see fellLeafMat)
+let LEAFB = null;
 const bufGlass = new Buf(), bufGIProxy = new Buf();
 const bufInside = new BuildBuf();   // (v592: an upper story's furniture in its rooms, see buildPieces)
 const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new GlowBuf(), bufBuild = new BuildBuf(), bufTmp = new Buf(), bufTmpGlow = new GlowBuf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
@@ -9523,7 +9526,7 @@ const SAME_CORNERS = [0, 0, 0], SWAP_CORNERS = [0, 1, -1];   // (offsets in corn
 function emitPart(geo, color, into) {
   if (partPre) dummy.matrix.premultiply(partPre);
   const e = dummy.matrix.elements, src = GP.get(geo), k = typeof color === 'string' ? CC(color) : color;
-  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : OUT;
+  const B = partAll ? partAll : into === 'glow' ? GLOW : into === 'metal' ? METAL : into === 'prism' ? PRISMB : into === 'trunk' ? TRUNK : into === 'canopy' ? CANOPY : into === 'plant' ? PLANT : into === 'web' ? WEB : into === 'spider' ? SPIDER : into === 'glass' ? GLASSB || OUT : into === 'leaf' ? LEAFB || OUT : OUT;
   B.need(src.length);
   const p = B.p, cl = B.c; let n = B.n;
   // (v440: a mirrored pose (negative scale) turns every triangle inside out: lay each one's corners the other way
@@ -13179,11 +13182,11 @@ function pine(x, z, k, snow = false) {
   part(G.box, '#5a3a22', x, y + 0.2 * P, z, { sx: 0.16 * P, sy: 0.4 * P, sz: 0.16 * P });
   for (let i = 0; i < 3; i++) {
     const w = (0.75 - i * 0.18) * (0.8 + k * 0.3) * TS * P, yy = y + 0.38 * P + i * hgt * 0.24 + hgt * 0.2;
-    part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 });
+    part(G.cone6, shade(g, 1 + i * 0.08), x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3, into: 'leaf' });
     if (snow) {
-      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3 });
+      part(G.cone6, '#eef4fa', x, yy + hgt * 0.12, z, { sx: w * 0.62, sy: hgt * 0.22, sz: w * 0.62, ry: k * 3, into: 'leaf' });
       // and dusting the wide foot of each tier, turned a sixth round from the one below so it isn't the same
-      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3 });
+      part(G.snowSkirt, '#eef4fa', x, yy, z, { sx: w, sy: hgt * 0.45, sz: w, ry: k * 3 + ((i + Math.floor(k * 6)) % 6) * Math.PI / 3, into: 'leaf' });
     }
   }
 }
@@ -13216,13 +13219,13 @@ function roundTree(x, z, k, leaf = '#4f8a3a', bark = '#6a4428') {
   }
   // the crown: a clump over the fork, one at each limb's end, darker ones tucked in under them, and a few small
   // light ones on top where the sun catches it
-  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5 });
+  part(G.ico, shade(L, 0.95 + k * 0.1), f[0], f[1] + 0.48 * S, f[2], { sx: 0.66 * S, sy: 0.5 * S, sz: 0.62 * S, ry: k * 5, into: 'leaf' });
   for (const [e, a] of ends) {
-    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd() });
-    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2 });
-    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a });
+    part(G.ico, shade(L, 0.88 + rnd() * 0.16), e[0], e[1] + 0.06 * S, e[2], { sx: (0.5 + rnd() * 0.1) * S, sy: (0.38 + rnd() * 0.08) * S, sz: (0.46 + rnd() * 0.1) * S, ry: a + rnd(), into: 'leaf' });
+    part(G.ico, shade(L, 0.74), e[0] - Math.sin(a) * 0.12 * S, e[1] - 0.14 * S, e[2] - Math.cos(a) * 0.12 * S, { sx: 0.36 * S, sy: 0.24 * S, sz: 0.34 * S, ry: a * 2, into: 'leaf' });
+    part(G.ico, shade(L, 1.16 + rnd() * 0.06), e[0] + Math.sin(a) * 0.04 * S, e[1] + 0.24 * S, e[2] + Math.cos(a) * 0.04 * S, { sx: 0.22 * S, sy: 0.16 * S, sz: 0.2 * S, ry: a, into: 'leaf' });
   }
-  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2 });
+  part(G.ico, shade(L, 1.2), f[0] + 0.05 * S, f[1] + 0.72 * S, f[2] - 0.04 * S, { sx: 0.3 * S, sy: 0.2 * S, sz: 0.28 * S, ry: k * 2, into: 'leaf' });
 }
 // A birch: one slender white trunk (or two, splaying from one foot), dark and rough at its foot and marked with
 // black up its length, a few thin dark branches angling up, and an airy, tall crown of small leaf clusters along
@@ -13263,10 +13266,10 @@ function birch(x, z, k) {
     crown.push([top[0], top[1] + 0.08 * S, top[2]]);
     // the crown: a tall loose mass up the top of the trunk, with clusters at the branch tips and its peak
     const mid = [pts[2][0] * 0.5 + top[0] * 0.5, pts[2][1] * 0.4 + top[1] * 0.6, pts[2][2] * 0.5 + top[2] * 0.5], cs = twin ? 0.8 : 1;
-    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd });
+    part(G.ico, shade(leaf, 0.86), mid[0], mid[1], mid[2], { sx: 0.36 * S * cs, sy: 0.72 * S * cs, sz: 0.34 * S * cs, ry: k * 4 + sd, into: 'leaf' });
     for (const [n, c] of crown.entries()) {
       const sz = (0.2 + rnd() * 0.08) * S * cs;
-      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6 });
+      part(G.ico, shade(leaf, 0.92 + n * 0.06 + rnd() * 0.06), c[0], c[1], c[2], { sx: sz, sy: sz * 1.25, sz: sz * 0.95, ry: rnd() * 6, into: 'leaf' });
     }
   }
 }
@@ -13282,7 +13285,7 @@ function swampTree(x, z, k) {
   const hang = [CC('#8f9c78'), CC('#a3ab8c'), CC('#7d8c66')];
   // the foot, flaring, with moss on it
   seg(G.frust7, barkD, [x, y - 0.05, z], [x, y + 0.3 * S, z], 0.2 * S);
-  for (let n = 0; n < 3; n++) { const a = k * 5 + n * 2.1; part(G.dodec, moss, x + Math.sin(a) * 0.15 * S, y + 0.06 * S, z + Math.cos(a) * 0.15 * S, { sx: 0.16 * S, sy: 0.1 * S, sz: 0.14 * S, ry: a }); }
+  for (let n = 0; n < 3; n++) { const a = k * 5 + n * 2.1; part(G.dodec, moss, x + Math.sin(a) * 0.15 * S, y + 0.06 * S, z + Math.cos(a) * 0.15 * S, { sx: 0.16 * S, sy: 0.1 * S, sz: 0.14 * S, ry: a, into: 'leaf' }); }
   // the trunk, kinking as it climbs
   const pts = [[x, y + 0.2 * S, z]];
   for (let n = 0; n < 3; n++) {
@@ -13301,7 +13304,7 @@ function swampTree(x, z, k) {
     seg(G.frust7, bark, from, m, 0.06 * S);
     seg(G.frust7, bark, m, end, 0.04 * S);
     // moss along the top of the limb
-    part(G.dodec, moss, (from[0] + m[0]) / 2, (from[1] + m[1]) / 2 + 0.04 * S, (from[2] + m[2]) / 2, { sx: 0.09 * S, sy: 0.05 * S, sz: 0.09 * S, ry: a });
+    part(G.dodec, moss, (from[0] + m[0]) / 2, (from[1] + m[1]) / 2 + 0.04 * S, (from[2] + m[2]) / 2, { sx: 0.09 * S, sy: 0.05 * S, sz: 0.09 * S, ry: a, into: 'leaf' });
     // bare twigs off its end
     for (let t = 0; t < 2; t++) {
       const ta = a + (t ? 0.7 : -0.7) + (rnd() - 0.5) * 0.4;
@@ -13702,7 +13705,7 @@ function pumice(x, z, k) {
 // crown and narrowing to a yellowed tip), a few young ones standing up in the middle, and dates hanging under them
 function frondBlade(col, x, y, z, ry, rx, rz, sx, sy, sz) {
   dummy.position.set(x, y, z); dummy.rotation.set(rx, ry, rz, 'YXZ'); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
-  emitPart(G.box, col, 'world');
+  emitPart(G.box, col, 'leaf');
   dummy.rotation.set(0, 0, 0, 'XYZ');
 }
 function palm(x, z, k) {
@@ -13720,7 +13723,7 @@ function palm(x, z, k) {
     seg(G.cyl8, ringC, b, [b[0] + (b[0] - a[0]) * 0.12, b[1] + (b[1] - a[1]) * 0.12, b[2] + (b[2] - a[2]) * 0.12], r * 1.2);   // (the ring a frond left)
   }
   const C = at(1);
-  part(G.ico, shade(CC('#6a5a32'), 0.9), C[0], C[1] + 0.02 * S, C[2], { sx: 0.2 * S, sy: 0.16 * S, sz: 0.2 * S });   // (the crown's heart)
+  part(G.ico, shade(CC('#6a5a32'), 0.9), C[0], C[1] + 0.02 * S, C[2], { sx: 0.2 * S, sy: 0.16 * S, sz: 0.2 * S, into: 'leaf' });   // (the crown's heart)
   // the fronds: out and up from the crown, arching over and drooping to their tips
   const frond = (a, up, L, wide) => {
     let px = C[0], py = C[1] + 0.04 * S, pz = C[2], pitch = up;
@@ -13742,7 +13745,7 @@ function palm(x, z, k) {
   // dates hanging in bunches under the crown
   for (let q = 0; q < 3; q++) {
     const a = k * 3 + q * 2.09, bx = C[0] + Math.sin(a) * 0.1 * S, bz = C[2] + Math.cos(a) * 0.1 * S;
-    part(G.ico, shade(CC('#9a5a22'), 0.85 + rnd() * 0.25), bx, C[1] - 0.1 * S, bz, { sx: 0.08 * S, sy: 0.12 * S, sz: 0.08 * S, ry: a });
+    part(G.ico, shade(CC('#9a5a22'), 0.85 + rnd() * 0.25), bx, C[1] - 0.1 * S, bz, { sx: 0.08 * S, sy: 0.12 * S, sz: 0.08 * S, ry: a, into: 'leaf' });
   }
 }
 function cactus(x, z, k) {
@@ -23279,26 +23282,141 @@ scene.add(arcMesh, ringMesh);
 let arcT = 9, ringT = 9;
 
 // ---------- Chopping ----------
+// (v826, Jordan) a felled tree topples as a pole tipping over about its foot does under gravity: slow to start, ever
+// faster, thudding down (a little bounce), dust thrown up all along it the moment it lands, the colour of its
+// bark; then it sinks into the ground as its leaves dissolve away in a smooth noise. T > Tree felling.
+const FELL = { gravity: 14, push: 0.6, bounce: 0.22, dust: 1, hold: 0.25, sink: 1.2, depth: 1.1, dissolve: 1, noise: 2.6 };
+// the bark a felled tree's dust takes (its trunk's own colour, by kind)
+const FELL_BARK = { [O.PINE]: '#5a3a22', [O.SNOWPINE]: '#5a3a22', [O.OAK]: '#6a4428', [O.BIRCH]: '#e8e4d8', [O.CACTUS]: '#5a8a3a', [O.PALM]: '#8a6a48', [O.BURNT]: '#1e1816' };
+const fellBark = (o, c, r) => FELL_BARK[o] || (o === O.DEAD ? (BI[T(c, r)] === SWAMP ? '#3e3a2c' : BI[T(c, r)] === GRAVE ? '#4a4448' : '#3a3030') : '#6a4428');
+// A felled tree's leaves, drawn as groundMat draws them but cut away where a smooth 3D noise (in the tree's own
+// frame, so it rides along as it falls) is under the cut: as fd.x rises from 0 to 1, holes open in the crown and
+// spread till nothing's left. A plain cut, no dither. Its shadow is cut the same way. Each tree falling has its own
+// (from a small pool, so their pipelines are made once): fd = (cut, noise scale, seed x, seed z).
+const FELL_WGSL = /* wgsl */ `
+fn fdHash(p: vec3f) -> vec3f {
+  let q = vec3f(dot(p, vec3f(127.1, 311.7, 74.7)), dot(p, vec3f(269.5, 183.3, 246.1)), dot(p, vec3f(113.5, 271.9, 124.6)));
+  return fract(sin(q) * 43758.5453) * 2.0 - 1.0;
+}
+fn fdGrad(i: vec3f, f: vec3f, o: vec3f) -> f32 { return dot(normalize(fdHash(i + o) + vec3f(1e-4)), f - o); }
+// gradient (Perlin) noise, about -0.9..0.9
+fn fdNoise(p: vec3f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  let a = mix(fdGrad(i, f, vec3f(0.0, 0.0, 0.0)), fdGrad(i, f, vec3f(1.0, 0.0, 0.0)), u.x);
+  let b = mix(fdGrad(i, f, vec3f(0.0, 1.0, 0.0)), fdGrad(i, f, vec3f(1.0, 1.0, 0.0)), u.x);
+  let c = mix(fdGrad(i, f, vec3f(0.0, 0.0, 1.0)), fdGrad(i, f, vec3f(1.0, 0.0, 1.0)), u.x);
+  let d = mix(fdGrad(i, f, vec3f(0.0, 1.0, 1.0)), fdGrad(i, f, vec3f(1.0, 1.0, 1.0)), u.x);
+  return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+}
+// is this point of the leaves (lp: in the tree's own frame) gone yet?
+fn fellCut(lp: vec3f) -> bool {
+  if (U.fd.x <= 0.0) { return false; }
+  let p = lp * U.fd.y + vec3f(U.fd.z, 0.0, U.fd.w);
+  let n = fdNoise(p) * 0.7 + fdNoise(p * 2.03 + vec3f(5.2, 1.3, 7.7)) * 0.3;
+  return clamp(0.5 + n * 0.85, 0.0, 1.0) < mix(-0.02, 1.02, U.fd.x);
+}
+`;
+const makeFellLeafMat = () => new GFX.ShaderMaterial({ uniforms: { fd: { value: { x: 0, y: FELL.noise, z: 0, w: 0 } } }, vertexColors: true, side: GFX.DoubleSide, lit: true,
+  shadowFrag: true,
+  shadowCode: FELL_WGSL + /* wgsl */ `
+struct SOut { @builtin(position) pos: vec4f, @location(0) lp: vec3f }
+@vertex fn vs(v: VIn) -> SOut { return SOut(F.viewProj * (O.model * vec4f(v.position, 1.0)), v.position); }
+@fragment fn fs(i: SOut) { if (fellCut(i.lp)) { discard; } }`,
+  code: FELL_WGSL + /* wgsl */ `
+struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) lp: vec3f }
+@vertex fn vs(v: VIn) -> VOut {
+  let w = O.model * vec4f(v.position, 1.0);
+  return VOut(F.viewProj * w, w.xyz, v.color, w.xyz - F.camPos.xyz, v.position);
+}
+@fragment fn fs(i: VOut) -> @location(0) vec4f {
+  if (fellCut(i.lp)) { discard; }
+  let N = flatNormal(i.eye);
+  let c = shadeLit(i.color, vec3f(0.0), 0.0, 1.0, i.world, N, O.emissive.w > 0.5);
+  return vec4f(applyFog(c, viewDepth(i.world)), 1.0);
+}`,
+});
+const fellLeafPool = [];   // { mat, d (the tree using it, or null) }
+function fellLeafMat(d) {
+  let s = fellLeafPool.find(q => !q.d);
+  if (!s) { s = fellLeafPool.length < 4 ? { mat: makeFellLeafMat(), d: null } : fellLeafPool.reduce((a, b) => a.d.fallT > b.d.fallT ? a : b); if (!fellLeafPool.includes(s)) fellLeafPool.push(s); }
+  if (s.d && s.d !== d) { s.d.leafMesh.material = groundMat; s.d.leafSlot = null; }
+  s.d = d;
+  const v = s.mat.uniforms.fd.value; v.x = 0; v.y = FELL.noise; v.z = (d.x * 7.31) % 97; v.w = (d.z * 3.17) % 89;
+  return s;
+}
+// A felled tree's fall, a step on: true once it's gone. It turns as a pole of its height pivoting on its foot
+// would (its angular speed gaining 3g/2L sin(angle) a second), lands where it lies (a little short of flat: its
+// crown holds it up), bounces a little, and settles; then it sinks and its leaves dissolve.
+const FELL_REST = Math.PI / 2 - 0.1;
+function updateFaller(d, dt) {
+  if (d.landT < 0 || d.spin !== 0) {
+    const kk = 1.5 * FELL.gravity / d.top;
+    // (in small steps: it's quickest just as it lands)
+    for (let n = 0, steps = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / steps; n < steps; n++) {
+      d.spin += kk * Math.sin(d.ang) * h; d.ang += d.spin * h;
+      if (d.ang >= FELL_REST) {
+        d.ang = FELL_REST;
+        if (d.landT < 0) { d.landT = d.fallT; fellDust(d); sfx.thunk(); }
+        d.spin = -d.spin * FELL.bounce;
+        if (Math.abs(d.spin) < 0.35) { d.spin = 0; break; }
+      }
+    }
+    d.g.quaternion.setFromAxisAngle(d.axis, d.ang);
+  }
+  if (d.landT < 0) return false;
+  const t = d.fallT - d.landT - FELL.hold;
+  if (t <= 0) return false;
+  const sk = Math.min(1, t / Math.max(0.05, FELL.sink));
+  d.g.position.y = d.y0 - FELL.depth * sk * sk * (3 - 2 * sk);
+  if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.mat.uniforms.fd.value.x = Math.min(1, t / Math.max(0.05, FELL.dissolve));
+  return t >= Math.max(FELL.sink, FELL.dissolve);
+}
+// the dust thrown up as it lands: all along it, from its foot to its crown, outward to either side, in its bark's
+// colour
+function fellDust(d) {
+  if (FELL.dust <= 0) return;
+  const col = fellBark(d.o, d.c, d.r), L = d.top * 0.95, n = Math.max(3, Math.round(L * 2.6 * FELL.dust));
+  const ax = d.fx, az = d.fz, px = -az, pz = ax;
+  if (FX_TUNE.on < 0.5) { for (let q = 0; q < n; q++) { const s = (q + 0.5) / n * L; puff(d.x + ax * s, surfaceY(d.x + ax * s, d.z + az * s), d.z + az * s, col, 3, 0.9); } return; }
+  const ramp = fxParts.tint(col);
+  for (let q = 0; q < n; q++) {
+    const s = (q + 0.2 + Math.random() * 0.6) / n * L, x0 = d.x + ax * s, z0 = d.z + az * s, gy = surfaceY(x0, z0);
+    for (let m = 0; m < Math.round(3 * FX_TUNE.density); m++) {
+      const side = m % 2 ? 1 : -1, sp = (0.7 + Math.random() * 0.9) * (0.8 + 0.4 * s / L), al = (Math.random() - 0.5) * 0.6;
+      fxParts.spawn({ style: GFX.FX.PUFF, x: x0 + px * side * 0.12, y: gy + 0.1, z: z0 + pz * side * 0.12,
+        vx: (px * side + ax * al) * sp, vz: (pz * side + az * al) * sp, vy: 0.4 + Math.random() * 0.7,
+        life: 0.7 + Math.random() * 0.6, size0: 0.1 + Math.random() * 0.06, size1: 0.3 + Math.random() * 0.16, drag: 2.6, grav: -0.08, turb: 0.25, floor: gy,
+        ramp, tone0: 0.7, tone1: 0.85, alpha: 0.8 });
+    }
+  }
+}
+const bufTmpLeaf = new Buf(), bufTmpPlant = new PlantBuf(), bufTmpWeb = new Buf(), bufTmpSpider = new SpiderBuf();
 function detach(i, c, r) {
   let d = detached.get(i);
   if (d) return d;
   const o = OB[i];
-  const save = [OUT, GLOW, METAL, PRISMB];
+  // (the leaves into a buffer of their own; a swamp tree's hanging moss with them; webs and spiders, which a felled
+  // tree doesn't keep, kept out of the world's own buffers)
+  const save = [OUT, GLOW, METAL, PRISMB, LEAFB, PLANT, WEB, SPIDER];
   OUT = bufTmp; GLOW = bufTmpGlow; METAL = bufTmpMetal; PRISMB = bufTmpPrism; bufTmp.n = 0; bufTmpGlow.n = 0; bufTmpMetal.n = 0; bufTmpPrism.n = 0;
-  drawObject(o, c, r);
+  LEAFB = bufTmpLeaf; PLANT = bufTmpPlant; WEB = bufTmpWeb; SPIDER = bufTmpSpider; bufTmpLeaf.n = 0; bufTmpPlant.n = 0; bufTmpWeb.n = 0; bufTmpSpider.n = 0;
+  try { drawObject(o, c, r); } finally { [OUT, GLOW, METAL, PRISMB, LEAFB, PLANT, WEB, SPIDER] = save; }
+  if (bufTmpPlant.n) { bufTmpLeaf.need(bufTmpPlant.n); bufTmpLeaf.p.set(bufTmpPlant.p.subarray(0, bufTmpPlant.n), bufTmpLeaf.n); bufTmpLeaf.c.set(bufTmpPlant.c.subarray(0, bufTmpPlant.n), bufTmpLeaf.n); bufTmpLeaf.n += bufTmpPlant.n; }
   const [x, z] = objPos(c, r, o), y = LV[i] * STEP;
   // recentre on the trunk so it can shake and topple about its foot
-  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; }
+  let top = 0;
+  for (const B of [bufTmp, bufTmpGlow, bufTmpMetal, bufTmpPrism, bufTmpLeaf]) for (let k = 0; k < B.n; k += 3) { B.p[k] -= x; B.p[k + 1] -= y; B.p[k + 2] -= z; if (B.p[k + 1] > top) top = B.p[k + 1]; }
   const g = new GFX.Group();
   const m = bufTmp.mesh(groundMat); if (m) g.add(m);
+  const ml = bufTmpLeaf.mesh(groundMat); if (ml) g.add(ml);
   // (and what of it glows: the fantasy ores' crystal tips, seams and embers)
   const mg = bufTmpGlow.mesh(glowMat); if (mg) g.add(mg);
   const mm = bufTmpMetal.mesh(metalMat); if (mm) g.add(mm);
   const mp = bufTmpPrism.mesh(prismMat(1, true)); if (mp) g.add(mp);
   g.position.set(x, y, z);
   scene.add(g);
-  [OUT, GLOW, METAL, PRISMB] = save;
-  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false };
+  d = { g, hp: OBJ[o].hp, o, c, r, x, z, shake: 0, falling: false, leafMesh: ml, top: Math.max(0.5, top) };
   detached.set(i, d);
   // its chunk's objects are drawn again without it a few rows a step (as a chunk streams in: drawing them all at
   // once took 8-20 ms, a spike on the first blow); till they swap in, the chunk's own copy stands and this one hides
@@ -23343,6 +23461,9 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
     if (od.tree) {
       // timber: tip over away from the swing, then sink away
       d.falling = true; d.fallT = 0; d.axis = new GFX.Vector3(dirz, 0, -dirx).normalize();
+      // (it tips about its foot from a hair off upright, the last blow's push already turning it)
+      d.ang = 0.03; d.spin = FELL.push; d.landT = -1; d.y0 = d.g.position.y; d.fx = dirx; d.fz = dirz;
+      if (d.leafMesh) { d.leafSlot = fellLeafMat(d); d.leafMesh.material = d.leafSlot.mat; }
       fallers.push(d);
       sfx.fell();
     } else {
@@ -29790,11 +29911,10 @@ function update(dt) {
   for (let k = fallers.length - 1; k >= 0; k--) {
     const d = fallers[k];
     d.fallT += dt;
-    const a = Math.min(Math.PI / 2 - 0.1, d.fallT * d.fallT * 3.2);
-    d.g.quaternion.setFromAxisAngle(d.axis, a);
-    if (d.fallT > 0.9 && !d.thud) { d.thud = true; puff(d.x + d.sx * 1.2, LV[T(d.c, d.r)] * STEP, d.z + d.sz * 1.2, '#c8bca0', 10, 1.4); }
-    if (d.fallT > 1.4) d.g.position.y -= dt * 1.4;
-    if (d.fallT > 2.2) { scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1); }
+    if (updateFaller(d, dt)) {
+      scene.remove(d.g); detached.delete(T(d.c, d.r)); fallers.splice(k, 1);
+      if (d.leafSlot && d.leafSlot.d === d) d.leafSlot.d = null;
+    }
   }
   // (v781, Jordan's G: doors and gates the top movers) a door at rest is left alone: its swing eases toward open or shut
   // and is set there once it's within a hair, where before it crept on for a minute or more after closing (each step a
@@ -32749,6 +32869,17 @@ const TUNING = [
     [TREE_SIZE, 'fern', 'Fern size', 0.3, 3, 0.05],
     [TREE_SIZE, 'swamp', 'Swamp tree size (mossy, gnarled)', 0.4, 2.5, 0.05],
     [TREE_SIZE, 'grave', 'Graveyard tree size (webbed, gnarled)', 0.4, 2.5, 0.05],
+  ]],
+  ['Tree felling', [
+    [FELL, 'gravity', 'Gravity (how fast it falls)', 2, 40, 0.5],
+    [FELL, 'push', 'Push from the last blow (how quick it starts)', 0, 3, 0.05],
+    [FELL, 'bounce', 'Bounce on landing', 0, 0.6, 0.01],
+    [FELL, 'dust', 'Dust along the trunk (× how much, 0 none)', 0, 3, 0.05],
+    [FELL, 'hold', 'Lies there before sinking (seconds)', 0, 2, 0.05],
+    [FELL, 'sink', 'Sinking (seconds)', 0.1, 4, 0.05],
+    [FELL, 'depth', 'How far it sinks', 0.2, 3, 0.05],
+    [FELL, 'dissolve', 'Leaves dissolving (seconds)', 0.1, 4, 0.05],
+    [FELL, 'noise', 'Dissolve noise size (higher: smaller holes)', 0.5, 8, 0.1],
   ]],
   ['Graveyard spiders', [
     [SPIDERS, 'drops', 'How often they drop (0 never)', 0, 5, 0.05],

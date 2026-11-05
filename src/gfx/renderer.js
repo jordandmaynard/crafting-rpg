@@ -1321,6 +1321,9 @@ class Renderer {
       p = this.device.createRenderPipeline({
         layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.bglFrameShadow, this.bglObj, info.bgl] }),
         vertex: { module: this._module(builtinCode('shadow', false, false).replace(/struct VIn[\s\S]*$/, '') + info.head + mat.shadowCode), entryPoint: 'vs', buffers },
+        // (shadowFrag: the shadowCode also has a fragment function fs, with no outputs, that may discard: a felled
+        // tree's dissolving leaves)
+        ...(mat.shadowFrag ? { fragment: { module: this._module(builtinCode('shadow', false, false).replace(/struct VIn[\s\S]*$/, '') + info.head + mat.shadowCode), entryPoint: 'fs', targets: [] } } : {}),
         primitive: { topology: 'triangle-list', cullMode: cull, frontFace: 'ccw' },
         depthStencil: { format: SHADOW_FORMAT, depthCompare: 'less-equal', depthWriteEnabled: true },
       });
