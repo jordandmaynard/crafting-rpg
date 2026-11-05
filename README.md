@@ -640,6 +640,7 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 **v832:** (Jordan) Resource fly-ups (floatGain, GAIN_FLY, T > Fly-ups): each holds still 1 s (hold) before it rises and fades; more of the same resource while it holds adds to its count, pulses it toward white and restarts the hold; different resources get their own, stacked. The resource's icon is drawn to the right of the text. Pinned to the world point each frame (updateGains). Covers chopping/mining, crops, loot and bone pickups, and build-piece refunds (one per material now, was one '+8P 2S' line). Damage, healing, XP keep floatText.
 **v833:** (Jordan: the rise looked jerky) Resource fly-ups rise smoothly; v832 kept the old fly-up's 9-step rise. GAIN_FLY.steps (T > Fly-ups) brings steps back (0 = smooth).
 **v834:** (Jordan) Resource fly-ups: only the +count pulses when more is added (color toward white and a swell about its middle); the name and icon stay still.
+**v835:** (Jordan) Resource fly-ups: the whole fly-up (text and icon) swells about its middle on a pulse again; only the +count pulses color.
 
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
