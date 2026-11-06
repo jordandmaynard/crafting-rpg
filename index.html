@@ -648,19 +648,18 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
    page tabs) unless POUCH.front. */
 #invGroup .pouch { position: absolute; left: 0; top: 0; width: 399px; height: 540px; transform-origin: 0 0; pointer-events: none; z-index: -1; }
 #invGroup .pouch.front { z-index: 3; }
-#invGroup .pouch > * { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; -webkit-user-drag: none; transition: opacity calc(var(--pouchFade, 0.12) * 1s) ease-out; }
+#invGroup .pouch > * { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; -webkit-user-drag: none; }
+/* (v915: the layers' see-through is set by pouchTick (pouchReveal): under the mouse, or a peek as gold comes in) */
 #invGroup .pouch .pouch-back, #invGroup .pouch .pouch-coins { opacity: 0; }
 /* (v910, Jordan) the backpack-matched leather colour (v908's filter: brightness 0.832, contrast 1.302, saturation 0.673)
    is baked into ui/pouch/*.webp, and the cutaway's gone: the front fades to the back shell and coins */
 #invGroup .pouch .pouch-coins { mask: url("ui/pouch/pouch-back.webp") 0 0 / 100% 100% no-repeat; -webkit-mask: url("ui/pouch/pouch-back.webp") 0 0 / 100% 100% no-repeat; }
-#invGroup .pouch.open .pouch-front, #invGroup .pouch.open .pouch-gold { opacity: 0; }
 /* (v913, Jordan) the gold count lives on the pouch's front now (off the Character page): Jordan's coin stacks icon (black
    outline baked in, ui/pouch/gold-icon.webp) over the total in large gold with a black outline, in the pouch's own art
    px so it swings with it, fading with the front. Place and look from T > Gold pouch (POUCH.gold*) */
 #invGroup .pouch > .pouch-gold { left: calc(var(--pgX, 215) * 1px - 200px); top: calc(var(--pgY, 360) * 1px - var(--pgIcon, 140) * 0.5px); width: 400px; height: auto; display: flex; flex-direction: column; align-items: center; }
 #invGroup .pouch-gold img { position: static; width: calc(var(--pgIcon, 140) * 1px); height: calc(var(--pgIcon, 140) * 1px); }
 #invGroup .pouch-gold span { position: static; margin-top: calc(var(--pgGap, -6) * 1px); font: 700 calc(var(--pgNum, 84) * 1px)/1 var(--wk); color: var(--pgColor, #f7cf4f); -webkit-text-stroke: calc(var(--pgStroke, 9) * 2px) #000; paint-order: stroke fill; letter-spacing: 0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
-#invGroup .pouch.open .pouch-back, #invGroup .pouch.open .pouch-coins { opacity: 1; }
 #invGroup .pouch-pin { position: absolute; width: 0; height: 0; pointer-events: none; }
 #invGroup .pack-tab.on { translate: 0 0; clip-path: inset(-6px 60px -6px -6px); --bmTint: #f3cd79; --bmTintA: 0.12; }
 #invGroup .pack-tab.on span { color: #fff0cf; }
@@ -1474,7 +1473,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 914;
+const GAME_VERSION = 915;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -21487,6 +21486,7 @@ requestAnimationFrame(potionTick);
 const POUCH = { x: 27, y: 672, neckX: 199, neckY: 127, scale: 0.45, front: 1, rest: 0,
   floorY: 512, floorX: 230, floorBow: 20.9,   // (v909: the floor Jordan drew, art px: its lowest point, where, and how much higher 150 px either side)
   len: 255, grav: 7750, damp: 2.1, maxSwing: 36, walk: 1, fade: 0.12, spring: 272, springPow: 4.75,
+  peek: 1, peekAmount: 0.85, peekIn: 0.15, peekHold: 1, peekOut: 0.6,   // (v915: the front fading as gold comes in)
   goldX: 215, goldY: 360, goldIcon: 140, goldNum: 84, goldStroke: 9, goldGap: -6, goldColor: '#f7cf4f',   // (v913: the gold count on its front, art px)
   perGold: 1, most: 250, drop: 30, size: 27.5, thick: 0.28, depth: 102, hit: 0.54, wall: 29.5, coinGrav: 0.55, shake: 1,
   friction: 4, spin: 0.005, spinDamp: 10.8, settle: 0,
@@ -21496,7 +21496,8 @@ const POUCH_W = 399, POUCH_H = 540, POUCH_CAP = 300, POUCH_STEP = 1 / 300, POUCH
 // the gold ramp the world's coin fountain uses (COIN_FX's 'gold'), for the coins' colour by POUCH.tone
 const POUCH_GOLD = ['#3a2204', '#6a420a', '#9a6612', '#c88e1e', '#e8b232', '#f6d058', '#fde69a', '#fff8dc'].map(h => new GFX.Color(h));
 const pouch = { phi: 0, w: 0, px: null, py: null, vx: 0, vy: 0, coins: [], drops: 0, dropT: 0, sdf: null, sdfBusy: false, gpu: null,
-  dirty: true, still: 0, acc: 0, mx: -1e9, my: -1e9, open: false, last: 0, broken: false, shown: false, settle: 0, gold: -1, grid: null };
+  dirty: true, still: 0, acc: 0, mx: -1e9, my: -1e9, open: false, last: 0, broken: false, shown: false, settle: 0, gold: -1, grid: null,
+  hov: 0, reveal: 0, peekV: 0, peekLeft: 0, lastGold: 0, layers: null };
 addEventListener('pointermove', e => { pouch.mx = e.clientX; pouch.my = e.clientY; }, { passive: true });
 document.addEventListener('pointerleave', () => { pouch.mx = pouch.my = -1e9; });
 addEventListener('blur', () => { pouch.mx = pouch.my = -1e9; });
@@ -21663,14 +21664,17 @@ function pouchSync(dt) {
   const P = POUCH, want = H.gold > 0 ? Math.min(Math.round(Math.min(P.most, POUCH_CAP)), Math.ceil(H.gold / Math.max(0.01, P.perGold))) : 0, C = pouch.coins;
   while (C.length > want) { C.pop(); pouch.dirty = true; }
   if (C.length >= want) { pouch.dropT = 0; return; }
-  if (!pouch.open) {
+  if (!pouch.open && !(pouch.peekLeft > 0)) {
     const was = C.length;
     while (C.length < want) C.push(pouchSpawn(false));
     if (C.length - was > 2) pouch.settle = POUCH_SETTLE;
     pouch.dirty = true; pouch.still = 0; return;
   }
   pouch.dropT += dt * Math.max(1, P.drop);
-  while (pouch.dropT >= 1 && C.length < want) { pouch.dropT -= 1; C.push(pouchSpawn(true)); pouch.dirty = true; pouch.still = 0; }
+  while (pouch.dropT >= 1 && C.length < want) {
+    pouch.dropT -= 1; C.push(pouchSpawn(true)); pouch.dirty = true; pouch.still = 0;
+    if (pouch.peekLeft > 0) pouch.peekLeft = Math.max(pouch.peekLeft, POUCH.peekHold);   // (a peek holds till the last coin's in, and its hold after)
+  }
 }
 function pouchInfo() {
   $('invInfo').innerHTML = `<b>GOLD</b> ${H.gold} piece${H.gold === 1 ? '' : 's'} in your pouch.`;
@@ -21692,7 +21696,7 @@ function pouchTickBody(now) {
   const dt = pouch.last ? Math.min(0.05, Math.max(0.001, (now - pouch.last) / 1000)) : 1 / 60;
   pouch.last = now;
   const el = $('pouch'), pin = $('pouchPin'), P = POUCH;
-  if (!(started && invOpen && invPack && el && el.offsetParent)) { pouch.px = null; pouch.shown = false; pouchSetOpen(false); return; }
+  if (!(started && invOpen && invPack && el && el.offsetParent)) { pouch.px = null; pouch.shown = false; pouchSetOpen(false); pouch.lastGold = H.gold; pouch.peekLeft = 0; pouch.peekV = 0; return; }
   if (!pouchSdf()) return;
   pin.style.left = P.x + 'px'; pin.style.top = P.y + 'px';
   el.classList.toggle('front', P.front >= 0.5);
@@ -21708,6 +21712,10 @@ function pouchTickBody(now) {
   }
   pouch.px = X; pouch.py = Y;
   pouch.shown = true;
+  // (v915, Jordan) gold coming in while the pack's open and the mouse isn't on the pouch: the front fades by P.peekAmount
+  // over P.peekIn s so you see it fall in, holds P.peekHold s after the last coin drops, then comes back over P.peekOut s
+  if (H.gold > pouch.lastGold && !pouch.open && P.peek >= 0.5 && P.peekAmount > 0) { pouch.peekLeft = Math.max(pouch.peekLeft, P.peekHold + 1e-3); pouch.dirty = true; }
+  pouch.lastGold = H.gold;
   pouchSync(dt);
   if (pouch.settle > 0) {
     // coins put in while it was shut (the first time it's shown, or a haul): let them fall into a heap before they're seen,
@@ -21722,7 +21730,7 @@ function pouchTickBody(now) {
   const L = Math.max(5, P.len), g = P.grav, rest = P.rest * Math.PI / 180, lim = P.maxSwing * Math.PI / 180, sc = Math.max(0.05, P.scale);
   pouch.acc = Math.min(pouch.acc + dt, POUCH_STEP * 16);
   let most = 0;
-  const awake = pouch.open || pouch.still < 0.6 || Math.abs(ax) + Math.abs(ay) > 50 || Math.abs(pouch.w) > 0.02;
+  const awake = pouch.open || pouch.reveal > 0 || pouch.still < 0.6 || Math.abs(ax) + Math.abs(ay) > 50 || Math.abs(pouch.w) > 0.02;
   while (pouch.acc >= POUCH_STEP) {
     pouch.acc -= POUCH_STEP;
     const h = POUCH_STEP, f = pouch.phi;
@@ -21735,7 +21743,6 @@ function pouchTickBody(now) {
     if (awake && pouch.coins.length) most = Math.max(most, pouchCoinStep(h, ax / sc, ay / sc, pouch.phi, pouch.w, al));
   }
   if (awake) { pouch.still = most > 0.02 ? 0 : pouch.still + dt; if (most > 0.02) pouch.dirty = true; }
-  el.style.setProperty('--pouchFade', Math.max(0, P.fade));
   el.style.transform = `translate(${P.x}px, ${P.y}px) rotate(${pouch.phi.toFixed(5)}rad) scale(${sc}) translate(${-P.neckX}px, ${-P.neckY}px)`;
   // under the mouse: the pointer turned back into the pouch's own px, inside the shell's outline
   const dx = (pouch.mx - r.left) / ui, dy = (pouch.my - r.top) / ui, c = Math.cos(pouch.phi), s = Math.sin(pouch.phi);
@@ -21747,7 +21754,27 @@ function pouchTickBody(now) {
   const pe = pouch.open ? 'auto' : 'none';
   if (el.style.pointerEvents !== pe) el.style.pointerEvents = pe;
   if (pouch.open && pouch.gold !== H.gold) { pouch.gold = H.gold; pouchInfo(); }
-  if (pouch.open && pouch.dirty) { pouch.dirty = false; pouchGpu(ui); }
+  pouchReveal(el, dt);
+  if (pouch.reveal > 0 && pouch.dirty) { pouch.dirty = false; pouchGpu(ui); }
+}
+// (v915) how far the front's faded away (0 shut .. 1 the back shell and coins alone): under the mouse, all of it over
+// P.fade s; a peek, P.peekAmount of it in P.peekIn s, out in P.peekOut s; whichever is more. The front and the gold count
+// fade by it; the back shell and the coins show whole behind them while anything shows through
+function pouchReveal(el, dt) {
+  const P = POUCH, ease = t => t * t * (3 - 2 * t);
+  pouch.hov = clamp(pouch.hov + (pouch.open ? 1 : -1) * dt / Math.max(0.001, P.fade), 0, 1);
+  const amt = clamp(P.peekAmount, 0, 1);
+  if (pouch.peekLeft > 0) {
+    pouch.peekV = Math.min(amt, pouch.peekV + dt * amt / Math.max(0.001, P.peekIn));
+    if (pouch.peekV >= amt) pouch.peekLeft = Math.max(0, pouch.peekLeft - dt);
+  } else pouch.peekV = Math.max(0, pouch.peekV - dt * Math.max(amt, 0.01) / Math.max(0.001, P.peekOut));
+  const was = pouch.reveal;
+  pouch.reveal = Math.max(ease(pouch.hov), amt > 0 ? ease(pouch.peekV / amt) * amt : 0);
+  if (pouch.reveal > 0 && !(was > 0)) pouch.dirty = true;   // (just showing: draw the coins as they are now)
+  const front = (1 - pouch.reveal).toFixed(3), back = pouch.reveal > 0.001 ? '1' : '0', L = pouch.layers || (pouch.layers = {
+    front: el.querySelector('.pouch-front'), gold: el.querySelector('.pouch-gold'), back: el.querySelector('.pouch-back'), coins: el.querySelector('.pouch-coins') });
+  if (L.front.style.opacity !== front) { L.front.style.opacity = front; L.gold.style.opacity = front; }
+  if (L.back.style.opacity !== back) { L.back.style.opacity = back; L.coins.style.opacity = back; }
 }
 const POUCH_WGSL = /* wgsl */ `
 fn pqr(q: vec4f, v: vec3f) -> vec3f { let t = 2.0 * cross(q.xyz, v); return v + q.w * t + cross(q.xyz, t); }
@@ -34771,6 +34798,11 @@ const TUNING = [
     [POUCH, 'springPow', 'Swing: how much harder the spring pulls further out (1 evenly, 2-4 much harder near the edge)', 1, 10, 0.05, applyPouch],
     [POUCH, 'walk', "Swing from walking with the pack open (x the pack potions' push; 0 off)", 0, 3, 0.05, applyPouch],
     [POUCH, 'fade', 'Under the mouse: cross-fade time (s)', 0, 1, 0.01, applyPouch],
+    [POUCH, 'peek', 'Gold coming in: the front fades so you see it fall in (1 on, 0 off)', 0, 1, 1, applyPouch],
+    [POUCH, 'peekAmount', 'Gold coming in: how much the front fades (1 all the way, as under the mouse)', 0, 1, 0.01, applyPouch],
+    [POUCH, 'peekIn', 'Gold coming in: fade-out time (s)', 0, 2, 0.01, applyPouch],
+    [POUCH, 'peekHold', 'Gold coming in: stays faded this long after the last coin drops in (s)', 0, 5, 0.05, applyPouch],
+    [POUCH, 'peekOut', 'Gold coming in: fade-back time (s)', 0, 3, 0.01, applyPouch],
     [POUCH, 'goldX', 'Gold count: across the front (art px, its middle)', 0, 399, 1, applyPouch],
     [POUCH, 'goldY', "Gold count: down the front (art px, the icon's middle)", 0, 540, 1, applyPouch],
     [POUCH, 'goldIcon', 'Gold count: icon size (art px)', 20, 300, 1, applyPouch],
