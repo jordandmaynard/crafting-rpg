@@ -715,6 +715,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v889:** (Jordan: it's the mist region's own edge that goes hard, not the wakes; the wakes' hard edges and staying clear are wanted) Wakes are back as they were before v887 (cut off where they were, no softening). The hard line was haze carried out past the region (dragged, pushed or swirled over ground with less or no resting share) piling up as a front, and the slices then cut it off dead where the share ran out (`site.z < 0.003`). Now haze over the most its spot can rest (`cap`: the share there times amount × (1 + patchiness)) fades back to it at `spill` 0.5 a second, and while it does its front is softened over `edgeSoft` 1.5 tiles (only where it's over that cap, so wakes and clearings keep their edges and never fill in); the slices fade the haze out over the share's last 0.06 instead of cutting it. The edge swirl now only warps along the region's edge (where the share changes), 1 tile far, curls 3 tiles across. T > Ground haze: Region edge.
 
+**v890:** (Jordan's tuning) Ground haze: relax 0.05 (was 0), whirlClear 16.2 (was 3), arrowWake 0.31 (was 0.22), arrowClear 7.8 (was 2.5), landClear 8.8 (was 3).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
