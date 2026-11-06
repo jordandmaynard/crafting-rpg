@@ -12,7 +12,7 @@ import { Kit, clamp } from './dsp.js';
 export const ROOMS = {
   open: { label: 'Open ground', pre: 0.003, er: [2, 0.004, 0.01, 0.3], tail: 0.03, rtLo: 0.5, rtHi: 0.2, start: 0.06, dark: 2500, len: 0.6, wet: 0.08 },
   forest: { label: 'Forest', pre: 0.004, er: [6, 0.006, 0.04, 0.22], tail: 0.06, rtLo: 0.5, rtHi: 0.22, start: 0.02, dark: 3000, len: 0.7, wet: 0.09 },
-  street: { label: 'Town street', pre: 0.006, er: [4, 0.012, 0.08, 0.3], tail: 0.06, rtLo: 0.6, rtHi: 0.3, start: 0.03, dark: 4000, len: 0.8, wet: 0.1 },
+  street: { label: 'Town street', pre: 0.006, er: [4, 0.012, 0.08, 0.3], tail: 0.06, rtLo: 0.6, rtHi: 0.3, start: 0.03, dark: 4000, len: 0.8, wet: 0.025 },   // (v899, Jordan: a quarter of what it was),
   snow: { label: 'Snowfield (deadened)', pre: 0.004, er: [1, 0.005, 0.015, 0.15], tail: 0.02, rtLo: 0.3, rtHi: 0.12, start: 0.03, dark: 2000, len: 0.4, wet: 0.05 },
   woodRoom: { label: 'Wooden room', pre: 0.001, er: [8, 0.002, 0.012, 0.35], tail: 0.12, rtLo: 0.3, rtHi: 0.16, start: 0.005, dark: 4500, len: 0.5, wet: 0.12, boxy: [240, 2] },
   stoneRoom: { label: 'Stone room', pre: 0.002, er: [8, 0.003, 0.016, 0.35], tail: 0.18, rtLo: 0.5, rtHi: 0.3, start: 0.006, dark: 5500, len: 0.7, wet: 0.14, boxy: [320, 1] },

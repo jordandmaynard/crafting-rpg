@@ -412,7 +412,7 @@ export const SOUNDS = {
 
   // ---------------------------------------------------------------- doors
   // (v898, Jordan: no creaks at all; a click as one opens, like a latch unlatching, and a deep, short thud as it
-  // shuts, with bass like the trees') The door in the game eases open or shut in about a quarter of a second (most of
+  // shuts, with bass like the trees'; v899: the open is a lock's two clicks, a metal pair's shut two clangs apart) The door in the game eases open or shut in about a quarter of a second (most of
   // the way in 0.23 s), so the shut's thud lands at P.slamAt. o.leaves: 2 for a pair of doors (a thud for each leaf).
   'door.wood.open': {
     label: 'Wooden door opens', group: 'doors', tune: 'door.wood',
@@ -434,7 +434,7 @@ export const SOUNDS = {
     layers: { slam: { n: 6, render: (k, P) => doorThud(k, P, true) } },
     compose(P, o, rnd) {
       const n = o.leaves ?? 2, L = [];
-      for (let j = 0; j < n; j++) L.push({ layer: 'slam', gain: P.slam * (j ? 0.8 : 1), delay: P.slamAt + j * P.slamGap * (0.6 + 0.8 * rnd()), rate: j ? 0.96 + 0.03 * rnd() : 1 + 0.03 * rnd() });
+      for (let j = 0; j < n; j++) L.push({ layer: 'slam', gain: P.slam * (j ? 0.8 : 1), delay: P.slamAt + j * P.slamGap * (0.85 + 0.3 * rnd()), rate: j ? 0.96 + 0.03 * rnd() : 1 + 0.03 * rnd() });
       return L;
     },
   },
@@ -447,26 +447,36 @@ function boom(k, f0, f1, tau, sec) {
   for (let i = 0; i < b.length; i++) { const t = i / sr; ph += (f1 + (f0 - f1) * Math.exp(-t / (tau * 0.6))) / sr; b[i] = Math.sin(2 * Math.PI * ph) * Math.exp(-t / tau) * Math.min(1, t / 0.002); }
   return b;
 }
-// a latch unlatching: the bolt snapping back (a hard click into a few small iron partials, hard and short), then
-// seating against its stop a moment later, softer; a little knock of the door under it. Metal doors' is heavier.
+// (v899, Jordan: a metal locking mechanism unlocking, two quick sounds) a lock opening: the key or handle turning the
+// bolt (a bright, ringing click of small steel parts), then the bolt snapping back against its stop a moment later
+// (a heavier clack that rings a little longer). Metal doors' is bigger and lower.
 function latchClick(k, P, metal) {
-  const sec = 0.16, out = k.buf(sec), hz = P.latchHz * (metal ? 0.6 : 1);
-  const ms = k.scatterModes(5, hz * 0.7, hz * 2, metal ? 0.02 : 0.01, metal ? 0.06 : 0.03, { drift: 0.002 });
-  k.add(out, strike(k, 0.0001, ms, sec, { grit: 0.25, bounces: 0 }), 1);
-  k.add(out, strike(k, 0.00015, ms, sec, { grit: 0.3, bounces: 1, spread: 0.001 }), k.r(0.35, 0.55), k.r(0.018, 0.035));
-  k.add(out, thud(k, metal ? 260 : 340, 0.012, sec), metal ? 0.45 : 0.3);
+  const sec = 0.3, out = k.buf(sec), hz = P.latchHz * (metal ? 0.75 : 1);
+  const steel = (lo, hi, t0, t1) => k.scatterModes(6, lo, hi, t0, t1, { drift: 0.002, beat: 1.2 });
+  // the turn: a tick, a tiny spring-loaded double
+  const turn = steel(hz * 1.1, hz * 2.6, 0.03, 0.08);
+  k.add(out, strike(k, 0.00008, turn, sec, { grit: 0.2, bounces: 1, spread: 0.0007 }), 0.55);
+  // the bolt: a heavier steel clack at a lower pitch, ringing on, with the lock's body knocking under it
+  const t = k.r(0.055, 0.085) * P.lockGap, bolt = [...steel(hz * 0.45, hz * 1.4, 0.06, 0.16), ...steel(hz * 0.2, hz * 0.4, 0.04, 0.1)];
+  k.add(out, strike(k, 0.00015, bolt, sec - t, { grit: 0.3, bounces: 2, spread: 0.0012 }), 1, t);
+  k.add(out, thud(k, metal ? 300 : 380, 0.01, sec - t), metal ? 0.3 : 0.2, t);
   return k.norm(out);
 }
 // a door shutting: a deep, short thud (a falling sine boom under a lowpassed thud and the 80-250 Hz body), the knock
 // of its panel (wood) or a short dull ring of the leaf (metal)
 function doorThud(k, P, metal) {
-  const sec = 0.5, out = k.buf(sec);
+  const sec = metal ? Math.max(0.5, P.ringDecay * 1.4) : 0.5, out = k.buf(sec);
   k.add(out, boom(k, P.thudHz * 1.6, P.thudHz * 0.75, P.len, sec), P.boom);
   k.add(out, thud(k, P.thudHz * 1.4, P.len * 0.8, sec), P.thud);
   k.add(out, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(sec), 260), 260), 80), P.len * 0.6, 0.002)), P.body);
   // the edge meeting the frame: a short bright knock on top, so it reads as a door and not only a boom
   k.add(out, k.norm(k.decay(k.bp(k.white(0.04), metal ? 1400 : 1900, 0.8), 0.006, 0.0003)), P.knock);
-  if (metal) k.add(out, strike(k, 0.002, k.modes(k.near(P.ringHz, 0.08), PLATE, P.ringDecay, { damp: 0.7, tilt: 0.6, scatter: 0.03 }), sec, { grit: 0.2, bounces: 1, spread: 0.003 }), P.ring);
+  // (v899) metal: the leaf clangs, a hard contact into a big plate's partials (beating, ringing on), brighter at the
+  // edge where it struck the other leaf
+  if (metal) {
+    k.add(out, strike(k, 0.0006, k.modes(k.near(P.ringHz, 0.08), PLATE, P.ringDecay, { damp: 0.5, tilt: 0.4, scatter: 0.03, extra: { drift: 0.003, beat: 1.4 } }), sec, { grit: 0.25, bounces: 2, spread: 0.002, jitter: 0.015 }), P.ring);
+    k.add(out, strike(k, 0.0003, k.scatterModes(6, 1200, 4200, 0.05, 0.2, { drift: 0.003, beat: 1.5 }), sec, { grit: 0.3, bounces: 1, spread: 0.001 }), P.edge);
+  }
   else k.add(out, strike(k, 0.002, k.modes(k.near(P.panelHz, 0.1), PLANK, P.panelRing, { damp: 0.75, tilt: 0.4, scatter: 0.06 }), sec, { grit: 0.3, bounces: 1, spread: 0.003 }), P.panel);
   return k.norm(out);
 }
@@ -484,8 +494,8 @@ export const SOUND_TUNING = {
   'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.25, blade: 0.22 },
   'hit.bone': { boneHz: 900, rattle: 0.35 },
   tree: { trunkHz: 65, crack: 1, crackGrains: 220, tear: 0.6, snaps: 20, bed: 0.6, groan: 0.7, rush: 1.2, crash: 1.4, crashGrains: 140, rumble: 0.6, bounce: 0.35, bounceAt: 0.14, heftShift: 0 },
-  'door.wood': { latch: 0.6, latchHz: 2600, slam: 1, slamAt: 0.21, boom: 0.9, thud: 0.8, body: 0.7, thudHz: 70, len: 0.09, knock: 0.2, panel: 0.35, panelHz: 95, panelRing: 0.05 },
-  'door.metal': { clank: 0.7, latchHz: 2600, slam: 1, slamAt: 0.2, slamGap: 0.035, boom: 1, thud: 0.8, body: 0.6, thudHz: 60, len: 0.11, knock: 0.15, ring: 0.3, ringHz: 320, ringDecay: 0.2 },
+  'door.wood': { latch: 0.6, latchHz: 2600, lockGap: 1, slam: 1, slamAt: 0.21, boom: 0.9, thud: 0.8, body: 0.7, thudHz: 70, len: 0.09, knock: 0.2, panel: 0.35, panelHz: 95, panelRing: 0.05 },
+  'door.metal': { clank: 0.8, latchHz: 2600, lockGap: 1, slam: 1, slamAt: 0.2, slamGap: 0.07, boom: 0.7, thud: 0.5, body: 0.5, thudHz: 60, len: 0.1, knock: 0.25, ring: 1, ringHz: 320, ringDecay: 0.6, edge: 0.5 },
 };
 // the tuning object a sound reads (doors share theirs between opening and shutting)
 export const tuneOf = (name) => SOUND_TUNING[SOUNDS[name].tune || name];
@@ -515,8 +525,8 @@ export const SOUND_SPEC = {
   'hit.padded': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms)', 1, 12, 0.1], ['slap', 'Leather slap', 0, 1.5, 0.01], ['cloth', 'Cloth', 0, 1.5, 0.01], ['blade', 'Blade tearing cloth', 0, 1.5, 0.01]],
   'hit.bone': [['boneHz', 'Bone pitch (Hz)', 300, 2500, 10], ['rattle', 'Rattle', 0, 1, 0.01]],
   tree: [['trunkHz', 'Trunk pitch (Hz)', 30, 200, 1], ['crack', 'Crack as it gives', 0, 1.5, 0.01], ['crackGrains', 'Crack: splinters (count)', 20, 600, 1], ['tear', 'Tearing while it falls', 0, 1.5, 0.01], ['snaps', 'Tearing: snaps a second', 2, 60, 1], ['bed', 'Tearing: fine crackle under the snaps', 0, 1, 0.01], ['groan', 'Tearing: low groan', 0, 1.5, 0.01], ['rush', 'Rush through the air into the landing', 0, 1.5, 0.01], ['crash', 'Crash on landing', 0, 1.5, 0.01], ['crashGrains', 'Crash: branches breaking (count)', 0, 500, 1], ['rumble', 'Crash: low rumble after', 0, 1.5, 0.01], ['bounce', 'Bounce knock', 0, 1, 0.01], ['bounceAt', 'Bounce: after (s)', 0.05, 0.4, 0.005], ['heftShift', 'Every tree lighter (-) or heavier (+)', -0.5, 0.5, 0.01]],
-  'door.wood': [['latch', 'Latch click (opening)', 0, 1.5, 0.01], ['latchHz', 'Latch pitch (Hz)', 800, 6000, 10], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: knock of the edge on the frame', 0, 1, 0.01], ['panel', 'Panel knock', 0, 1.5, 0.01], ['panelHz', 'Panel pitch (Hz)', 40, 300, 1], ['panelRing', 'Panel ring (s)', 0.02, 0.3, 0.005]],
-  'door.metal': [['clank', 'Latch clank (opening)', 0, 1.5, 0.01], ['latchHz', 'Latch pitch (Hz, × 0.6 for iron)', 800, 6000, 10], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['slamGap', 'Gap between the two leaves (s)', 0, 0.15, 0.001], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: knock of the edge on the frame', 0, 1, 0.01], ['ring', 'Leaf ring', 0, 1.5, 0.01], ['ringHz', 'Leaf pitch (Hz)', 80, 900, 1], ['ringDecay', 'Leaf ring (s)', 0.05, 1, 0.01]],
+  'door.wood': [['latch', 'Lock opening', 0, 1.5, 0.01], ['latchHz', 'Lock pitch (Hz)', 800, 6000, 10], ['lockGap', 'Lock: time between its two clicks (×)', 0.3, 3, 0.01], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: knock of the edge on the frame', 0, 1, 0.01], ['panel', 'Panel knock', 0, 1.5, 0.01], ['panelHz', 'Panel pitch (Hz)', 40, 300, 1], ['panelRing', 'Panel ring (s)', 0.02, 0.3, 0.005]],
+  'door.metal': [['clank', 'Lock opening', 0, 1.5, 0.01], ['latchHz', 'Lock pitch (Hz, × 0.75 for iron)', 800, 6000, 10], ['lockGap', 'Lock: time between its two clicks (×)', 0.3, 3, 0.01], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['slamGap', 'Gap between the two leaves (s)', 0, 0.15, 0.001], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: knock of the edge on the frame', 0, 1, 0.01], ['ring', 'Leaf ring', 0, 1.5, 0.01], ['ringHz', 'Leaf pitch (Hz)', 80, 900, 1], ['ringDecay', 'Leaf ring (s)', 0.05, 1.5, 0.01], ['edge', 'Leaf edge clang (bright)', 0, 1.5, 0.01]],
 };
 
 // renders one variant of one layer (a Float32Array, peak 0.9), the same every time for that seed
