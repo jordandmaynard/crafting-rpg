@@ -1124,6 +1124,28 @@ class Renderer {
     attr._gb = b;
     return b.buf;
   }
+  // (v926) sends a mesh's vertex buffers (and index) to the GPU now, the ones its first draw would bind, so that
+  // cost lands where the caller can budget it (the game's chunk streaming) and not in the frame it's first drawn.
+  // until: a performance.now() time to stop at, after at least one buffer sent; true once all of them are there
+  upload(mesh, until = Infinity) {
+    const geo = mesh?.geometry, mat = mesh?.material;
+    if (!geo || !mat || mesh.isInstancedMesh) return true;
+    if (!geo._onDispose) geo._onDispose = g => this._disposeGeometry(g);
+    const pos = geo.attributes.position;
+    if (!pos || !pos.count) return true;
+    const V = GPUBufferUsage.VERTEX, list = [[pos, V]];
+    if (mat.vertexColors && geo.attributes.color) list.push([geo.attributes.color, V]);
+    if (mat.isShaderMaterial) for (const name in mat.attributes) { const a = geo.attributes[name]; if (a) list.push([a, V]); }
+    if (geo.index) list.push([geo.index, GPUBufferUsage.INDEX]);
+    let sent = false;
+    for (const [a, use] of list) {
+      const b = this._bufs.get(a);
+      if (b && b.version === a.version && b.length === a.array.length) continue;
+      if (sent && performance.now() > until) return false;
+      this._buffer(a, use); sent = true;
+    }
+    return true;
+  }
   // binds a geometry's vertex buffers (and index); gives the next free vertex buffer slot, or 0 for nothing to draw
   _bindGeometry(pass, geo, shaderMat, hasColor, positionOnly = false) {
     if (!geo._onDispose) geo._onDispose = g => this._disposeGeometry(g);

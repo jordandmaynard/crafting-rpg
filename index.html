@@ -1482,7 +1482,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 925;
+const GAME_VERSION = 926;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9808,9 +9808,11 @@ let GLASSB = null;
 // (a tree's leaves: into OUT with the rest as the world is drawn, but into LEAFB of their own while a tree is drawn
 // to be felled (detach), so they can dissolve as it sinks; see fellLeafMat)
 let LEAFB = null;
-const bufGlass = new Buf(), bufGIProxy = new Buf();
-const bufInside = new BuildBuf();   // (v592: an upper story's furniture in its rooms, see buildPieces)
-const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new GlowBuf(), bufBuild = new BuildBuf(), bufTmp = new Buf(), bufTmpGlow = new GlowBuf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
+// (v926: let, as a chunk streaming in builds its pieces a slice a frame into a set of its own, PIECE_STREAM_BUFS)
+let bufGlass = new Buf(), bufGIProxy = new Buf();
+let bufInside = new BuildBuf();   // (v592: an upper story's furniture in its rooms, see buildPieces)
+let bufBuild = new BuildBuf();
+const bufGround = new Buf(), bufObj = new Buf(), bufGlow = new GlowBuf(), bufTmp = new Buf(), bufTmpGlow = new GlowBuf(), bufTmpMetal = new Buf(), bufTmpPrism = new Buf();
 // trunks also carry, for every vertex, the centre of its tree and the ground at its foot (for the cutaway)
 class TreeBuf extends Buf {
   constructor() { super(); this.b = new Float32Array(this.p.length); }
@@ -10283,7 +10285,7 @@ function* groundSteps(cx, cz, ch) {
   yield; OUT = bufGround;
   let wet = false, molten = false;
   for (let r = r0; r < r0 + CH; r++) {
-    if (r > r0 && (r - r0) % 4 === 0) { yield; OUT = bufGround; }
+    if (r > r0 && (r - r0) % 2 === 0) { yield; OUT = bufGround; }   // (v926: 2 rows a step, was 4)
     for (let c = c0; c < c0 + CH; c++) {
       const i = T(c, r), s = SH[i], pal = PAL[townGround(i) || BI[i]], L = BR[i] ? 0 : LV[i], cy = CY[i];
       if (!L && WL[i]) { if (LAVA[i]) molten = true; else wet = true; }
@@ -10379,6 +10381,9 @@ function* groundSteps(cx, cz, ch) {
   buildBog(c0, r0, grid, GW, ch);
   if (wet) { yield; buildWater(c0, r0, grid, GW, ch); }
   if (molten) { yield; buildLava(c0, r0, grid, GW, ch); }
+  // (v926) its meshes sent to the GPU a slice a step, before the chunk is shown (its first draw sent them all at once)
+  const ms = chunkMeshes(ch);
+  while (ms.length) { yield; uploadSome(ms); }
 }
 // The open water of a chunk on the same half-tile grid as the ground: each point stands at the highest
 // surface of the water tiles round it (so where a river steps down a level, the lower tile's upper half is a
@@ -15552,12 +15557,12 @@ const detached = new Map();   // tile -> { g, hp, o, c, r }
 // a band of rows at a time, which keeps its part-drawn objects over frames)
 const OBJ_BUFS = { obj: bufObj, glow: bufGlow, metal: new Buf(), prism: new Buf(), trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider, inObj: new Buf(), inGlow: new GlowBuf() };
 const BAND_BUFS = { obj: new Buf(), glow: new GlowBuf(), metal: new Buf(), prism: new Buf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf(), inObj: new Buf(), inGlow: new GlowBuf() };
-const OBJ_BAND = 8;      // rows of tiles in a band
+const OBJ_BAND = 4;      // rows of tiles in a band (v926: was 8)
 let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUFS
 // (v592) INOBJ, INGLOW: where the furniture inside a roofed room goes (town props, beds, workshop props), a mesh of
 // its own a chunk (ch.inObj, ch.inGlow) that's only drawn while that room can be seen into (interiorShown)
 let INOBJ = null, INGLOW = null;
-const PIECE_GLOW = new GlowBuf();   // (v618: what glows of the building pieces, story 0: the wall lanterns' glass)
+let PIECE_GLOW = new GlowBuf();   // (v618: what glows of the building pieces, story 0: the wall lanterns' glass)
 let PIECE_GLOW_ON = false;
 // (v611) while furniture is drawn into an inside mesh, the buffer it would have gone to: for what pokes out (chimneys)
 let PROP_OUTER = null;
@@ -17262,18 +17267,25 @@ function archLeaf(leaf) {
 }
 // (only: a Set of the stories to draw, the rest left alone; null = all of them. v424: the cutaway redraws just the
 // stories whose walls it cut or stood up again, not the whole chunk)
-function buildPieces(cx, cz, ch, only = null) {
+function buildPieces(cx, cz, ch, only = null) { for (const _ of piecesSteps(cx, cz, ch, only, false)); }
+// (v926, Jordan's 39 ms spike) the same a slice at a time (sliced: it yields between tiles once past PIECE_UNTIL), for a
+// chunk streaming in: see finishChunk and stepPieces, which lends it buffers of its own (PIECE_STREAM_BUFS) each step
+function* piecesSteps(cx, cz, ch, only, sliced) {
   // (the slate roofs' map and settings, shared with buildMat for the bay windows' roofs; slateMat is made after buildMat)
   if (!DETAIL_U.tSlate) { DETAIL_U.tSlate = SLATE_U.tSlate; DETAIL_U.sl = SLATE_U.s; DETAIL_U.slope = SLATE_U.slope; }
   ch.build = null; ch.buildGI = null; ch.glass = null;
   if (!buildCount[cz * NC + cx]) return;
   OUT = bufBuild; bufBuild.n = 0; GLASSB = bufGlass; bufGlass.n = 0; bufGIProxy.n = 0; bufBuild.cr.length = 0; bufGlass.cr.length = 0;
-  const giCuts = [], glowSv = GLOW;
+  // (sliced, upper stories' glow goes into a scratch buffer of the job's own, not into whatever GLOW is between steps)
+  const giCuts = [], glowSv = sliced ? PIECE_STREAM_BUFS.scratchGlow : GLOW;
   GLOW = PIECE_GLOW; PIECE_GLOW.n = 0; PIECE_GLOW.tags = []; PIECE_GLOW_ON = true;
+  // (after a yield: the globals it draws with set again, as other code ran between)
+  const again = k => { OUT = bufBuild; GLASSB = bufGlass; GLOW = k ? glowSv : PIECE_GLOW; PIECE_GLOW_ON = !k; PDY = k * WALL_H; PCUT = k * 2 * SNN; };
   try {
   const c0 = cx * CH, r0 = cz * CH;
   if (!only || only.has(0)) {
   for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+    if (sliced && performance.now() > PIECE_UNTIL) { yield; again(0); }
     const i = T(c, r);
     if (FL[i] === 3) { const mf = MOSAIC_AT.get(i); if (mf) mosaicFloor(c, r, mf); else marbleFloor(c, r); }
     else if (FL[i] === 2) stoneFloor(c, r);
@@ -17300,11 +17312,14 @@ function buildPieces(cx, cz, ch, only = null) {
     const pd = PROP_DRAW.get(i);   // (the ground floor's wall hangings, lowered with their wall by the cutaway)
     if (pd) for (const q of pd) if (q.hang) drawProp(q, false);
   }
+  if (sliced) { yield; again(0); }
   ch.build = bufBuild.mesh(buildMat);
   ch.pglow = PIECE_GLOW.mesh(glowMat);   // (v618: the wall lanterns' glass)
   GLOW = glowSv; PIECE_GLOW_ON = false;
+  if (sliced) { yield; again(1); PDY = 0; PCUT = 0; }
   ch.buildGI = ch.build ? giGeo(bufBuild, giCuts, bufGIProxy) : null;
   ch.glass = glassMesh(bufGlass);
+  if (sliced) { yield; again(1); PDY = 0; PCUT = 0; }
   }
   // the stories above, a mesh each, so the ones over you can be hidden (storyView)
   for (let k = 1; k <= STORY_MAX; k++) {
@@ -17313,6 +17328,7 @@ function buildPieces(cx, cz, ch, only = null) {
     bufBuild.n = 0; bufGlass.n = 0; bufBuild.cr.length = 0; bufGlass.cr.length = 0; bufInside.n = 0; bufInside.cr.length = 0; PDY = k * WALL_H; PCUT = k * 2 * SNN;
     try {
       for (let r = r0; r < r0 + CH; r++) for (let c = c0; c < c0 + CH; c++) {
+        if (sliced && performance.now() > PIECE_UNTIL) { yield; again(k); }
         const i = T(c, r), f = U.FL.get(i);
         if (f) {
           // (its underside: joists, seen from below and at its open edges)
@@ -17339,6 +17355,7 @@ function buildPieces(cx, cz, ch, only = null) {
         if (sn) upStationBody(sn);
       }
     } finally { PDY = 0; PCUT = 0; }
+    if (sliced) { yield; again(k); PDY = 0; PCUT = 0; }
     ch['inUp' + k] = bufInside.mesh(buildMat);
     ch['up' + k] = bufBuild.mesh(buildMat);
     // (v441: a story hidden because you're under it still casts, so its shadow doesn't vanish with it)
@@ -17351,6 +17368,12 @@ function buildPieces(cx, cz, ch, only = null) {
 function setPieces(ch, only = null) {
   const tmp = {};
   buildPieces(ch.cx, ch.cz, tmp, only);
+  // (v926: one streaming in a slice at a time starts again, so it isn't swapped in as it was before this)
+  if (ch.pieceJob || ch.pieceTmp) { ch.pieceJob = null; ch.pieceTmp = null; ch.upq = null; if (pieceOwner === ch) pieceOwner = null; }
+  if (!only) ch.piecesDone = true;
+  swapPieces(ch, tmp, only);
+}
+function swapPieces(ch, tmp, only) {
   if (!only || only.has(0)) {
     ch.buildGI = tmp.buildGI;
     swapMesh(ch, 'build', tmp.build); swapMesh(ch, 'glass', tmp.glass || null); swapMesh(ch, 'pglow', tmp.pglow || null);
@@ -18206,10 +18229,11 @@ function stepGround(until) {
   let r;
   do {
     const t0 = performance.now();
-    r = groundJob.steps.next();
+    spikes.enter('stream: ground step');
+    try { r = groundJob.steps.next(); } finally { spikes.exit(); }
     const d = performance.now() - t0;
-    chunkTime.parts[0] = Math.max(chunkTime.parts[0], d); chunkTime.ms += d;
-  } while (!r.done && performance.now() < until);
+    chunkTime.parts[0] = Math.max(chunkTime.parts[0], d); chunkTime.ms += d; stepCost(d);
+  } while (!r.done && performance.now() + STREAM.est < until);
   if (!r.done) return null;
   const ch = groundJob.ch;
   groundJob = null;
@@ -18228,29 +18252,79 @@ function finishChunk(ch) {
   // (ch.redo: a streamed-in chunk's objects drawn again the same way, after a prop was cut out of them)
   if (ch.stage === 0 || ch.redo) {
     // what stands on it, a band of rows a step (drawn into BAND_BUFS, which another chunk can take over, and then
-    // this one starts again), then its meshes made, one a step, and swapped in together
-    if (bandOwner !== ch) { bandOwner = ch; ch.band = 0; ch.made = {}; objBufs(BAND_BUFS, true); }
+    // this one starts again), then its meshes made, one a step, sent to the GPU a slice a step (v926), and swapped in together
+    if (bandOwner !== ch) { bandOwner = ch; ch.band = 0; ch.made = {}; ch.upq = null; objBufs(BAND_BUFS, true); }
     const bands = CH / OBJ_BAND;
+    spikes.enter(ch.band < bands ? 'stream: objects, a band of rows' : ch.band < bands + OBJ_MESHES.length ? 'stream: objects, a mesh made' : ch.upq?.length !== 0 ? 'stream: objects, sent to the GPU' : 'stream: objects swapped in');
     if (ch.band < bands) {
       objBufs(BAND_BUFS);
       objRows(ch.cx, ch.cz, ch.band * OBJ_BAND, ++ch.band * OBJ_BAND);
       objBufs(OBJ_BUFS);
     } else if (ch.band < bands + OBJ_MESHES.length) objMesh(BAND_BUFS, ch.made, OBJ_MESHES[ch.band++ - bands]);
+    else if (!ch.upq) { ch.upq = OBJ_MESHES.map(k => ch.made[k]).filter(Boolean); uploadSome(ch.upq); }
+    else if (ch.upq.length) uploadSome(ch.upq);
     else {
       for (const k of OBJ_MESHES) swapMesh(ch, k, ch.made[k]);
-      bandOwner = null; ch.made = null;
+      bandOwner = null; ch.made = null; ch.upq = null;
       if (ch.redo) { ch.redo = false; showDetached(ch); } else ch.stage = 1;
     }
+    spikes.exit();
     const k = ch.stage || ch.band > bands ? 2 : 1;
     chunkTime.parts[k] = Math.max(chunkTime.parts[k], performance.now() - t0);
+  } else if (!ch.piecesDone) {
+    // (v926, Jordan's 39 ms spike: a town chunk's pieces, every story, were built in one step and all its meshes sent
+    // to the GPU in the frame after) its pieces a slice at a time (piecesSteps, in buffers of their own that another
+    // chunk can take over, and then this one starts again), their meshes sent a slice a step, then swapped in together
+    if (!ch.upq && (pieceOwner !== ch || !ch.pieceJob)) { pieceOwner = ch; ch.pieceTmp = {}; ch.pieceJob = piecesSteps(ch.cx, ch.cz, ch.pieceTmp, null, true); }
+    if (!ch.upq) {
+      spikes.enter('stream: pieces, a slice');
+      let r;
+      try { r = stepPieces(ch.pieceJob); } finally { spikes.exit(); }
+      if (r.done) {
+        pieceOwner = null; ch.pieceJob = null;
+        const t = ch.pieceTmp;
+        ch.upq = [t.build, t.glass, t.pglow, ...[1, 2, 3].flatMap(k => [t['up' + k], t['inUp' + k], t['glass' + k]])].filter(Boolean);
+      }
+    } else if (ch.upq.length) { spikes.enter('stream: pieces, sent to the GPU'); uploadSome(ch.upq); spikes.exit(); }
+    else {
+      spikes.enter('stream: pieces swapped in');
+      swapPieces(ch, ch.pieceTmp, null);
+      ch.pieceTmp = null; ch.upq = null; ch.piecesDone = true;
+      spikes.exit();
+    }
+    chunkTime.parts[3] = Math.max(chunkTime.parts[3], performance.now() - t0);
   } else {
-    setPieces(ch);
+    spikes.enter('stream: grass + drift');
     grassChunk(ch.cx, ch.cz);
+    spikes.exit();
     ch.stage = 2;
     chunkTime.n++;
     chunkTime.parts[3] = Math.max(chunkTime.parts[3], performance.now() - t0);
   }
   chunkTime.ms += performance.now() - t0;
+  stepCost(performance.now() - t0);
+}
+// (v926) the buffers a streaming chunk's pieces are built into, a slice a frame, lent to piecesSteps by stepPieces so
+// the pieces built meanwhile (setPieces, the cutaway, building) don't draw over them
+const PIECE_STREAM_BUFS = { build: new BuildBuf(), glass: new Buf(), giProxy: new Buf(), inside: new BuildBuf(), glow: new GlowBuf(), scratchGlow: new GlowBuf() };
+let PIECE_UNTIL = Infinity, pieceOwner = null;
+function stepPieces(job) {
+  const sv = [OUT, GLASSB, GLOW, PIECE_GLOW_ON, PDY, PCUT, bufBuild, bufGlass, bufGIProxy, bufInside, PIECE_GLOW], B = PIECE_STREAM_BUFS;
+  bufBuild = B.build; bufGlass = B.glass; bufGIProxy = B.giProxy; bufInside = B.inside; PIECE_GLOW = B.glow;
+  PIECE_UNTIL = performance.now() + STREAM.slice;
+  try { return job.next(); }
+  finally { [OUT, GLASSB, GLOW, PIECE_GLOW_ON, PDY, PCUT, bufBuild, bufGlass, bufGIProxy, bufInside, PIECE_GLOW] = sv; PIECE_UNTIL = Infinity; }
+}
+// sends meshes from the front of list to the GPU until STREAM.slice ms have gone (at least one buffer), taking off the
+// ones done; true once the list is empty
+function uploadSome(list) {
+  const until = performance.now() + STREAM.slice;
+  while (list.length) {
+    if (!renderer.upload(list[0], until)) return false;
+    list.shift();
+    if (performance.now() > until) break;
+  }
+  return !list.length;
 }
 function swapMesh(ch, key, m) {
   ch.giStale = Math.max(ch.giStale || 0, key === 'ground' || key === 'water' || key === 'lava' || key === 'bog' ? 2 : 1); ch.giJob = null;
@@ -18287,6 +18361,10 @@ function dropChunk(key) {
   chunks.delete(key);
 }
 let streamFrame = 0;
+// (v926, Jordan's 39 ms spike) ms a frame for chunk streaming while playing (was 6, more than a whole 240 Hz frame),
+// and est: what a step has taken lately, so a step isn't started that would run past the budget (always at least one)
+const STREAM = { budget: 3, est: 1, slice: 1 };   // (slice: ms a step of building pieces or sending meshes to the GPU runs to)
+function stepCost(ms) { STREAM.est = STREAM.est * 0.75 + Math.min(ms, 20) * 0.25; }
 function streamChunks(budgetMs) {
   streamFrame++;
   const t0 = performance.now();
@@ -18313,7 +18391,7 @@ function streamChunks(budgetMs) {
     let ch = chunks.get(key);
     // (a step at a time, nearest first, as long as the budget lasts, and always at least one)
     if (!ch) {
-      if (budgetMs !== Infinity && built && performance.now() - t0 > budgetMs) continue;
+      if (budgetMs !== Infinity && built && performance.now() - t0 + STREAM.est > budgetMs) continue;
       const until = budgetMs === Infinity ? Infinity : t0 + budgetMs;
       // (another chunk's ground under way goes first)
       if (groundJob && groundJob.key !== key) { stepGround(until); built++; if (groundJob || budgetMs !== Infinity) continue; }
@@ -18321,7 +18399,7 @@ function streamChunks(budgetMs) {
       ch = stepGround(until); built++;
       if (!ch) continue;
     }
-    while ((ch.stage < 2 || ch.redo) && (budgetMs === Infinity || !built || performance.now() - t0 <= budgetMs)) { finishChunk(ch); built++; }
+    while ((ch.stage < 2 || ch.redo) && (budgetMs === Infinity || !built || performance.now() - t0 + STREAM.est <= budgetMs)) { finishChunk(ch); built++; }
     ch.used = streamFrame;
   }
   if (chunks.size > CHUNK_KEEP) {
@@ -36380,7 +36458,7 @@ function frameBody(now) {
   runBuildQueue(dt);
   ventSmoke(dt);
   prof.lap('clouds, water, hearths, smoke');
-  streamBusy = streamChunks(veilBusy() ? VEIL.budget : 6);
+  streamBusy = streamChunks(veilBusy() ? VEIL.budget : STREAM.budget);
   prof.lap('chunk streaming');
   drawMini(dt);
   prof.lap('minimap');
