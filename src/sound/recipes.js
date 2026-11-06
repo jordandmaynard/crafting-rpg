@@ -37,62 +37,77 @@ function heelToe(k, P, one, sec) {
 // a landing of three hits as the trunk and then the crown come down, with a long low rumble). Every value here scales
 // the tree tuning (SOUND_TUNING.tree), so the lab's sliders move all three together.
 const TREE_HEFT = {
-  L: { hz: 1.45, bounce: 0.3, crack: { spread: 0.2, grains: 0.8 }, tear: { sec: 2.2, level: 0.7, snaps: 0.6, bed: 0.5, lo: 500, hi: 10000, groan: 0.15, rumble: 0, early: 0.35 }, rush: null,
-    crash: { sec: 0.7, level: 0.55, snap: 1, body: 0.8, thudHz: 170, thudTau: 0.04, ring: 0.06, grains: 0.8, spread: 0.07, rumble: 0.1, rumbleTau: 0.08, settle: 0.4, hits: [[0, 1]] } },
-  M: { hz: 1, bounce: 1, crack: { spread: 0.24, grains: 1 }, tear: { sec: 2.4, level: 1, snaps: 1, bed: 1, lo: 250, hi: 9000, groan: 1, rumble: 1 }, rush: { len: 0.7, level: 1 },
-    crash: { sec: 1.4, level: 1, body: 1.4, thudHz: 110, thudTau: 0.16, ring: 0.25, grains: 1, spread: 0.13, rumble: 1, rumbleTau: 0.26, settle: 1, hits: [[0, 1]] } },
-  H: { hz: 0.72, bounce: 1, crack: { spread: 0.32, grains: 1.3 }, tear: { sec: 2.8, level: 1.1, snaps: 1.3, bed: 1.2, lo: 200, hi: 9000, groan: 1.4, rumble: 1.5 }, rush: { len: 1, level: 0.35 },
-    crash: { sec: 2, level: 1.1, snap: 0.25, body: 0.9, thudHz: 85, thudTau: 0.22, ring: 0.35, grains: 1, spread: 0.3, rumble: 1.3, rumbleTau: 0.3, settle: 4, settleGain: 0.2, hits: [[0, 0.55], [0.05, 0.85], [0.13, 1]] } },
+  L: { hz: 1.45, bounce: 0.1, crack: { spread: 0.2, grains: 0.8, level: 1 }, tear: { sec: 2.2, level: 0.3, snaps: 3.5, bedHz: 2500, bed: 0.8, bedWander: 0.55, groan: 0.15, rumble: 0, early: 0.35 }, rush: null,
+    crash: { sec: 0.9, level: 0.55, snap: 0.2, snapHi: 5000, body: 0.55, wood: 0.5, debris: 0.45, debrisTau: 0.13, debrisLo: 600, debrisHi: 3000, thudHz: 170, thudTau: 0.04, thudCut: 90, ring: 0.05, grains: 0.5, grainHi: 4000, spread: 0.06, rumble: 0, rumbleTau: 0.05, settle: 1.2, settleLo: 800, settleHi: 3500, tailSnaps: 14, tailHi: 5000, tailLen: 0.6, hits: [[0, 1], [0.07, 0.6]] } },
+  M: { hz: 1, bounce: 0.6, crack: { spread: 0.24, grains: 1, level: 1.9, hi: 14000, again: 0.5 }, tear: { sec: 2.4, level: 1.5, snaps: 1, snapHi: 12000, bedHz: 1000, bed: 1, groan: 1, rumble: 1, early: 0 }, rush: { len: 0.7, level: 1, build: 0.35 },
+    crash: { sec: 1.6, level: 1, snap: 0.8, snapTau: 0.01, body: 1.4, wood: 0.5, debris: 0.4, debrisTau: 0.08, debrisHi: 1800, air: 0.5, thudHz: 110, thudTau: 0.05, ring: 0.06, grains: 0.3, spread: 0.1, rumble: 1, rumbleTau: 0.25, bed: 0.08, bedTau: 0.25, tailSnaps: 9, tailLen: 0.7, settle: 0.4, hits: [[0, 1]] } },
+  H: { hz: 0.72, bounce: 0.8, crack: { spread: 0.32, grains: 1.3, level: 1.9, hi: 14000 }, tear: { sec: 2.8, level: 1.1, snaps: 1.2, snapHi: 12000, bedHz: 2200, bed: 1.1, groan: 1.4, rumble: 1.5, early: 0 }, rush: { len: 1, level: 0.35 },
+    crash: { sec: 1.8, level: 1.1, snap: 0.5, snapLast: 1, boom: 0.5, boomTo: 58, body: 0.9, wood: 0.9, debris: 0.7, debrisTau: 0.15, debrisLo: 200, debrisHi: 1200, air: 0.5, thudHz: 85, thudTau: 0.09, ring: 0.04, quietHits: 0.3, grains: 0.4, grainAt: 0.13, grainHi: 4000, spread: 0.2, rumble: 1.1, rumbleTau: 0.32, bed: 0.25, bedTau: 0.4, tailSnaps: 90, tailLen: 1, settle: 0.8, hits: [[0, 0.7], [0.06, 0.85], [0.13, 1]] } },
 };
-// the crack as it gives: a hard knock into the trunk's partials and a burst of splinters
+// the crack as it gives: a hard knock into the trunk's partials and a burst of splinters (as bright for every size of
+// tree: the recordings' are)
 const treeCrack = (H) => ({ n: 4, render(k, P) {
   const sec = H.crack.spread + 0.1, out = k.buf(sec);
-  k.add(out, strike(k, 0.0003, k.modes(k.near(P.trunkHz * H.hz * 2.6, 0.12), WOOD, 0.07, { damp: 0.7, tilt: 0.35, scatter: 0.08 }), sec, { grit: 0.5, bounces: 2, spread: 0.003 }), 0.7);
-  k.grains(out, { count: Math.round(P.crackGrains * H.crack.grains), t0: 0.002, spread: H.crack.spread, density: (u) => Math.min(1, u * 20) * Math.pow(1 - u, 1.6), lo: 150, hi: 8000, q: 0.9, dur: [0.0008, 0.006], pow: 1.6, clump: 0.4 });
-  k.grains(out, { count: 26, t0: 0.003, spread: H.crack.spread * 0.8, lo: 280 * H.hz, hi: 2400 * H.hz, dur: [0.004, 0.014], kind: 'ping', pow: 1.8, gain: 0.7 });
-  k.add(out, thud(k, 130 * H.hz, 0.05, sec), 0.5);
+  k.add(out, strike(k, 0.0003, k.modes(k.near(P.trunkHz * 2.6, 0.12), WOOD, 0.07, { damp: 0.7, tilt: 0.35, scatter: 0.08 }), sec, { grit: 0.5, bounces: 2, spread: 0.003 }), 0.7);
+  k.grains(out, { count: Math.round(P.crackGrains * H.crack.grains), t0: 0.002, spread: H.crack.spread, density: (u) => Math.min(1, u * 20) * Math.pow(1 - u, 1.6), lo: 300, hi: H.crack.hi || 9000, q: 0.9, dur: [0.0008, 0.006], pow: 1.6, clump: 0.4 });
+  k.grains(out, { count: 26, t0: 0.003, spread: H.crack.spread * 0.8, lo: 400, hi: 3400, dur: [0.004, 0.014], kind: 'ping', pow: 1.8, gain: 0.7 });
+  k.add(out, thud(k, 130, 0.05, sec), 0.4);
   return k.norm(out);
 } });
-// fibres tearing while it goes over: snaps, a dense crackle that surges and eases, the hinge's groan and the trunk's
-// weight working on it (a low, uneven rumble); light trees' thin and bright, heavy trees' dense and dark
+// fibres tearing while it goes over (v903, on the judge's reading): a continuous, softly surging tearing bed (filtered
+// noise: it never drops out between snaps), with a few larger snaps a second over it in clusters (5-10/s: dense tiny
+// grains read as popcorn or fire), the hinge's groan and the trunk's weight working on it (a low, uneven rumble)
 const treeTear = (H) => ({ n: 3, render(k, P) {
-  const T = H.tear, sec = T.sec, out = k.buf(sec), sw = k.wander(sec, 5, 0.7), surge = (t) => Math.max(0.15, sw[Math.min(sw.length - 1, Math.floor(t * k.sr))]);
-  k.grains(out, { count: Math.round(P.snaps * T.snaps * sec), t0: 0, spread: sec, density: () => 1, lo: 200, hi: Math.min(6500, T.hi), q: 1, dur: [0.001, 0.008], pow: 2.2, clump: 0.45 });
-  k.grains(out, { count: Math.round(P.snaps * T.snaps * sec * 0.35), t0: 0, spread: sec, density: () => 1, lo: 300 * H.hz, hi: 2000 * H.hz, dur: [0.004, 0.016], kind: 'ping', pow: 2, gain: 0.8 });
-  if (P.bed > 0) k.grains(out, { count: Math.round(700 * T.bed * sec), t0: 0, spread: sec, density: () => 1, lo: T.lo, hi: T.hi, q: 0.9, dur: [0.0006, 0.003], pow: 1.8, gain: P.bed * 0.6, clump: 0.5, env: surge });
+  const T = H.tear, sec = T.sec, out = k.buf(sec);
+  if (P.bed > 0) {
+    const bed = k.mul(k.lp(k.bp(k.pink(sec), T.bedHz, 0.4), T.bedHz * 6), k.wander(sec, 3, T.bedWander || 0.35));
+    k.add(out, k.norm(bed), P.bed * T.bed * 0.5);
+  }
+  k.grains(out, { count: Math.round(P.snaps * T.snaps * sec), t0: 0, spread: sec, density: () => 1, lo: 300, hi: T.snapHi || 6000, q: 0.9, dur: [0.003, 0.012], pow: T.bedWander ? 2 : 1.2, clump: 0.55 });
+  k.grains(out, { count: Math.round(P.snaps * T.snaps * sec * 0.3), t0: 0, spread: sec, density: () => 1, lo: 400, hi: 2400, dur: [0.004, 0.016], kind: 'ping', pow: 1.6, gain: 0.6 });
   const r0 = k.near(28, 0.2), ex = k.stickSlip(sec, (t) => r0 * (0.8 + 0.5 * t), (t) => Math.min(1, t * 4), { jitter: 0.5, sharp: 0.0006 });
-  k.add(out, k.norm(k.modal(ex, k.modes(k.near(P.trunkHz * H.hz, 0.1), WOOD, 0.12, { damp: 0.6, tilt: 0.6, scatter: 0.08 }), sec)), P.groan * T.groan);
-  if (T.rumble > 0) k.add(out, k.norm(k.mul(k.hp(k.lp(k.lp(k.brown(sec), 130), 130), 40), k.wander(sec, 7, 0.8))), P.groan * 0.5 * T.rumble);
+  k.add(out, k.norm(k.modal(ex, k.modes(k.near(P.trunkHz * H.hz, 0.1), WOOD, 0.12, { damp: 0.6, tilt: 0.6, scatter: 0.08 }), sec)), P.groan * T.groan * 0.6);
+  if (T.rumble > 0) k.add(out, k.norm(k.mul(k.hp(k.lp(k.lp(k.brown(sec), 130), 130), 40), k.wander(sec, 7, 0.8))), P.groan * 0.4 * T.rumble);
   return k.norm(out);
 } });
-// the crown's rush through the air, the lows swelling hardest into the landing
+// the crown's weight coming down: a dark roar (low-passed ~800 Hz) and the lows swelling into the landing
 const treeRush = (H) => ({ n: 3, render(k, P) {
   const sec = H.rush.len, out = k.buf(sec), u = (t) => clamp(t / sec, 0, 1);
-  const air = k.filter(k.pink(sec), 'lp', (t) => (250 + 700 * u(t)) * Math.sqrt(H.hz), 0.7);
+  const air = k.lp(k.filter(k.pink(sec), 'lp', (t) => 300 + 500 * u(t), 0.7), 800);
   k.mul(air, k.wander(sec, 14, 0.5));
   k.shape(air, (t) => Math.pow(u(t), 1.5));
   k.add(out, k.norm(air), 0.8);
+  // (v903) branches crashing in the crown just before the trunk hits: dark snaps (300-1500 Hz) swelling over the last quarter second
+  if (H.rush.build) k.grains(out, { count: Math.round(40 * H.rush.build), t0: Math.max(0, sec - 0.28), spread: Math.min(sec, 0.28), density: (u) => u * u, lo: 300, hi: 1500, q: 0.9, dur: [0.003, 0.012], pow: 1.4, gain: 0.4, clump: 0.4 });
   k.add(out, k.norm(k.shape(k.mul(k.hp(k.lp(k.lp(k.brown(sec), 220), 220), 40), k.wander(sec, 9, 0.4)), (t) => Math.pow(u(t), 1.4))), 1.4);
-  k.grains(out, { count: 40, t0: 0.1, spread: sec - 0.1, density: (x) => x * x, lo: 250, hi: 3000, q: 1, dur: [0.002, 0.01], pow: 1.8, gain: 0.5 });
   return k.norm(out);
 } });
-// the landing: for each hit a heavy thud, the trunk knocking and a crack of air; branches breaking, a low rumble,
-// twigs settling after
+// the landing (v903): for each hit a thud, the 80-250 Hz body and a 200-1000 Hz wooden body, the trunk knocking (a
+// short ring: a long one hummed), a crack of air; then branches and debris settling, a broadband noise decaying over
+// a quarter to two thirds of a second by size (the recordings' 0.27 / 0.38 / 0.67 s to -30 dB), a few snaps in it
 const treeCrash = (H) => ({ n: 4, render(k, P) {
   const C = H.crash, sec = C.sec, out = k.buf(sec);
-  for (const [at, lv] of C.hits) {
-    const t0 = at * k.r(0.8, 1.2);
-    k.add(out, thud(k, C.thudHz, C.thudTau, sec - t0), lv, t0);
-    // (v897) the body of the blow: the ground and trunk thumping in the 90-250 Hz band (the recordings' punch)
-    k.add(out, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(sec - t0), 260), 260), 80), 0.07 + 0.05 * H.crash.level, 0.002)), C.body * lv, t0);
-    k.add(out, strike(k, 0.006, k.modes(k.near(P.trunkHz * H.hz, 0.12), WOOD, C.ring, { damp: 0.7, tilt: 0.5, scatter: 0.08 }), sec - t0, { grit: 0.5, bounces: 2, spread: 0.01 }), 0.8 * lv, t0);
-    k.add(out, k.norm(k.decay(k.lp(k.white(0.2), 9000), 0.025, 0.0006)), (C.snap ?? 0.45) * lv, t0);
-  }
-  k.grains(out, { count: Math.round(P.crashGrains * C.grains), t0: 0, spread: C.spread, lo: 200, hi: 8000, q: 1, dur: [0.001, 0.008], pow: 1.5, gain: 0.7, clump: 0.3 });
-  k.grains(out, { count: Math.round(18 * C.grains), t0: 0, spread: C.spread * 0.9, lo: 250 * H.hz, hi: 2000 * H.hz, dur: [0.005, 0.02], kind: 'ping', pow: 1.6, gain: 0.5 });
-  k.add(out, k.norm(k.decay(k.hp(k.pink(0.6), 1500), 0.08, 0.004)), 0.18);
-  k.add(out, thud(k, 70, C.rumbleTau, sec), P.rumble * C.rumble);
-  k.grains(out, { count: Math.round(22 * C.settle), t0: 0.2, spread: sec * 0.5, density: (u) => Math.pow(1 - u, 1.5), lo: 300, hi: 3500, q: 1, dur: [0.001, 0.006], pow: 2, gain: C.settleGain ?? 0.08 });
+  C.hits.forEach(([at, lv], hi) => {
+    const t0 = at * k.r(0.8, 1.2), last = hi === C.hits.length - 1;
+    k.add(out, k.hp(thud(k, C.thudHz, C.thudTau, sec - t0), C.thudCut || 55), lv, t0);
+    if (C.boom) k.add(out, boom(k, 75, C.boomTo || 40, C.thudTau * 1.2, sec - t0), C.boom * lv, t0);   // (a heavy trunk's weight: 40-150 Hz)
+    k.add(out, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(sec - t0), 260), 260), 80), 0.05 + 0.02 * H.crash.level, 0.002)), C.body * lv, t0);
+    k.add(out, k.norm(k.decay(k.bp(k.pink(sec - t0), C.woodHz || 500, 0.5), 0.04 + 0.02 * H.crash.level, 0.001)), C.wood * lv, t0);
+    k.add(out, strike(k, 0.006, k.modes(k.near(P.trunkHz * H.hz * 1.5, 0.12), WOOD, C.ring, { damp: 0.7, tilt: 0.5, scatter: 0.08 }), sec - t0, { grit: 0.5, bounces: 2, spread: 0.01 }), 0.6 * lv * (last || !C.quietHits ? 1 : C.quietHits), t0);
+    // the crack of it (a heavy tree's only on the last hit, the crown's: one short crack, not a smear)
+    if (!C.snapLast || last) k.add(out, k.norm(k.decay(k.lp(k.white(0.2), C.snapHi || 9000), C.snapTau || (C.snapLast ? 0.012 : 0.025), 0.0006)), (C.snap ?? 0.45) * lv, t0);
+  });
+  // splinters' air (5-16 kHz) over the strike: without it a big tree's landing sounded muffled
+  if (C.air) k.add(out, k.norm(k.mul(k.decay(k.lp(k.hp(k.white(0.3), 5000), 16000), 0.03, 0.0005), k.wander(0.3, 40, 0.6))), C.air, C.snapLast ? C.hits[C.hits.length - 1][0] : 0);
+  const deb = k.decay(k.lp(k.hp(k.pink(sec), C.debrisLo || 250), C.debrisHi || 4000), C.debrisTau, 0.004);
+  k.add(out, k.norm(k.mul(deb, k.wander(sec, 20, 0.5))), C.debris);
+  // the long settling after a big tree: a faint broadband bed (150 Hz-6 kHz) over the rumble, so the tail is not only bass
+  if (C.bed) k.add(out, k.norm(k.mul(k.decay(k.lp(k.hp(k.pink(sec), 150), 6000), C.bedTau, 0.01), k.wander(sec, 12, 0.5))), C.bed);
+  k.grains(out, { count: Math.round(P.crashGrains * C.grains), t0: C.grainAt || 0, spread: C.spread, lo: 300, hi: C.grainHi || 6000, q: 1, dur: [0.002, 0.01], pow: 1.4, gain: 0.6, clump: 0.4 });
+  k.add(out, k.hp(thud(k, 70, C.rumbleTau, sec), 45), P.rumble * C.rumble);
+  // (v903) wooden debris snapping and rattling as it settles, ~25 dB under the rumble, over most of a second
+  if (C.tailSnaps) k.grains(out, { count: C.tailSnaps, t0: 0.05, spread: Math.min(C.tailLen, sec - 0.06), density: (u) => Math.pow(1 - u, 1.3), lo: 1000, hi: C.tailHi || 12000, q: 1, dur: [0.001, 0.006], pow: 1.8, gain: 0.07, clump: 0.4 });
+  k.grains(out, { count: Math.round(10 * C.settle), t0: 0.12, spread: sec * 0.5, density: (u) => Math.pow(1 - u, 1.5), lo: C.settleLo || 300, hi: C.settleHi || 3000, q: 1, dur: [0.002, 0.008], pow: 1.6, gain: 0.15 });
   return k.norm(out);
 } });
 const treeBounce = (H) => ({ n: 3, render(k, P) {
@@ -170,7 +185,8 @@ export const SOUNDS = {
       const land = Math.max(0.3, o.land ?? 1.9), out = [];
       for (const [c, w] of heftMix(P, o)) {
         const H = TREE_HEFT[c];
-        out.push({ layer: 'crack' + c, gain: P.crack * w, delay: 0, rate: 0.95 + 0.1 * rnd() });
+        out.push({ layer: 'crack' + c, gain: P.crack * H.crack.level * w, delay: 0, rate: 0.95 + 0.1 * rnd() });
+        if (H.crack.again) out.push({ layer: 'crack' + c, gain: P.crack * H.crack.level * H.crack.again * w, delay: Math.min(land * 0.4, 0.2 + 0.1 * rnd()), rate: 1 + 0.1 * rnd() });
         if (c === 'L') out.push({ layer: 'crackL', gain: P.crack * w * 0.9, delay: Math.min(land * 0.4, 0.22 + 0.1 * rnd()), rate: 1 + 0.15 * rnd() });
         out.push({ layer: 'tear' + c, gain: P.tear * H.tear.level * w, delay: 0.06, rate: 0.95 + 0.1 * rnd(), dur: Math.max(0.15, land - 0.06 + 0.04 - (H.tear.early || 0) * Math.min(1, land / 1.8)) });
         if (H.rush && !o.bare) {   // (v898: a bare tree, o.bare, has no crown to rush through the air)
@@ -422,7 +438,7 @@ export const SOUNDS = {
   'door.wood.close': {
     label: 'Wooden door shuts', group: 'doors', tune: 'door.wood',
     layers: { slam: { n: 6, render: (k, P) => doorThud(k, P, false) } },
-    compose: (P, o, rnd) => [{ layer: 'slam', gain: P.slam, delay: P.slamAt * (0.93 + 0.1 * rnd()), rate: 0.95 + 0.1 * rnd() }],
+    compose: (P, o, rnd) => [{ layer: 'slam', gain: P.slam, delay: Math.max(0, P.slamAt * (0.93 + 0.1 * rnd()) - DOOR_PRE), rate: 0.95 + 0.1 * rnd() }],
   },
   'door.metal.open': {
     label: 'Metal double doors open', group: 'doors', tune: 'door.metal',
@@ -434,7 +450,7 @@ export const SOUNDS = {
     layers: { slam: { n: 6, render: (k, P) => doorThud(k, P, true) } },
     compose(P, o, rnd) {
       const n = o.leaves ?? 2, L = [];
-      for (let j = 0; j < n; j++) L.push({ layer: 'slam', gain: P.slam * (j ? 0.8 : 1), delay: P.slamAt + j * P.slamGap * (0.85 + 0.3 * rnd()), rate: j ? 0.96 + 0.03 * rnd() : 1 + 0.03 * rnd() });
+      for (let j = 0; j < n; j++) L.push({ layer: 'slam', gain: P.slam * (j ? 0.8 : 1), delay: Math.max(0, P.slamAt + j * P.slamGap * (0.85 + 0.3 * rnd()) - DOOR_PRE), rate: j ? 0.96 + 0.03 * rnd() : 1 + 0.03 * rnd() });
       return L;
     },
   },
@@ -486,22 +502,68 @@ function latchClick(k, P, metal) {
   k.shape(out, (t) => Math.min(1, t / 0.005));
   return k.norm(out);
 }
-// a door shutting: a deep, short thud (a falling sine boom under a lowpassed thud and the 80-250 Hz body), the knock
-// of its panel (wood) or a short dull ring of the leaf (metal)
+// a door shutting (v903, on Jordan's two references, mainly the slammed one, and reworked over rounds with an
+// independent judge): the air it pushes ahead of it (a low whump), the latch bolt hitting the strike plate ~0.155 s
+// before it seats (a 15-20 ms broadband burst, a woody knock, a ~120 Hz thump), a 30-40 ms bright swell as it rides the plate, then
+// the edge meeting the frame: a crack rising over 10 ms and holding ~25 ms (peak near 1.3 kHz), the panel's mid knock,
+// and the low body ~15 ms behind it: a ladder of panel modes (58, 103, 179, 234, 305 Hz) peaking ~70 ms in; one tap
+// in the frame near 90 ms and the latch springing home ~0.14 s on. Rendered with DOOR_PRE seconds before the impact;
+// compose starts it that much earlier. Metal doors: the leaf clangs too (a big plate's beating partials, a bright edge).
+const DOOR_PRE = 0.18;
 function doorThud(k, P, metal) {
-  const sec = metal ? Math.max(0.5, P.ringDecay * 1.4) : 0.5, out = k.buf(sec);
-  k.add(out, boom(k, P.thudHz * 1.6, P.thudHz * 0.75, P.len, sec), P.boom);
-  k.add(out, thud(k, P.thudHz * 1.4, P.len * 0.8, sec), P.thud);
-  k.add(out, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(sec), 260), 260), 80), P.len * 0.6, 0.002)), P.body);
-  // the edge meeting the frame: a short bright knock on top, so it reads as a door and not only a boom
-  k.add(out, k.norm(k.decay(k.bp(k.white(0.04), metal ? 1400 : 1900, 0.8), 0.006, 0.0003)), P.knock);
-  // (v899) metal: the leaf clangs, a hard contact into a big plate's partials (beating, ringing on), brighter at the
-  // edge where it struck the other leaf
-  if (metal) {
-    k.add(out, strike(k, 0.0006, k.modes(k.near(P.ringHz, 0.08), PLATE, P.ringDecay, { damp: 0.5, tilt: 0.4, scatter: 0.03, extra: { drift: 0.003, beat: 1.4 } }), sec, { grit: 0.25, bounces: 2, spread: 0.002, jitter: 0.015 }), P.ring);
-    k.add(out, strike(k, 0.0003, k.scatterModes(6, 1200, 4200, 0.05, 0.2, { drift: 0.003, beat: 1.5 }), sec, { grit: 0.3, bounces: 1, spread: 0.001 }), P.edge);
+  const pre = DOOR_PRE, sec = pre + (metal ? Math.max(0.5, P.ringDecay * 1.4) : 0.5), out = k.buf(sec), body = k.buf(sec - pre);
+  // the air ahead of it
+  const air = k.lp(k.lp(k.pink(pre + 0.03), 250), 250);
+  k.shape(air, (t) => clamp((t - 0.02) / 0.03, 0, 1) * (0.6 + 0.4 * clamp(t / pre, 0, 1)) * (t > pre ? Math.max(0, 1 - (t - pre) / 0.03) : 1));
+  k.add(out, k.norm(air), P.whump);
+  const airMid = k.lp(k.bp(k.pink(pre + 0.03), 600, 0.6), 1500);   // (the reference's air reaches 250-1000 Hz, ~15 dB down)
+  k.shape(airMid, (t) => clamp((t - 0.02) / 0.03, 0, 1) * Math.max(0, 1 - Math.max(0, t - pre + 0.06) / 0.08));
+  k.add(out, k.norm(airMid), P.whump * 0.04);
+  // the latch bolt riding over the strike plate: two quick bright clicks
+  // (the handle or the edge brushing the frame as it comes in, then the bolt over the plate)
+  // (v903, the judge: a 15-20 ms broadband burst whose highs die ~30 dB over 100 ms, not a dry tick; then, instead
+  // of a second tick, a 30-40 ms bright swell into the slam as the bolt rides the plate)
+  const lh = k.decay(k.mul(k.lp(k.lp(k.hp(k.white(0.15), metal ? 900 : 700), 5000), 9000), k.wander(0.15, 120, 0.5)), 0.016, 0.0003), lt = pre - 0.155 * k.r(0.95, 1.05);
+  k.add(out, k.norm(lh), P.latchClick, lt);
+  // (and the door's woody knock with it: 300 Hz-1 kHz, and a low thump ~120 Hz)
+  k.add(out, k.norm(k.decay(k.bp(k.white(0.06), 600, 1), 0.01, 0.0005)), P.latchClick * 0.6, lt);
+  k.add(out, k.norm(k.decay(k.bp(k.pink(0.15), 120, 1.5), 0.03, 0.002)), P.latchClick * 0.8, lt);
+  const sw = k.r(0.03, 0.04), swell = k.mul(k.lp(k.hp(k.white(sw), 2000), 12000), k.wander(sw, 200, 0.6));
+  k.shape(swell, (t) => Math.pow(10, (-38 + 14 * t / sw) / 20) / 0.063);
+  k.add(out, swell, P.latchClick * 0.22, pre - sw);
+  // the edge meeting the frame: a broadband crack
+  // (v903, the judge: rising over ~10 ms, holding ~25 ms, then decaying; a peak near 1.3 kHz; little above 8 kHz)
+  const crack = k.norm(k.lp(k.hp(k.white(0.12), 700), 6000));
+  k.add(crack, k.norm(k.bp(k.white(0.12), 1300, 3)), 0.5);
+  k.add(crack, k.norm(k.bp(k.pink(0.12), 350, 0.8)), 0.7);   // (with a 200-600 Hz body)
+  k.shape(crack, (t) => (t < 0.01 ? t / 0.01 : t < 0.035 ? 1 : Math.exp(-(t - 0.035) / 0.018)));
+  k.add(out, k.norm(crack), P.knock, pre - 0.004);
+  // the door tapping once in its frame near 90 ms (~-19 dB; a cluster of rattles clattered)
+  k.add(out, k.norm(k.decay(k.lp(k.hp(k.white(0.03), 2000), 9000), 0.004, 0.0002)), 0.11 * P.knock, pre + 0.09 * k.r(0.95, 1.05));
+  // the panel's mid-band knock right behind it (250-1000 Hz), then the low body ~15 ms behind it, peaking ~40 ms after the knock
+  k.add(out, k.norm(k.decay(k.bp(k.pink(sec - pre), 500, 0.7), P.len * 0.4, 0.002)), P.mid, pre + 0.006);
+  const bd = k.r(0.012, 0.022), bs = sec - pre - bd;
+  k.add(body, boom(k, P.thudHz * 1.6, P.thudHz * 0.75, P.len, bs), P.boom * 0.4, bd);
+  // (v903, the judge: a ladder of low panel modes, not one sub boom: 58, 103, 179, 234, 305 Hz at 0, -7, -7, -14,
+  // -13 dB in the reference, swelling over ~70 ms)
+  const ladder = k.buf(bs), sr = k.sr, fs = P.thudHz / 70;
+  for (const [f, db, tau] of [[58, 0, 1.75], [103, -5, 1.4], [179, -6, 1.1], [234, -8, 0.9], [305, -7, 0.8]]) {
+    const hz = f * fs * k.r(0.96, 1.04), a = Math.pow(10, db / 20), tt = P.len * tau, ph = k.r(0, 6.28);
+    for (let i = 0; i < ladder.length; i++) { const t = i / sr; ladder[i] += a * Math.sin(2 * Math.PI * hz * t + ph) * (1 - Math.exp(-t / 0.03)) * Math.exp(-t / tt - Math.max(0, t - 0.4) / 0.05); }
   }
-  else k.add(out, strike(k, 0.002, k.modes(k.near(P.panelHz, 0.1), PLANK, P.panelRing, { damp: 0.75, tilt: 0.4, scatter: 0.06 }), sec, { grit: 0.3, bounces: 1, spread: 0.003 }), P.panel);
+  k.add(body, k.norm(ladder), P.boom, bd);
+  k.add(body, thud(k, P.thudHz * 1.4, P.len * 0.8, bs), P.thud, bd);
+  k.add(body, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(bs), 260), 260), 80), P.len * 0.8, 0.003)), P.body, bd);
+  if (metal) {
+    k.add(body, strike(k, 0.0006, k.modes(k.near(P.ringHz, 0.08), PLATE, P.ringDecay, { damp: 0.5, tilt: 0.4, scatter: 0.03, extra: { drift: 0.003, beat: 1.4 } }), bs, { grit: 0.25, bounces: 2, spread: 0.002, jitter: 0.015 }), P.ring, bd);
+    k.add(body, strike(k, 0.0003, k.scatterModes(6, 1200, 4200, 0.05, 0.2, { drift: 0.003, beat: 1.5 }), bs, { grit: 0.3, bounces: 1, spread: 0.001 }), P.edge);
+  } else k.add(body, strike(k, 0.002, k.modes(k.near(P.panelHz, 0.1), PLANK, P.panelRing, { damp: 0.75, tilt: 0.4, scatter: 0.06 }), bs, { grit: 0.3, bounces: 1, spread: 0.003 }), P.panel, bd);
+  // the latch springing home and the door rattling in its frame a moment after
+  const rb = k.r(0.13, 0.16);
+  k.add(body, k.norm(k.decay(k.lp(k.hp(k.white(0.06), 500), 5000), 0.01, 0.0005)), P.rebound * 0.63, rb);
+  k.add(body, k.norm(k.decay(k.lp(k.brown(0.2), 200), 0.04, 0.003)), P.rebound * 0.6, rb);
+  k.add(out, body, 1, pre);
+  k.shape(out, (t) => Math.min(1, (sec - t) / 0.02));
   return k.norm(out);
 }
 
@@ -517,9 +579,9 @@ export const SOUND_TUNING = {
   'hit.flesh': { bodyHz: 85, bodyMs: 4, wet: 0.18, fur: 0.12, blade: 0.22 },
   'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.25, blade: 0.22 },
   'hit.bone': { boneHz: 900, rattle: 0.35 },
-  tree: { trunkHz: 65, crack: 1, crackGrains: 220, tear: 0.6, snaps: 20, bed: 0.6, groan: 0.7, rush: 1.2, crash: 1.4, crashGrains: 140, rumble: 0.6, bounce: 0.35, bounceAt: 0.14, heftShift: 0 },
-  'door.wood': { latch: 0.7, latchHz: 4000, lockGap: 1, scrape: 1, snap: 1, rattle: 1, slam: 1, slamAt: 0.21, boom: 0.9, thud: 0.8, body: 0.7, thudHz: 70, len: 0.09, knock: 0.2, panel: 0.35, panelHz: 95, panelRing: 0.05 },
-  'door.metal': { clank: 0.8, latchHz: 3200, lockGap: 1, scrape: 1, snap: 1, rattle: 1, slam: 1, slamAt: 0.2, slamGap: 0.07, boom: 0.7, thud: 0.5, body: 0.5, thudHz: 60, len: 0.1, knock: 0.25, ring: 1, ringHz: 320, ringDecay: 0.6, edge: 0.5 },
+  tree: { trunkHz: 65, crack: 1, crackGrains: 220, tear: 0.9, snaps: 7, bed: 0.6, groan: 0.7, rush: 1.2, crash: 1.4, crashGrains: 140, rumble: 0.6, bounce: 0.35, bounceAt: 0.14, heftShift: 0 },
+  'door.wood': { latch: 0.7, latchHz: 4000, lockGap: 1, scrape: 1, snap: 1, rattle: 1, slam: 1, slamAt: 0.21, boom: 0.9, thud: 0.8, body: 0.7, thudHz: 70, len: 0.09, knock: 1.6, whump: 0.15, latchClick: 0.4, mid: 0.45, rebound: 0.35, panel: 0.35, panelHz: 95, panelRing: 0.05 },
+  'door.metal': { clank: 0.8, latchHz: 3200, lockGap: 1, scrape: 1, snap: 1, rattle: 1, slam: 1, slamAt: 0.2, slamGap: 0.07, boom: 0.7, thud: 0.5, body: 0.5, thudHz: 60, len: 0.1, knock: 1.6, whump: 0.15, latchClick: 0.45, mid: 0.35, rebound: 0.35, ring: 1, ringHz: 320, ringDecay: 0.6, edge: 0.5 },
 };
 // the tuning object a sound reads (doors share theirs between opening and shutting)
 export const tuneOf = (name) => SOUND_TUNING[SOUNDS[name].tune || name];
@@ -548,9 +610,9 @@ export const SOUND_SPEC = {
   'hit.flesh': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms; longer is duller)', 1, 12, 0.1], ['wet', 'Wet', 0, 1.5, 0.01], ['fur', 'Fur and hide', 0, 1, 0.01], ['blade', 'Blade slice', 0, 1.5, 0.01]],
   'hit.padded': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms)', 1, 12, 0.1], ['slap', 'Leather slap', 0, 1.5, 0.01], ['cloth', 'Cloth', 0, 1.5, 0.01], ['blade', 'Blade tearing cloth', 0, 1.5, 0.01]],
   'hit.bone': [['boneHz', 'Bone pitch (Hz)', 300, 2500, 10], ['rattle', 'Rattle', 0, 1, 0.01]],
-  tree: [['trunkHz', 'Trunk pitch (Hz)', 30, 200, 1], ['crack', 'Crack as it gives', 0, 1.5, 0.01], ['crackGrains', 'Crack: splinters (count)', 20, 600, 1], ['tear', 'Tearing while it falls', 0, 1.5, 0.01], ['snaps', 'Tearing: snaps a second', 2, 60, 1], ['bed', 'Tearing: fine crackle under the snaps', 0, 1, 0.01], ['groan', 'Tearing: low groan', 0, 1.5, 0.01], ['rush', 'Rush through the air into the landing', 0, 1.5, 0.01], ['crash', 'Crash on landing', 0, 1.5, 0.01], ['crashGrains', 'Crash: branches breaking (count)', 0, 500, 1], ['rumble', 'Crash: low rumble after', 0, 1.5, 0.01], ['bounce', 'Bounce knock', 0, 1, 0.01], ['bounceAt', 'Bounce: after (s)', 0.05, 0.4, 0.005], ['heftShift', 'Every tree lighter (-) or heavier (+)', -0.5, 0.5, 0.01]],
-  'door.wood': [['latch', 'Lock opening', 0, 1.5, 0.01], ['latchHz', 'Lock: top of its steel partials (Hz)', 800, 6000, 10], ['lockGap', 'Lock: timing (× slower)', 0.3, 3, 0.01], ['scrape', 'Lock: key scraping between clicks', 0, 3, 0.01], ['snap', 'Lock: bright snap of each click', 0, 3, 0.01], ['rattle', 'Lock: parts rattling after the bolt', 0, 3, 0.01], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: knock of the edge on the frame', 0, 1, 0.01], ['panel', 'Panel knock', 0, 1.5, 0.01], ['panelHz', 'Panel pitch (Hz)', 40, 300, 1], ['panelRing', 'Panel ring (s)', 0.02, 0.3, 0.005]],
-  'door.metal': [['clank', 'Lock opening', 0, 1.5, 0.01], ['latchHz', 'Lock: top of its steel partials (Hz)', 800, 6000, 10], ['lockGap', 'Lock: timing (× slower)', 0.3, 3, 0.01], ['scrape', 'Lock: key scraping between clicks', 0, 3, 0.01], ['snap', 'Lock: bright snap of each click', 0, 3, 0.01], ['rattle', 'Lock: parts rattling after the bolt', 0, 3, 0.01], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['slamGap', 'Gap between the two leaves (s)', 0, 0.15, 0.001], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: knock of the edge on the frame', 0, 1, 0.01], ['ring', 'Leaf ring', 0, 1.5, 0.01], ['ringHz', 'Leaf pitch (Hz)', 80, 900, 1], ['ringDecay', 'Leaf ring (s)', 0.05, 1.5, 0.01], ['edge', 'Leaf edge clang (bright)', 0, 1.5, 0.01]],
+  tree: [['trunkHz', 'Trunk pitch (Hz)', 30, 200, 1], ['crack', 'Crack as it gives', 0, 1.5, 0.01], ['crackGrains', 'Crack: splinters (count)', 20, 600, 1], ['tear', 'Tearing while it falls', 0, 1.5, 0.01], ['snaps', 'Tearing: snaps a second', 1, 30, 1], ['bed', 'Tearing: the continuous tearing under the snaps', 0, 2, 0.01], ['groan', 'Tearing: low groan', 0, 1.5, 0.01], ['rush', 'Rush through the air into the landing', 0, 1.5, 0.01], ['crash', 'Crash on landing', 0, 1.5, 0.01], ['crashGrains', 'Crash: branches breaking (count)', 0, 500, 1], ['rumble', 'Crash: low rumble after', 0, 1.5, 0.01], ['bounce', 'Bounce knock', 0, 1, 0.01], ['bounceAt', 'Bounce: after (s)', 0.05, 0.4, 0.005], ['heftShift', 'Every tree lighter (-) or heavier (+)', -0.5, 0.5, 0.01]],
+  'door.wood': [['latch', 'Lock opening', 0, 1.5, 0.01], ['latchHz', 'Lock: top of its steel partials (Hz)', 800, 6000, 10], ['lockGap', 'Lock: timing (× slower)', 0.3, 3, 0.01], ['scrape', 'Lock: key scraping between clicks', 0, 3, 0.01], ['snap', 'Lock: bright snap of each click', 0, 3, 0.01], ['rattle', 'Lock: parts rattling after the bolt', 0, 3, 0.01], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: crack of the edge on the frame', 0, 1.5, 0.01], ['panel', 'Panel knock', 0, 1.5, 0.01], ['panelHz', 'Panel pitch (Hz)', 40, 300, 1], ['panelRing', 'Panel ring (s)', 0.02, 0.3, 0.005], ['whump', 'Shut: the air it pushes ahead of it', 0, 1, 0.01], ['latchClick', 'Shut: latch clicking over the plate', 0, 1.5, 0.01], ['mid', 'Thud: 250-500 Hz body', 0, 1.5, 0.01], ['rebound', 'Shut: rebound rattle after', 0, 1, 0.01]],
+  'door.metal': [['clank', 'Lock opening', 0, 1.5, 0.01], ['latchHz', 'Lock: top of its steel partials (Hz)', 800, 6000, 10], ['lockGap', 'Lock: timing (× slower)', 0.3, 3, 0.01], ['scrape', 'Lock: key scraping between clicks', 0, 3, 0.01], ['snap', 'Lock: bright snap of each click', 0, 3, 0.01], ['rattle', 'Lock: parts rattling after the bolt', 0, 3, 0.01], ['slam', 'Thud (shutting)', 0, 1.5, 0.01], ['slamAt', 'Thud lands after (s)', 0.05, 0.5, 0.005], ['slamGap', 'Gap between the two leaves (s)', 0, 0.15, 0.001], ['boom', 'Thud: low boom', 0, 1.5, 0.01], ['thud', 'Thud: dull thump', 0, 1.5, 0.01], ['body', 'Thud: body (80-250 Hz)', 0, 1.5, 0.01], ['thudHz', 'Thud pitch (Hz)', 35, 160, 1], ['len', 'Thud length (s)', 0.03, 0.3, 0.005], ['knock', 'Thud: crack of the edge on the frame', 0, 1.5, 0.01], ['ring', 'Leaf ring', 0, 1.5, 0.01], ['ringHz', 'Leaf pitch (Hz)', 80, 900, 1], ['ringDecay', 'Leaf ring (s)', 0.05, 1.5, 0.01], ['edge', 'Leaf edge clang (bright)', 0, 1.5, 0.01], ['whump', 'Shut: the air it pushes ahead of it', 0, 1, 0.01], ['latchClick', 'Shut: latch clicking over the plate', 0, 1.5, 0.01], ['mid', 'Thud: 250-500 Hz body', 0, 1.5, 0.01], ['rebound', 'Shut: rebound rattle after', 0, 1, 0.01]],
 };
 
 // renders one variant of one layer (a Float32Array, peak 0.9), the same every time for that seed
