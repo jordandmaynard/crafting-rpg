@@ -762,6 +762,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v919:** (Jordan: a variable to turn the bag's swing off entirely) T > Gold pouch > Swing: on (1) or off (0). Off, the pouch hangs still at its rest angle; the coins inside still feel the rivet's moves.
 
+**v920:** Jordan's Gold pouch tuning as defaults: x 46, y 657.5, scale 0.3, len 563, grav 3000, damp 6.4, maxSwing 18, springPow 7.65, depth 154.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
