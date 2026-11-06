@@ -543,7 +543,7 @@ function doorThud(k, P, metal) {
   // the panel's mid-band knock right behind it (250-1000 Hz), then the low body ~15 ms behind it, peaking ~40 ms after the knock
   k.add(out, k.norm(k.decay(k.bp(k.pink(sec - pre), 500, 0.7), P.len * 0.4, 0.002)), P.mid, pre + 0.006);
   const bd = k.r(0.012, 0.022), bs = sec - pre - bd;
-  k.add(body, boom(k, P.thudHz * 1.6, P.thudHz * 0.75, P.len, bs), P.boom * 0.4, bd);
+  k.add(body, boom(k, P.thudHz * 1.6, P.thudHz * 0.75, P.len * 1.3, bs), P.boom * 1.1, bd);   // (v904, Jordan: keep more of the old deep boom)
   // (v903, the judge: a ladder of low panel modes, not one sub boom: 58, 103, 179, 234, 305 Hz at 0, -7, -7, -14,
   // -13 dB in the reference, swelling over ~70 ms)
   const ladder = k.buf(bs), sr = k.sr, fs = P.thudHz / 70;
