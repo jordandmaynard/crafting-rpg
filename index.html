@@ -1499,7 +1499,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 933;
+const GAME_VERSION = 934;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -29203,8 +29203,32 @@ function buildPotionNormals() {
 }
 // the atlas: each potion's icon side by side, cell px square, premultiplied, with the items' one-pixel black outline
 // (and the sloshing ones' empty bottle and its depth at the icons' size, potionGeoTex)
+// (v934, Jordan's 37 ms spike on the first potion thrown: the atlas was drawn then, its images decoded and every pixel
+// outlined) each size's atlas is kept (pcardAtlasCache), and it's drawn while loading at the size a bottle in hand will
+// want at the zoom you start at (warmPotionCards), so the first throw finds it ready
+const pcardAtlasCache = new Map();
+let pcardWarm = false, pcardWarmTries = 0;
+function warmPotionCards() {
+  if (++pcardWarmTries > 1200) return true;   // (images that never come: given up)
+  if (!POTION_GEOM[128] || !POTION_GEOM[256]) return false;
+  const cs = cv.style, dpr = Math.min(2, devicePixelRatio || 1), h = Math.max(1, Math.round(parseFloat(cs.height) * dpr));
+  if (!(h > 1)) return false;
+  h2a.set(H.x, H.y + 1, H.z); h2b.copy(h2a); h2b.y += POTION_DRAW.size2d;
+  h2a.project(camera); h2b.project(camera);
+  const big = Math.abs(h2b.y - h2a.y) / 2 * h, want = Math.max(16, Math.min(256, Math.ceil(big / 8) * 8));
+  buildPotionNormals();
+  return buildPotionAtlas(want);
+}
 function buildPotionAtlas(cell) {
-  const srcs = pcardSrcs();
+  const srcs = pcardSrcs(), sig = srcs.join('|'), key = cell + '|' + sig, hit = pcardAtlasCache.get(key);
+  if (hit) {
+    const t = PCARD_U.tP.value;
+    t.image = { data: hit.data, width: hit.W, height: cell }; t.regions = []; t.needsUpdate = true;
+    PCARD_U.cells.value = hit.n; PCARD_U.cellPx.value = cell; pcardCell = cell; pcardSig = sig;
+    const gt = potionGeoTex(cell - 2);
+    if (gt) PCARD_U.tG.value = gt;
+    return true;
+  }
   const ims = srcs.map(src => { const u = src.split('#')[0]; let im = pcardImgs.get(u); if (!im) { im = new Image(); im.src = u; pcardImgs.set(u, im); } return im; });
   if (!ims.every(im => im.complete && im.naturalWidth)) return false;
   const n = ims.length, W = cell * n, c = document.createElement('canvas'); c.width = W; c.height = cell;
@@ -29220,7 +29244,9 @@ function buildPotionAtlas(cell) {
   pcardInk(d, W, cell, cell);
   const t = PCARD_U.tP.value;
   t.image = { data: new Uint8Array(d.buffer), width: W, height: cell }; t.regions = []; t.needsUpdate = true;
-  PCARD_U.cells.value = n; PCARD_U.cellPx.value = cell; pcardCell = cell; pcardSig = srcs.join('|');
+  PCARD_U.cells.value = n; PCARD_U.cellPx.value = cell; pcardCell = cell; pcardSig = sig;
+  if (pcardAtlasCache.size >= 8) pcardAtlasCache.delete(pcardAtlasCache.keys().next().value);
+  pcardAtlasCache.set(key, { data: t.image.data, W, n });
   const gt = potionGeoTex(cell - 2);
   if (gt) PCARD_U.tG.value = gt;
   return true;
@@ -36650,6 +36676,7 @@ function frameBody(now) {
   prof.lap('game update (hero, foes, effects)');
   updateCamera(dt);
   updateHeldPotion();
+  if (!pcardWarm && (!started || veilBusy())) pcardWarm = warmPotionCards();   // (v934: while loading or on the start screen)
   showJumpHint();
   updateFoeBars(dt);
   updateGains(dt);
