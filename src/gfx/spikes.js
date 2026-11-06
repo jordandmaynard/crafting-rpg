@@ -77,6 +77,16 @@ export class SpikeRecorder {
     else delete obj[k];
   }
 
+  // (v928) a row timed by the game itself (render (encode)'s own parts, see the game's encMark): ms added under what's running
+  add(name, ms) {
+    const parent = this.top;
+    if (!parent || !(ms > 0)) return;
+    let n = parent.kids.get(name);
+    if (!n) parent.kids.set(name, (n = node(name)));
+    n.ms += ms;
+    n.n++;
+  }
+
   // A part of a function the game can't wrap (update's parts): enter(name) ... exit().
   enter(name) {
     const parent = this.top;

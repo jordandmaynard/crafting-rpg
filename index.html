@@ -1482,7 +1482,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 927;
+const GAME_VERSION = 928;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9457,7 +9457,7 @@ const ENC_T = {};
 let encT0 = 0, encR0 = 0;
 function encMark(k) {
   const n = performance.now(), r = renderer.info.tRender;
-  if (k) ENC_T[k] = (ENC_T[k] || 0) + (n - encT0) - (r - encR0);
+  if (k) { const ms = (n - encT0) - (r - encR0); ENC_T[k] = (ENC_T[k] || 0) + ms; spikes.add('encode: ' + k, ms); }
   encT0 = n; encR0 = r;
 }
 function renderWorld() {
@@ -17313,11 +17313,11 @@ function* piecesSteps(cx, cz, ch, only, sliced) {
     if (pd) for (const q of pd) if (q.hang) drawProp(q, false);
   }
   if (sliced) { yield; again(0); }
-  ch.build = bufBuild.mesh(buildMat);
+  ch.build = sliced ? (yield* buildMeshSteps(bufBuild, buildMat)) : bufBuild.mesh(buildMat);
   ch.pglow = PIECE_GLOW.mesh(glowMat);   // (v618: the wall lanterns' glass)
   GLOW = glowSv; PIECE_GLOW_ON = false;
   if (sliced) { yield; again(1); PDY = 0; PCUT = 0; }
-  ch.buildGI = ch.build ? giGeo(bufBuild, giCuts, bufGIProxy) : null;
+  ch.buildGI = !ch.build ? null : sliced ? (yield* giGeoSteps(bufBuild, giCuts, bufGIProxy)) : giGeo(bufBuild, giCuts, bufGIProxy);
   ch.glass = glassMesh(bufGlass);
   if (sliced) { yield; again(1); PDY = 0; PCUT = 0; }
   }
@@ -17356,13 +17356,56 @@ function* piecesSteps(cx, cz, ch, only, sliced) {
       }
     } finally { PDY = 0; PCUT = 0; }
     if (sliced) { yield; again(k); PDY = 0; PCUT = 0; }
-    ch['inUp' + k] = bufInside.mesh(buildMat);
-    ch['up' + k] = bufBuild.mesh(buildMat);
+    ch['inUp' + k] = sliced ? (yield* buildMeshSteps(bufInside, buildMat)) : bufInside.mesh(buildMat);
+    ch['up' + k] = sliced ? (yield* buildMeshSteps(bufBuild, buildMat)) : bufBuild.mesh(buildMat);
     // (v441: a story hidden because you're under it still casts, so its shadow doesn't vanish with it)
     if (ch['up' + k]) ch['up' + k].castHidden = true;
     ch['glass' + k] = glassMesh(bufGlass);
   }
   } finally { GLASSB = null; GLOW = glowSv; PIECE_GLOW_ON = false; }
+}
+// (v928) BuildBuf.mesh and giGeo a slice at a time, for piecesSteps: a town chunk's pieces are ~600k vertices, ~48 MB
+// to copy into its mesh, which as one step was the longest left in streaming. The same arrays come out.
+function* sliceCopy(src, len) {
+  const a = new Float32Array(len), B = 1 << 18;
+  for (let o = 0; o < len; o += B) {
+    if (performance.now() > PIECE_UNTIL) yield;
+    a.set(src.subarray(o, Math.min(len, o + B)), o);
+  }
+  return a;
+}
+function* buildMeshSteps(b, mat) {
+  if (!b.n) return null;
+  const n = b.n, v = n / 3;
+  const p = yield* sliceCopy(b.p, n), c = yield* sliceCopy(b.c, n);
+  const dl = yield* sliceCopy(b.dl, v * 4), dh = yield* sliceCopy(b.dh, v * 3), dq = yield* sliceCopy(b.dq, v * 4);
+  if (performance.now() > PIECE_UNTIL) yield;
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.BufferAttribute(p, 3));
+  g.setAttribute('color', new GFX.BufferAttribute(c, 3));
+  const m = shadowy(new GFX.Mesh(g, mat));
+  g.setAttribute('dl', new GFX.BufferAttribute(dl, 4));
+  g.setAttribute('dh', new GFX.BufferAttribute(dh, 3));
+  g.setAttribute('dq', new GFX.BufferAttribute(dq, 4));
+  g.setAttribute('ct', cutAttr(b, v));
+  return m;
+}
+function* giGeoSteps(b, cuts, proxy) {
+  if (!cuts.length) return null;
+  let len = b.n + proxy.n;
+  for (let k = 0; k < cuts.length; k += 2) len -= cuts[k + 1] - cuts[k];
+  const p = new Float32Array(len), col = new Float32Array(len), B = 1 << 18;
+  let o = 0, from = 0;
+  function* take(S, a, z) {
+    for (let x = a; x < z; x += B) {
+      if (performance.now() > PIECE_UNTIL) yield;
+      const e = Math.min(z, x + B);
+      p.set(S.p.subarray(x, e), o); col.set(S.c.subarray(x, e), o); o += e - x;
+    }
+  }
+  for (let k = 0; k < cuts.length; k += 2) { yield* take(b, from, cuts[k]); from = cuts[k + 1]; }
+  yield* take(b, from, b.n); yield* take(proxy, 0, proxy.n);
+  return { attributes: { position: { array: p, count: len / 3 }, color: { array: col } }, index: null };
 }
 // a chunk's pieces built again, every story's mesh swapped in
 function setPieces(ch, only = null) {
@@ -30073,6 +30116,14 @@ function drawDayStrip() {
 // the fantasy ore rocks' light (T > Ore rocks), brighter the rarer; oreLightAt: where they stand, found once
 const ORE_GLOW = { verdane: 4, caerite: 4, orivane: 4, auralith: 4, range: 1.6 };
 let oreLightAt = null;
+// (v928: found while loading, not on the first frame played: a pass over every tile, now through a table of which
+// objects are metal ores rather than each tile's object looked up)
+function findOreLights() {
+  const metal = new Uint8Array(OBJ.length);
+  OBJ.forEach((o, k) => { if (o && o.metal) metal[k] = 1; });
+  oreLightAt = [];
+  for (let i = 0; i < N * N; i++) if (metal[OB[i]]) { const c = i % N, r = (i - c) / N; oreLightAt.push([c + 0.5, r + 0.5, 3, i]); }
+}
 function updateLamps() {
   const near = [];
   for (const t of towns) if (Math.hypot(t.c - H.x, t.r - H.z) < 40) near.push(...t.lamps);
@@ -30083,7 +30134,7 @@ function updateLamps() {
   // roof and walls over it from inside: it only lights its room while you're in that building
   if (PROP_FIRE.light > 0) for (const f of propFires) if (f.hearth && !f.q.built && (f.bld == null || f.bld === heroBld) && Math.abs(f.lx - H.x) < 30 && Math.abs(f.lz - H.z) < 30) near.push(f.lamp || (f.lamp = [f.lx, f.lz, 4, null, f.ly - heightAt(f.lx, f.lz)]));
   // the fantasy ore rocks (Verdane and up) each light the ground round them in their colour
-  if (!oreLightAt) { oreLightAt = []; for (let i = 0; i < N * N; i++) if (OBJ[OB[i]].metal) { const c = i % N, r = (i - c) / N; oreLightAt.push([c + 0.5, r + 0.5, 3, i]); } }
+  if (!oreLightAt) findOreLights();
   for (const p of oreLightAt) if (OBJ[OB[p[3]]].metal && ORE_GLOW[OBJ[OB[p[3]]].metal] > 0 && Math.abs(p[0] - H.x) < 30 && Math.abs(p[1] - H.z) < 30) near.push(p);
   const dist = p => Math.hypot(p[0] - H.x, p[1] - H.z);
   near.sort((a, b) => dist(a) - dist(b));
@@ -30703,17 +30754,24 @@ function wakeTown(t) {
   }
 }
 // towns wake when you come near and sleep when you've gone; the waking ones' people are built a few ms a frame
-function folkTowns_tick() {
+// (v928, Jordan's 44 ms spike right after loading: every town, mill and farm in reach was woken in the first frame,
+// and the mills' and farms' homes found then too) the homes are found and the towns round you woken while loading
+// (see the world's load), and in play at most one town wakes a frame (once: all of them, for the load)
+function folkWakeTowns(once = true) {
   if (!folkHomes) makeFolkHomes();
+  let woke = false;
   const tick = t => {
     if (!t.houses || !t.houses.length) return;
     const d = Math.max(Math.abs(H.x - t.c), Math.abs(H.z - t.r)) - t.R;
     const awake = folkTowns.has(t);
-    if (!awake && FOLK.on > 0.5 && d < FOLK.wake) wakeTown(t);
+    if (!awake && FOLK.on > 0.5 && d < FOLK.wake) { if (!woke || !once) { wakeTown(t); woke = true; } }
     else if (awake && (d > FOLK.wake + 12 || FOLK.on <= 0.5)) freeTown(t);
   };
   for (const t of towns) tick(t);
   for (const t of folkHomes) tick(t);
+}
+function folkTowns_tick() {
+  folkWakeTowns();
   const t0 = performance.now();
   for (const t of folkTowns) {
     if (t.batches) continue;
@@ -30946,7 +31004,8 @@ function folkUpMove(p, dx, dz) {
 const folkCells = new Map();
 let heroLastX = 0, heroLastZ = 0;
 function updateFolk(dt) {
-  folkTowns_tick();
+  spikes.enter('townsfolk: towns woken + people built');
+  try { folkTowns_tick(); } finally { spikes.exit(); }
   if (folkTalk) folkTalk.t -= dt;
   const hvx = (H.x - heroLastX) / Math.max(dt, 1e-3), hvz = (H.z - heroLastZ) / Math.max(dt, 1e-3);
   heroLastX = H.x; heroLastZ = H.z;
@@ -31919,6 +31978,7 @@ function update(dt) {
   }
 
   spikes.exit(); spikes.enter('update: roofs, sky, lamps, HUD');
+  spikes.enter('roofs + rooms shown');
   // ----- roofs: hidden over the building you stand in, and all of them while building -----
   // (v369: the room on your story; and what's over you, when something is, hides: storyView)
   const inside = roomOf.get(seenStory() * SNN + T(Math.floor(H.x), Math.floor(H.z)));
@@ -31941,15 +32001,20 @@ function update(dt) {
   }
   for (const ch of chunks.values()) for (let k = 1; k <= STORY_MAX; k++) { const m = ch['up' + k], g = ch['glass' + k]; if (m) m.visible = k <= view; if (g) g.visible = k <= view; }
   for (const d of doors.values()) if (d.k) d.pivot.visible = d.k <= view;
+  spikes.exit(); spikes.enter('cutaway + inside light');
   updateCutaway(inside);
   heroBld = inBld || null;
   updateInsideFill(dt, inBld);
 
+  spikes.exit(); spikes.enter('build ghost, plot walls, materials');
   updateGhost();
   updatePlotWalls();
   updateStoryGrid(); updateGrassHide(); updateGlassU(); updateDetailU(); updateRoses(); updateSlateU(); updateThatchU();
+  spikes.exit(); spikes.enter('sky');
   updateSky();
+  spikes.exit(); spikes.enter('lamps');
   updateLamps();
+  spikes.exit(); spikes.enter('action prompt');
 
   // action prompt: over the loot, the table, or the middle of the door (or gate)
   const act = actionHere(), nd = act && act.kind === 'door' ? act.door : null;
@@ -32005,6 +32070,7 @@ function update(dt) {
     pr.hidden = false;
   } else pr.hidden = true;
 
+  spikes.exit(); spikes.enter('region name, discoveries, map fog');
   // region name
   regionT -= dt;
   if (regionT <= 0) {
@@ -32027,7 +32093,9 @@ function update(dt) {
     { const m = landmasses[LANDID[i] - 1]; if (m && m.name && !m.found) { m.found = true; toast('Discovered ' + titleCase(m.name) + '!', 'good', true, 'compass'); } }
     revealFog();
   }
+  spikes.exit(); spikes.enter('bars');
   updateBar();
+  spikes.exit();
   spikes.exit();
 }
 
@@ -36704,6 +36772,9 @@ generate((f, label, HFin) => { $('loadFill').style.width = (f * 100).toFixed(1) 
   revealFog();
   updateSky();
   regionName = towns[0].name; setPlace(plateName(regionName));
+  // (v928) what the first frame played used to work out: the ore rocks' lights, the folk's homes and the towns round you woken
+  findOreLights();
+  folkWakeTowns(false);
   genMs = performance.now() - genStart;
   $('loadFill').style.width = '100%'; $('loadText').textContent = 'THE WORLD AWAITS'; drawGenMapAt(true);
   $('start').disabled = false; $('start').focus();
