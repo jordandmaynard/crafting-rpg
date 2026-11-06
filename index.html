@@ -568,7 +568,7 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
    further left than the kit's layout, so its strap column covers the folio's and the straps read as one, per Jordan's
    second mockup) */
 #inv { position: fixed; inset: 0; z-index: 5; pointer-events: none; -webkit-user-select: none; user-select: none; }
-#inv > section, #inv #invInfo { pointer-events: auto; }
+#inv > section { pointer-events: auto; }
 #invGroup { left: calc(74px * var(--ui)); top: calc(56px * var(--ui)); width: 914px; height: 732px; transform: scale(var(--ui)); transform-origin: top left; }
 #invGroup .folio { position: absolute; left: 464px; top: 68px; width: 450px; height: 664px; z-index: 1; isolation: isolate; }
 #invGroup .backpack { position: absolute; left: 0; top: 0; width: 506px; height: 732px; z-index: 2; isolation: isolate; }
@@ -702,7 +702,9 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 #inv .invAct svg, #inv .invAct img, #inv #trash svg { width: 70%; height: 70%; }
 #inv .invAct img.paint, #inv #trash img.paint { width: 86%; height: 86%; image-rendering: auto; pointer-events: none; }
 #inv #trash.drop { --actSkin: url("ui/cell-focus.webp"); box-shadow: 0 0 0 3px #d8443a; }
-#inv #invInfo { position: absolute; left: 18px; top: 744px; width: 904px; max-width: none; min-height: 0; margin: 0; font: 20px/1.3 var(--wk); color: #f6e8cc; text-shadow: 0 1px 2px #000, 0 0 6px #140b0a; }
+/* (v917, Jordan: the pouch hung over it) the hint line sits just above the belt's centre piece, left aligned with its
+   left edge, and grows upward; placed by placeInvInfo, scaled with the HUD */
+#inv #invInfo { position: absolute; left: 16px; bottom: 16px; width: 904px; max-width: none; min-height: 0; margin: 0; transform: scale(var(--ui)); transform-origin: 0 100%; pointer-events: none; font: 20px/1.3 var(--wk); color: #f6e8cc; text-shadow: 0 1px 2px #000, 0 0 6px #140b0a; }
 #inv #invInfo b { font: 600 20px var(--wk); color: #ffd98a; }
 
 /* a refining station (Wanderer's Kit refining frames v1, v343): its own 800x480 window, top right, one painted frame a
@@ -1326,8 +1328,8 @@ body.mapOpen #miniWrap.minimap { display: none; }
       <div id="pack" class="pack-grid"></div>
       <div class="packActs"><div id="refineBtn" class="invAct" title="Refine (R): send everything raw to this plot's stations, shared out evenly"></div><div id="stashBtn" class="invAct" title="Stash: put everything else away in this plot's crates and chests"></div><div id="trash" title="Drag something here to throw it away"></div></div>
     </div>
-    <div id="invInfo"></div>
   </section>
+  <div id="invInfo"></div>
   <section class="wk station" id="station" data-skin="grinder" hidden aria-label="Refining station">
     <img class="shell" id="stShell" src="ui/refining/frame-grinder.webp" alt="" draggable="false">
     <h1 class="live-title" id="stTitle"></h1>
@@ -1473,7 +1475,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 916;
+const GAME_VERSION = 917;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -22629,12 +22631,24 @@ function showInfo() {
 const cellOf = el => { const [k, i] = el.dataset.cell.split(':'); return [k, k === 'gear' ? i : +i]; };
 // what a station takes, as its window says: LOGS, COPPER ORE OR IRON ORE
 const stationTakes = st => Object.keys(STATION_KIND[st.kind].refine).map(id => ITEMS[id].name.toUpperCase()).join(' OR ');
+// (v917, Jordan) the pack's hint line: just above the belt's centre piece, from its left edge (bottom left of the
+// screen when the belt's not shown)
+const INV_INFO_GAP = 6;
+function placeInvInfo() {
+  const el = $('invInfo'), bc = $('beltCenter');
+  if (!el) return;
+  const r = bc ? bc.getBoundingClientRect() : null, ui = uiScale();
+  const left = r && r.width ? r.left : 16, bottom = r && r.width ? innerHeight - r.top + INV_INFO_GAP * ui : 16;
+  el.style.left = Math.round(left) + 'px'; el.style.bottom = Math.round(bottom) + 'px';
+  el.style.width = Math.max(200, Math.min(904, (innerWidth - left - 16) / Math.max(0.05, ui))) + 'px';
+}
+addEventListener('resize', () => { if (invOpen) requestAnimationFrame(placeInvInfo); });
 function toggleInv(open = !invOpen || !invPack) {
   if (open && mode !== 'play') setMode('play');
   // (already open with only a station up: show the pack beside it)
   if (open && invOpen) { invPack = true; renderInv(); placeInv(); renderModes(); return; }
   invOpen = open; $('inv').hidden = !open;
-  if (open) { if (openSt) invFocus = [isStore(openSt) ? 'box' : 'in', 0]; else if (invFocus[0] === 'in' || invFocus[0] === 'out' || invFocus[0] === 'box' || (folioFolded && invFocus[0] === 'gear')) invFocus = invHome(); renderInv(); placeInv(); }
+  if (open) { if (openSt) invFocus = [isStore(openSt) ? 'box' : 'in', 0]; else if (invFocus[0] === 'in' || invFocus[0] === 'out' || invFocus[0] === 'box' || (folioFolded && invFocus[0] === 'gear')) invFocus = invHome(); renderInv(); placeInv(); placeInvInfo(); }
   else { invPress = null; $('dragIcon').hidden = true; openSt = null; invPack = true; }
   renderModes();
 }
@@ -32832,6 +32846,7 @@ function layoutBelt() {
   }
   el.style.setProperty('--bcS', cs.toFixed(4));
   el.style.setProperty('--bcDy', (-69.5 * (s - cs)).toFixed(2) + 'px');
+  try { if (invOpen) placeInvInfo(); } catch (err) { /* (before the pack's code is up) */ }
 }
 addEventListener('resize', layoutBelt);
 function zoomLimits() {

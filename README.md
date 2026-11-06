@@ -756,6 +756,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v916:** (Jordan: coins coming in looked like they were spawning at the top rather than falling in; start them higher above the neck, fade them in as they pass it, and don't let them hit the neck till they're past it so they don't bunch up at the top) Coins dropped into the pouch now start T > Gold pouch's Coins coming in: start above the neck (default 120 art px) up, already falling at its speed (0), straight down the bag's length whatever its swing. They fade in over its fade distance (60 px), fully shown at the neck, and pass through the neck, the walls and the other coins till they're its pass distance (30 px) under the neck, then land like any other coin.
 
+**v917:** (Jordan sent the pouch's back shell without the front lip, and the pack's hint line was under the pouch) ui/pouch/pouch-back.webp is now Jordan's lipless back shell (art/deliveries/gold-pouch-back-shell-no-lip.png), on the same crop and size as the front, its colour fitted to the old baked back (brightness 0.874, contrast 1.490, saturation 0.522; the new painting is lighter than the old one). The coins' walls and the mouse-over test come from its outline, so they follow the new shape. The pack's hint line (#invInfo: the click / drag hint, what's under the mouse, the gold) now sits just above the belt's centre piece, left aligned with its left edge, growing upward, at the HUD's scale; with the belt hidden (touch, Hide UI) it goes to the bottom left.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
