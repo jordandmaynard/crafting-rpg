@@ -1448,7 +1448,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 893;
+const GAME_VERSION = 894;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -22971,13 +22971,15 @@ function updateGains(dt) {
 // T > Sound > New sounds 0 brings the old beeps back everywhere, to compare. The recipes are tuned in sounds.html.
 let actx = null;
 const snd = new SoundEngine();
-const SOUND_GAME = { useLab: 1, steps: 1 }, SOUND_READ = { rendering: 0, voices: 0 };
+const SOUND_GAME = { useLab: 1, steps: 1, treeFall: 0, treeWavSync: 0 }, SOUND_READ = { rendering: 0, voices: 0 };
 function audioOn() {
   if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
   if (actx && !snd.ready) {
     // (v892) the new sound engine (src/sound): the lab's tuning first, if it's kept in this browser and wanted
     if (SOUND_GAME.useLab > 0.5) SoundEngine.applyLab();
     try { snd.start(actx); } catch (e) { showCrash(e); }
+    // (v894) Jordan's recorded tree fall, only to compare the synthesized one against (T > Sound > Tree falling)
+    if (snd.ready) snd.loadSample('treeFallWav', 'sounds/tree-fall-e.wav');
   }
   if (actx && actx.state === 'suspended') actx.resume();
 }
@@ -23032,6 +23034,27 @@ function playSnd(name, x, y, z, o = {}) {
   o.pan = sndV.z > 1 ? 0 : Math.max(-1, Math.min(1, sndV.x));
   o.dist = Math.hypot(x - H.x, z - H.z, (y - H.y) * 0.5);
   return snd.play(name, o);
+}
+// (v894) a felled tree: the synthesized fall (a crack as it gives, tearing as it goes over, the rush of its crown
+// through the air timed to land with it), then its crash when it does land; or, with T > Sound > Tree falling at 1,
+// Jordan's recording (sounds/tree-fall-e.wav) from the start of the fall. Its crash comes about 2 s in, a second or
+// so after a tree here lands, unless T > Sound > line the recording's crash up is on (that skips into it).
+const TREE_WAV_CRASH = 1.98;
+function treeFallSnd(d) {
+  const y = d.g.position.y + 1;
+  if (SOUND_GAME.treeFall > 0.5 && snd.ready) {
+    sndV.set(d.x, y, d.z).project(camera);
+    const o = { pan: sndV.z > 1 ? 0 : Math.max(-1, Math.min(1, sndV.x)), dist: Math.hypot(d.x - H.x, d.z - H.z),
+      offset: SOUND_GAME.treeWavSync > 0.5 ? Math.max(0, TREE_WAV_CRASH - d.landEst) : 0 };
+    if (snd.playSample('treeFallWav', 'work', o)) { d.fallSnd = 'wav'; return; }
+  }
+  d.fallSnd = playSnd('tree.fall', d.x, y, d.z, { land: d.landEst }) ? 'synth' : 'beep';
+  if (d.fallSnd === 'beep') sfx.fell();
+}
+function treeLandSnd(d) {
+  if (d.fallSnd === 'wav') return;   // (the recording has its own crash)
+  if (d.fallSnd === 'synth' && playSnd('tree.land', d.x, d.g.position.y + 0.5, d.z)) return;
+  sfx.thunk();
 }
 // what the hero's boots are on (T > Sound has a row for footsteps): a built floor or an upper story, a town's
 // cobbled streets, a beach, snow, sand, a road or dirt, else grass
@@ -24419,7 +24442,7 @@ function updateFaller(d, dt) {
   }
   // (v850) its light goes once it's FELL.lightOff of the way down
   if (d.giParts && d.ang >= FELL_REST * FELL.lightOff) giLetGo(d);
-  if (landed) { fellDust(d); fellLeafBurst(d); sfx.thunk(); }
+  if (landed) { fellDust(d); fellLeafBurst(d); treeLandSnd(d); }
   else if (d.landT < 0) fellLeafTrail(d, dt);
   // (the leaves' dissolving starts FELL.dissolveAt after it lands (v828), or before, when that's negative (v829: by
   // when it's due to land, worked out as it starts to fall); the sinking FELL.hold after)
@@ -24577,7 +24600,7 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
       { const kk = 1.5 * FELL.gravity / d.top; let a = d.ang, w = d.spin, t = 0; while (a < FELL_REST && t < 10) { w += kk * Math.sin(a) / 240; a += w / 240; t += 1 / 240; } d.landEst = t; }
       if (d.leafMesh) { d.leafSlot = fellLeafMat(d); d.leafMesh.material = d.leafSlot.mat; }
       fallers.push(d);
-      sfx.fell();
+      treeFallSnd(d);
     } else {
       scene.remove(d.g); detached.delete(i); giLetGo(d);
       // a gravestone sometimes turns up a bone (Jordan, v366)
@@ -33809,6 +33832,8 @@ const TUNING = [
     [SOUND_MIX, 'engine', 'New sounds (1) or the old beeps everywhere (0), to compare', 0, 1, 1, () => snd.mix()],
     [SOUND_GAME, 'useLab', 'Use the sound lab\'s tuning kept in this browser (sounds.html; takes effect on reload)', 0, 1, 1],
     [SOUND_GAME, 'steps', 'Footsteps on', 0, 1, 1],
+    [SOUND_GAME, 'treeFall', 'Tree falling: synthesized (0) or Jordan\'s recording, Tree Fall E (1), to compare', 0, 1, 1],
+    [SOUND_GAME, 'treeWavSync', 'Tree falling, recording: line its crash up with the landing (1: skips the start of it) or play it from the start (0)', 0, 1, 1],
     [SOUND_MIX, 'master', 'Volume: everything', 0, 2, 0.01, () => snd.mix()],
     [SOUND_MIX, 'steps', 'Volume: footsteps', 0, 2, 0.01, () => snd.mix()],
     [SOUND_MIX, 'combat', 'Volume: weapon hits', 0, 2, 0.01, () => snd.mix()],

@@ -209,23 +209,48 @@ export class SoundEngine {
 
   // ---- playing ----
   has(name) { const p = this.pools.get(name); return !!p && Object.values(p).every((l) => l.length); }
-  // Plays a sound. o: { dist (tiles from the hero), pan (-1..1), strength (about 0.3-1.5, 1 a normal blow), blunt,
-  // leaves, deep, gain }. False if it can't (not started, not rendered yet, too many playing): play the old one then.
-  play(name, o = {}) {
-    const S = SOUNDS[name], M = SOUND_MIX;
-    if (!this.ctx || !S || M.engine < 0.5 || !this.has(name)) return false;
-    if (this.voices >= M.voices) return true;
-    const A = this.ctx, now = A.currentTime, pool = this.pools.get(name), P = tuneOf(name);
-    const dist = Math.max(0, o.dist || 0), s = o.strength ?? 1;
+  // A voice: the chain one play goes through (its level for distance, brightness, pan, its group and the room send).
+  // Null if it's too far to hear. done(end) lets it go once its layers have finished (end: context seconds).
+  #voice(group, o) {
+    const A = this.ctx, M = SOUND_MIX, dist = Math.max(0, o.dist || 0), s = o.strength ?? 1;
     const level = (o.gain ?? 1) / (1 + Math.max(0, dist - M.near) / Math.max(0.1, M.fall)) * clamp((M.range - dist) / Math.max(0.1, M.range * 0.4), 0, 1);
-    if (level < 0.003) return true;
+    if (level < 0.003) return null;
     const vg = A.createGain(); vg.gain.value = level;
     const lp = A.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.5;
     lp.frequency.value = clamp(20000 * Math.exp(-dist / Math.max(1, M.air)) * (0.45 + 0.55 * clamp(s, 0, 1)), 700, 20000);
     const pan = A.createStereoPanner(); pan.pan.value = clamp((o.pan || 0) * M.pan, -1, 1);
     const send = A.createGain(); send.gain.value = clamp(1 + dist / 40, 1, 1.4);
-    vg.connect(lp); lp.connect(pan); pan.connect(this.groups[S.group] || this.groups.work); pan.connect(send); send.connect(this.wetIn);
-    let end = 0, any = false;
+    vg.connect(lp); lp.connect(pan); pan.connect(this.groups[group] || this.groups.work); pan.connect(send); send.connect(this.wetIn);
+    this.voices++;
+    return { input: vg, done: (end) => setTimeout(() => { this.voices--; pan.disconnect(); send.disconnect(); }, Math.max(0, end - A.currentTime) * 1000 + 100) };
+  }
+  // one buffer into a voice at `at` (context seconds): from `offset` seconds in, for `dur` seconds if given (faded out
+  // over its last 40 ms), re-pitched by rate. Returns when it ends.
+  #layer(V, buf, gain, rate, at, offset = 0, dur = 0) {
+    const A = this.ctx, src = A.createBufferSource(), sg = A.createGain();
+    src.buffer = buf; src.playbackRate.value = rate;
+    sg.gain.value = gain;
+    src.connect(sg); sg.connect(V.input);
+    const off = clamp(offset, 0, buf.duration - 0.01), full = (buf.duration - off) / rate;
+    src.start(at, off);
+    if (dur > 0 && dur < full) {
+      const f = Math.min(0.04, dur * 0.5);
+      sg.gain.setValueAtTime(gain, at + dur - f); sg.gain.linearRampToValueAtTime(0, at + dur);
+      src.stop(at + dur + 0.01);
+      return at + dur;
+    }
+    return at + full;
+  }
+  // Plays a sound. o: { dist (tiles from the hero), pan (-1..1), strength (about 0.3-1.5, 1 a normal blow), blunt,
+  // leaves, deep, land, gain }. False if it can't (not started, not rendered yet): play the old one then.
+  play(name, o = {}) {
+    const S = SOUNDS[name], M = SOUND_MIX;
+    if (!this.ctx || !S || M.engine < 0.5 || !this.has(name)) return false;
+    if (this.voices >= M.voices) return true;
+    const A = this.ctx, now = A.currentTime, pool = this.pools.get(name), P = tuneOf(name);
+    const V = this.#voice(S.group, o);
+    if (!V) return true;
+    let end = now;
     for (const c of S.compose(P, o, Math.random)) {
       if (!c || c.gain <= 0) continue;
       const list = pool[c.layer];
@@ -234,20 +259,31 @@ export class SoundEngine {
       let v = Math.floor(Math.random() * list.length);
       if (list.length > 1 && v === this.last.get(key)) v = (v + 1 + Math.floor(Math.random() * (list.length - 1))) % list.length;
       this.last.set(key, v);
-      const src = A.createBufferSource(), sg = A.createGain();
-      src.buffer = list[v];
-      src.playbackRate.value = clamp(1 + ((c.rate ?? 1) - 1) * M.variety, 0.25, 4);
-      sg.gain.value = c.gain * (0.85 + 0.3 * Math.random());
-      src.connect(sg); sg.connect(vg);
-      const at = now + Math.max(0, c.delay || 0);
-      src.start(at);
-      end = Math.max(end, at + src.buffer.duration / src.playbackRate.value);
-      any = true;
+      const rate = clamp(1 + ((c.rate ?? 1) - 1) * M.variety, 0.25, 4);
+      end = Math.max(end, this.#layer(V, list[v], c.gain * (0.85 + 0.3 * Math.random()), rate, now + Math.max(0, c.delay || 0), c.offset || 0, c.dur || 0));
     }
-    if (!any) { vg.disconnect(); return false; }
-    this.voices++;
-    // (the whole voice let go once its last layer and the room's tail have had time to finish)
-    setTimeout(() => { this.voices--; pan.disconnect(); send.disconnect(); }, (end - now) * 1000 + 100);
+    V.done(end);
+    return true;
+  }
+
+  // ---- recorded samples (for comparing against: the synthesized sounds don't use any) ----
+  // fetches and decodes a sound file once, kept as `name`; resolves to whether it loaded
+  loadSample(name, url) {
+    this.samples ||= new Map();
+    if (this.samples.has(name)) return this.samples.get(name);
+    const p = fetch(url).then((r) => { if (!r.ok) throw new Error(`${url}: ${r.status}`); return r.arrayBuffer(); })
+      .then((b) => this.ctx.decodeAudioData(b)).then((buf) => { this.samples.set(name, buf); return true; })
+      .catch((e) => { this.samples.delete(name); (this.onError || console.warn)(new Error('Sound file ' + url + ': ' + (e && e.message || e))); return false; });
+    this.samples.set(name, p);
+    return p;
+  }
+  // plays a loaded sample through the same chain as a synthesized sound (o as play's, plus offset: seconds in)
+  playSample(name, group, o = {}) {
+    const buf = this.samples?.get(name);
+    if (!this.ctx || !(buf instanceof AudioBuffer)) return false;
+    const V = this.#voice(group, o);
+    if (!V) return true;
+    V.done(this.#layer(V, buf, 1, 1, this.ctx.currentTime, o.offset || 0));
     return true;
   }
 
