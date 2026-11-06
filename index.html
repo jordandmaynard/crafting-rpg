@@ -1444,7 +1444,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 886;
+const GAME_VERSION = 887;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8908,13 +8908,18 @@ function updateBloom() {
 // whirlSpin (tiles a second round you), whirlClear (a second): how your whirlwind stirs it, even standing still.
 // poolAway: in swamps and the Wastes, the share of it left away from water and lava (thickest by them, thinning to
 // this poolReach tiles off). None lies over water (Jordan's ask, v109); lava keeps it.
+// (v887, Jordan: a cleared patch's rim hardened into a cut line over time) edgeSoft: tiles a rim spreads over, at the
+// least (0 off); swirlAmount (tiles), swirlSize (tiles), swirlSpeed: a slow curl of where the haze is read, so its
+// edges drift and curl even in still air (0 off). foeWake (0 off, else a scale on each foe's size), foeClear (haze
+// swept aside a tile walked, as wakeClear), foeDrag (share of its speed the air's dragged along): foes' wakes.
 const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 1, patchiness: 1, patchSize: 17.3, relax: 0,
   windSpeed: 0, settle: 1.19, swirl: 28.5, smooth: 0.15, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 100, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
   arrowWake: 0.22, arrowClear: 2.5, arrowPush: 2, arrowDrag: 6, landRadius: 0.35, landClear: 3, landPush: 5,
+  edgeSoft: 0.75, swirlAmount: 0.4, swirlSize: 2.5, swirlSpeed: 0.12, foeWake: 1, foeClear: 60, foeDrag: 0.5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400',
   lake: 0.44, lakeColor: '#ababab', lakeFade: 6};   // (v499, Jordan: mist over lakes and ponds, and v501 bays, inlets, straits and shallows; not seas, oceans or rivers; the graveyards' for now)
-const hazeStirs = [];   // arrows passing through it this frame (stirHaze)
+const hazeStirs = [];   // arrows and boats passing through it this frame (stirHaze, BOAT_WAKE; foes added in foeStirs)
 // on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T),
 // and no black point, which is there to take back the lit haze's washout
 if (MOBILE) { GI.on = 0; HAZE.on = 0; GROUND_HAZE.on = 0; EYE.on = 0; BLOOM.strength = 0; GRADE.black = 0; }
@@ -9060,12 +9065,35 @@ function updateGroundHaze(dt) {
     if (ghJob) { const until = performance.now() + GH_BUDGET; while (performance.now() < until) if (ghJob.next().done) { ghJob = null; break; } }
     on = ghAny;
   }
+  if (on) foeStirs(dt);
   const a = CLOUDS.direction * Math.PI / 180;
   groundHaze.update({ on, target: [camTarget.x, camTarget.z], hero: [H.x, H.z], dt, amount: G.amount, patchiness: G.patchiness,
     patchSize: G.patchSize, relax: G.relax, wind: [Math.cos(a) * G.windSpeed, Math.sin(a) * G.windSpeed], settle: G.settle, swirl: G.swirl, smooth: G.smooth,
+    edgeSoft: G.edgeSoft, swirlAmount: G.swirlAmount, swirlSize: G.swirlSize, swirlSpeed: G.swirlSpeed,
     wakeRadius: H.whirl >= 0 ? G.whirlWake : G.wakeRadius, spin: H.whirl >= 0 ? G.whirlSpin : 0, spinClear: H.whirl >= 0 ? G.whirlClear : 0, wakeDrag: G.wakeDrag, wakeClear: G.wakeClear, height: G.height, density: G.density, slices: G.slices,
     brightness: G.brightness, stirs: hazeStirs });
   hazeStirs.length = 0;
+}
+// (v887) foes' wakes: each foe on the ground in the sim's grid (24 tiles round the camera) that moved this frame stirs
+// the haze along its step, as the hero's wake does (cleared by how far it walked, the air dragged along), in the stirs
+// left after arrows and boats, nearest the hero first. A stir costs the sim a line test per cell: 32 of them about
+// a hundredth of a millisecond on a desktop GPU.
+const GH_STIRS = GFX.GROUND_HAZE_STIRS, ghFoeNear = [];
+function foeStirs(dt) {
+  const G = GROUND_HAZE, room = GH_STIRS - hazeStirs.length;
+  ghFoeNear.length = 0;
+  for (const f of foes) {
+    const x0 = f.ghX, z0 = f.ghZ;
+    f.ghX = f.x; f.ghZ = f.z;
+    if (!(G.foeWake > 0) || room <= 0 || x0 === undefined || f.ghost || f.hp <= 0 || f.def.rooted) continue;
+    if (Math.abs(f.x - camTarget.x) > 24 || Math.abs(f.z - camTarget.z) > 24) continue;
+    const moved = Math.hypot(f.x - x0, f.z - z0);
+    if (moved < 1e-3 || moved > 3 || f.y - ghGround(f.x, f.z) > 1.3) continue;
+    ghFoeNear.push([Math.hypot(f.x - H.x, f.z - H.z), f, x0, z0, moved]);
+  }
+  if (ghFoeNear.length > room) { ghFoeNear.sort((a, b) => a[0] - b[0]); ghFoeNear.length = room; }
+  for (const [, f, x0, z0, moved] of ghFoeNear)
+    hazeStirs.push([x0, z0, f.x, f.z, Math.max(0.12, (f.def.rad || 0.3) * G.foeWake), G.foeClear * moved, 0, G.foeDrag * moved / Math.max(dt, 1e-3)]);
 }
 setInterval(() => {
   if ($('tuning').hidden) return;
@@ -33957,6 +33985,13 @@ const TUNING = [
     [GROUND_HAZE, 'landRadius', 'Arrow landing: clearing radius (tiles)', 0.05, 1.5, 0.01],
     [GROUND_HAZE, 'landClear', 'Arrow landing: haze cleared', 0, 10, 0.05],
     [GROUND_HAZE, 'landPush', 'Arrow landing: air pushed out (tiles a second)', 0, 12, 0.1],
+    [GROUND_HAZE, 'edgeSoft', 'Soft edges: a cleared patch\'s rim spreads over at least this many tiles (0 off)', 0, 3, 0.05],
+    [GROUND_HAZE, 'swirlAmount', 'Edge swirl: how far the edges curl (tiles, 0 off)', 0, 2, 0.01],
+    [GROUND_HAZE, 'swirlSize', 'Edge swirl: size of the curls (tiles)', 0.5, 10, 0.1],
+    [GROUND_HAZE, 'swirlSpeed', 'Edge swirl: how fast they turn over', 0, 1, 0.01],
+    [GROUND_HAZE, 'foeWake', 'Foe wakes: size, times each foe\'s own (0 off)', 0, 3, 0.05],
+    [GROUND_HAZE, 'foeClear', 'Foe wakes: haze swept aside (a tile walked)', 0, 100, 0.5],
+    [GROUND_HAZE, 'foeDrag', 'Foe wakes: air dragged along (share of its speed)', 0, 2, 0.01],
   ]],
   ['Picture', [
     [BLOOM, 'strength', 'Bloom: how much glow (0 off)', 0, 2, 0.01],
