@@ -701,6 +701,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v882:** (Jordan's tuning) Picture: inside fill strength 1 (was 0.8).
 
+**v883:** (Jordan) Anything can be built upstairs: refining stations, crafting tables, crates, chests and barrels go on any upper story, on floor laid on that story under every tile (no stairs, beds or furniture there, no wall of that story between its tiles, on your plot). Only the hearth stays on the ground, since it claims the plot. A station up a story is keyed `k * SNN + tile` in `stations` / `stationTile` like a stair (`st.k`, `stKey`, `stBase`, `stFloor`), never in OB; it's drawn into meshes of its own (`upStationBody`, `st.up`, rebuilt with its chunk's pieces) and shown only while its story is (`stShown`). Its tiles block walking (`enterOpen`, `storyFlip`); walls and stairs can't cut through it; F reaches only stations and tables on your own floor; the open window closes if you leave that floor. Move mode works on the story picked with ↑ ↓, so a station can be carried up or down a story; Remove upstairs takes a station before the floor under it.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
