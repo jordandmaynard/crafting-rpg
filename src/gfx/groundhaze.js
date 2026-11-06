@@ -65,7 +65,7 @@ struct GH {
   pl0: vec4f,  // hero position xz, velocity xz
   pl1: vec4f,  // wake radius (tiles), drag, haze cleared a tile walked, the air spun round the hero (tiles a second)
   s0: vec4f,   // site map: first texel x, z, texels across, texels a tile
-  p3: vec4f,   // x: edge softness (tiles over which the resting amount may rise or fall; 0 off)
+  p3: vec4f,   // x: edge softness (tiles a spilled front spreads over; 0 off), y: spilled haze fades back (a second)
 }
 struct Cell {
   a: vec4f,    // velocity xz (tiles a second), haze, _
@@ -89,11 +89,15 @@ fn siteTexel(t: vec2i) -> vec4f {
   if (any(r < vec2i(0)) || any(r >= vec2i(i32(hu.s0.z)))) { return vec4f(0.0); }
   return textureLoad(siteTex, r, 0);
 }
-// how much haze rests at wp (bilinear over the site map), with its drifting patches
-fn hazeRest(wp: vec2f) -> f32 {
+// the site's resting share at wp (bilinear over the site map)
+fn restShare(wp: vec2f) -> f32 {
   let p = wp * hu.s0.w - 0.5;
   let i = vec2i(floor(p)); let f = p - floor(p);
-  let m = mix(mix(siteTexel(i).z, siteTexel(i + vec2i(1, 0)).z, f.x), mix(siteTexel(i + vec2i(0, 1)).z, siteTexel(i + vec2i(1, 1)).z, f.x), f.y);
+  return mix(mix(siteTexel(i).z, siteTexel(i + vec2i(1, 0)).z, f.x), mix(siteTexel(i + vec2i(0, 1)).z, siteTexel(i + vec2i(1, 1)).z, f.x), f.y);
+}
+// how much haze rests at wp, with its drifting patches
+fn hazeRest(wp: vec2f) -> f32 {
+  let m = restShare(wp);
   if (m <= 0.0) { return 0.0; }
   return ghPatches(wp, hu.p1.xy, hu.g1.w, hu.p0.x * m, hu.p0.y, hu.p0.z);
 }
@@ -161,23 +165,29 @@ fn oldCell(cf: vec2f) -> Cell {
   }
   var vel = s.a.xy;
   var h0 = s.a.z;
-  // (v887) soft edges: where the haze rises or falls faster than the resting amount over \`soft\` tiles (a wake's or a
-  // whirl's rim, cleared again and again until it was a cut line, and with the air still, nothing blurred it), some
-  // of the neighbours' average is mixed in, so the rim spreads into a ramp that wide and stops there. Flat haze and
-  // the gentle patches are left alone, and so is the middle of a wake, so it stays clear.
+  // (v889, Jordan) the region's own edge stays soft. Haze carried out past where it rests (dragged, pushed or swirled
+  // out over ground that has less or none) piled up there as a front with a hard edge, and with relax 0 nothing took
+  // it back. Now any haze over \`cap\` (the most the site's share there can rest, its patches at their thickest) fades
+  // back to it at hu.p3.y a second, so the region keeps the soft edge of its blurred share; and while it fades, a front
+  // of it steeper than the haze behind it over \`soft\` tiles has some of its neighbours' average mixed in. Haze under
+  // its resting amount (a wake, a clearing) is left alone: wakes keep their edges and don't fill in.
+  let cap = hu.p0.x * restShare(wp) * (1.0 + hu.p0.y);
   if (soft > 0.0) {
-    let slope = length(vec2f(cR.z - cL.z, cU.z - cD.z)) * 0.5 * CPM;      // haze a tile
-    let over = clamp(slope * soft / max(hu.p0.x, 1e-3) - 1.0, 0.0, 1.0);
-    h0 = mix(h0, (cR.z + cL.z + cU.z + cD.z) * 0.25, over * (1.0 - pow(0.5, dt * 60.0)));
+    let hl = max(max(cR.z, cL.z), max(cU.z, cD.z));
+    if (hl > cap * 1.02 + 1e-4) {
+      let slope = length(vec2f(cR.z - cL.z, cU.z - cD.z)) * 0.5 * CPM;      // haze a tile
+      let over = clamp((slope * soft / max(hl, 1e-3) - 1.0) * 2.0, 0.0, 1.0);
+      h0 = mix(h0, (cR.z + cL.z + cU.z + cD.z) * 0.25, over * (1.0 - pow(0.5, dt * 60.0)));
+    }
   }
+  if (h0 > cap) { h0 -= (h0 - cap) * (1.0 - exp(-hu.p3.y * dt)); }
   let haze = h0 + (rest - h0) * (1.0 - exp(-hu.p0.w * dt));   // drifts back to the resting haze
   vel = mix(vel, hu.p1.xy, 1.0 - exp(-hu.p1.z * dt));               // the air settles back to the wind
   // the hero's wake: they drag the air along and sweep the haze aside
   let rel = wp - hu.pl0.xy;
-  // (v887) eased to nothing at the cut-off, rather than stopping there: cleared again and again, a step there drew a line
-  let w = max(exp(-dot(rel, rel) / max(hu.pl1.x * hu.pl1.x, 1e-4)) - 0.01, 0.0) / 0.99;
+  let w = exp(-dot(rel, rel) / max(hu.pl1.x * hu.pl1.x, 1e-4));
   var h = haze;
-  if (w > 0.0) {
+  if (w > 0.01) {
     let walked = length(hu.pl0.zw) * dt;
     vel = mix(vel, hu.pl0.zw, clamp(w * hu.pl1.y, 0.0, 1.0));
     h *= exp(-hu.pl1.z * walked * w);
@@ -197,8 +207,8 @@ fn oldCell(cf: vec2f) -> Cell {
     let near = sa.xy + seg * select(0.0, clamp(dot(wp - sa.xy, seg) / sl, 0.0, 1.0), sl > 1e-6);
     let off = wp - near;
     let d2 = dot(off, off);
-    let sw = max(exp(-d2 / max(sb.x * sb.x, 1e-4)) - 0.01, 0.0) / 0.99;
-    if (sw <= 0.0) { continue; }
+    let sw = exp(-d2 / max(sb.x * sb.x, 1e-4));
+    if (sw < 0.01) { continue; }
     h *= exp(-sb.y * sw);
     let dl = sqrt(d2);
     if (dl > 1e-3) { vel += off / dl * sb.z * sw; }
@@ -300,20 +310,25 @@ const CPM = ${CPT}.0;
 ${NOISE}
 struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) slice: f32 }
 fn siteAt(xz: vec2f) -> vec4f { return textureSampleLevel(siteTex, siteTexS, (xz * U.site.w - U.site.xy) / U.site.z, 0.0); }
-// (v887) the swirl: a slow curl-noise warp of where the haze is read, so its edges curl and drift even with the air
-// still. A stream function of two octaves of noise drifting different ways; its curl turns the read point without
-// bunching it up. U.swirl: how far (tiles), its size (tiles), how fast it turns over (a second).
+// (v887) the swirl: a slow curl-noise warp of where the haze is read, so the region's edge curls and drifts even with
+// the air still. A stream function of two octaves of noise drifting different ways; its curl turns the read point
+// without bunching it up. U.swirl: how far (tiles), its size (tiles), how fast it turns over (a second). (v889) Only
+// where the resting share changes (the region's edge, blurred over a few tiles), so wakes inside keep their shape.
 fn ghPsi(p: vec2f, t: f32) -> f32 {
   return ghNoise(p + vec2f(t * 0.7, t * 0.3)) + 0.5 * ghNoise(p * 2.03 + vec2f(5.2 - t * 0.5, 1.3 + t * 0.9));
 }
 fn ghSwirl(wp: vec2f) -> vec2f {
   if (U.swirl.x <= 0.0) { return vec2f(0.0); }
+  let e1 = 0.5;
+  let sg = vec2f(siteAt(wp + vec2f(e1, 0.0)).z - siteAt(wp - vec2f(e1, 0.0)).z, siteAt(wp + vec2f(0.0, e1)).z - siteAt(wp - vec2f(0.0, e1)).z);
+  let rim = smoothstep(0.01, 0.06, length(sg));
+  if (rim <= 0.0) { return vec2f(0.0); }
   let p = wp / max(U.swirl.y, 0.25);
   let t = U.wind.z * U.swirl.z;
   let e = 0.1;
   let a = ghPsi(p, t);
   let g = vec2f(ghPsi(p + vec2f(e, 0.0), t) - a, ghPsi(p + vec2f(0.0, e), t) - a) / e;
-  return vec2f(g.y, -g.x) * (U.swirl.x * 0.5);
+  return vec2f(g.y, -g.x) * (U.swirl.x * 0.5 * rim);
 }
 // the sim's haze, read through a cubic B-spline (four bilinear taps) rather than plain bilinear, whose creases along
 // every cell's edges showed the grid as the haze moved
@@ -405,6 +420,9 @@ fn stateHaze(uv: vec2f) -> f32 {
     haze = mix(haze, stateHaze((swp * CPM - U.grid.xy) / U.grid.zw), inside);
   }
   haze *= rim;
+  // (v889) and faded out over the share's last few hundredths rather than cut where it ends (the discard above): haze
+  // carried out that far stopped there at a hard line along the share's outer edge
+  haze *= smoothstep(0.003, 0.06, site.z);
   let H = max(U.look.x, 0.02);
   // by the slice's height over the ground (as laid out, not as its flat triangles happen to cross a slope)
   let sigma = haze * exp(-2.0 * (i.slice + 0.5) / U.look.z) * U.look.y;
@@ -513,7 +531,7 @@ export class GroundHaze {
   // Each frame, before drawing. f: { on, target: [x, z] (the camera's), hero: [x, z], dt, amount, patchiness,
   // patchSize (tiles), relax, wind: [x, z] (tiles a second), settle, swirl, wakeRadius, wakeDrag, wakeClear, spin
   // (tiles a second the air's spun round the hero, whirling), spinClear (haze swept aside round them a second),
-  // smooth (0-0.95: the neighbours' average mixed in each sixtieth of a second), edgeSoft (tiles), swirlAmount,
+  // smooth (0-0.95: the neighbours' average mixed in each sixtieth of a second), edgeSoft (tiles), spill, swirlAmount,
   // swirlSize (tiles), swirlSpeed, height, density, slices, brightness,
   // stirs (things passing through this frame: [x0, z0, x1, z1, radius, clear, push, drag] each, up to MAX_STIRS) }
   update(f) {
@@ -542,7 +560,7 @@ export class GroundHaze {
       f.amount, f.patchiness, freq, f.relax, f.wind[0], f.wind[1], f.settle, f.swirl,
       f.spinClear || 0, flags, f.smooth || 0, ns, f.hero[0], f.hero[1], vel[0], vel[1],
       f.wakeRadius, f.wakeDrag, f.wakeClear, f.spin || 0, so[0], so[1], GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT,
-      f.edgeSoft || 0, 0, 0, 0]));
+      f.edgeSoft || 0, f.spill || 0, 0, 0]));
     const U = this.material.uniforms;
     Object.assign(U.grid.value, { x: origin[0], y: origin[1] });
     Object.assign(U.look.value, { x: f.height, y: f.density, z: slices, w: f.brightness });
