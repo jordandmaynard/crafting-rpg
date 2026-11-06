@@ -1445,9 +1445,10 @@ import { makeFolkKit, jobTitle, design as folkDesign, shade as folkShade, WILD_W
 import { Ragdoll, RAGDOLL } from './src/ragdoll.js';
 import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShapes } from './src/props/props.js';
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
+import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 891;
+const GAME_VERSION = 892;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -17481,7 +17482,7 @@ function makeDoor(c, r, w, kind = 'door', flip = false, k = 0, half = false) {
   pivot.matrixStill = true;
   scene.add(shadowy(pivot)); MOVER_TAG.set(pivot, 'doors and gates');
   if (k) pivot.visible = k <= shownStory;
-  const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k };
+  const d = { pivot, open: false, t: 0, side: 1, c, r, w, gate, flip, k, kind };   // (kind: v892, for its sound)
   doors.set(dKey(c, r, w, k), d);
   return d;
 }
@@ -22964,15 +22965,29 @@ function updateGains(dt) {
 }
 
 // ---------- Sound (tiny square-wave chiptune blips) ----------
+// (v892) The new synthesized sounds (src/sound, Jordan's pick of the sound plan: materials, grains, layering, rooms and
+// a mic-like chain) play where there are any: the axe on a tree, footsteps, weapon hits on beasts and people, and doors.
+// Every other sound is still one of these beeps, routed through the new mix (its room and mic chain) once it's up.
+// T > Sound > New sounds 0 brings the old beeps back everywhere, to compare. The recipes are tuned in sounds.html.
 let actx = null;
-function audioOn() { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } } if (actx && actx.state === 'suspended') actx.resume(); }
+const snd = new SoundEngine();
+const SOUND_GAME = { useLab: 1, steps: 1 }, SOUND_READ = { rendering: 0, voices: 0 };
+function audioOn() {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+  if (actx && !snd.ready) {
+    // (v892) the new sound engine (src/sound): the lab's tuning first, if it's kept in this browser and wanted
+    if (SOUND_GAME.useLab > 0.5) SoundEngine.applyLab();
+    try { snd.start(actx); } catch (e) { showCrash(e); }
+  }
+  if (actx && actx.state === 'suspended') actx.resume();
+}
 function beep(freq, dur, { type = 'square', vol = 0.06, slide = 0, at = 0 } = {}) {
   if (!actx) return;
   const t = actx.currentTime + at, o = actx.createOscillator(), g = actx.createGain();
   o.type = type; o.frequency.setValueAtTime(freq, t);
   if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+  o.connect(g).connect(snd.ready ? snd.legacyIn : actx.destination); o.start(t); o.stop(t + dur + 0.02);
 }
 const sfx = {
   swing: () => beep(520, 0.07, { type: 'triangle', slide: -380, vol: 0.04 }),
@@ -23006,6 +23021,72 @@ const sfx = {
   splash: () => { beep(320, 0.1, { type: 'sawtooth', slide: -220, vol: 0.012 }); beep(180, 0.14, { type: 'triangle', slide: -90, vol: 0.02, at: 0.03 }); },
   dirge: () => [392, 349, 311, 262].forEach((f, i) => beep(f, 0.3, { type: 'triangle', at: i * 0.25, vol: 0.06 })),
 };
+snd.onError = e => showCrash(e);
+// (v892) a new sound at a spot in the world: how far it is from the hero (tiles) and how far across the screen
+// (-1 left .. 1 right). False if it didn't play (sound not up yet, still rendering, or T > Sound > New sounds off):
+// the caller plays its old beep then.
+const sndV = new GFX.Vector3();
+function playSnd(name, x, y, z, o = {}) {
+  if (!snd.ready) return false;
+  sndV.set(x, y, z).project(camera);
+  o.pan = sndV.z > 1 ? 0 : Math.max(-1, Math.min(1, sndV.x));
+  o.dist = Math.hypot(x - H.x, z - H.z, (y - H.y) * 0.5);
+  return snd.play(name, o);
+}
+// what the hero's boots are on (T > Sound has a row for footsteps): a built floor or an upper story, a town's
+// cobbled streets, a beach, snow, sand, a road or dirt, else grass
+function stepSurface() {
+  if (H.boat || heroFloor() > 0) return 'wood';
+  const i = T(Math.floor(H.x), Math.floor(H.z)), b = BI[i];
+  if (FL[i]) return FL[i] === 1 ? 'wood' : 'cobble';
+  if (BR[i] || DOCK[i]) return 'wood';   // (bridges and docks: planks)
+  if (TSTREET[i]) return 'cobble';
+  if (BEACH[i] || SHOAL[i]) return BDIRT[i] ? 'dirt' : 'sand';
+  if (b === SNOW) return 'snow';
+  if (b === DESERT) return 'sand';
+  if (b === WASTES || b === TOWN || PATH[i] || TILL[i] || FIELD[i]) return 'dirt';
+  return 'grass';
+}
+// a footstep, `pace` 0..1 of a full walk; in deep snow or sand drifts the step sinks (lower, longer)
+function footstep(pace) {
+  if (SOUND_GAME.steps < 0.5 || !snd.ready) return;
+  const surf = stepSurface(), deep = (surf === 'snow' || surf === 'sand') && driftSlow(H.x, H.z) < 0.85;
+  playSnd('step.' + surf, H.x, H.y, H.z, { strength: 0.55 + 0.45 * pace, deep, gain: 0.75 + 0.25 * pace });
+}
+// a weapon striking a foe: flesh (beasts, zombies), cloth and leather (people and goblins), bone (skeletons); a
+// hammer or bare fists land blunt, anything else cuts
+function hitSnd(f, dmg, kill) {
+  const d = f.def || {}, mat = d.human && !d.undead ? 'padded' : d.undead && d.bone >= 1 ? 'bone' : 'flesh';
+  const wk = GEAR.weapon ? ITEMS[GEAR.weapon].kind : 'fist', blunt = wk === 'hammer' || wk === 'fist' ? 1 : 0;
+  return playSnd('hit.' + mat, f.x, f.y ?? H.y, f.z, { strength: Math.min(1.5, (0.55 + dmg / 30) * (kill ? 1.25 : 1)), blunt });
+}
+// a door opening or shutting (a pair together): wood, or metal for iron and bronze doors
+function doorSnd(d, open) {
+  const metal = d.kind === 'irondoor' || d.kind === 'irongate' || d.kind === 'tombdoor';
+  const x = d.w ? d.c : d.c + 0.5, z = d.w ? d.r + 0.5 : d.r, y = LV[T(Math.floor(x), Math.floor(z))] * STEP + d.k * WALL_H + 1;
+  return playSnd(`door.${metal ? 'metal' : 'wood'}.${open ? 'open' : 'close'}`, x, y, z, { leaves: d.pair ? 2 : 1 });
+}
+// the room the hero hears everything in: inside (a wooden room, a stone room, or a big stone hall), or out (a town's
+// streets, a forest, a snowfield, open ground)
+let sndRoomT = 0;
+function soundRoom() {
+  if (H.boat) return 'open';
+  const i = T(Math.floor(H.x), Math.floor(H.z)), b = BI[i];
+  if (heroFloor() > 0 || roomOf.has(i)) {
+    const bl = bldOf(i), n = bl ? (bl.tiles.length ?? bl.tiles.size ?? 0) : 0, stone = FL[i] >= 2;
+    return stone && n >= 70 ? 'hall' : stone ? 'stoneRoom' : 'woodRoom';
+  }
+  if (TN[i] || b === TOWN) return 'street';
+  if (b === SNOW) return 'snow';
+  if (b === FOREST || b === SWAMP) return 'forest';
+  return 'open';
+}
+function updateSound(dt) {
+  if (!snd.ready || (sndRoomT -= dt) > 0) return;
+  SOUND_READ.rendering = snd.rendering; SOUND_READ.voices = snd.voices;
+  sndRoomT = 0.25;
+  snd.setRoom(soundRoom());
+}
 
 // ---------- Effects ----------
 let debris = [], dust = [], orbs = [], fallers = [];
@@ -24477,7 +24558,9 @@ function strikeProp(i, c, r, dirx, dirz, dmg = SWING_DMG[0]) {
   const top = LV[i] * STEP + (od.tree ? 0.7 : 0.55);
   chips(d.x, top, d.z, res === 'wood' ? 'wood' : 'stone', od.tree ? 4 : od.ore ? 3 : 6);
   if (od.ore) chips(d.x, top, d.z, res, 3);
-  if (res === 'wood') sfx.chop(); else sfx.clink();
+  // (v892) a tree takes the new axe-on-wood sound (harder blows brighter); the rest still beep
+  if (od.tree && playSnd('chop', d.x, top, d.z, { strength: Math.min(1.5, dmg / SWING_DMG[0]) })) { /* played */ }
+  else if (res === 'wood') sfx.chop(); else sfx.clink();
   // (and 2 more for breaking it), times RESOURCES.amount
   harvestCarry[res] += (before - d.hp + (d.hp <= 0 ? 2 : 0)) * RESOURCES.amount;
   const gain = Math.floor(harvestCarry[res] + 1e-6);
@@ -24543,9 +24626,11 @@ function hurtFoe(f, dmg, fromX, fromZ, knock = 3, color = '#ffffff') {
   const dx = f.x - fromX, dz = f.z - fromZ, l = Math.hypot(dx, dz) || 1;
   f.kx = dx / l * knock; f.kz = dz / l * knock;
   floatText(String(dmg), f.x, f.y + 1.1, f.z, color);
-  sfx.hit();
+  // (v892) the blow's new sound (the killing one harder) in place of the hit and kill beeps
+  const hitNew = hitSnd(f, dmg, f.hp <= 0);
+  if (!hitNew) sfx.hit();
   if (f.hp <= 0) {
-    sfx.kill();
+    if (!hitNew) sfx.kill();
     // (v477: a person falls down dead, where a monster flies apart)
     // (v697, Jordan: a skeleton bursts into its bones as it used to; zombies still fall)
     if (f.rig && f.folk.pieces) { shatterHuman(f, new GFX.Vector3(dx / l, 0, dz / l)); freeHuman(f); }
@@ -27306,7 +27391,7 @@ function useDoor(d = nearDoor()) {
     const side = d.w ? (H.x < d.c ? 1 : -1) : (H.z < d.r ? 1 : -1);
     for (const q of both) { q.open = true; openDoors.add(dKey(q.c, q.r, q.w, q.k)); q.side = side; }
   }
-  sfx.door();
+  if (!doorSnd(d, d.open)) sfx.door();
 }
 
 // ---------- Build mode ----------
@@ -30255,7 +30340,7 @@ function updateFolk(dt) {
           const dc = R[p.ri] % N - fc, dr = Math.floor(R[p.ri] / N) % N - fr;
           if (Math.abs(dc) + Math.abs(dr) === 1) {
             const q = doorAcross(fc, fr, dc ? (dc > 0 ? 1 : 3) : (dr > 0 ? 2 : 0));
-            if (q && !q.open && (!q.gate || t.lone)) { setDoor(q, true, p.x, p.z); p.opened = q; sfx.door(); }   // (v683: a farm's gate too)
+            if (q && !q.open && (!q.gate || t.lone)) { setDoor(q, true, p.x, p.z); p.opened = q; if (!doorSnd(q, true)) sfx.door(); }   // (v683: a farm's gate too)
           }
         }
         const ex = tx - p.x, ez = tz - p.z, el = Math.hypot(ex, ez);
@@ -30305,7 +30390,7 @@ function updateFolk(dt) {
         const [mx, mz] = doorMid(p.opened);
         if (Math.hypot(p.x - mx, p.z - mz) > 1.0) {
           const inWay = Math.hypot(H.x - mx, H.z - mz) < 0.6 || t.folk.some(o => o !== p && Math.hypot(o.x - mx, o.z - mz) < 0.55);
-          if (!inWay) { if (p.opened.open) setDoor(p.opened, false); p.opened = null; }
+          if (!inWay) { if (p.opened.open) { setDoor(p.opened, false); doorSnd(p.opened, false); } p.opened = null; }
         }
       }
       // out of your way: off to the side you're not heading (straight away if you're standing still)
@@ -30995,6 +31080,10 @@ function update(dt) {
     H.moving = moved > dt * 0.5;
     if (H.moving) {
       H.walkPhase += moved * WALK.cadence;
+      // (v892) a footstep each time a foot comes down (the start of its planted half, see legSwing), not mid-tumble
+      // or mid-leap
+      const stepN = Math.floor((H.walkPhase - Math.PI / 2) / Math.PI);
+      if (stepN !== H.stepN) { if (H.stepN != null && H.dash < 0 && !H.flip && !H.leap) footstep(Math.min(1, moved / dt / 4.6)); H.stepN = stepN; }
       // which way the step goes against the way you face, eased so the gaits blend as it swings round
       const mx = H.x - x0, mz = H.z - z0, ml = Math.hypot(mx, mz) || 1, fx = Math.sin(H.face), fz = Math.cos(H.face);
       const k = (1 - Math.exp(-dt * 10));
@@ -33714,6 +33803,37 @@ const TUNING = [
     [GAIN_FLY, 'iconSize', 'Resource icon size beside the text (pixels)', 8, 64, 1],
     [GAIN_FLY, 'stack', 'Height between different resources\' fly-ups at one spot (tiles)', 0.1, 1, 0.01],
   ]],
+  // (v892) the new sound engine's mix (src/sound/engine.js SOUND_MIX); the sounds themselves are tuned in sounds.html
+  ['Sound', [
+    [SOUND_MIX, 'engine', 'New sounds (1) or the old beeps everywhere (0), to compare', 0, 1, 1, () => snd.mix()],
+    [SOUND_GAME, 'useLab', 'Use the sound lab\'s tuning kept in this browser (sounds.html; takes effect on reload)', 0, 1, 1],
+    [SOUND_GAME, 'steps', 'Footsteps on', 0, 1, 1],
+    [SOUND_MIX, 'master', 'Volume: everything', 0, 2, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'steps', 'Volume: footsteps', 0, 2, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'combat', 'Volume: weapon hits', 0, 2, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'work', 'Volume: axe on trees', 0, 2, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'doors', 'Volume: doors', 0, 2, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'legacy', 'Volume: the old beeps still in use', 0, 2, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'legacyRoom', 'Room: how much of the old beeps goes to the room', 0, 1.5, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'room', 'Room: reverb level (× each kind of place\'s own)', 0, 3, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'roomFade', 'Room: seconds to fade into the next place', 0.05, 3, 0.05],
+    [SOUND_MIX, 'near', 'Distance: full volume within (tiles of the hero)', 0, 20, 0.5],
+    [SOUND_MIX, 'fall', 'Distance: tiles past that to fall to half', 1, 60, 0.5],
+    [SOUND_MIX, 'range', 'Distance: nothing heard beyond (tiles)', 5, 120, 1],
+    [SOUND_MIX, 'air', 'Distance: tiles over which the highs fade (larger: less)', 5, 200, 1],
+    [SOUND_MIX, 'pan', 'Pan at the screen\'s edge', 0, 1, 0.01],
+    [SOUND_MIX, 'variety', 'Random re-pitching (× each sound\'s own)', 0, 3, 0.01],
+    [SOUND_MIX, 'voices', 'Sounds at once, at most', 4, 96, 1],
+    [SOUND_MIX, 'lowCut', 'Mic chain: low cut (Hz)', 10, 200, 1, () => snd.mix()],
+    [SOUND_MIX, 'drive', 'Mic chain: saturation mixed in (0 none, 1 all)', 0, 1, 0.01, () => snd.mix()],
+    [SOUND_MIX, 'presence', 'Mic chain: presence lift at 3.5 kHz (dB)', -6, 6, 0.1, () => snd.mix()],
+    [SOUND_MIX, 'airShelf', 'Mic chain: top above 11 kHz (dB)', -12, 6, 0.1, () => snd.mix()],
+    [SOUND_MIX, 'glue', 'Mic chain: glue compressor on', 0, 1, 1, () => snd.mix()],
+    [SOUND_MIX, 'threshold', 'Mic chain: compressor threshold (dB)', -40, 0, 0.5, () => snd.mix()],
+    [SOUND_MIX, 'ratio', 'Mic chain: compressor ratio', 1, 10, 0.1, () => snd.mix()],
+    [SOUND_READ, 'rendering', 'Sound variants still rendering', 'readout', 0, 1],
+    [SOUND_READ, 'voices', 'Sounds playing now', 'readout', 0, 1],
+  ]],
   // (v840) gold from people and goblins, and the coin fountain as they die
   ['Gold', [
     [GOLD, 'goblin', 'Gold a goblin carries at level 1 (before the spread)', 0, 50, 1],
@@ -35597,6 +35717,7 @@ function frameBody(now) {
   showJumpHint();
   updateFoeBars(dt);
   updateGains(dt);
+  updateSound(dt);
   prof.lap('camera + foe bars');
   updateClouds(dt);
   updateWater(dt);

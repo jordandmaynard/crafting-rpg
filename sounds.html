@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emberwild sound lab</title>
+<style>
+/* (v892) the sound lab: play, reroll and tune the new synthesized sounds (src/sound) without the game. Dark first, like
+   the game. Tuning is kept in this browser, and the game uses it too (T > Sound > Use the sound lab's tuning). */
+:root {
+  --bg: #17131a; --panel: #221c24; --card: #2a232c; --line: #3a3038; --ink: #ece2d0; --dim: #a8988a; --accent: #d8a24a; --accentInk: #1a1208;
+  --changed: #e8c870; --errBg: #6a1e1a; --errInk: #fff; color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #efe6d6; --panel: #f8f2e6; --card: #fffaf0; --line: #d6c8b0; --ink: #2a2018; --dim: #6a5a48; --accent: #a8641e; --accentInk: #fff8ec; --changed: #9a6a00; color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+#app { display: flex; height: 100%; }
+#main { flex: 1; overflow-y: auto; padding: 16px 20px 40px; }
+#panel { width: 380px; flex: none; background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px 16px 30px; }
+@media (max-width: 860px) { #app { flex-direction: column; height: auto; } #panel { width: auto; border-left: 0; border-top: 1px solid var(--line); } }
+h1 { font-size: 18px; margin: 0 0 2px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 22px 0 8px; }
+p.lead { color: var(--dim); margin: 0 0 12px; max-width: 70ch; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.card h3 { font-size: 14px; margin: 0 0 8px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.card h3 small { color: var(--dim); font-weight: 400; }
+button { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 6px 11px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.play { background: var(--accent); color: var(--accentInk); border-color: var(--accent); font-weight: 600; }
+button.on { background: var(--accent); color: var(--accentInk); border-color: var(--accent); }
+button.old { color: var(--dim); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+label.ctl { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; margin: 8px 0; font-size: 13px; }
+label.ctl input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+label.ctl .v { font: 12px ui-monospace, monospace; color: var(--dim); }
+label.ctl.changed .v, label.ctl.changed > span:first-child { color: var(--changed); }
+select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; }
+#status { font: 12px ui-monospace, monospace; color: var(--dim); }
+#start { font-size: 16px; padding: 12px 18px; }
+#copied { color: var(--accent); font-size: 12px; margin-left: 6px; }
+textarea { width: 100%; min-height: 90px; font: 12px ui-monospace, monospace; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 6px; }
+#err { position: fixed; left: 12px; right: 12px; bottom: 12px; background: var(--errBg); color: var(--errInk); padding: 10px 12px; border-radius: 8px; font: 12px ui-monospace, monospace; white-space: pre-wrap; display: none; z-index: 9; }
+.keys { color: var(--dim); font-size: 12px; }
+kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <main id="main">
+    <h1>Emberwild sound lab</h1>
+    <p class="lead">Every sound here is synthesized as it loads: a strike through a material, grains for loose ground, rooms made from generated echoes, played a little differently every time. Pick a sound to tune it on the right. Your tuning is kept in this browser and the game uses it too; Copy settings gives the values to paste back so they become the defaults.</p>
+    <div class="row">
+      <button id="start" class="play">Start sound</button>
+      <span id="status">Sound starts on your first click (the browser's rule).</span>
+    </div>
+
+    <h2>Where you hear it</h2>
+    <div class="row">
+      <label>Room <select id="room"></select></label>
+      <label>Distance <input id="dist" type="range" min="0" max="40" step="0.5" value="1"> <span id="distV" class="keys">1 tile</span></label>
+      <label>Pan <input id="pan" type="range" min="-1" max="1" step="0.05" value="0"></label>
+      <label>Strength <input id="strength" type="range" min="0.3" max="1.5" step="0.05" value="1"> <span id="strV" class="keys">1</span></label>
+    </div>
+
+    <h2>Axe</h2>
+    <div class="card" data-tune="chop">
+      <h3>Axe on a tree <small>key 1</small></h3>
+      <div class="row">
+        <button class="play" data-play="chop">Chop</button>
+        <button data-loop="chop" data-every="0.85">Keep chopping</button>
+        <button class="old" data-old="chop">Old beep</button>
+      </div>
+    </div>
+
+    <h2>Footsteps</h2>
+    <div class="card" data-tune="step.grass" id="stepCard">
+      <h3>Walking <small>key 2 a step, W walks</small></h3>
+      <div class="row" id="surfaces"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="play" data-step="1">One step</button>
+        <button id="walk" data-every="0.27">Walk</button>
+        <label><input type="checkbox" id="deep"> Deep drift (snow and sand)</label>
+      </div>
+    </div>
+
+    <h2>Weapon hits</h2>
+    <div class="card" data-tune="hit.flesh" id="hitCard">
+      <h3>A blow landing <small>key 3</small></h3>
+      <div class="row" id="targets"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="play" data-hit="1">Hit</button>
+        <button data-hit="kill">Killing blow</button>
+        <button id="combo" data-every="0.42">Keep hitting</button>
+        <label><input type="checkbox" id="blunt"> Blunt (hammer, fists)</label>
+        <button class="old" data-old="hit">Old beep</button>
+      </div>
+    </div>
+
+    <h2>Doors</h2>
+    <div class="card" data-tune="door.wood">
+      <h3>Wooden door <small>keys 4 and 5</small></h3>
+      <div class="row">
+        <button class="play" data-play="door.wood.open">Open</button>
+        <button class="play" data-play="door.wood.close">Shut</button>
+        <button class="old" data-old="door">Old beep</button>
+      </div>
+    </div>
+    <div class="card" data-tune="door.metal">
+      <h3>Metal double doors <small>keys 6 and 7</small></h3>
+      <div class="row">
+        <button class="play" data-play="door.metal.open">Open</button>
+        <button class="play" data-play="door.metal.close">Shut</button>
+        <label><input type="checkbox" id="single"> One leaf (an iron door or gate)</label>
+      </div>
+    </div>
+    <p class="keys"><kbd>Space</kbd> plays the last sound again. <kbd>R</kbd> rerolls the selected sound's variants.</p>
+  </main>
+
+  <aside id="panel">
+    <h2 style="margin-top:0" id="tuneTitle">Tuning</h2>
+    <div class="row">
+      <button id="reroll">Reroll variants</button>
+      <button id="resetOne">Reset this sound</button>
+    </div>
+    <div id="tune"></div>
+    <h2>Mix (all sounds)</h2>
+    <div id="mix"></div>
+    <h2>Keep it</h2>
+    <div class="row">
+      <button class="play" id="copy">Copy settings</button><span id="copied"></span>
+      <button id="resetAll">Reset everything</button>
+    </div>
+    <textarea id="out" readonly placeholder="Changed values show here; Copy puts them on the clipboard."></textarea>
+  </aside>
+</div>
+<div id="err" role="alert"></div>
+
+<script type="module">
+const errBox = document.getElementById('err');
+const showErr = (e) => { errBox.style.display = 'block'; errBox.textContent += (errBox.textContent ? '\n' : '') + String(e && (e.stack || e.message) || e); };
+addEventListener('error', (e) => showErr(e.error || e.message));
+addEventListener('unhandledrejection', (e) => showErr(e.reason));
+
+let mod;
+try { mod = await import('./src/sound/engine.js'); } catch (e) { showErr(e); throw e; }
+const { SoundEngine, SOUND_MIX } = mod;
+const { SOUNDS, SOUND_TUNING, SOUND_SPEC } = await import('./src/sound/recipes.js');
+const { ROOMS } = await import('./src/sound/rooms.js');
+
+const $ = (id) => document.getElementById(id);
+const DEF_T = JSON.parse(JSON.stringify(SOUND_TUNING)), DEF_M = { ...SOUND_MIX };
+SoundEngine.applyLab(SoundEngine.loadLab(), true);
+const snd = new SoundEngine();
+snd.onError = showErr;
+let ctx = null, tuneKey = 'chop', last = null, surface = 'grass', target = 'flesh';
+
+// ---- starting ----
+function start() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    snd.onProgress = (n) => { $('status').textContent = n ? `Rendering: ${n} variants to go` : `Ready. Room: ${ROOMS[snd.roomKind]?.label || ''}`; };
+    snd.start(ctx);
+    snd.setRoom($('room').value);
+    $('start').textContent = 'Sound on';
+  }
+  if (ctx.state === 'suspended') ctx.resume();
+}
+$('start').onclick = start;
+addEventListener('pointerdown', start, { once: true });
+addEventListener('keydown', start, { once: true });
+
+// ---- where ----
+for (const [k, R] of Object.entries(ROOMS)) $('room').append(new Option(R.label, k));
+$('room').value = 'forest';
+$('room').onchange = () => { snd.setRoom($('room').value); $('status').textContent = `Room: ${ROOMS[$('room').value].label}`; };
+$('dist').oninput = () => { $('distV').textContent = $('dist').value + ' tiles'; };
+$('strength').oninput = () => { $('strV').textContent = $('strength').value; };
+const where = () => ({ dist: +$('dist').value, pan: +$('pan').value, strength: +$('strength').value });
+
+// ---- playing ----
+function play(name, extra = {}) {
+  start();
+  last = [name, extra];
+  if (!snd.play(name, { ...where(), ...extra })) $('status').textContent = snd.rendering ? `Still rendering (${snd.rendering} to go)…` : 'Not ready yet';
+}
+const SURF = [['grass', 'Grass'], ['cobble', 'Cobblestone'], ['snow', 'Snow'], ['sand', 'Sand'], ['dirt', 'Dirt and gravel'], ['wood', 'Wooden floor']];
+for (const [k, l] of SURF) { const b = document.createElement('button'); b.textContent = l; b.dataset.surf = k; $('surfaces').append(b); }
+const TARG = [['flesh', 'Wolf or boar (flesh)'], ['padded', 'Bandit or goblin (cloth, leather)'], ['bone', 'Skeleton (bone)']];
+for (const [k, l] of TARG) { const b = document.createElement('button'); b.textContent = l; b.dataset.targ = k; $('targets').append(b); }
+const mark = () => {
+  for (const b of document.querySelectorAll('[data-surf]')) b.classList.toggle('on', b.dataset.surf === surface);
+  for (const b of document.querySelectorAll('[data-targ]')) b.classList.toggle('on', b.dataset.targ === target);
+  $('stepCard').dataset.tune = 'step.' + surface; $('hitCard').dataset.tune = 'hit.' + target;
+};
+const step = () => play('step.' + surface, { deep: $('deep').checked, strength: +$('strength').value });
+const hit = (kill) => play('hit.' + target, { blunt: $('blunt').checked ? 1 : 0, strength: +$('strength').value * (kill ? 1.25 : 1) });
+const leaves = () => ($('single').checked ? 1 : 2);
+
+// loops: one running at a time
+let loop = null;
+function toggleLoop(btn, fn) {
+  const was = loop && loop.btn === btn;
+  if (loop) { clearInterval(loop.id); loop.btn.classList.remove('on'); loop = null; }
+  if (was) return;
+  start(); fn();
+  loop = { btn, id: setInterval(fn, +btn.dataset.every * 1000 * (btn.id === 'walk' ? 1 : 1)) };
+  btn.classList.add('on');
+}
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  const card = b.closest('.card');
+  if (b.dataset.surf) { surface = b.dataset.surf; mark(); selectTune('step.' + surface); step(); return; }
+  if (b.dataset.targ) { target = b.dataset.targ; mark(); selectTune('hit.' + target); hit(false); return; }
+  if (card) selectTune(card.dataset.tune);
+  if (b.dataset.play) play(b.dataset.play, { leaves: leaves() });
+  else if (b.dataset.step) step();
+  else if (b.dataset.hit) hit(b.dataset.hit === 'kill');
+  else if (b.dataset.loop === 'chop') toggleLoop(b, () => play('chop', { strength: +$('strength').value * (0.85 + 0.3 * Math.random()) }));
+  else if (b.id === 'walk') toggleLoop(b, step);
+  else if (b.id === 'combo') toggleLoop(b, () => hit(Math.random() < 0.2));
+  else if (b.dataset.old) oldBeep(b.dataset.old);
+});
+addEventListener('keydown', (e) => {
+  if (e.target.closest('input, select, textarea') && e.key !== ' ') return;
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); if (last) play(...last); }
+  else if (k === '1') { selectTune('chop'); play('chop'); }
+  else if (k === '2') { selectTune('step.' + surface); step(); }
+  else if (k === 'w') toggleLoop($('walk'), step);
+  else if (k === '3') { selectTune('hit.' + target); hit(false); }
+  else if (k >= '4' && k <= '7') { const n = ['door.wood.open', 'door.wood.close', 'door.metal.open', 'door.metal.close'][k - 4]; selectTune(n.slice(0, n.lastIndexOf('.'))); play(n, { leaves: leaves() }); }
+  else if (k === 'r') reroll();
+});
+
+// the game's old beeps, for comparison (as index.html's sfx table had them)
+function beep(freq, dur, { type = 'square', vol = 0.06, slide = 0, at = 0 } = {}) {
+  start();
+  const t = ctx.currentTime + at, o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function oldBeep(k) {
+  if (k === 'chop') { beep(150, 0.05, { type: 'triangle', vol: 0.09 }); beep(95, 0.07, { type: 'square', vol: 0.03, at: 0.02 }); }
+  else if (k === 'hit') { beep(180, 0.06, { type: 'sawtooth', vol: 0.05, slide: -60 }); beep(90, 0.05, { vol: 0.04, at: 0.02 }); }
+  else if (k === 'door') beep(180, 0.22, { type: 'sawtooth', slide: 90, vol: 0.025 });
+}
+
+// ---- tuning ----
+const fmt = (v, st) => (st >= 1 ? String(Math.round(v)) : String(+v.toFixed(Math.max(0, Math.ceil(-Math.log10(st))))));
+function slider(obj, key, label, min, max, st, def, onChange) {
+  const L = document.createElement('label'), s1 = document.createElement('span'), v = document.createElement('span'), r = document.createElement('input');
+  L.className = 'ctl'; s1.textContent = label; v.className = 'v'; r.type = 'range'; r.min = min; r.max = max; r.step = st; r.value = obj[key];
+  const show = () => { v.textContent = fmt(obj[key], st) + (obj[key] !== def ? ` (was ${fmt(def, st)})` : ''); L.classList.toggle('changed', obj[key] !== def); };
+  r.oninput = () => { obj[key] = +r.value; show(); onChange(); };
+  r.ondblclick = () => { obj[key] = def; r.value = def; show(); onChange(); };
+  show(); L.append(s1, v, r); L.title = 'Double-click to reset';
+  return L;
+}
+let retuneT = 0;
+const retuneSoon = (key) => { clearTimeout(retuneT); retuneT = setTimeout(() => { snd.retune(key); save(); }, 160); };
+function selectTune(key) {
+  tuneKey = key;
+  for (const c of document.querySelectorAll('.card')) c.classList.toggle('sel', c.dataset.tune === key || (c.dataset.tune.startsWith('step.') && key.startsWith('step.') && c.id === 'stepCard') || (c.dataset.tune.startsWith('hit.') && key.startsWith('hit.') && c.id === 'hitCard'));
+  const label = SOUNDS[key]?.label || (key === 'door.wood' ? 'Wooden door' : key === 'door.metal' ? 'Metal double doors' : key);
+  $('tuneTitle').textContent = 'Tuning: ' + label;
+  const box = $('tune'); box.textContent = '';
+  for (const [k, l, mn, mx, st] of SOUND_SPEC[key] || []) box.append(slider(SOUND_TUNING[key], k, l, mn, mx, st, DEF_T[key][k], () => retuneSoon(key)));
+  showOut();
+}
+const MIX_ROWS = [
+  ['master', 'Volume: everything', 0, 2, 0.01], ['steps', 'Volume: footsteps', 0, 2, 0.01], ['combat', 'Volume: hits', 0, 2, 0.01], ['work', 'Volume: axe', 0, 2, 0.01], ['doors', 'Volume: doors', 0, 2, 0.01],
+  ['room', 'Room: reverb level (× the place\'s own)', 0, 3, 0.01], ['roomFade', 'Room: fade between places (s)', 0.05, 3, 0.05],
+  ['near', 'Distance: full volume within (tiles)', 0, 20, 0.5], ['fall', 'Distance: tiles past that to half', 1, 60, 0.5], ['air', 'Distance: highs fade over (tiles)', 5, 200, 1],
+  ['variety', 'Random re-pitching (×)', 0, 3, 0.01], ['lowCut', 'Mic chain: low cut (Hz)', 10, 200, 1], ['drive', 'Mic chain: saturation', 0, 1, 0.01],
+  ['presence', 'Mic chain: presence at 3.5 kHz (dB)', -6, 6, 0.1], ['airShelf', 'Mic chain: top above 11 kHz (dB)', -12, 6, 0.1],
+  ['glue', 'Mic chain: glue compressor on', 0, 1, 1], ['threshold', 'Mic chain: compressor threshold (dB)', -40, 0, 0.5], ['ratio', 'Mic chain: compressor ratio', 1, 10, 0.1],
+];
+for (const [k, l, mn, mx, st] of MIX_ROWS) $('mix').append(slider(SOUND_MIX, k, l, mn, mx, st, DEF_M[k], () => { snd.mix(); save(); showOut(); }));
+
+function changes() {
+  const tuning = {}, mix = {};
+  for (const [k, P] of Object.entries(SOUND_TUNING)) for (const [p, v] of Object.entries(P)) if (v !== DEF_T[k][p]) (tuning[k] ||= {})[p] = v;
+  for (const [p, v] of Object.entries(SOUND_MIX)) if (v !== DEF_M[p]) mix[p] = v;
+  return { tuning, mix };
+}
+function save() { const c = changes(); if (Object.keys(c.tuning).length || Object.keys(c.mix).length) SoundEngine.saveLab(c); else SoundEngine.clearLab(); showOut(); }
+function showOut() {
+  const { tuning, mix } = changes(), lines = ['Sound lab (v892)'];
+  for (const [k, P] of Object.entries(tuning)) lines.push(`${k}: ` + Object.entries(P).map(([p, v]) => `${p} ${v} (was ${DEF_T[k][p]})`).join(', '));
+  if (Object.keys(mix).length) lines.push('Mix: ' + Object.entries(mix).map(([p, v]) => `${p} ${v} (was ${DEF_M[p]})`).join(', '));
+  $('out').value = lines.length > 1 ? lines.join('\n') : '';
+}
+$('copy').onclick = async () => {
+  showOut();
+  const t = $('out').value || 'Sound lab (v892): no changes';
+  try { await navigator.clipboard.writeText(t); $('copied').textContent = 'Copied'; }
+  catch { $('out').select(); document.execCommand?.('copy'); $('copied').textContent = 'Selected: copy it'; }
+  setTimeout(() => { $('copied').textContent = ''; }, 2000);
+};
+function reroll() { start(); snd.reroll(tuneKey); }
+$('reroll').onclick = reroll;
+$('resetOne').onclick = () => { Object.assign(SOUND_TUNING[tuneKey], DEF_T[tuneKey]); selectTune(tuneKey); snd.retune(tuneKey); save(); };
+$('resetAll').onclick = () => {
+  for (const k of Object.keys(SOUND_TUNING)) Object.assign(SOUND_TUNING[k], DEF_T[k]);
+  Object.assign(SOUND_MIX, DEF_M); snd.mix(); SoundEngine.clearLab();
+  $('mix').textContent = ''; for (const [k, l, mn, mx, st] of MIX_ROWS) $('mix').append(slider(SOUND_MIX, k, l, mn, mx, st, DEF_M[k], () => { snd.mix(); save(); showOut(); }));
+  selectTune(tuneKey); if (ctx) snd.reroll();
+};
+mark(); selectTune('chop');
+</script>
+</body>
+</html>
