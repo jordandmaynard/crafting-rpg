@@ -697,6 +697,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v880:** (Jordan) Road names sit at the middle of their road. A road's label spots used to be its first tiles found reading the map top down, so the name landed on the road's top end (seed 201560036: The Crowreach, Wainford Path). Now `nameFeatures` gives each road spots from halfway along its tiles (`g.line`), then outward both ways in steps of a twentieth of the road (3 tiles at least), so the name only slides toward an end when the middle has no room. Both the along-the-road letters and the flat fallback use these spots.
 
+**v881:** (Jordan) The big station picture in the saw table, grinder, smelter and tanning rack windows gets the same 1 screen px black edge as the crafting window's item icons (`--st1`).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
