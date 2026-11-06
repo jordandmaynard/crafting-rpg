@@ -81,16 +81,18 @@ kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-
     <h2>Trees</h2>
     <div class="card" data-tune="tree">
       <h3>A tree falling <small>key 8 synthesized, 9 the recording</small></h3>
-      <div class="row">
+      <div class="row" id="hefts"></div>
+      <div class="row" style="margin-top:8px">
         <button class="play" data-tree="synth">Synthesized</button>
-        <button class="play" data-tree="wav">Recording (Tree Fall E)</button>
-        <button data-tree="ab" title="The recording, then the synthesized one 4.5 s later">Both, one after the other</button>
+        <button class="play" data-tree="wav">Recording</button>
+        <button data-tree="ab" title="The recording, then the synthesized one 5 s later">Both, one after the other</button>
       </div>
       <div class="row" style="margin-top:8px">
-        <label>Lands after <input id="land" type="range" min="0.5" max="3" step="0.05" value="1.95"> <span id="landV" class="keys">1.95 s</span></label>
+        <label>Weight <input id="heft" type="range" min="0" max="1" step="0.01" value="0.5"> <span id="heftV" class="keys">0.5</span></label>
+        <label>Lands after <input id="land" type="range" min="0.5" max="3" step="0.05" value="1.9"> <span id="landV" class="keys">1.9 s</span></label>
         <label><input type="checkbox" id="wavSync"> Recording: skip in so its crash comes at the landing</label>
       </div>
-      <p class="keys">The synthesized one is a fall (crack, tearing, the crown rushing down) and then its crash, played when the tree lands. In the game a tree lands about 1 s after it starts to go; 1.95 s here matches the recording's crash.</p>
+      <p class="keys">Weight 0 is a light tree (like Tree Fall A), 0.5 a middling one (E), 1 a heavy one (D); between, the nearest two blend. The buttons above set the weight and the landing time to match each recording. In the game the weight comes from the kind of tree (birch light, oak heavy) and how tall it is, and a tree lands about 1 s after it starts to go. The Recording button plays A, E or D, whichever is nearest the weight.</p>
     </div>
 
     <h2>Footsteps</h2>
@@ -216,22 +218,30 @@ const mark = () => {
 const step = () => play('step.' + surface, { deep: $('deep').checked, strength: +$('strength').value });
 const hit = (kill) => play('hit.' + target, { blunt: $('blunt').checked ? 1 : 0, strength: +$('strength').value * (kill ? 1.25 : 1) });
 const leaves = () => ($('single').checked ? 1 : 2);
-// a tree: the fall now, its crash when it lands (as the game plays them); or the recording, loaded the first time
-const landAt = () => +$('land').value;
-$('land').oninput = () => { $('landV').textContent = $('land').value + ' s'; };
+// a tree: the fall now, its crash when it lands (as the game plays them); or the recording nearest its weight, loaded
+// the first time
+const TREE_REC = [{ key: 'A', label: 'Light (Tree Fall A)', heft: 0, land: 1.85, crash: 1.87, url: 'sounds/tree-fall-a.wav' }, { key: 'E', label: 'Middling (Tree Fall E)', heft: 0.5, land: 1.88, crash: 1.9, url: 'sounds/tree-fall-e.wav' }, { key: 'D', label: 'Heavy (Tree Fall D)', heft: 1, land: 2.2, crash: 2.22, url: 'sounds/tree-fall-d.wav' }];
+const landAt = () => +$('land').value, heftAt = () => +$('heft').value;
+const showTree = () => {
+  $('landV').textContent = $('land').value + ' s'; $('heftV').textContent = $('heft').value;
+  for (const b of document.querySelectorAll('[data-heft]')) b.classList.toggle('on', Math.abs(+b.dataset.heft - heftAt()) < 0.005 && Math.abs(+b.dataset.land - landAt()) < 0.01);
+};
+for (const R of TREE_REC) { const b = document.createElement('button'); b.textContent = R.label; b.dataset.heft = R.heft; b.dataset.land = R.land; $('hefts').append(b); }
+$('land').oninput = showTree; $('heft').oninput = showTree;
 let landTimer = 0;
 function treeSynth() {
-  const land = landAt();
-  play('tree.fall', { land });
-  clearTimeout(landTimer); landTimer = setTimeout(() => snd.play('tree.land', where()), land * 1000);
+  const land = landAt(), heft = heftAt();
+  play('tree.fall', { land, heft });
+  clearTimeout(landTimer); landTimer = setTimeout(() => snd.play('tree.land', { ...where(), heft }), land * 1000);
   last = treeSynth;
 }
 function treeWav() {
   start(); last = treeWav;
-  const offset = $('wavSync').checked ? Math.max(0, 1.98 - landAt()) : 0;
-  Promise.resolve(snd.loadSample('treeFallWav', 'sounds/tree-fall-e.wav')).then((ok) => { if (ok) snd.playSample('treeFallWav', 'work', { ...where(), offset }); });
+  const R = TREE_REC.reduce((a, b) => (Math.abs(b.heft - heftAt()) < Math.abs(a.heft - heftAt()) ? b : a));
+  const offset = $('wavSync').checked ? Math.max(0, R.crash - landAt()) : 0;
+  Promise.resolve(snd.loadSample('tree' + R.key, R.url)).then((ok) => { if (ok) snd.playSample('tree' + R.key, 'work', { ...where(), offset }); });
 }
-function treeAB() { treeWav(); setTimeout(treeSynth, 4500); last = treeAB; }
+function treeAB() { treeWav(); setTimeout(treeSynth, 5000); last = treeAB; }
 
 // loops: one running at a time
 let loop = null;
@@ -251,6 +261,7 @@ document.addEventListener('click', (e) => {
   if (b.dataset.surf) { surface = b.dataset.surf; mark(); selectTune('step.' + surface); step(); return; }
   if (b.dataset.targ) { target = b.dataset.targ; mark(); selectTune('hit.' + target); hit(false); return; }
   if (card) selectTune(card.dataset.tune);
+  if (b.dataset.heft) { $('heft').value = b.dataset.heft; $('land').value = b.dataset.land; showTree(); selectTune('tree'); treeSynth(); return; }
   if (b.dataset.tree) (b.dataset.tree === 'synth' ? treeSynth : b.dataset.tree === 'wav' ? treeWav : treeAB)();
   else if (b.dataset.play) play(b.dataset.play, { leaves: leaves() });
   else if (b.dataset.step) step();
@@ -329,14 +340,14 @@ function changes() {
 }
 function save() { const c = changes(); if (Object.keys(c.tuning).length || Object.keys(c.mix).length) SoundEngine.saveLab(c); else SoundEngine.clearLab(); showOut(); }
 function showOut() {
-  const { tuning, mix } = changes(), lines = ['Sound lab (v894)'];
+  const { tuning, mix } = changes(), lines = ['Sound lab (v895)'];
   for (const [k, P] of Object.entries(tuning)) lines.push(`${k}: ` + Object.entries(P).map(([p, v]) => `${p} ${v} (was ${DEF_T[k][p]})`).join(', '));
   if (Object.keys(mix).length) lines.push('Mix: ' + Object.entries(mix).map(([p, v]) => `${p} ${v} (was ${DEF_M[p]})`).join(', '));
   $('out').value = lines.length > 1 ? lines.join('\n') : '';
 }
 $('copy').onclick = async () => {
   showOut();
-  const t = $('out').value || 'Sound lab (v894): no changes';
+  const t = $('out').value || 'Sound lab (v895): no changes';
   try { await navigator.clipboard.writeText(t); $('copied').textContent = 'Copied'; }
   catch { $('out').select(); document.execCommand?.('copy'); $('copied').textContent = 'Selected: copy it'; }
   setTimeout(() => { $('copied').textContent = ''; }, 2000);
@@ -350,7 +361,7 @@ $('resetAll').onclick = () => {
   $('mix').textContent = ''; for (const [k, l, mn, mx, st] of MIX_ROWS) $('mix').append(slider(SOUND_MIX, k, l, mn, mx, st, DEF_M[k], () => { snd.mix(); save(); showOut(); }));
   selectTune(tuneKey); if (ctx) snd.reroll();
 };
-mark(); selectTune('chop');
+mark(); showTree(); selectTune('chop');
 </script>
 </body>
 </html>
