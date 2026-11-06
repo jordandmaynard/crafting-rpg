@@ -717,6 +717,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v890:** (Jordan's tuning) Ground haze: relax 0.05 (was 0), whirlClear 16.2 (was 3), arrowWake 0.31 (was 0.22), arrowClear 7.8 (was 2.5), landClear 8.8 (was 3).
 
+**v891:** (Jordan's tuning, and grass that doesn't take the aim decal) Aim decal: style 0 (was 1), ink #ffffff (was #efdcae), shadowA 0 (was 0.55), opacity 0.73 (was 0.9), inkWidth 0.025 (was 0.07), hatchWidth 0 (was 0.16), hatchA 0 (was 0.32), wash 0.33 (was 0.07), chevronA 0 (was 0.75), rune #ffffff (was #e6bf62), runeGap 0.45 (was 0.6), runeWidth 0.01 (was 0.05), color #4a4a4a (was #34628d), shotWidth 0.65 (was 0.45), shotEdgeBright 2.2 (was 1.5), shotFill 0.75 (was 0.4). New row T > Aim decal > Grass takes the decal (`AIM_FX.grass`, default 0): the decal skips pixels the grass tufts mark with alpha 0 in the colour target (read from the colour half of the depth copy the decal already took), so it lies on the ground between the blades and the blades cover it; 1 lights the blades too, as before.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

@@ -1447,7 +1447,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 890;
+const GAME_VERSION = 891;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9551,7 +9551,7 @@ function renderWorld() {
     if (fxParts.clearMesh.visible) { renderer.passName = 'effects'; camera.layers.set(FX_CLEAR_LAYER); renderer.render(scene, camera); }
     // the aim decal, over a copy of the depth so far
     if (on && aimMesh.visible) {
-      AIM_U.tD.value = renderer.snapshot(outlineRT).depth;
+      const s = renderer.snapshot(outlineRT, true); AIM_U.tD.value = s.depth; AIM_U.tC.value = s.color;
       renderer.passName = 'aim decal';
       camera.layers.set(7); renderer.render(scene, camera);
     }
@@ -25716,11 +25716,13 @@ function updateArrows(dt) {
 // and the fill's brightness, and for the shot the box's width
 // style 0 is the old glow; 1 is ink on the ground (a wobbly hand-drawn outline in `ink` over a dark `shadow` halo,
 // a hatched fill, chevrons down the lines) with the round areas drawn as gold rune circles (`rune`)
-const AIM_FX = { style: 1, color: '#34628d', steady: 1,
-  ink: '#efdcae', shadow: '#2a170b', shadowA: 0.55, opacity: 0.9, inkWidth: 0.07, shadowWidth: 0.05, wobble: 0.035,
-  hatch: 3.2, hatchWidth: 0.16, hatchA: 0.32, wash: 0.07, chevrons: 1.1, chevronA: 0.75,
-  rune: '#e6bf62', runeGlow: 1.35, runeGap: 0.6, runeSpin: 0.12, runeWidth: 0.05,
-  shotWidth: 0.45, shotEdge: 0.03, shotEdgeBright: 1.5, shotFill: 0.4,
+// (v891) grass 0: the decal lies on the ground between the grass tufts, not on their blades (they mark the colour
+// target's alpha 0, read here from the depth copy's colour); 1 lights the blades too, as before
+const AIM_FX = { style: 0, color: '#4a4a4a', steady: 1, grass: 0,
+  ink: '#ffffff', shadow: '#2a170b', shadowA: 0, opacity: 0.73, inkWidth: 0.025, shadowWidth: 0.05, wobble: 0.035,
+  hatch: 3.2, hatchWidth: 0, hatchA: 0, wash: 0.33, chevrons: 1.1, chevronA: 0,
+  rune: '#ffffff', runeGlow: 1.35, runeGap: 0.45, runeSpin: 0.12, runeWidth: 0.01,
+  shotWidth: 0.65, shotEdge: 0.03, shotEdgeBright: 2.2, shotFill: 0.75,
   volleyEdge: 0.04, volleyEdgeBright: 2, volleyFill: 0.75,
   rainEdge: 0.08, rainEdgeBright: 1.9, rainFill: 0.65,
   potionEdge: 0.08, potionEdgeBright: 1.9, potionFill: 0.65,
@@ -25731,7 +25733,7 @@ const AIM_FX = { style: 1, color: '#34628d', steady: 1,
   stunsmashEdge: 0.05, stunsmashEdgeBright: 2, stunsmashFill: 0.75,
   chargeWidth: 1.25, chargeTaper: 0.6, chargeEdge: 0.08, chargeEdgeBright: 2.4, chargeFill: 0.85 };
 const AIM_NU = 84, AIM_NV = 72;
-const AIM_U = { tD: { value: WATER_U.tRefrD.value }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
+const AIM_U = { tD: { value: WATER_U.tRefrD.value }, tC: { value: WATER_U.tRefr.value }, grass: { value: 0 }, origin: { value: new GFX.Vector3() }, dir: { value: new GFX.Vector3(0, 0, 1) }, kind: { value: 0 },
   len: { value: 20 }, taper: { value: 0 }, cone: { value: 0.78 }, radius: { value: 2 }, boxW: { value: 0.5 }, edgeW: { value: 0.06 }, edgeB: { value: 1 }, fillB: { value: 0.3 }, steady: { value: 1 },
   color: { value: new GFX.Color('#ffb347') }, style: { value: 1 }, ink: { value: new GFX.Color('#efdcae') }, shadow: { value: new GFX.Color('#2a170b') },
   rune: { value: new GFX.Color('#e6bf62') }, shadowA: { value: 0.55 }, opacity: { value: 0.9 }, inkW: { value: 0.07 }, shadowW: { value: 0.05 }, wobble: { value: 0.035 },
@@ -25870,6 +25872,8 @@ fn aimInk(g: vec2f, wp: vec2f) -> vec4f {
   let dims = vec2i(textureDimensions(tD));
   let zb = textureLoad(tD, clamp(vec2i(i.pos.xy), vec2i(0), dims - 1), 0);
   if (zb >= 1.0) { discard; }
+  // (v891) a grass tuft's blade (alpha 0 in the colour copy): left bare unless U.grass
+  if (U.grass < 0.5 && textureLoad(tC, clamp(vec2i(i.pos.xy), vec2i(0), dims - 1), 0).a < 0.1) { discard; }
   // the surface seen through this pixel, from the depth copy
   let P = F.proj;
   let vb = (P[3][2] - zb * P[3][3]) / (zb * P[2][3] - P[2][2]);
@@ -25973,7 +25977,7 @@ function updateAimDecal() {
   U.len.value = S.len || 0; U.cone.value = (S.cone || 0) * Math.PI / 180; U.radius.value = S.radius || 0;
   U.taper.value = S.taper ? Math.min(S.taper, S.len - 0.5) : 0;
   U.boxW.value = S.boxW || 0; U.edgeW.value = A[nm + 'Edge']; U.edgeB.value = A[nm + 'EdgeBright']; U.fillB.value = A[nm + 'Fill']; U.steady.value = A.steady;
-  U.color.value.set(AIM_FX.color);
+  U.color.value.set(AIM_FX.color); U.grass.value = A.grass;
   U.style.value = A.style; aimMat.blending = A.style ? GFX.NormalBlending : GFX.AdditiveBlending;
   U.ink.value.set(A.ink); U.shadow.value.set(A.shadow); U.rune.value.set(A.rune);
   U.shadowA.value = A.shadowA; U.opacity.value = A.opacity; U.inkW.value = A.inkWidth; U.shadowW.value = A.shadowWidth; U.wobble.value = A.wobble;
@@ -34866,6 +34870,7 @@ const TUNING = [
   ]],
   ['Aim decal', [
     [AIM_FX, 'style', 'Style (0 glow, 1 ink + runes)', 0, 1, 1],
+    [AIM_FX, 'grass', 'Grass takes the decal (0 ground only, 1 on the blades too)', 0, 1, 1],
     [AIM_FX, 'ink', 'Ink: colour', 'color'],
     [AIM_FX, 'shadow', 'Ink: halo colour', 'color'],
     [AIM_FX, 'shadowA', 'Ink: halo strength', 0, 1, 0.01],
