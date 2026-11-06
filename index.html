@@ -1496,7 +1496,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 931;
+const GAME_VERSION = 932;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -22273,8 +22273,14 @@ const hotUsable = id => !!id && !!ITEMS[id] && (ITEMS[id].slot === 'weapon' || !
 const hotFits = (n, id) => !id || (n === HOT_POT ? !!ITEMS[id]?.potion : hotUsable(id));
 // the weapon in hand: the square in hand's, unless that holds potions
 const handWeapon = () => { const id = HOT[hotSel]; return id && ITEMS[id].slot === 'weapon' ? id : null; };
-// the potion in hand, if the square in hand holds some
-const handPotion = () => { const id = HOT[hotSel]; return id && ITEMS[id].potion ? id : null; };
+// (v932, Jordan) the potions square is never in hand: R takes one of its potions in hand for a moment and throws it
+// (at once, or with Attack on release on letting go of R), the square in hand and its weapon and abilities unchanged
+// but put away until the throw's done; no attacks or abilities while R is held. H.quickPot: R held with the throw
+// still to come (Attack on release); H.rHeld: R down at all
+const quickId = () => { const id = HOT[HOT_POT]; return id && ITEMS[id].potion ? id : null; };
+const quickOn = () => !!H.quickPot || !!(H.toss && H.toss.slot === HOT_POT);
+// the potion in hand, if the square in hand holds some (or one from the potions square, mid quick throw)
+const handPotion = () => { if (quickOn()) return quickId(); const id = HOT[hotSel]; return id && ITEMS[id].potion ? id : null; };
 // building materials are counted out of the pack (H.wood and H.stone read it; addItem and takeItem change it)
 Object.defineProperties(H, { wood: { get: () => countItem('wood') }, stone: { get: () => countItem('stone') },
   // (v538) at a boat's wheel or sat down: weapon away, no attacks, rolls or abilities
@@ -22326,12 +22332,12 @@ const DRESS = {
   coifChain: () => setOn('head') === 'chain', skirtChain: () => setOn('chest') === 'chain',
   crestPlate: () => plated('head'), breastPlate: () => plated('chest'), breastTrim: () => plated('chest'), kneesPlate: () => plated('legs'),
   pauldron: () => FANTASY_SET[setOn('chest')] >= 0, pauldronTop: () => FANTASY_SET[setOn('chest')] >= 2,
-  sword: () => !H.still && weapon().kind === 'sword',
-  bow: () => !H.still && weapon().kind === 'bow',
-  spear: () => !H.still && weapon().kind === 'spear',
-  axe: () => !H.still && weapon().kind === 'axe',
-  hammer: () => !H.still && weapon().kind === 'hammer',
-  hoe: () => !H.still && weapon().kind === 'hoe',
+  sword: () => !H.still && !quickOn() && weapon().kind === 'sword',
+  bow: () => !H.still && !quickOn() && weapon().kind === 'bow',
+  spear: () => !H.still && !quickOn() && weapon().kind === 'spear',
+  axe: () => !H.still && !quickOn() && weapon().kind === 'axe',
+  hammer: () => !H.still && !quickOn() && weapon().kind === 'hammer',
+  hoe: () => !H.still && !quickOn() && weapon().kind === 'hoe',
   potion: () => !H.still && Math.round(POTION_THROW.inHand) === 1 && !!handPotion(),
   ...Object.fromEntries(WEAPON_TIERS.map(t => ['tier_' + t, () => weapon().tier === t])),
 };
@@ -22496,7 +22502,7 @@ $('trash').innerHTML = paintImg('act-trash', '64px');
 // them (the weapon in hand stays in hand), drag a square into the pack or onto the trash, or right-click it to
 // send it to the pack. A weapon you craft goes in the first empty square, or the pack if there's none.
 function useHot(n) {
-  if (mode !== 'play' || !H.alive || hotSel === n) return false;
+  if (mode !== 'play' || !H.alive || hotSel === n || n === HOT_POT) return false;
   hotSel = n; GEAR.weapon = handWeapon();
   gearChanged(); renderHot();
   return true;
@@ -25539,7 +25545,7 @@ addEventListener('keydown', e => {
     else if (n === 7) slotAction('move');
   }
   else if (mode === 'play' && /^Digit[1-8]$/.test(e.code)) useHot(+e.code.slice(5) - 1);
-  else if (mode === 'play' && e.code === 'KeyR' && !H.helm) useHot(HOT_POT);
+  else if (mode === 'play' && e.code === 'KeyR') quickPotDown();
   if (e.code === 'KeyQ') pressAbility('q');
   if (e.code === 'KeyE') pressAbility('e');
   if (e.code === 'Space') castDash();
@@ -25554,8 +25560,9 @@ addEventListener('keyup', e => {
   keys.delete(e.code);
   if (e.code === 'KeyQ') releaseAbility('q');
   if (e.code === 'KeyE') releaseAbility('e');
+  if (e.code === 'KeyR') quickPotUp();
 });
-addEventListener('blur', () => { keys.clear(); abilHeld.q = abilHeld.e = false; mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; drag = null; });
+addEventListener('blur', () => { keys.clear(); quickPotCancel(); abilHeld.q = abilHeld.e = false; mouse.down = mouse.right = mouse.mid = false; mouse.mask = 0; drag = null; });
 cv.addEventListener('contextmenu', e => e.preventDefault());
 // buttons are read from the pressed-buttons mask, because a second button pressed while one is
 // held arrives as a move, not a pointerdown (attacking while turning the camera)
@@ -26736,7 +26743,7 @@ const abilHeld = { q: false, e: false };
 // (the bow's Q and E, the spear's, and the sword's lunge: the whirl and the swing are point blank)
 const AIMED = new Set(['volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boomerang', 'stunsmash', 'charge']);
 const onRelease = key => OPTIONS.attackOnRelease && AIMED.has(weapon()[key]);
-function pressAbility(key) { if (onRelease(key)) abilHeld[key] = true; else useAbility(key); }
+function pressAbility(key) { if (H.rHeld || quickOn()) return; if (onRelease(key)) abilHeld[key] = true; else useAbility(key); }
 function releaseAbility(key) {
   if (!abilHeld[key]) return;
   abilHeld[key] = false;
@@ -26752,7 +26759,7 @@ function aimName() {
   // being aimed: Attack on release (or touch) and held past POTION_THROW.ringAfter
   const hp = handPotion();
   if (hp) return POTION_THROW.ring > 0.5 && POTION_EFFECT[ITEMS[hp].potion]?.radius && potionOnRelease() && H.potAim >= POTION_THROW.ringAfter
-    && (mouse.down || PAD.attack || TOUCH.attack) ? 'potion' : null;
+    && (mouse.down || PAD.attack || TOUCH.attack || H.quickPot) ? 'potion' : null;
   const w = weapon();
   for (const key of ['e', 'q']) if ((abilHeld[key] || TOUCH.hold === key) && AIMED.has(w[key])) return w[key];
   if (w.strike === 'shoot' && (mouse.down || PAD.attack || TOUCH.attack)) return 'shot';
@@ -29442,7 +29449,7 @@ function throwPotion() {
   const [tx, tz] = potionTarget(), dx = tx - H.x, dz = tz - H.z, d = Math.hypot(dx, dz);
   if (d > 0.3) H.face = Math.atan2(dx, dz);
   // (v781) the toss begins (potionTossPose); the bottle leaves the hand POTION_TOSS.windup seconds on (tossTick)
-  H.toss = { t: 0, id, slot: hotSel, tx, tz, gone: false };
+  H.toss = { t: 0, id, slot: H.quickPot || H.rHeld ? HOT_POT : hotSel, tx, tz, gone: false };
   H.cdPotion = P.cd;
   if (POTION_TOSS.windup <= 0) tossTick(0);
   return true;
@@ -29453,7 +29460,7 @@ function tossTick(dt) {
   const k = H.toss;
   if (!k) return;
   k.t += dt;
-  if (!k.gone && (!H.alive || mode !== 'play')) { H.toss = null; return; }
+  if (!k.gone && (!H.alive || mode !== 'play')) { H.toss = null; if (k.slot === HOT_POT) { H.quickPot = false; dressHero(); renderBar(); } return; }
   if (!k.gone && k.t >= POTION_TOSS.windup) {
     k.gone = true;
     const P = POTION_THROW, slot = HOT[k.slot] === k.id ? k.slot : HOT.indexOf(k.id);
@@ -29469,7 +29476,31 @@ function tossTick(dt) {
     sfx.swoosh();
     renderBar(); if (invOpen) renderInv(); else renderHot();
   }
-  if (k.gone && k.t >= POTION_TOSS.time) H.toss = null;
+  if (k.gone && k.t >= POTION_TOSS.time) { H.toss = null; if (k.slot === HOT_POT && !H.quickPot) { dressHero(); renderBar(); } }
+}
+// (v932) R: a quick throw from the potions square (see quickOn)
+function quickPotDown() {
+  H.rHeld = true;
+  if (mode !== 'play' || !H.alive || H.still || H.helm || H.seat) return;
+  if (!quickId()) { sfx.nope(); return; }
+  if (H.toss || H.cdPotion > 0) { sfx.nope(); return; }
+  H.quickPot = true; H.potAim = 0; dressHero();
+  if (!potionOnRelease()) quickPotThrow();
+}
+function quickPotThrow() {
+  if (!H.quickPot) return;
+  throwPotion();
+  H.quickPot = false; H.potAim = 0;
+  if (!quickOn()) { dressHero(); renderBar(); }
+}
+function quickPotUp() {
+  H.rHeld = false;
+  quickPotThrow();
+}
+function quickPotCancel() {
+  H.rHeld = false;
+  if (!H.quickPot) return;
+  H.quickPot = false; H.potAim = 0; dressHero(); renderBar();
 }
 // a point along a throw's arc (t 0-1): straight across, lifted by a parabola
 function potionAt(f, t, out) {
@@ -31849,7 +31880,11 @@ function update(dt) {
     const atkHeld = mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack);
     // (v751: each press throws one; v752, Jordan: with Options > Attack on release, and on touch, a press aims, with
     // the ring once it's held POTION_THROW.ringAfter, and letting go throws)
-    if (handPotion()) {
+    // (v932) R held or a quick throw under way: no attacks; the throw's aim grows while R's held
+    if (H.rHeld || quickOn()) {
+      if (H.quickPot) H.potAim = (H.potAim || 0) + dt;
+      if (mode !== 'play' || !H.alive || H.still) quickPotCancel();
+    } else if (handPotion()) {
       if (potionOnRelease()) {
         // (only a press begun with the potion in hand throws on letting go)
         if (atkHeld) { if (!H.atkWas) { H.potArmed = true; H.potAim = 0; } else H.potAim = (H.potAim || 0) + dt; }
