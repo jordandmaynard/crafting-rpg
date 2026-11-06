@@ -707,6 +707,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v885:** (Jordan's tuning) Wall plants: ivy 0.67 (was 0.25), bougainvillea 0.64 (was 0.25), length 0.95 (was 0.8), leaf 1.24 (was 1).
 
+**v886:** (Jordan) The river mill's upper story is built of timber walls (the buildable half-timbered wall, `KIND_VAL.wall`) in place of logs, and keeps its thatched roof: timber would roof it in slate, so the mill's rooms carry their own roof (`millRoof`, `roofMesh(b, { thatch: true })`). Thatch forced over timber sits `THATCH_LIFT` (0.11) higher, so its fringe, falling outward from the wall's line, clears the timber's top beam and posts.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.

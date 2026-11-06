@@ -1444,7 +1444,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 885;
+const GAME_VERSION = 886;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -6974,8 +6974,8 @@ function placeCabins() {
   }
 }
 // River mills (v677, Jordan): on rivers near a meadow, wherever the river runs straight past a bank for MILL.cut tiles.
-// A mill is two stories on a 4 x 4 footing: stone below, logs above under a thatched roof (the thatch comes of the log
-// walls: logBuilding). Along its river side the bank is cut away for MILL.cut tiles (MCUT: the ground there drops
+// A mill is two stories on a 4 x 4 footing: stone below, timber above (v886, was logs) under a thatched roof (its
+// rooms' own roof: millRoof). Along its river side the bank is cut away for MILL.cut tiles (MCUT: the ground there drops
 // straight down a stone face to the river's bed) and a water wheel turns in the river against that wall, its bottom
 // carried along by the current; its paddles drip as they come up out of the water, until they pass level. Inside, on
 // the wheel's wall, stands a grinder anyone can use (a station of the mill's, st.poi). In local terms a runs along the
@@ -7061,13 +7061,13 @@ function placeMills() {
     // the upper floor over all of it but the stairwell
     const U = UP[1];
     for (const [c, r] of m.tiles) { const i = T(c, r); if (i !== t0 && i !== t1) U.FL.set(i, 1); }
-    // stone walls below (a door at the back, a window in the end wall and one over the wheel), logs above
+    // stone walls below (a door at the back, a window in the end wall and one over the wheel), timber above (v886)
     const doorT = T(...millTile(m, 1, D - 1)), winAt = new Map([[T(...millTile(m, 0, 1)), (pa + 2) & 3], [T(...millTile(m, 2, 0)), d]]);
     for (const [c, r] of m.tiles) for (let e = 0; e < 4; e++) {
       if (set.has(T(c + DC[e], r + DR[e]))) continue;
       const i = T(c, r), [ec, er, ew] = edgeOf(c, r, e), door = i === doorT && e === bk;
       (ew ? WW : WN)[T(ec, er)] = door ? KIND_VAL.door : winAt.get(i) === e ? KIND_VAL.stonewindow : KIND_VAL.stonewall;
-      (ew ? U.WW : U.WN).set(T(ec, er), KIND_VAL.logwall);
+      (ew ? U.WW : U.WN).set(T(ec, er), KIND_VAL.wall);
       piece(ec, er);
       if (door) m.door = [ec, er, ew];
     }
@@ -12664,12 +12664,15 @@ const MILL_FALL_U = Object.assign({}, FALL_U, { amount: { value: MILL.drip }, sp
   glowK: { value: 0 }, glowCol: { value: new GFX.Color('#000000') } });
 const millFallMat = makeFallMat(MILL_FALL_U);
 millFallMat.keepAlpha = true;
-// once the scene exists: each mill's doors, rooms (the thatch comes of the log walls above), its grinder, wheel and bank
+// (v886, Jordan) the mill's upper story is timber but keeps its thatch: timber would roof it in slate, so its rooms
+// carry their own roof, thatch over any walls
+const millRoof = b => roofMesh(b, { thatch: true });
+// once the scene exists: each mill's doors, rooms (thatched: millRoof), its grinder, wheel and bank
 function finishMills() {
   for (const m of mills) {
     if (m.door) makeDoor(...m.door);
-    makeRoom(m.tiles, '#8a6a44');
-    makeRoom(m.tiles, '#8a6a44', null, 1);
+    makeRoom(m.tiles, '#8a6a44', millRoof);
+    makeRoom(m.tiles, '#8a6a44', millRoof, 1);
     placeStation({ c: m.grind[0], r: m.grind[1], kind: 'grinder', ry: m.grindRy });
     m.grinder = stations.get(T(...m.grind));
     m.grinder.poi = m;
@@ -17578,6 +17581,7 @@ function makeThatchTex() {
   return t;
 }
 const THATCH_U = { s: { value: { x: 1.8, y: 0.76, z: 1.52, w: 1.09 } }, slope: { value: ROOF_SLOPE }, tSlate: { value: makeThatchTex() } };
+const THATCH_LIFT = 0.11;   // (v886: 0.13 out the fringe falls 0.13 * ROOF_SLOPE; over the timber's top with 0.01 to spare)
 function updateThatchU() { const v = THATCH_U.s.value; v.x = THATCH.bump; v.y = THATCH.row * THATCH_TEX.rows; v.z = THATCH.span; v.w = THATCH.shade; }
 const thatchMat = new GFX.ShaderMaterial({ uniforms: THATCH_U, vertexColors: true, side: GFX.DoubleSide, lit: true, code: slateMat.code });
 // (v439) roofs drawn before the other opaque things, so the floors, walls and furniture under them are never shaded
@@ -17674,7 +17678,8 @@ function settleBuildings() {
   }
   regroup.clear();
 }
-// (o.snow: lying deep in snow, icicles along the eaves; o.extra(base): more drawn into the same mesh)
+// (o.snow: lying deep in snow, icicles along the eaves; o.extra(base): more drawn into the same mesh; o.thatch: thatch
+// whatever the walls, v886)
 function roofMesh(rm, o = {}) {   // rm: a building
   let top = 0;
   const outside = [];
@@ -17689,7 +17694,9 @@ function roofMesh(rm, o = {}) {   // rm: a building
     // diagonal neighbours count too, so inner corners pinch the roof down to the walls
     for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
-  const base = top * STEP + k * WALL_H + WALL_H - 0.02;
+  // (v886) thatch forced over timber walls sits THATCH_LIFT higher, so its fringe, falling outward from the wall's
+  // line, clears the timber's top beam and posts (out 0.13, up to WALL_H) where log walls are sawn on a slant instead
+  const base = top * STEP + k * WALL_H + WALL_H - 0.02 + (o.thatch && !logBuilding(rm) ? THATCH_LIFT : 0);
   if (!o.snow && desertBuilding(rm)) return flatDesertRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);   // (v649)
   // (v663, Jordan: in an alpine town the roofs lie under snow, the flat ones too; not pushable, no one goes up there)
   const alp = alpineBuilding(rm);
@@ -17706,7 +17713,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     return m;
   };
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const slate = !o.snow && timberBuilding(rm), thatch = !o.snow && !slate && logBuilding(rm);
+  const slate = !o.snow && !o.thatch && timberBuilding(rm), thatch = !o.snow && (o.thatch || !slate && logBuilding(rm));
   const tileA = o.snow ? CC('#eef3f8') : CC(thatch ? THATCH_COLOR : rm.color), tileB = o.snow ? CC('#e2eaf2') : shade(tileA, 0.87), ridge = o.snow ? CC('#4a3220') : shade(tileA, thatch ? 0.55 : 0.68);
   const eave = thatch ? 0.2 : 0.14;   // (thatch hangs thicker over the walls)
   const snowLip = CC('#f4f8fb'), ice = CC('#cfe6f6');
