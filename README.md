@@ -699,6 +699,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v881:** (Jordan) The big station picture in the saw table, grinder, smelter and tanning rack windows gets the same 1 screen px black edge as the crafting window's item icons (`--st1`).
 
+**v882:** (Jordan's tuning) Picture: inside fill strength 1 (was 0.8).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
