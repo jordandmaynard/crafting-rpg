@@ -318,28 +318,19 @@ export const SOUNDS = {
     compose: (P, o, rnd) => [{ layer: 'step', gain: 1, delay: 0, rate: (0.94 + 0.12 * rnd()) * (o.deep ? 0.9 : 1) }],
   },
   'step.dirt': {
-    // (v905, on Jordan's reference, footsteps on dirt and gravel, and an independent judge's reading of it) a crunch
-    // more than a thud: a dense, steady stream of grit grains (a tight band at 500 Hz-3 kHz, strongest ~1.2 kHz,
-    // nothing below 250 Hz) that starts ~8 dB down and builds over 10-140 ms as the weight rolls onto the foot, holds,
-    // then fades smoothly (-10 dB by ~0.22 s, then settling more slowly, ~-18 by ~0.35 s): the grains keep coming as it fades, only quieter
     label: 'Footstep: dirt and gravel (roads, the wastes)', group: 'steps',
     layers: {
       step: { n: 12, render(k, P) {
         return heelToe(k, P, (k, s) => {
-          const len = P.len, sec = len + 0.45, out = k.buf(sec), ramp = k.r(0.01, 0.14), fc = k.r(950, 1500), dip = k.rand() < 0.5 ? k.r(0.3, 0.5) : 0, dt = k.r(0.04, 0.08);
-          const env = (t) => (0.4 + 0.6 * Math.min(1, t / ramp)) * (t < ramp + len ? 1 : Math.max(Math.exp(-(t - ramp - len) / 0.05), 0.25 * Math.exp(-(t - ramp - len) / 0.09))) * Math.min(1, t / 0.004) * Math.min(1, (sec - t) / 0.05) * (1 - dip * Math.exp(-(((t - dt) / 0.015) ** 2)));
-          const bed = k.mul(k.lp(k.bp(k.pink(sec), fc, 1.2), 2500), k.wander(sec, 50, 0.35));
-          k.shape(bed, env);
-          k.add(out, k.norm(bed), P.grit * s);
-          k.grains(out, { count: Math.round(P.crunch * sec * s), t0: 0.001, spread: sec - 0.01, density: () => 1, env, lo: fc * 0.65, hi: fc * k.r(1.5, 2), q: 1.2, dur: [0.0006, 0.003], pow: 0.7, gain: 1, clump: 0.3 });
-          // a few pebbles popping out of it (1.5-4 kHz, 6-10 dB over the bed)
-          k.grains(out, { count: Math.round(k.r(3, 8) * s), t0: 0.005, spread: 0.25, density: () => 1, lo: 1500, hi: 4000, q: 1.5, dur: [0.001, 0.003], pow: 0.5, gain: P.pops * s, clump: 0 });
-          k.grains(out, { count: Math.round(6 * s), t0: 0.003, spread: len + ramp, lo: 1200, hi: 3500, dur: [0.001, 0.004], kind: 'ping', pow: 2, gain: P.gravel * s });
-          return k.filter(k.hp(k.hp(out, 250), 250), 'peak', 3500, 1, -4);   // (a 4 dB dip at 3-4 kHz; the top above 6 kHz stays)
-        }, P.len + 0.75);
+          const out = k.buf(0.16);
+          k.add(out, thud(k, 250, 0.026, 0.14), P.thud * s);
+          k.grains(out, { count: Math.round(14 * s), t0: 0.002, spread: 0.08, lo: 1200, hi: 3800, dur: [0.001, 0.004], kind: 'ping', pow: 2, gain: P.gravel * s });
+          k.grains(out, { count: Math.round(40 * s), t0: 0.001, spread: 0.07, lo: 1500, hi: 6000, q: 1.1, dur: [0.0005, 0.002], pow: 2, gain: P.grit * s });
+          return out;
+        }, 0.28);
       } },
     },
-    compose: (P, o, rnd) => [{ layer: 'step', gain: Math.pow(10, (rnd() - 0.5) * 0.8), delay: 0, rate: 0.94 + 0.12 * rnd() }],
+    compose: (P, o, rnd) => [{ layer: 'step', gain: 1, delay: 0, rate: 0.94 + 0.12 * rnd() }],
   },
   'step.wood': {
     label: 'Footstep: wooden floor', group: 'steps',
@@ -612,7 +603,7 @@ export const SOUND_TUNING = {
   'step.cobble': { thud: 1, knock: 0.5, mid: 0.14, sub: 0.15, len: 0.014, click: 0.02, toe: 0.7, grit: 0.006, sand: 0.03, scuff: 0.15, scuffChance: 0.12, gap: 1.05 },
   'step.snow': { crunch: 1, squeak: 0.25, thud: 0.5, len: 0.16, gap: 1 },
   'step.sand': { thud: 0.7, hiss: 0.3, slide: 0.2, len: 0.2, gap: 1 },
-  'step.dirt': { crunch: 900, grit: 0.35, gravel: 0.25, pops: 2.5, len: 0.07, gap: 1.6 },
+  'step.dirt': { thud: 0.9, gravel: 0.3, grit: 0.12, gap: 1 },
   'step.wood': { plankHz: 210, ring: 0.07, knock: 0.8, thud: 0.6, creak: 0.25, creakChance: 0.12, gap: 1 },
   'hit.flesh': { bodyHz: 85, bodyMs: 4, wet: 0.18, fur: 0.12, blade: 0.22 },
   'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.25, blade: 0.22 },
@@ -643,7 +634,7 @@ export const SOUND_SPEC = {
   'step.cobble': [['thud', 'Thud (110-450 Hz)', 0, 1.5, 0.01], ['knock', 'Knock (250-600 Hz)', 0, 1.5, 0.01], ['mid', 'Body (0.5-2 kHz)', 0, 0.5, 0.005], ['sub', 'Low thump (45-90 Hz)', 0, 1, 0.01], ['len', 'Thud length (s)', 0.008, 0.08, 0.001], ['click', 'Heel click', 0, 1, 0.01], ['grit', 'Grit', 0, 0.5, 0.005], ['sand', 'Scuff and grit under the sole', 0, 0.2, 0.002], ['scuff', 'Scuff: level', 0, 1, 0.01], ['scuffChance', 'Scuff: chance a step', 0, 1, 0.01], ['toe', 'Toe level (×)', 0.2, 1.5, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'step.snow': [['crunch', 'Crunch', 0, 1.5, 0.01], ['squeak', 'Squeak', 0, 1, 0.01], ['thud', 'Thud', 0, 1.5, 0.01], ['len', 'Crunch length (s)', 0.05, 0.4, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'step.sand': [['thud', 'Thud', 0, 1.5, 0.01], ['hiss', 'Grains hiss', 0, 1.5, 0.01], ['slide', 'Slide', 0, 1, 0.01], ['len', 'Length (s)', 0.05, 0.5, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
-  'step.dirt': [['crunch', 'Crunch grains a second', 0, 1500, 10], ['grit', 'Grit bed', 0, 1, 0.01], ['gravel', 'Stones ticking', 0, 1, 0.01], ['pops', 'Pebbles popping', 0, 5, 0.05], ['len', 'Crunch length (s)', 0.04, 0.4, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
+  'step.dirt': [['thud', 'Thud', 0, 1.5, 0.01], ['gravel', 'Gravel', 0, 1, 0.01], ['grit', 'Grit', 0, 1, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'step.wood': [['plankHz', 'Plank pitch (Hz)', 80, 600, 1], ['ring', 'Plank ring (s)', 0.01, 0.3, 0.005], ['knock', 'Knock', 0, 1.5, 0.01], ['thud', 'Thud', 0, 1.5, 0.01], ['creak', 'Board creak: level', 0, 1, 0.01], ['creakChance', 'Board creak: chance a step', 0, 1, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'hit.flesh': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms; longer is duller)', 1, 12, 0.1], ['wet', 'Wet', 0, 1.5, 0.01], ['fur', 'Fur and hide', 0, 1, 0.01], ['blade', 'Blade slice', 0, 1.5, 0.01]],
   'hit.padded': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms)', 1, 12, 0.1], ['slap', 'Leather slap', 0, 1.5, 0.01], ['cloth', 'Cloth', 0, 1.5, 0.01], ['blade', 'Blade tearing cloth', 0, 1.5, 0.01]],
