@@ -90,14 +90,17 @@ export class SoundEngine {
     this.presence = A.createBiquadFilter(); this.presence.type = 'peaking'; this.presence.frequency.value = 3500; this.presence.Q.value = 0.8;
     this.airShelf = A.createBiquadFilter(); this.airShelf.type = 'highshelf'; this.airShelf.frequency.value = 11000;
     this.comp = A.createDynamicsCompressor(); this.comp.knee.value = 12; this.comp.attack.value = 0.008; this.comp.release.value = 0.2;
-    this.compBy = g();
+    this.compBy = g(); this.compOut = g();
     this.limiter = A.createDynamicsCompressor(); this.limiter.threshold.value = -1.5; this.limiter.knee.value = 0; this.limiter.ratio.value = 20; this.limiter.attack.value = 0.002; this.limiter.release.value = 0.12;
     this.out = g();
     this.bus.connect(this.lowCut);
-    this.lowCut.connect(this.satDry); this.lowCut.connect(this.shaper); this.shaper.connect(this.satWet);
+    this.lowCut.connect(this.satDry); const half = g(0.5); this.lowCut.connect(half); half.connect(this.shaper); this.shaper.connect(this.satWet);   // (the curve spans -2..2)
     const sum = g(); this.satDry.connect(sum); this.satWet.connect(sum);
     sum.connect(this.presence); this.presence.connect(this.airShelf);
-    this.airShelf.connect(this.comp); this.comp.connect(this.limiter);
+    // (v896) the saturation and the glue compressor are each either in or out, never mixed in parallel with the
+    // straight signal: the compressor (and an oversampled shaper) delay what goes through them by a few ms, and that
+    // copy summed with the undelayed one combed every sound (hollow, phasey: it read as wet)
+    this.airShelf.connect(this.comp); this.comp.connect(this.compOut); this.compOut.connect(this.limiter);
     this.airShelf.connect(this.compBy); this.compBy.connect(this.limiter);
     this.limiter.connect(this.out); this.out.connect(A.destination);
     this.mix();
@@ -120,10 +123,12 @@ export class SoundEngine {
     set(this.legacySend.gain, M.legacyRoom);
     set(this.lowCut.frequency, Math.max(10, M.lowCut));
     const d = clamp(M.drive, 0, 1);
-    set(this.satWet.gain, d); set(this.satDry.gain, 1 - d * 0.6);
+    if (d > 0.001 && this.satAt !== d) { this.shaper.curve = satCurve(2.4, 0.08, d); this.satAt = d; }
+    set(this.satWet.gain, d > 0.001 ? 1 : 0); set(this.satDry.gain, d > 0.001 ? 0 : 1);
     set(this.presence.gain, M.presence); set(this.airShelf.gain, M.airShelf);
-    this.comp.threshold.value = M.glue > 0.5 ? M.threshold : 0; this.comp.ratio.value = M.glue > 0.5 ? M.ratio : 1;
-    set(this.comp.threshold, M.glue > 0.5 ? M.threshold : 0);
+    const glue = M.glue > 0.5;
+    this.comp.threshold.value = M.threshold; this.comp.ratio.value = M.ratio;
+    set(this.compOut.gain, glue ? 1 : 0); set(this.compBy.gain, glue ? 0 : 1);
     set(this.out.gain, M.master);
     this.#roomLevel();
   }
@@ -302,8 +307,10 @@ export class SoundEngine {
 }
 
 // tanh soft clip, normalised, with a little asymmetry (even harmonics, like a preamp)
-function satCurve(k, asym) {
-  const n = 2048, c = new Float32Array(n), nt = Math.tanh(k);
-  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1, y = x + asym * (x * x - 1 / 3); c[i] = Math.tanh(k * y) / nt; }
+// the saturation curve, mixed with the straight line by d (as the old parallel blend was: 1 - 0.6 d of it, d of the
+// tanh); over -2..2, so a loud bus isn't clipped by the curve's ends
+function satCurve(k, asym, d = 1) {
+  const n = 4096, c = new Float32Array(n), nt = Math.tanh(k);
+  for (let i = 0; i < n; i++) { const x = ((i / (n - 1)) * 2 - 1) * 2, y = x + asym * (x * x - 1 / 3); c[i] = (1 - 0.6 * d) * x + d * Math.tanh(k * y) / nt; }
   return c;
 }
