@@ -24,10 +24,16 @@ const PLATE = [1, 1.58, 2.76, 3.9, 5.4, 7.2, 8.9, 11.3];
 const BONE = [1, 1.93, 2.84, 4.1, 5.6];
 
 // a step: the heel, then the toe a moment later and softer, each made by one(k, scale)
+// take part of one band out of a sound's first `len` seconds (depth 0..1 of that band, eased back in over as long)
+function onsetDip(k, b, type, f, q, depth, len) {
+  const band = k.filter(Float32Array.from(b), type, f, q), sr = k.sr;
+  for (let i = 0; i < b.length && i < len * 2 * sr; i++) { const t = i / sr; b[i] -= band[i] * depth * (t < len ? 1 : 1 - (t - len) / len); }
+  return b;
+}
 function heelToe(k, P, one, sec) {
   const out = k.buf(sec);
   k.add(out, one(k, 1), 1, 0);
-  k.add(out, one(k, 0.55), k.r(0.35, 0.6), k.r(0.045, 0.085) * (P.gap ?? 1));
+  k.add(out, one(k, 0.55), k.r(0.35, 0.6) * (P.toe ?? 1), k.r(0.045, 0.085) * (P.gap ?? 1));
   return out;
 }
 
@@ -212,43 +218,66 @@ export const SOUNDS = {
 
   // ---------------------------------------------------------------- footsteps
   'step.grass': {
+    // (v905, on Jordan's reference, running in grass, and an independent judge's reading of it) a soft swish that
+    // swells over 35-75 ms with no click (the foot brushing through and pressing the blades), noise from 300 Hz up
+    // with a little more at 200-350 Hz and 6-9 kHz, falling to ~-15 dB within ~40 ms of its peak and rustling on
+    // there through the rest of the step (it runs on into the next) with a few blades ticking; a soft low footfall bump under it
     label: 'Footstep: grass', group: 'steps',
     layers: {
       step: { n: 12, render(k, P) {
         return heelToe(k, P, (k, s) => {
-          const out = k.buf(0.2);
-          k.add(out, thud(k, 240, 0.022, 0.15), P.thud * s);
-          k.grains(out, { count: Math.round(40 * s), t0: 0.002, spread: P.len, lo: 1500, hi: 5000, q: 0.8, dur: [0.003, 0.012], pow: 1.6, gain: P.swish * s, clump: 0.15 });
-          k.grains(out, { count: Math.round(6 * s), t0: 0.004, spread: 0.06, lo: 1600, hi: 4200, dur: [0.001, 0.003], kind: 'ping', pow: 2, gain: P.stems * s });
-          return out;
-        }, 0.32);
+          const len = P.len, sec = len + 0.1, out = k.buf(sec), rise = k.r(0.05, 0.075);
+          const env = (t) => (t < rise ? 0.5 - 0.5 * Math.cos(Math.PI * t / rise) : (1 - P.swish) * Math.exp(-(t - rise) / 0.018) + P.swish) * Math.min(1, (sec - t) / 0.08);
+          const sw = k.norm(k.hp(k.pink(sec), k.r(255, 345)));
+          k.add(sw, k.norm(k.bp(k.pink(sec), k.r(240, 320), 1)), 0.2);
+          const air = k.norm(k.lp(k.hp(k.white(sec), 6500), 10000));   // (the 6-9 kHz air comes in ~15 ms after the swish starts)
+          k.shape(air, (t) => clamp((t - 0.01) / 0.025, 0, 1));
+          k.add(sw, air, 0.45 * Math.pow(10, k.r(-3, 3) / 20));
+          k.mul(sw, k.wander(sec, 60, 0.35));
+          k.shape(sw, env);
+          k.add(out, k.norm(sw), P.brush * s);
+          // the footfall: a soft 60-150 Hz bump swelling and gone over ~40 ms, no click
+          const fd = k.r(0.03, 0.05), ff = k.hp(k.lp(k.lp(k.brown(fd), 150), 150), 60);
+          k.shape(ff, (t) => 0.5 - 0.5 * Math.cos(2 * Math.PI * t / fd));
+          k.add(out, k.norm(ff), P.thud * s);
+          k.grains(out, { count: Math.round(24 * s), t0: rise * 0.3, spread: len, density: (u) => env(rise * 0.3 + u * len), lo: 1200, hi: 11000, q: 0.8, dur: [0.002, 0.008], pow: 1.6, gain: P.stems * s, clump: 0.3 });
+          return onsetDip(k, out, 'hp', 5000, 0.707, 0.5, 0.03);   // (darker for its first 30 ms)
+        }, P.len + 0.22);
       } },
     },
-    compose: (P, o, rnd) => [{ layer: 'step', gain: 1, delay: 0, rate: 0.94 + 0.12 * rnd() }],
+    compose: (P, o, rnd) => [{ layer: 'step', gain: Math.pow(10, (rnd() - 0.5) * 0.45), delay: 0, rate: 0.94 + 0.12 * rnd() }],
   },
   'step.cobble': {
-    label: 'Footstep: cobblestone', group: 'steps',
+    // (v905, on Jordan's reference, footsteps on concrete; stone floors and cobbles) a dark, firm hit: a body at
+    // 110-450 Hz and a 250-600 Hz knock, falling ~25 dB in 0.1 s, with only a faint, dull heel click (1-1.6 kHz)
+    // and grit above; the toe lands ~0.12 s after the heel, softer
+    label: 'Footstep: cobblestone, stone floor', group: 'steps',
     layers: {
       step: { n: 12, render(k, P) {
         return heelToe(k, P, (k, s) => {
-          const out = k.buf(0.12), base = k.near(P.stoneHz, 0.15);
-          k.add(out, strike(k, k.r(0.0006, 0.0011), k.modes(base, STONE, 0.02, { damp: 0.5, tilt: 0.4, scatter: 0.12 }), 0.12, { grit: 0.45, bounces: 2, spread: 0.0018 }), P.click * s);
-          k.add(out, thud(k, 190, 0.014, 0.1), P.thud * s);
-          k.grains(out, { count: Math.round(10 * s), t0: 0.001, spread: 0.05, lo: 4000, hi: 11000, q: 1.2, dur: [0.0004, 0.0018], pow: 2.2, gain: P.grit * s });
-          return out;
-        }, 0.24);
+          const out = k.buf(0.2);
+          k.add(out, k.norm(k.decay(k.hp(k.hp(k.lp(k.lp(k.brown(0.2), 450), 450), 110), 110), P.len, 0.0012)), P.thud * s);
+          k.add(out, k.norm(k.decay(k.bp(k.pink(0.12), k.r(320, 440), 1.2), P.len * 0.5, 0.0008)), P.knock * s);
+          k.add(out, k.norm(k.decay(k.lp(k.bp(k.white(0.03), k.r(1000, 1600), 0.8), 1600), 0.003, 0.0015)), P.click * s * Math.pow(10, k.r(-6, 2) / 20));
+          k.add(out, k.norm(k.decay(k.bp(k.pink(0.15), k.r(800, 1300), 0.7), 0.025, 0.001)), P.mid * s);   // (the 0.5-2 kHz body, ~25 ms)
+          k.add(out, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(0.15), 90), 90), 45), 0.018, 0.002)), P.sub * s);   // (and a 45-90 Hz thump)
+          k.grains(out, { count: Math.round(6 * s), t0: 0.001, spread: 0.03, lo: 3000, hi: 9000, q: 1.2, dur: [0.0004, 0.0015], pow: 2.2, gain: P.grit * s });
+          // the sole scuffing and grit under it: faint noise at 2-12 kHz (~-38 dB) dying over ~80 ms, brighter or
+          // duller from step to step
+          k.add(out, k.norm(k.decay(k.lp(k.hp(k.white(0.3), 2000), 14000), 0.08, 0.012)), P.sand * s * Math.pow(10, k.r(-4, 4) / 20));
+          return onsetDip(k, out, 'bp', 3500, 0.6, 0.6, 0.015);   // (the hit's first 15 ms ~8 dB darker at 2-6 kHz)
+        }, 0.36);
       } },
-      // a scuff now and then: the sole dragging on the stone
+      // a scuff now and then: the sole dragging on the stone (dark: the reference has little above 2 kHz)
       scuff: { n: 4, render(k, P) {
-        const sec = 0.12, n = k.bp(k.white(sec), k.r(2500, 4000), 0.7);
+        const sec = 0.12, n = k.lp(k.bp(k.pink(sec), k.r(700, 1300), 0.6), 3000);
         k.mul(n, k.wander(sec, 120, 0.8));
         k.env(n, [[0, 0], [0.015, 1], [sec, 0]]);
-        k.grains(n, { count: 18, t0: 0, spread: sec, lo: 3000, hi: 9000, dur: [0.0004, 0.0015], pow: 2, gain: 0.8, density: () => 1 });
         return k.norm(n);
       } },
     },
     compose: (P, o, rnd) => [
-      { layer: 'step', gain: 1, delay: 0, rate: 0.95 + 0.1 * rnd() },
+      { layer: 'step', gain: Math.pow(10, (rnd() - 0.5) * 0.5), delay: 0, rate: 0.95 + 0.1 * rnd() },
       rnd() < P.scuffChance ? { layer: 'scuff', gain: P.scuff, delay: 0.03 + 0.04 * rnd(), rate: 0.9 + 0.2 * rnd() } : null,
     ],
   },
@@ -289,19 +318,28 @@ export const SOUNDS = {
     compose: (P, o, rnd) => [{ layer: 'step', gain: 1, delay: 0, rate: (0.94 + 0.12 * rnd()) * (o.deep ? 0.9 : 1) }],
   },
   'step.dirt': {
+    // (v905, on Jordan's reference, footsteps on dirt and gravel, and an independent judge's reading of it) a crunch
+    // more than a thud: a dense, steady stream of grit grains (a tight band at 500 Hz-3 kHz, strongest ~1.2 kHz,
+    // nothing below 250 Hz) that starts ~8 dB down and builds over 10-140 ms as the weight rolls onto the foot, holds,
+    // then fades smoothly (-10 dB by ~0.22 s, then settling more slowly, ~-18 by ~0.35 s): the grains keep coming as it fades, only quieter
     label: 'Footstep: dirt and gravel (roads, the wastes)', group: 'steps',
     layers: {
       step: { n: 12, render(k, P) {
         return heelToe(k, P, (k, s) => {
-          const out = k.buf(0.16);
-          k.add(out, thud(k, 250, 0.026, 0.14), P.thud * s);
-          k.grains(out, { count: Math.round(14 * s), t0: 0.002, spread: 0.08, lo: 1200, hi: 3800, dur: [0.001, 0.004], kind: 'ping', pow: 2, gain: P.gravel * s });
-          k.grains(out, { count: Math.round(40 * s), t0: 0.001, spread: 0.07, lo: 1500, hi: 6000, q: 1.1, dur: [0.0005, 0.002], pow: 2, gain: P.grit * s });
-          return out;
-        }, 0.28);
+          const len = P.len, sec = len + 0.45, out = k.buf(sec), ramp = k.r(0.01, 0.14), fc = k.r(950, 1500), dip = k.rand() < 0.5 ? k.r(0.3, 0.5) : 0, dt = k.r(0.04, 0.08);
+          const env = (t) => (0.4 + 0.6 * Math.min(1, t / ramp)) * (t < ramp + len ? 1 : Math.max(Math.exp(-(t - ramp - len) / 0.05), 0.25 * Math.exp(-(t - ramp - len) / 0.09))) * Math.min(1, t / 0.004) * Math.min(1, (sec - t) / 0.05) * (1 - dip * Math.exp(-(((t - dt) / 0.015) ** 2)));
+          const bed = k.mul(k.lp(k.bp(k.pink(sec), fc, 1.2), 2500), k.wander(sec, 50, 0.35));
+          k.shape(bed, env);
+          k.add(out, k.norm(bed), P.grit * s);
+          k.grains(out, { count: Math.round(P.crunch * sec * s), t0: 0.001, spread: sec - 0.01, density: () => 1, env, lo: fc * 0.65, hi: fc * k.r(1.5, 2), q: 1.2, dur: [0.0006, 0.003], pow: 0.7, gain: 1, clump: 0.3 });
+          // a few pebbles popping out of it (1.5-4 kHz, 6-10 dB over the bed)
+          k.grains(out, { count: Math.round(k.r(3, 8) * s), t0: 0.005, spread: 0.25, density: () => 1, lo: 1500, hi: 4000, q: 1.5, dur: [0.001, 0.003], pow: 0.5, gain: P.pops * s, clump: 0 });
+          k.grains(out, { count: Math.round(6 * s), t0: 0.003, spread: len + ramp, lo: 1200, hi: 3500, dur: [0.001, 0.004], kind: 'ping', pow: 2, gain: P.gravel * s });
+          return k.filter(k.hp(k.hp(out, 250), 250), 'peak', 3500, 1, -4);   // (a 4 dB dip at 3-4 kHz; the top above 6 kHz stays)
+        }, P.len + 0.75);
       } },
     },
-    compose: (P, o, rnd) => [{ layer: 'step', gain: 1, delay: 0, rate: 0.94 + 0.12 * rnd() }],
+    compose: (P, o, rnd) => [{ layer: 'step', gain: Math.pow(10, (rnd() - 0.5) * 0.8), delay: 0, rate: 0.94 + 0.12 * rnd() }],
   },
   'step.wood': {
     label: 'Footstep: wooden floor', group: 'steps',
@@ -570,11 +608,11 @@ function doorThud(k, P, metal) {
 // ---- tuning ----
 export const SOUND_TUNING = {
   chop: { biteMs: 0.22, headRing: 0.12, trunkHz: 150, trunkRing: 0.09, bodyMs: 1.1, thud: 0.6, crunch: 0.25, splinters: 10, splinterGain: 0.25, leaves: 0.05, leavesLen: 0.5 },
-  'step.grass': { thud: 0.7, swish: 0.3, stems: 0.25, len: 0.12, gap: 1 },
-  'step.cobble': { stoneHz: 1400, click: 0.8, thud: 0.9, grit: 0.12, scuff: 0.2, scuffChance: 0.15, gap: 1 },
+  'step.grass': { thud: 0.3, brush: 1, swish: 0.2, stems: 0.12, len: 0.34, gap: 1 },
+  'step.cobble': { thud: 1, knock: 0.5, mid: 0.14, sub: 0.15, len: 0.014, click: 0.02, toe: 0.7, grit: 0.006, sand: 0.03, scuff: 0.15, scuffChance: 0.12, gap: 1.05 },
   'step.snow': { crunch: 1, squeak: 0.25, thud: 0.5, len: 0.16, gap: 1 },
   'step.sand': { thud: 0.7, hiss: 0.3, slide: 0.2, len: 0.2, gap: 1 },
-  'step.dirt': { thud: 0.9, gravel: 0.3, grit: 0.12, gap: 1 },
+  'step.dirt': { crunch: 900, grit: 0.35, gravel: 0.25, pops: 2.5, len: 0.07, gap: 1.6 },
   'step.wood': { plankHz: 210, ring: 0.07, knock: 0.8, thud: 0.6, creak: 0.25, creakChance: 0.12, gap: 1 },
   'hit.flesh': { bodyHz: 85, bodyMs: 4, wet: 0.18, fur: 0.12, blade: 0.22 },
   'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.25, blade: 0.22 },
@@ -601,11 +639,11 @@ export const SOUND_SPEC = {
     ['leaves', 'Leaves shiver: level', 0, 1, 0.01],
     ['leavesLen', 'Leaves shiver: length (s)', 0.1, 1.5, 0.01],
   ],
-  'step.grass': [['thud', 'Thud', 0, 1.5, 0.01], ['swish', 'Blades swishing', 0, 1.5, 0.01], ['stems', 'Stems snapping', 0, 1, 0.01], ['len', 'Swish length (s)', 0.03, 0.3, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
-  'step.cobble': [['stoneHz', 'Stone pitch (Hz)', 500, 3500, 10], ['click', 'Heel click', 0, 1.5, 0.01], ['thud', 'Thud', 0, 1.5, 0.01], ['grit', 'Grit', 0, 1, 0.01], ['scuff', 'Scuff: level', 0, 1, 0.01], ['scuffChance', 'Scuff: chance a step', 0, 1, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
+  'step.grass': [['thud', 'Thud', 0, 1.5, 0.01], ['brush', 'Swish', 0, 1.5, 0.01], ['swish', 'Rustle after (share)', 0, 1, 0.01], ['stems', 'Stems ticking', 0, 1, 0.01], ['len', 'Swish length (s)', 0.03, 0.4, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
+  'step.cobble': [['thud', 'Thud (110-450 Hz)', 0, 1.5, 0.01], ['knock', 'Knock (250-600 Hz)', 0, 1.5, 0.01], ['mid', 'Body (0.5-2 kHz)', 0, 0.5, 0.005], ['sub', 'Low thump (45-90 Hz)', 0, 1, 0.01], ['len', 'Thud length (s)', 0.008, 0.08, 0.001], ['click', 'Heel click', 0, 1, 0.01], ['grit', 'Grit', 0, 0.5, 0.005], ['sand', 'Scuff and grit under the sole', 0, 0.2, 0.002], ['scuff', 'Scuff: level', 0, 1, 0.01], ['scuffChance', 'Scuff: chance a step', 0, 1, 0.01], ['toe', 'Toe level (×)', 0.2, 1.5, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'step.snow': [['crunch', 'Crunch', 0, 1.5, 0.01], ['squeak', 'Squeak', 0, 1, 0.01], ['thud', 'Thud', 0, 1.5, 0.01], ['len', 'Crunch length (s)', 0.05, 0.4, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'step.sand': [['thud', 'Thud', 0, 1.5, 0.01], ['hiss', 'Grains hiss', 0, 1.5, 0.01], ['slide', 'Slide', 0, 1, 0.01], ['len', 'Length (s)', 0.05, 0.5, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
-  'step.dirt': [['thud', 'Thud', 0, 1.5, 0.01], ['gravel', 'Gravel', 0, 1, 0.01], ['grit', 'Grit', 0, 1, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
+  'step.dirt': [['crunch', 'Crunch grains a second', 0, 1500, 10], ['grit', 'Grit bed', 0, 1, 0.01], ['gravel', 'Stones ticking', 0, 1, 0.01], ['pops', 'Pebbles popping', 0, 5, 0.05], ['len', 'Crunch length (s)', 0.04, 0.4, 0.005], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'step.wood': [['plankHz', 'Plank pitch (Hz)', 80, 600, 1], ['ring', 'Plank ring (s)', 0.01, 0.3, 0.005], ['knock', 'Knock', 0, 1.5, 0.01], ['thud', 'Thud', 0, 1.5, 0.01], ['creak', 'Board creak: level', 0, 1, 0.01], ['creakChance', 'Board creak: chance a step', 0, 1, 0.01], ['gap', 'Heel to toe gap (×)', 0.3, 2, 0.01]],
   'hit.flesh': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms; longer is duller)', 1, 12, 0.1], ['wet', 'Wet', 0, 1.5, 0.01], ['fur', 'Fur and hide', 0, 1, 0.01], ['blade', 'Blade slice', 0, 1.5, 0.01]],
   'hit.padded': [['bodyHz', 'Body pitch (Hz)', 40, 250, 1], ['bodyMs', 'Contact length (ms)', 1, 12, 0.1], ['slap', 'Leather slap', 0, 1.5, 0.01], ['cloth', 'Cloth', 0, 1.5, 0.01], ['blade', 'Blade tearing cloth', 0, 1.5, 0.01]],
