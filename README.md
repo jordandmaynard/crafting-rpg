@@ -760,6 +760,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v918:** (Jordan: bottles in the backpack should react to dragging the backpack again, as well as to walking) Moving the pack's window now pushes the potions in its squares the way walking does: the window's move on screen (times T > Potion bottles' Dragging the pack window: push, default 1, 0 off) is added to their input, and the bottles go live while it moves and settle back to their icons after. Hotbar bottles still feel only the walk; the gold pouch still swings from its own rivet.
 
+**v919:** (Jordan: a variable to turn the bag's swing off entirely) T > Gold pouch > Swing: on (1) or off (0). Off, the pouch hangs still at its rest angle; the coins inside still feel the rivet's moves.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
