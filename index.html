@@ -1444,7 +1444,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 883;
+const GAME_VERSION = 884;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9815,6 +9815,26 @@ G.snowSkirt = (() => {
   g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
   return g;
 })();
+// (v884) the wall plants' pieces (wallPlants), each facing +z, one-sided (built pieces cull back faces):
+// a heart-shaped leaf, its two lobes at the top, its point at the bottom, folded back from a midrib that stands out
+G.ivyLeaf = (() => {
+  const g = new GFX.BufferGeometry(), Nn = [0, 0.3, 0.03], LT = [-0.28, 0.5, -0.05], L = [-0.48, 0.08, -0.07], Tp = [0, -0.5, 0.04], R = [0.48, 0.08, -0.07], RT = [0.28, 0.5, -0.05];
+  g.setAttribute('position', new GFX.Float32BufferAttribute([...Nn, ...LT, ...L, ...Nn, ...L, ...Tp, ...Nn, ...Tp, ...R, ...Nn, ...R, ...RT], 3));
+  return g;
+})();
+// a bougainvillea flower: three papery bracts round a raised middle, cupped
+G.bract = (() => {
+  const g = new GFX.BufferGeometry(), pos = [], p = t => [0.5 * Math.cos(t), 0.5 * Math.sin(t), -0.08];
+  for (let q = 0; q < 3; q++) { const t = Math.PI / 2 + q * Math.PI * 2 / 3; pos.push(0, 0, 0.06, ...p(t - 0.55), ...p(t + 0.55)); }
+  g.setAttribute('position', new GFX.Float32BufferAttribute(pos, 3));
+  return g;
+})();
+// a hanging stem: a thin flat ribbon, its foot at -y
+G.ribbon = (() => {
+  const g = new GFX.BufferGeometry();
+  g.setAttribute('position', new GFX.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3));
+  return g;
+})();
 const GP = new Map();
 for (const k in G) GP.set(G[k], (G[k].index ? G[k].toNonIndexed() : G[k]).attributes.position.array);
 // drop a primitive into the current buffer, posed and tinted
@@ -16131,6 +16151,7 @@ function wallPieceRaw(c, r, w, type, cut) {
     const sk = PCUT / (2 * SNN) * SNN, inner = roomOf.has(sk + i) && roomOf.has(sk + j);
     if (St === STONE_SAND) { if (!cut && !PDY && !(inner && BANK_WALLS.has(edgeKey(c, r, w)))) desertBand(c, r, w, y, at, ry); }   // (v649: the belt course, no crenels; v725: none round a bank's strongroom)
     else if (!cut && !inner) for (const a of [0.2, 0.8]) { const p = at(a, y + top + 0.1); part(G.box, shade(CC(St.crenel), k), p[0], p[1], p[2], { sx: 0.3, sy: 0.2, sz: 0.34, ry }); }
+    if (type === 4 && !inner) wallPlants(c, r, w, y, at, cut, St);   // (v884: ivy or bougainvillea grown over some)
     return;
   }
   if (cut) {
@@ -16174,6 +16195,97 @@ function wallPieceRaw(c, r, w, type, cut) {
 }
 // The timber walls' look (v414): plaster, the dark oak of the beams, how thick they are, and the braces (T > Walls)
 const TIMBER = { plaster: '#d9cba8', beam: '#4a3020', width: 0.09, braces: 1, pairs: 0.4 };   // (braces: share of walls with a diagonal; pairs: share of those with two)
+// (v884, Jordan) Plants grown over rock walls (type 4), picked at random by the wall's spot, built or a town's alike:
+// ivy over grey (and dark) stone, bougainvillea over sandstone. Each is a curtain of little 3D leaves (G.ivyLeaf) or
+// flowers (G.bract) hung off the wall's outer face(s), thick in a band along the top and thinning out down strands
+// of different lengths. Every leaf's spot is hashed from a lattice fixed in the world along the wall's line, the same
+// number of columns and strands to a tile, so two plant walls side by side run on as one. A wall stacked on another
+// (stories) carries the plant on down from the top of the stack. They go into the wall's own triangles (buildMat,
+// SURF 0: no bevel), so they're lowered by the cutaway, hidden with their story, cast shadows and stay out of GI
+// (wallGI's cut). T > Wall plants.
+const WALL_PLANTS = {
+  ivy: 0.25, boug: 0.25,          // (share of grey stone / sandstone rock walls that get one)
+  length: 0.8,                    // (how far down the longest strands reach, share of the wall (stack) height)
+  band: 0.5,                      // (the thick band along the top, tiles)
+  strands: 6, columns: 10,        // (strands hanging down, and leaves across the band, per tile)
+  leaf: 1,                        // (leaf / flower size, times)
+  ivyLeaf: '#3d7430', ivyNew: '#79a83e', ivyStem: '#4a5228',
+  bougFlower: '#d0206a', bougLeaf: '#3f6a2a',
+};
+// the edge's value on story k (0 none)
+const edgeValAt = (c, r, w, k) => k ? ((UP[k] && (w ? UP[k].WW : UP[k].WN).get(T(c, r))) || 0) : (w ? WW : WN)[T(c, r)];
+// which faces a rock wall's plant hangs on: its outside, or both where neither side is known as in (s: -1 / 1 along
+// the wall's normal axis, as windowOutside)
+function plantSides(c, r, w) {
+  const o = windowOutside(c, r, w);
+  return o ? [o] : [-1, 1];
+}
+function wallPlants(c, r, w, y, at, cut, St) {
+  const WP = WALL_PLANTS, sand = St === STONE_SAND, share = sand ? WP.boug : WP.ivy;
+  // (picked by the edge alone, not its story, so a stack of rock walls is all grown over or not at all)
+  if (share <= 0 || hs(c * 3 + w, r * 7 + 1, 884) >= share) return;
+  const k = Math.round(PDY / WALL_H), same = kk => edgeValAt(c, r, w, kk) === 4 && (stoneOf(c, r, w, kk) === STONE_SAND) === sand;
+  let k0 = k, k1 = k;
+  while (k0 > 0 && same(k0 - 1)) k0--;
+  while (k1 < STORY_MAX && same(k1 + 1)) k1++;
+  const TOP = WALL_H - 0.12, yTop = y + (k1 - k) * WALL_H + TOP, H = yTop - (y - (k - k0) * WALL_H);
+  // (this story's share of the curtain: up to the next story's foot, or the top; only the stub's height when cut)
+  const lo = y, hi = cut ? y + CUT_H : k < k1 ? y + WALL_H : yTop + 0.1;
+  const L = WP.leaf, band = Math.min(WP.band, H), reach = Math.max(band, H * WP.length);
+  const nC = Math.max(1, Math.round(WP.columns)), nS = Math.max(1, Math.round(WP.strands));
+  const along0 = w ? r : c, line = (w ? c : r) * 2 + w;
+  const cLeaf = CC(sand ? WP.bougLeaf : WP.ivyLeaf), cNew = CC(sand ? WP.bougLeaf : WP.ivyNew), cFlower = CC(WP.bougFlower), cStem = CC(sand ? '#5a4630' : WP.ivyStem);
+  // (clear of the wall's face: the sandstone's belt and cap stand further out)
+  const face = sand ? 0.21 : 0.17, capOut = sand && !k ? 0.1 : 0;
+  const saveE = emitSurf, saveS = SURF;
+  emitSurf = null; SURF = 0;
+  try {
+    for (const s of plantSides(c, r, w)) {
+      const ry = Math.atan2(w ? s : 0, w ? 0 : s), salt = 885 + (s > 0 ? 7 : 0);
+      const put = (geo, col, a, yy, o, sx, sy, spin, tilt) => {
+        if (yy < lo || yy >= hi) return;
+        const p = at(a, yy); p[w ? 0 : 2] += s * o;
+        dummy.position.set(p[0], p[1], p[2]); dummy.rotation.set(tilt, ry, spin, 'YXZ'); dummy.scale.set(sx, sy, sx); dummy.updateMatrix();
+        emitPart(geo, col, 'world');
+        dummy.rotation.set(0, 0, 0, 'XYZ');
+      };
+      const out = yy => face + (yTop - yy < 0.16 ? capOut : 0);
+      // a leaf (or, on sandstone, mostly flowers), sized and lit by its two hashes, leaning out and facing a little up
+      const bloom = (a, yy, h1, h2, depth, young) => {
+        const sz = 0.13 * L * (0.8 + h1 * 0.4) * (young ? 0.82 : 1), spin = (h2 - 0.5) * 1.1, tilt = -0.3 - h1 * 0.45;
+        if (sand && h2 < 0.72) put(G.bract, shade(cFlower, 0.78 + h1 * 0.4), a, yy, out(yy) + depth, sz * 1.05, sz * 1.05, h1 * 6.3, tilt);
+        else put(G.ivyLeaf, shade(young ? cNew : cLeaf, 0.8 + h2 * 0.35), a, yy, out(yy) + depth, sz * (sand ? 0.7 : 1), sz, spin, tilt);
+      };
+      // the band along the top: rows of leaves, two deep, thinning a little toward its foot
+      const dy = 0.068 * L, rows = Math.ceil(band / dy);
+      for (let q = 0; q < rows; q++) for (let j = 0; j < nC; j++) {
+        const g = along0 * nC + j, h1 = hs(g, line * 31 + q, salt), h2 = hs(g + 0.5, line * 17 + q, salt + 1), h3 = hs(g, line * 13 + q * 3, salt + 2);
+        const f = q / rows;
+        if (h3 > 1 - f * 0.3) continue;
+        const a = (j + 0.5 + (h1 - 0.5) * 0.8) / nC, yy = yTop - 0.035 - q * dy + (h2 - 0.5) * dy * 0.9;
+        bloom(a, yy, h1, h2, 0.04 + (q + j) % 2 * 0.035 + (1 - f) * 0.02, false);
+      }
+      // the strands hanging down from it, each its own length, a leaf every step, alternating sides, sparser to the tip
+      const step = 0.075 * L;
+      for (let j = 0; j < nS; j++) {
+        const g = along0 * nS + j, h = hs(g, line * 7, salt + 3), h4 = hs(g + 0.25, line * 5, salt + 4);
+        const a0 = (j + 0.5 + (h - 0.5) * 0.6) / nS, len = band + (reach - band) * Math.pow(h4, 0.7), y0 = yTop - band * 0.55, y1 = yTop - len;
+        const sway = yy => a0 + Math.sin(yy * 3.1 + h * 6.3) * 0.025;
+        // (its stem, in short runs, only on the strand's bare lower reach)
+        for (let yy = y0; yy > y1 + 1e-3; yy -= 0.24) {
+          const yb = Math.max(y1, yy - 0.24), ym = (yy + yb) / 2, da = sway(yb) - sway(yy);
+          put(G.ribbon, cStem, sway(ym), ym, out(ym) + 0.035, 0.022, Math.hypot(da, yy - yb), Math.atan2(da, yy - yb) * (w ? -s : s), 0);
+        }
+        let n = 0;
+        for (let yy = y0; yy > y1; yy -= step, n++) {
+          const t = (y0 - yy) / Math.max(0.01, y0 - y1), h1 = hs(g, line * 3 + n, salt + 5), h2 = hs(g + 0.75, line * 11 + n, salt + 6);
+          if (h1 < t * 0.35) continue;
+          bloom(sway(yy) + (n % 2 ? 0.03 : -0.03), yy, h1, h2, 0.05 + (n % 2) * 0.02, t > 0.85);
+        }
+      }
+    }
+  } finally { emitSurf = saveE; SURF = saveS; }
+}
 // The windows (v373; wider in v414, the glass nearly to the posts). Glass is a pale blue-green pane behind lead or timber bars.
 const GLASS = '#8fbccc';
 // How glass is drawn (v377, Jordan: not see-through, but seeming to let light in). windowMat lights both faces as the
@@ -34920,6 +35032,20 @@ const TUNING = [
     [TIMBER, 'pairs', 'Of those, share with a mirrored pair', 0, 1, 0.01, redrawPieces],
     [SHUTTER, 'open', 'Shutters open (degrees from shut)', 0, 175, 1, redrawPieces],
   ]],
+  ['Wall plants', [
+    [WALL_PLANTS, 'ivy', 'Ivy: share of grey stone rock walls grown over', 0, 1, 0.01, redrawPieces],
+    [WALL_PLANTS, 'boug', 'Bougainvillea: share of sandstone rock walls grown over', 0, 1, 0.01, redrawPieces],
+    [WALL_PLANTS, 'length', 'Longest strands reach down (share of the wall height)', 0, 1, 0.01, redrawPieces],
+    [WALL_PLANTS, 'band', 'Thick band along the top (tiles)', 0, 1.9, 0.01, redrawPieces],
+    [WALL_PLANTS, 'columns', 'Leaves across the band, per tile', 3, 20, 1, redrawPieces],
+    [WALL_PLANTS, 'strands', 'Strands hanging down, per tile', 1, 14, 1, redrawPieces],
+    [WALL_PLANTS, 'leaf', 'Leaf and flower size (times)', 0.5, 2, 0.01, redrawPieces],
+    [WALL_PLANTS, 'ivyLeaf', 'Ivy leaf colour', 'color', 0, 0, redrawPieces],
+    [WALL_PLANTS, 'ivyNew', 'Ivy young leaves (strand tips)', 'color', 0, 0, redrawPieces],
+    [WALL_PLANTS, 'ivyStem', 'Ivy stems', 'color', 0, 0, redrawPieces],
+    [WALL_PLANTS, 'bougFlower', 'Bougainvillea flowers', 'color', 0, 0, redrawPieces],
+    [WALL_PLANTS, 'bougLeaf', 'Bougainvillea leaves', 'color', 0, 0, redrawPieces],
+  ]],
   ['Slate roofs', [
     [SLATE, 'bump', 'Slate relief on timber houses\' roofs (0 off)', 0, 3, 0.01],
     [SLATE, 'row', 'Row height (tiles)', 0.06, 0.4, 0.01],
@@ -35693,6 +35819,28 @@ window.GAME = {
   turnStairs: () => { stairTurn = (stairTurn + 1) & 3; return stairTurn; },
   // (tests) a wall piece's triangles, drawn at (c, r) with no story: positions and colours, for a picture of it
   glassInfo: (c, r) => { const ch = chunks.get(Math.floor(r / CH) * NC + Math.floor(c / CH)); if (!ch) return null; const n = m => m ? m.geometry.attributes.position.count : 0; return { build: n(ch.build), glass: n(ch.glass), gi: ch.buildGI ? ch.buildGI.attributes.position.count : null, glassCast: ch.glass ? ch.glass.castShadow : null, glass1: n(ch.glass1), up1: n(ch.up1), inScene: ch.glass ? !!ch.glass.parent : null }; },
+  // (v884) the rock walls (every story), how many are grown over, and the vertices: walls alone vs with their plants
+  wallPlants: () => {
+    const out = { rock: 0, sand: 0, ivy: 0, boug: 0, wallVerts: 0, plantVerts: 0 }, save = OUT, sv = { ...WALL_PLANTS }, b = new BuildBuf();
+    OUT = b;
+    try {
+      for (let k = 0; k <= STORY_MAX; k++) {
+        PDY = k * WALL_H; PCUT = k * 2 * SNN;
+        const edges = k ? [...[0, 1].flatMap(w => [...(w ? UP[k].WW : UP[k].WN)].map(([i, v]) => [i, w, v]))] : [];
+        if (!k) for (let i = 0; i < N * N; i++) { if (WN[i]) edges.push([i, 0, WN[i]]); if (WW[i]) edges.push([i, 1, WW[i]]); }
+        for (const [i, w, v] of edges) {
+          if (v !== 4) continue;
+          const c = i % N, r = (i - c) / N, sand = stoneOf(c, r, w, k) === STONE_SAND;
+          out[sand ? 'sand' : 'rock']++;
+          WALL_PLANTS.ivy = WALL_PLANTS.boug = 0; b.n = 0; wallPiece(c, r, w, 4); const n0 = b.n;
+          WALL_PLANTS.ivy = sv.ivy; WALL_PLANTS.boug = sv.boug; b.n = 0; wallPiece(c, r, w, 4); const n1 = b.n;
+          out.wallVerts += n0 / 3; out.plantVerts += (n1 - n0) / 3;
+          if (n1 > n0) out[sand ? 'boug' : 'ivy']++;
+        }
+      }
+    } finally { OUT = save; PDY = 0; PCUT = 0; Object.assign(WALL_PLANTS, sv); }
+    return out;
+  },
   wallTris: (c, r, w, type) => { const b = new Buf(), save = OUT; OUT = b; try { wallPiece(c, r, w, type); } finally { OUT = save; } return { p: Array.from(b.p.subarray(0, b.n)), c: Array.from(b.c.subarray(0, b.n)) }; },
   storyGrid: () => ({ on: !!gridMesh, verts: gridMesh ? gridMesh.geometry.attributes.position.count : 0, y: gridMesh ? +gridMesh.geometry.attributes.position.array[1].toFixed(2) : null }),
   // (tests) put a name on the place plate and report the size it was fitted at
