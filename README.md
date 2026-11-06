@@ -772,6 +772,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v924:** Jordan's Gold pouch tuning as defaults: peekHold 1.25.
 
+**v925:** (Jordan: the gold pouch swung the wrong way when walking; walking left should swing it right) The walk now moves the pouch's rivet the way the hero goes, as dragging the window does, so the bag lags behind: walk left and it swings right. (It had used the pack potions' push as is, which is the walk reversed.)
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
