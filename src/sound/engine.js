@@ -17,7 +17,7 @@ import { hashStr, clamp } from './dsp.js';
 
 export const SOUND_MIX = {
   engine: 1,       // 1: the new sounds where there are any; 0: the old beeps everywhere (to compare)
-  master: 1.6,     // everything
+  master: 1.2,     // everything
   steps: 0.45,     // each group's level
   combat: 0.9,
   work: 0.85,
@@ -33,13 +33,13 @@ export const SOUND_MIX = {
   pan: 0.75,       // how far a sound at the screen's edge is panned
   variety: 1,      // × each recipe's random re-pitching
   voices: 40,      // sounds at once, at most
-  lowCut: 35,      // Hz: the mic chain's low cut
+  lowCut: 20,      // Hz: the mic chain's low cut
   drive: 0.05,     // saturation mixed in (0 none, 1 all of it)
   presence: 0,   // dB at 3.5 kHz, a mic's presence lift
   airShelf: -2,    // dB above 11 kHz (a mic's gentle top roll-off)
   glue: 1,         // 1: the glue compressor on
-  threshold: -18,  // glue compressor threshold (dB) and ratio
-  ratio: 2.5,
+  threshold: -6,  // glue compressor threshold (dB) and ratio
+  ratio: 2,
 };
 
 const LAB_KEY = 'emberwild.soundLab';
@@ -84,16 +84,17 @@ export class SoundEngine {
     this.legacySend = g(M.legacyRoom);
     this.legacyIn.connect(this.legacySend); this.legacySend.connect(this.wetIn);
     // the mic chain
-    this.lowCut = A.createBiquadFilter(); this.lowCut.type = 'highpass'; this.lowCut.Q.value = 0.6;
+    this.lowCut = A.createBiquadFilter(); this.lowCut.type = 'highpass'; this.lowCut.Q.value = 0.707;
     this.satDry = g(); this.satWet = g(); this.shaper = A.createWaveShaper(); this.shaper.oversample = '2x';
     this.shaper.curve = satCurve(2.4, 0.08);
     this.presence = A.createBiquadFilter(); this.presence.type = 'peaking'; this.presence.frequency.value = 3500; this.presence.Q.value = 0.8;
     this.airShelf = A.createBiquadFilter(); this.airShelf.type = 'highshelf'; this.airShelf.frequency.value = 11000;
-    this.comp = A.createDynamicsCompressor(); this.comp.knee.value = 12; this.comp.attack.value = 0.008; this.comp.release.value = 0.2;
+    this.comp = A.createDynamicsCompressor(); this.comp.knee.value = 6; this.comp.attack.value = 0.03; this.comp.release.value = 0.25;
     this.compBy = g(); this.compOut = g();
     this.limiter = A.createDynamicsCompressor(); this.limiter.threshold.value = -1.5; this.limiter.knee.value = 0; this.limiter.ratio.value = 20; this.limiter.attack.value = 0.002; this.limiter.release.value = 0.12;
     this.out = g();
-    this.bus.connect(this.lowCut);
+    // (v897) the volume goes in before the chain, so the limiter is the last word (it was after: loud enough, it clipped)
+    this.bus.connect(this.out); this.out.connect(this.lowCut);
     this.lowCut.connect(this.satDry); const half = g(0.5); this.lowCut.connect(half); half.connect(this.shaper); this.shaper.connect(this.satWet);   // (the curve spans -2..2)
     const sum = g(); this.satDry.connect(sum); this.satWet.connect(sum);
     sum.connect(this.presence); this.presence.connect(this.airShelf);
@@ -102,7 +103,7 @@ export class SoundEngine {
     // copy summed with the undelayed one combed every sound (hollow, phasey: it read as wet)
     this.airShelf.connect(this.comp); this.comp.connect(this.compOut); this.compOut.connect(this.limiter);
     this.airShelf.connect(this.compBy); this.compBy.connect(this.limiter);
-    this.limiter.connect(this.out); this.out.connect(A.destination);
+    this.limiter.connect(A.destination);
     this.mix();
     // the renders
     // (if the worker can't start, or dies, what it still owed is rendered here instead)

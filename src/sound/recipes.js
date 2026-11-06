@@ -38,11 +38,11 @@ function heelToe(k, P, one, sec) {
 // the tree tuning (SOUND_TUNING.tree), so the lab's sliders move all three together.
 const TREE_HEFT = {
   L: { hz: 1.45, bounce: 0.3, crack: { spread: 0.2, grains: 0.8 }, tear: { sec: 2.2, level: 0.7, snaps: 0.6, bed: 0.5, lo: 500, hi: 10000, groan: 0.15, rumble: 0, early: 0.35 }, rush: null,
-    crash: { sec: 0.7, level: 0.55, snap: 1, thudHz: 170, thudTau: 0.04, ring: 0.06, grains: 0.8, spread: 0.07, rumble: 0.1, rumbleTau: 0.08, settle: 0.4, hits: [[0, 1]] } },
+    crash: { sec: 0.7, level: 0.55, snap: 1, body: 0.8, thudHz: 170, thudTau: 0.04, ring: 0.06, grains: 0.8, spread: 0.07, rumble: 0.1, rumbleTau: 0.08, settle: 0.4, hits: [[0, 1]] } },
   M: { hz: 1, bounce: 1, crack: { spread: 0.24, grains: 1 }, tear: { sec: 2.4, level: 1, snaps: 1, bed: 1, lo: 250, hi: 9000, groan: 1, rumble: 1 }, rush: { len: 0.7, level: 1 },
-    crash: { sec: 1.4, level: 1, thudHz: 110, thudTau: 0.16, ring: 0.25, grains: 1, spread: 0.13, rumble: 1, rumbleTau: 0.26, settle: 1, hits: [[0, 1]] } },
+    crash: { sec: 1.4, level: 1, body: 1.4, thudHz: 110, thudTau: 0.16, ring: 0.25, grains: 1, spread: 0.13, rumble: 1, rumbleTau: 0.26, settle: 1, hits: [[0, 1]] } },
   H: { hz: 0.72, bounce: 1, crack: { spread: 0.32, grains: 1.3 }, tear: { sec: 2.8, level: 1.1, snaps: 1.3, bed: 1.2, lo: 200, hi: 9000, groan: 1.4, rumble: 1.5 }, rush: { len: 1, level: 0.35 },
-    crash: { sec: 2, level: 1.1, snap: 0.25, thudHz: 85, thudTau: 0.22, ring: 0.35, grains: 1, spread: 0.3, rumble: 1.3, rumbleTau: 0.3, settle: 4, settleGain: 0.2, hits: [[0, 0.55], [0.05, 0.85], [0.13, 1]] } },
+    crash: { sec: 2, level: 1.1, snap: 0.25, body: 0.9, thudHz: 85, thudTau: 0.22, ring: 0.35, grains: 1, spread: 0.3, rumble: 1.3, rumbleTau: 0.3, settle: 4, settleGain: 0.2, hits: [[0, 0.55], [0.05, 0.85], [0.13, 1]] } },
 };
 // the crack as it gives: a hard knock into the trunk's partials and a burst of splinters
 const treeCrack = (H) => ({ n: 4, render(k, P) {
@@ -83,6 +83,8 @@ const treeCrash = (H) => ({ n: 4, render(k, P) {
   for (const [at, lv] of C.hits) {
     const t0 = at * k.r(0.8, 1.2);
     k.add(out, thud(k, C.thudHz, C.thudTau, sec - t0), lv, t0);
+    // (v897) the body of the blow: the ground and trunk thumping in the 90-250 Hz band (the recordings' punch)
+    k.add(out, k.norm(k.decay(k.hp(k.lp(k.lp(k.brown(sec - t0), 260), 260), 80), 0.07 + 0.05 * H.crash.level, 0.002)), C.body * lv, t0);
     k.add(out, strike(k, 0.006, k.modes(k.near(P.trunkHz * H.hz, 0.12), WOOD, C.ring, { damp: 0.7, tilt: 0.5, scatter: 0.08 }), sec - t0, { grit: 0.5, bounces: 2, spread: 0.01 }), 0.8 * lv, t0);
     k.add(out, k.norm(k.decay(k.lp(k.white(0.2), 9000), 0.025, 0.0006)), (C.snap ?? 0.45) * lv, t0);
   }
