@@ -152,7 +152,8 @@ export class SpikeRecorder {
       (this.holding ? btn('resume', 'Resume game') : '') + (this.spikes.length ? btn('clear', 'Clear') : '') + '</div>';
     if (!this.on && !this.spikes.length) {
       return h + `<div class="gnote">On: frames over ${SPIKE_TUNING.ms} ms of CPU are kept, with every call's time` +
-        `${SPIKE_TUNING.pause >= 0.5 ? ', and the game stops on one' : ''} (T > Spike capture).</div>`;
+        `${SPIKE_TUNING.pause >= 0.5 ? ', and the game stops on one' : ''} (T > Spike capture). It stays on with this panel closed and ` +
+        'from one load to the next, so it catches the first frames after loading; a spike opens the panel.</div>';
     }
     h += '<div class="spike-list">' + this.spikes.map((s, i) =>
       `<button data-spike="show" data-i="${i}" class="${s === this.shownSpike ? 'on' : ''}">${s.ms.toFixed(0)} ms · ${clockText(s.clock)}</button>`).join('') + '</div>';

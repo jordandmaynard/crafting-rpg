@@ -1482,7 +1482,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 926;
+const GAME_VERSION = 927;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -36293,6 +36293,13 @@ const spikes = new GFX.SpikeRecorder();
 prof.spikes = spikes;
 // the objects whose calls spike capture times (the game's own functions are timed by update's sections)
 spikes.sources = () => [[renderer, 'renderer'], [gi, 'gi probes'], [haze, 'lit haze'], [eye, 'eye'], [bloom, 'bloom'], [groundHaze, 'ground haze'], [caustics, 'caustics']];
+// (v927, Jordan: spikes on first load were over before the panel could be opened) spike capture stays on with the
+// panel closed and from one load to the next (kept in localStorage), so it's on from the first frame; a spike kept
+// while the panel's closed opens it at the spike (see frameBody). Frames under the veil aren't kept (its streaming
+// runs on a big budget on purpose, VEIL.budget).
+const SPIKE_KEY = 'emberwild.spikeCapture';
+const saveSpikeOn = () => { try { localStorage.setItem(SPIKE_KEY, spikes.on ? '1' : '0'); } catch (e) {} };
+try { if (localStorage.getItem(SPIKE_KEY) === '1') spikes.toggle(); } catch (e) {}
 // (v436) G > Split world: the world pass drawn in parts by what they're made of, a row each (costs a little itself)
 const PROF_SPLIT = { world: false };
 // (v769: each part's filter made once, so the renderer's recorded draw list for it is kept from frame to frame)
@@ -36341,13 +36348,21 @@ spikePanel.addEventListener('click', e => {
   const b = e.target.closest('[data-spike]');
   if (!b) return;
   spikes.click(b);
+  if (b.dataset.spike === 'toggle') saveSpikeOn();
   showSpikes();
 });
 function toggleProfiler() {
   const on = prof.toggle();
   profPanel.hidden = !on;
   if (on) { profLive.innerHTML = '<div class="ptitle">Measuring…</div>'; showSpikes(); }
-  else if (spikes.on) spikes.toggle();   // (closed: nothing timed)
+  // (v927: spike capture carries on while it's closed; it's turned off by its own button)
+}
+// a spike kept: the panel opened (if it's closed) at the spike capture, unfolded
+function showSpikeOpen() {
+  if (profPanel.hidden) toggleProfiler();
+  if (prof.folded.has('Spike capture')) prof.fold('Spike capture');
+  showSpikes();
+  profPanel.scrollTop = Math.max(0, spikePanel.offsetTop - 8);
 }
 $('gpuBtn').addEventListener('click', e => { toggleProfiler(); e.currentTarget.blur(); });
 $('gpuClose').addEventListener('click', e => { e.stopPropagation(); if (!profPanel.hidden) toggleProfiler(); e.currentTarget.blur(); });
@@ -36527,8 +36542,9 @@ function frameBody(now) {
       for (const k in WN) prof.count('recorded again: ' + WN[k], W[k] || 0); I.why = {}; }
     I.submits = 0; I.canvases = 0; I.upKB = 0; I.tWalk = 0; I.tShadow = 0; I.tRender = 0; I.replayed = 0; I.recorded = 0; }
   prof.frame(frameStart, now, profLive, `World built in ${(genMs / 1000).toFixed(1)} s. GPU rows are each pass's time; "scene" rows by what's drawn.`);
-  spikes.end(performance.now() - frameStart, now, [dayNum, clock]);
-  if (spikes.changed && !profPanel.hidden) showSpikes();
+  const kept = spikes.end(veilBusy() ? 0 : performance.now() - frameStart, now, [dayNum, clock]);
+  if (kept && (profPanel.hidden || document.body.classList.contains('noUI'))) showSpikeOpen();
+  else if (spikes.changed && !profPanel.hidden) showSpikes();
 }
 // The error box: the first time each error comes up, its message and where it happened (the top of its stack) are
 // shown top middle, with a COPY button, so it can be passed on from a browser with no console to hand
