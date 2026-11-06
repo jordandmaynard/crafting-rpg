@@ -1475,7 +1475,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 917;
+const GAME_VERSION = 918;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -20914,7 +20914,7 @@ addEventListener('resize', setDpr);
 // T > Potion bottles.
 const POTION_FX = { fill: 0.8, inset: 10, soft: 0.5, persp: 0.25, mid: 0.79, contrast: 2.7, shade: 0.57, light: 0.39, depth: 0.32,
   surface: 0.7, rim: 2, front: 0.8, gleam: 0.94, slosh: 1.8, spring: 124, damp: 6.5, maxTilt: 0.63, wave: 1.8, bubbles: 2,
-  walkPush: 60, walkBob: 4 };   // (v748, Jordan's tuning)
+  walkPush: 60, walkBob: 4, dragPush: 1 };   // (v748, Jordan's tuning; v918 dragPush: the pack window dragged)
 const POTION_TINT = { red: '#e10e27', purple: '#aa20c5', green: '#10e525', blue: '#0951e1', amber: '#fdb435', clear: '#a8ddf5' };   // (v744, Jordan's colours and names)
 // (v751, Jordan) potions are thrown, not drunk: put a stack on the hotbar, pick its square and click; it flies to the
 // cursor in an arc and breaks there, letting its effect out over the spot. POTION_THROW: the throw (cd: seconds before
@@ -21127,7 +21127,7 @@ function potionRedo() {
 // 'hot'). One frame loop runs them all.
 const potionMats = {}, POTION_ACT = { give: 0, redraw: 0, greens: 0 };
 const POTION_LIVE = new Set();
-const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0 };
+const potionPack = { x: 0, y: 0, hx: null, hz: null, phase: 0, busy: 0, wx: 0, wy: 0, wl: null, wt: null, wbusy: 0 };
 let potionDragS = null;
 const potionState = () => ({ x: null, y: null, vx: 0, vy: 0, ax: 0, ay: 0, tilt: 0, tv: 0, amp: 0, phase: 0, bub: [], calm: false, lv: null });
 // (v767, Jordan: the slosh cost more CPU than the whole lit haze march) the liquid is painted on the GPU: POTION_WGSL is
@@ -21411,18 +21411,30 @@ function potionTickBody(now) {
     pk.x -= sx * F.walkPush; pk.y -= sy * F.walkPush * 0.5;
     if (H.moving) { pk.phase = H.walkPhase; pk.busy = 1.5; } else pk.busy = Math.max(0, pk.busy - dt);
     pk.bob = H.moving ? Math.abs(Math.sin(pk.phase)) * F.walkBob : 0;
-    // every potion showing in the pack (and on the hotbar) sloshes while you walk
-    if (pk.busy > 0 && (F.walkPush > 0 || F.walkBob > 0)) {
+    // (v918, Jordan) the pack's window dragged about: its move on screen (x POTION_FX.dragPush) pushes the pack's
+    // potions too, as the walk does (pk.wx/wy, added only for the pack's squares, not the hotbar's)
+    const ig = invOpen && F.dragPush > 0 ? $('invGroup') : null, ir = ig ? ig.getBoundingClientRect() : null;
+    if (ir && ir.width) {
+      const mx = pk.wl === null ? 0 : ir.left - pk.wl, my = pk.wt === null ? 0 : ir.top - pk.wt;
+      if (Math.hypot(mx, my) < 300 && (mx || my)) { pk.wx += mx * F.dragPush; pk.wy += my * F.dragPush; pk.wbusy = 1; }
+      pk.wl = ir.left; pk.wt = ir.top;
+    } else { pk.wl = pk.wt = null; }
+    pk.wbusy = Math.max(0, pk.wbusy - dt);
+    // every potion showing in the pack (and on the hotbar) sloshes while you walk, and the pack's while it's dragged
+    const packBusy = (pk.busy > 0 && (F.walkPush > 0 || F.walkBob > 0)) || pk.wbusy > 0;
+    if (packBusy) {
       if (invOpen) for (const el of document.querySelectorAll('#inv .cell[data-cell^="pack:"] img[data-potion]')) {
         const sel = `#inv .cell[data-cell="${el.closest('.cell').dataset.cell}"]`;
         potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, true);
       }
-      if (hotOn) for (const el of document.querySelectorAll('#hotbar .hslot[data-hot] img[data-potion]')) {
+      if (hotOn && pk.busy > 0) for (const el of document.querySelectorAll('#hotbar .hslot[data-hot] img[data-potion]')) {
         const sel = `.hslot[data-hot="${el.closest('.hslot').dataset.hot}"]`;
         potionLiveAt(potionSel(sel, el.dataset.potion), el.dataset.potion, null, 'hot');
       }
     }
-  } else { pk.hx = null; pk.busy = 0; pk.bob = 0; }
+  } else { pk.hx = null; pk.busy = 0; pk.bob = 0; pk.wl = pk.wt = null; pk.wbusy = 0; }
+  // (a pack square's push: the walk's, and the window's own moves)
+  const pushX = (home) => pushed(home) ? pk.x + (home === 'hot' ? 0 : pk.wx) : 0, pushY = (home) => pushed(home) ? pk.y - (pk.bob || 0) + (home === 'hot' ? 0 : pk.wy) : 0;
   for (const S of [...POTION_LIVE]) {
     if (S.drag) {
       if (drag.hidden || !S.cv.isConnected) {
@@ -21434,7 +21446,7 @@ function potionTickBody(now) {
           if (sel) {
             const L = potionLiveAt(potionSel(sel, S.kind), S.kind, S.st, sel.includes('pack:') || (sel.startsWith('.hslot') && 'hot'));
             // (its anchor takes off the pack's push as it stands now, so the push it starts feeling doesn't jump)
-            if (L) { const push = pushed(L.home); L.anchor = [S.st.x - (push ? pk.x : 0), S.st.y - (push ? pk.y - (pk.bob || 0) : 0)]; }
+            if (L) L.anchor = [S.st.x - pushX(L.home), S.st.y - pushY(L.home)];
           }
         }
         continue;
@@ -21453,8 +21465,8 @@ function potionTickBody(now) {
     }
     if (!S.anchor) S.anchor = [0, 0];
     const push = pushed(S.home);
-    const settled = potionStep(S, S.anchor[0] + (push ? pk.x : 0), S.anchor[1] + (push ? pk.y - (pk.bob || 0) : 0), dt);
-    if (settled && !(push && pk.busy > 0)) {
+    const settled = potionStep(S, S.anchor[0] + pushX(S.home), S.anchor[1] + pushY(S.home), dt);
+    if (settled && !(push && (pk.busy > 0 || (S.home !== 'hot' && pk.wbusy > 0)))) {
       // settled: back to its icon
       POTION_LIVE.delete(S);
       const t = document.createElement('template'); t.innerHTML = ICON['potion_' + S.kind];
@@ -34935,6 +34947,7 @@ const TUNING = [
     [POTION_FX, 'wave', 'Dragging: bounce of the wave on top', 0, 3, 0.05],
     [POTION_FX, 'bubbles', 'Dragging: bubbles when shaken (0 off)', 0, 3, 0.05],
     [POTION_FX, 'walkPush', 'Walking with the pack open: push (screen px a tile walked, 0 off)', 0, 300, 1],
+    [POTION_FX, 'dragPush', 'Dragging the pack window: push (x its move on screen, 0 off)', 0, 3, 0.05],
     [POTION_FX, 'walkBob', 'Walking with the pack open: bob on each step (px)', 0, 20, 0.5],
   ]],
   ['Thrown potions', [

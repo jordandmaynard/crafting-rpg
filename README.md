@@ -758,6 +758,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v917:** (Jordan sent the pouch's back shell without the front lip, and the pack's hint line was under the pouch) ui/pouch/pouch-back.webp is now Jordan's lipless back shell (art/deliveries/gold-pouch-back-shell-no-lip.png), on the same crop and size as the front, its colour fitted to the old baked back (brightness 0.874, contrast 1.490, saturation 0.522; the new painting is lighter than the old one). The coins' walls and the mouse-over test come from its outline, so they follow the new shape. The pack's hint line (#invInfo: the click / drag hint, what's under the mouse, the gold) now sits just above the belt's centre piece, left aligned with its left edge, growing upward, at the HUD's scale; with the belt hidden (touch, Hide UI) it goes to the bottom left.
 
+**v918:** (Jordan: bottles in the backpack should react to dragging the backpack again, as well as to walking) Moving the pack's window now pushes the potions in its squares the way walking does: the window's move on screen (times T > Potion bottles' Dragging the pack window: push, default 1, 0 off) is added to their input, and the bottles go live while it moves and settle back to their icons after. Hotbar bottles still feel only the walk; the gold pouch still swings from its own rivet.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
