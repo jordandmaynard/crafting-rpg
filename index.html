@@ -1473,7 +1473,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 915;
+const GAME_VERSION = 916;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -21488,6 +21488,7 @@ const POUCH = { x: 27, y: 672, neckX: 199, neckY: 127, scale: 0.45, front: 1, re
   len: 255, grav: 7750, damp: 2.1, maxSwing: 36, walk: 1, fade: 0.12, spring: 272, springPow: 4.75,
   peek: 1, peekAmount: 0.85, peekIn: 0.15, peekHold: 1, peekOut: 0.6,   // (v915: the front fading as gold comes in)
   goldX: 215, goldY: 360, goldIcon: 140, goldNum: 84, goldStroke: 9, goldGap: -6, goldColor: '#f7cf4f',   // (v913: the gold count on its front, art px)
+  dropFrom: 120, dropSpeed: 0, dropFade: 60, passBelow: 30,   // (v916: new coins fall in from above the neck, fading in, passing through it)
   perGold: 1, most: 250, drop: 30, size: 27.5, thick: 0.28, depth: 102, hit: 0.54, wall: 29.5, coinGrav: 0.55, shake: 1,
   friction: 4, spin: 0.005, spinDamp: 10.8, settle: 0,
   tilt: 14, lightX: -0.5, lightY: -0.85, lightZ: 0.6, amb: 0.13, diffuse: 0.78, spec: 3.65, gloss: 61, shine: 0.44, back: 0.2,
@@ -21550,7 +21551,7 @@ function pouchRandQ() {
 }
 // a coin: where (x, y across and down the bag's picture, z toward you), where it was a step ago, its turn and spin
 function pouchCoin(x, y, z) {
-  return { x, y, z, ox: x, oy: y, oz: z, q: pouchRandQ(), w: [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8],
+  return { x, y, z, ox: x, oy: y, oz: z, q: pouchRandQ(), in: false, w: [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8],
     nx: 0, ny: 0, nz: 0, hit: false, tone: Math.random() };
 }
 // a place for a new coin: dropped in at the neck, or (quietly, the bag shut) anywhere low in the bag with room
@@ -21564,7 +21565,17 @@ function pouchSpawn(drop) {
     if (t < 79 && pouch.coins.some(c => (c.x - x) ** 2 + (c.y - y) ** 2 + (c.z - z) ** 2 < 3.6 * rc * rc)) continue;
     return pouchCoin(x, y, z);
   }
-  return pouchCoin(P.neckX + (Math.random() - 0.5) * 40, P.neckY + 40 + Math.random() * 20, (Math.random() - 0.5) * 16);
+  // (v916, Jordan) dropped: from P.dropFrom above the neck, already falling at P.dropSpeed; it fades in over the last
+  // P.dropFade before the neck and goes through it (and the other coins) till P.passBelow under it, so they don't heap at the top
+  const k = pouchCoin(P.neckX + (Math.random() - 0.5) * 30, P.neckY - Math.max(0, P.dropFrom) - Math.random() * 20, (Math.random() - 0.5) * 16);
+  k.in = true; k.oy = k.y - Math.max(0, P.dropSpeed) * POUCH_STEP;
+  return k;
+}
+// how much of a coin shows: falling in, faded by how near the neck it's come; otherwise all of it
+function pouchCoinAlpha(k) {
+  if (!k.in) return 1;
+  const f = Math.max(1, POUCH.dropFade), t = clamp((k.y - (POUCH.neckY - f)) / f, 0, 1);
+  return t * t * (3 - 2 * t);
 }
 // one step of the coins (h s): a the rivet's pull (bag px/s², on screen), phi/om/al the bag's turn, its rate and its
 // change of rate
@@ -21575,8 +21586,16 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
   // gravity less the rivet's pull, turned into the bag's frame
   const sx = -ax * sk, sy = g - ay * sk, gx = sx * c + sy * s, gy = -sx * s + sy * c, h2 = h * h;
   let most = 0;
+  const pass = P.neckY + Math.max(0, P.passBelow);
   for (const k of C) {
+    if (k.in && k.y > pass) k.in = false;
     const vx = k.x - k.ox, vy = k.y - k.oy, vz = (k.z - k.oz) * 0.98;
+    if (k.in) {
+      // (falling in: straight down the bag's length, so it comes through the neck however the bag's swinging)
+      k.ox = k.x; k.oy = k.y; k.oz = k.z;
+      k.x += vx * 0.98; k.y += vy * 0.9995 + g * h2; k.z += vz;
+      k.nx = k.ny = k.nz = 0; k.hit = false; continue;
+    }
     const rx = k.x - P.neckX, ry = k.y - P.neckY, ux = vx / h, uy = vy / h;
     // the bag's turning: -al J r + om² r - 2 om J v (J r = (-ry, rx))
     const fx = gx + sk * (al * ry + om * om * rx + 2 * om * uy), fy = gy + sk * (-al * rx + om * om * ry - 2 * om * ux);
@@ -21603,6 +21622,7 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
         if (cj < 0 || cj >= GW * GH) continue;
         for (let j = head[cj]; j >= 0; j = next[j]) {
           if (j <= i) continue;
+          if (a.in || C[j].in) continue;
           const b = C[j], dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z, d2 = dx * dx + dy * dy + dz * dz;
           if (d2 >= D2 || d2 < 1e-8) continue;
           const d = Math.sqrt(d2), p = (2 * rc - d) * 0.5 / d, px = dx * p, py = dy * p, pz = dz * p;
@@ -21612,6 +21632,7 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
       }
     }
     for (const k of C) {
+      if (k.in) continue;
       const ys = k.y * ct + k.z * st, dd = pouchD(k.x, ys) - wall;
       if (dd < rc) {
         let ex = pouchD(k.x + 1, ys) - pouchD(k.x - 1, ys), ey = pouchD(k.x, ys + 1) - pouchD(k.x, ys - 1);
@@ -21778,11 +21799,12 @@ function pouchReveal(el, dt) {
 }
 const POUCH_WGSL = /* wgsl */ `
 fn pqr(q: vec4f, v: vec3f) -> vec3f { let t = 2.0 * cross(q.xyz, v); return v + q.w * t + cross(q.xyz, t); }
-struct VOut { @builtin(position) pos: vec4f, @location(0) n: vec3f, @location(1) d: f32, @location(2) @interpolate(flat) tone: f32 }
+struct VOut { @builtin(position) pos: vec4f, @location(0) n: vec3f, @location(1) d: f32, @location(2) @interpolate(flat) tone: f32, @location(3) @interpolate(flat) al: f32 }
 @vertex fn vs(v: VIn) -> VOut {
   var o: VOut;
   let k = i32(v.ci + 0.5);
-  let a = U.cs[k * 2]; let q = U.cs[k * 2 + 1];
+  let a = U.cs[k * 3]; let q = U.cs[k * 3 + 1];
+  o.al = U.cs[k * 3 + 2].x;
   let th = max(U.shape.x, 0.02);
   // (a: where, its radius in w (0: no coin); q: its turn; the disc's axis is its y)
   let p = a.xyz + pqr(q, v.position * vec3f(a.w, a.w * th, a.w));
@@ -21808,7 +21830,7 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) n: vec3f, @location(1)
   let env = mix(0.12, 1.0, smoothstep(-0.3, 0.8, -R.y)) * U.look.z;
   var col = base * (U.lit.w + dif * U.look.w + env) + mix(base, vec3f(1.0), 0.35) * spec;
   col *= mix(U.shade.x, 1.0, i.d);
-  return vec4f(col, 1.0);
+  return vec4f(col, i.al);
 }`;
 // the coins' vertices: a twelve-sided disc of radius 1 (faces y = ±1, a bevel out to its rim), a block of them a coin
 function pouchGeo(cap) {
@@ -21844,9 +21866,9 @@ function pouchGpu(ui) {
   const P = POUCH, cv = $('pouchCoins'), C = pouch.coins;
   let G = pouch.gpu;
   if (!G) {
-    const U = { cs: { value: new Float32Array(POUCH_CAP * 8) }, view: { value: { x: 0, y: 0, z: 0, w: 0 } }, shape: { value: { x: 0, y: 0, z: 0, w: 0 } },
+    const U = { cs: { value: new Float32Array(POUCH_CAP * 12) }, view: { value: { x: 0, y: 0, z: 0, w: 0 } }, shape: { value: { x: 0, y: 0, z: 0, w: 0 } },
       lit: { value: { x: 0, y: 0, z: 0, w: 0 } }, look: { value: { x: 0, y: 0, z: 0, w: 0 } }, gold: { value: { x: 0, y: 0, z: 0, w: 0 } }, shade: { value: { x: 0, y: 0, z: 0, w: 0 } } };
-    const mat = new GFX.ShaderMaterial({ uniforms: U, attributes: { nrm: 'vec3f', ci: 'f32' }, side: GFX.DoubleSide, code: POUCH_WGSL });
+    const mat = new GFX.ShaderMaterial({ uniforms: U, attributes: { nrm: 'vec3f', ci: 'f32' }, side: GFX.DoubleSide, transparent: true, code: POUCH_WGSL });
     const mesh = new GFX.Mesh(new GFX.BufferGeometry(), mat); mesh.frustumCulled = false;
     const scene = new GFX.Scene(); scene.add(mesh);
     G = pouch.gpu = { U, mat, mesh, scene, cap: 0, tgt: renderer.canvasTarget(cv), cam: new GFX.OrthographicCamera(-1, 1, 1, -1, 0.1, 10) };
@@ -21859,7 +21881,7 @@ function pouchGpu(ui) {
   if (cv.width !== W || cv.height !== Hh) { cv.width = W; cv.height = Hh; }
   const cs = G.U.cs.value, n = Math.min(C.length, G.cap);
   cs.fill(0);
-  for (let i = 0; i < n; i++) { const c = C[i]; cs.set([c.x, c.y, c.z, P.size, c.q[0], c.q[1], c.q[2], c.q[3]], i * 8); }
+  for (let i = 0; i < n; i++) { const c = C[i]; cs.set([c.x, c.y, c.z, P.size, c.q[0], c.q[1], c.q[2], c.q[3], pouchCoinAlpha(c), 0, 0, 0], i * 12); }
   const t = P.tilt * Math.PI / 180, tv = clamp(P.tone, 0, 1) * (POUCH_GOLD.length - 1), i0 = Math.min(POUCH_GOLD.length - 2, Math.floor(tv));
   const g0 = POUCH_GOLD[i0], g1 = POUCH_GOLD[i0 + 1], f = tv - i0;
   Object.assign(G.U.view.value, { x: POUCH_W, y: POUCH_H, z: Math.cos(t), w: Math.sin(t) });
@@ -34813,6 +34835,10 @@ const TUNING = [
     [POUCH, 'perGold', 'Gold for each coin in the pouch', 0.1, 50, 0.1, applyPouch],
     [POUCH, 'most', 'Most coins in the pouch', 0, 300, 1, applyPouch],
     [POUCH, 'drop', 'Gold coming in while you look: coins dropped in a second', 1, 120, 1, applyPouch],
+    [POUCH, 'dropFrom', 'Coins coming in: start this far above the neck (art px)', 0, 600, 1, applyPouch],
+    [POUCH, 'dropSpeed', 'Coins coming in: already falling this fast (art px/s)', 0, 3000, 10, applyPouch],
+    [POUCH, 'dropFade', 'Coins coming in: fade in over this far, done at the neck (art px)', 0, 300, 1, applyPouch],
+    [POUCH, 'passBelow', 'Coins coming in: go through the neck and other coins till this far under it (art px)', 0, 300, 1, applyPouch],
     [POUCH, 'size', 'Coin radius (pouch art px)', 4, 40, 0.5, applyPouch],
     [POUCH, 'thick', 'Coin thickness (x radius, each side)', 0.04, 0.6, 0.01, applyPouch],
     [POUCH, 'depth', 'How far the coins spread front to back in the bag (art px)', 0, 200, 1, applyPouch],
