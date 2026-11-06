@@ -447,38 +447,43 @@ function boom(k, f0, f1, tau, sec) {
   for (let i = 0; i < b.length; i++) { const t = i / sr; ph += (f1 + (f0 - f1) * Math.exp(-t / (tau * 0.6))) / sr; b[i] = Math.sin(2 * Math.PI * ph) * Math.exp(-t / tau) * Math.min(1, t / 0.002); }
   return b;
 }
-// (v901) a lock opening, modelled on Jordan's reference (a door lock unlocking, its first second): the key or handle
-// working the mechanism, a run of small clicks (0, 46, 74, 92, 152 ms) building to the bolt's clack (188 ms, the
-// loudest), which rings ~60 ms and rattles off. All of it sounds through the lock's case in the door: a comb of
-// resonances on a ~123 Hz spacing from 340 Hz to ~2.2 kHz (mid and hard, not tinkly), with a few short steel partials
-// on top. Metal doors' is lower and heavier. P.lockGap stretches the timing, P.latchHz is the top of the steel.
-const LOCK_CLICKS = [[0, 0.18], [0.046, 0.45], [0.074, 0.35], [0.092, 0.85], [0.152, 0.8]];
+// (v901-902) a lock opening, modelled on Jordan's reference (a door lock unlocking, its first second) and reworked on
+// an independent judge's reading of it (v902): the key working the wards, a bright scrape running under a run of
+// short, bright clicks that grow louder (0, 19, 63, 93, 110, 171 ms), then the bolt's crack at 208 ms, the loudest:
+// a bright burst (2-10 kHz, ~15 ms) with a broad mid body and a few quick, sparse steel partials, no re-strike, then
+// a smooth mid-band decay (300-1500 Hz, -20 dB at 100 ms, -31 at 200 ms). Mostly shaped noise rather than tuned
+// resonances: tuned ones made it a wooden "tok". Metal doors' is lower and a little longer. P.lockGap stretches the
+// timing; P.latchHz is the top of the steel partials.
+const LOCK_CLICKS = [[0, 0.03], [0.019, 0.056], [0.063, 0.18], [0.093, 0.14], [0.110, 0.35], [0.171, 0.32]];
+function lockBurst(k, f, q, tau, len) { return k.norm(k.decay(k.bp(k.white(len), f, q), tau, 0.0003)); }
 function latchClick(k, P, metal) {
-  const sec = 0.55, out = k.buf(sec), f0 = k.near(metal ? 100 : 123, 0.06), g = P.lockGap;
-  const caseModes = (t60) => { const m = []; for (let n = 3; n <= 18; n++) m.push([f0 * n * k.r(0.985, 1.015), t60 * k.r(0.7, 1.3), Math.pow(n / 3, -0.5) * k.r(0.6, 1)]); return m; };
-  const steel = k.scatterModes(4, P.latchHz * 0.55, P.latchHz * 1.5, 0.015, 0.035, { drift: 0.002 });
-  // the mechanism's small clicks, each a short tick through the case
-  const ex = k.buf(sec);
-  const clickAt = LOCK_CLICKS.map(([t, lv]) => [t * g * k.r(0.88, 1.12), lv * k.r(0.75, 1.25)]);
-  for (let q = 0; q < 9; q++) clickAt.push([k.r(0, 0.18) * g, k.r(0.06, 0.25)]);   // (and the wards' smaller ticks among them)
-  for (const [t, lv] of clickAt) k.add(ex, k.contact(k.r(0.00008, 0.0002), { grit: 0.3, bounces: k.chance(0.5) ? 1 : 0, spread: 0.0008, len: 0.01 }), lv, t);
-  // the key working the wards between the clicks: a fine scrape
-  const sl = 0.19 * g, scrape = k.stickSlip(sl, (t) => 260 * (0.7 + 0.6 * Math.sin(t * 40)), (t) => 0.5 + 0.5 * Math.sin(Math.PI * clamp(t / sl, 0, 1)), { jitter: 0.6, sharp: 0.00006 });
-  k.add(ex, scrape, P.scrape * 0.12);
-  k.add(out, k.norm(k.bp(scrape.slice(), 4500, 0.7)), P.scrape * 0.06);
-  k.add(out, k.modal(ex, [...caseModes(0.05), ...steel], sec), 1);
-  // each click's bright edge (the steel's own snap, above the case's ring)
-  for (const [t, lv] of clickAt) k.add(out, k.norm(k.decay(k.bp(k.white(0.01), k.r(3000, 7000), 0.9), 0.0012, 0.0001)), lv * 1.3 * P.snap, t);
-  // the bolt's clack: harder, a bounce or two, ringing longer, a knock of the door under it
-  const tb = 0.188 * g * k.r(0.94, 1.06);
-  const bolt = k.contact(0.00025, { grit: 0.35, bounces: 2, spread: 0.0015, len: 0.02 });
-  k.add(out, k.modal(bolt, [...caseModes(metal ? 0.2 : 0.16), ...k.scatterModes(5, P.latchHz * 0.4, P.latchHz * 2.2, 0.03, 0.09, { drift: 0.002 })], sec - tb), 3.2, tb);
-  k.add(out, k.norm(k.decay(k.bp(k.white(0.02), k.r(3500, 6000), 0.7), 0.002, 0.0001)), 1.8 * P.snap, tb);
-  k.add(out, thud(k, metal ? 220 : 260, 0.015, sec - tb), metal ? 0.6 : 0.4, tb);
-  // and the parts settling after it: a few faint ticks
-  const tail = k.buf(sec - tb);
-  for (let q = 0; q < 16; q++) { const t = k.r(0.02, 0.33); k.add(tail, k.contact(0.0001, { grit: 0.3, bounces: 0, len: 0.005 }), 0.3 * Math.exp(-t / 0.2) * k.r(0.3, 1), t); }
-  k.add(out, k.modal(tail, [...caseModes(0.08), ...k.scatterModes(3, 2500, 6000, 0.01, 0.03)], sec - tb), P.rattle, tb);
+  const sec = 0.6, out = k.buf(sec), g = P.lockGap, lo = metal ? 0.75 : 1, hit = 0.208 * g * k.r(0.95, 1.05);
+  // the key scraping the wards: bright, uneven, under the clicks until the bolt goes
+  const scrape = k.mul(k.lp(k.lp(k.bp(k.white(hit), 2000 * lo, 0.7), 4500), 4500), k.wander(hit, 60, 0.8));
+  k.shape(scrape, (t) => (0.4 + 0.6 * t / hit) * Math.min(1, t / 0.01) * Math.min(1, (hit - t) / 0.005));
+  k.add(out, k.norm(scrape), P.scrape * 0.07);
+  // the clicks: short bright bursts (10-20 ms), louder toward the bolt
+  for (const [t, lv] of LOCK_CLICKS) {
+    const len = k.r(0.01, 0.02), at = t * g * k.r(0.92, 1.08);
+    k.add(out, lockBurst(k, k.r(1200, 2600) * lo, 0.8, len / 2.5, len * 1.5), lv * k.r(0.9, 1.1) * 0.75, at);
+    // (each with a little body: the plug and pins knocking in the case, damped)
+    k.add(out, lockBurst(k, k.r(300, 800) * lo, 1.6, 0.006, 0.04), lv * k.r(0.85, 1.1) * 0.8, at);
+    k.add(out, lockBurst(k, k.r(3500, 5000), 0.9, 0.0012, 0.01), lv * 0.12 * P.snap, at);
+    // (and the steel's ting, a narrow ring at 3.7-4.4 kHz: the reference's lead-in has it)
+    k.add(out, lockBurst(k, k.r(3700, 4400) * Math.sqrt(lo), 5, 0.004, 0.02), lv * 0.3 * P.snap, at);
+  }
+  // the bolt: a bright crack, a broad mid body, a few quick steel partials, the door knocking under it
+  k.add(out, k.norm(k.decay(k.lp(k.lp(k.hp(k.white(0.04), 1800), 6000), 6000), 0.004, 0.0002)), P.snap * 0.8, hit);
+  k.add(out, lockBurst(k, 1700 * lo, 0.6, 0.012, 0.06), 0.8, hit);
+  // (a low-mid clunk of the lock's case, not a sub thud)
+  k.add(out, lockBurst(k, 300 * lo, 1.2, 0.02, 0.12), 0.6, hit);
+  k.add(out, strike(k, 0.0002, k.scatterModes(5, 3000 * lo, P.latchHz * 2, 0.02, 0.06, { drift: 0.002 }), 0.2, { grit: 0.4, bounces: 0 }), 0.3, hit);
+  // the parts settling: a smooth mid-band decay with a few faint ticks in it
+  const tl = sec - hit, tail = k.decay(k.lp(k.lp(k.bp(k.white(tl), 650 * lo, 0.7), 1400), 1400), metal ? 0.09 : 0.075, 0.003);
+  for (let q = 0; q < 8; q++) { const t = k.r(0.02, 0.3); k.add(tail, lockBurst(k, k.r(800, 1800) * lo, 0.8, 0.001, 0.008), 0.12 * Math.exp(-t / 0.12) * k.r(0.3, 1), t); }
+  k.add(out, k.norm(tail), 0.35 * P.rattle, hit + 0.004);
+  k.hp(out, 140);
+  k.shape(out, (t) => Math.min(1, t / 0.005));
   return k.norm(out);
 }
 // a door shutting: a deep, short thud (a falling sine boom under a lowpassed thud and the 80-250 Hz body), the knock
@@ -513,8 +518,8 @@ export const SOUND_TUNING = {
   'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.25, blade: 0.22 },
   'hit.bone': { boneHz: 900, rattle: 0.35 },
   tree: { trunkHz: 65, crack: 1, crackGrains: 220, tear: 0.6, snaps: 20, bed: 0.6, groan: 0.7, rush: 1.2, crash: 1.4, crashGrains: 140, rumble: 0.6, bounce: 0.35, bounceAt: 0.14, heftShift: 0 },
-  'door.wood': { latch: 0.7, latchHz: 4000, lockGap: 1, scrape: 1.5, snap: 1, rattle: 1, slam: 1, slamAt: 0.21, boom: 0.9, thud: 0.8, body: 0.7, thudHz: 70, len: 0.09, knock: 0.2, panel: 0.35, panelHz: 95, panelRing: 0.05 },
-  'door.metal': { clank: 0.8, latchHz: 3200, lockGap: 1, scrape: 1.5, snap: 1, rattle: 1, slam: 1, slamAt: 0.2, slamGap: 0.07, boom: 0.7, thud: 0.5, body: 0.5, thudHz: 60, len: 0.1, knock: 0.25, ring: 1, ringHz: 320, ringDecay: 0.6, edge: 0.5 },
+  'door.wood': { latch: 0.7, latchHz: 4000, lockGap: 1, scrape: 1, snap: 1, rattle: 1, slam: 1, slamAt: 0.21, boom: 0.9, thud: 0.8, body: 0.7, thudHz: 70, len: 0.09, knock: 0.2, panel: 0.35, panelHz: 95, panelRing: 0.05 },
+  'door.metal': { clank: 0.8, latchHz: 3200, lockGap: 1, scrape: 1, snap: 1, rattle: 1, slam: 1, slamAt: 0.2, slamGap: 0.07, boom: 0.7, thud: 0.5, body: 0.5, thudHz: 60, len: 0.1, knock: 0.25, ring: 1, ringHz: 320, ringDecay: 0.6, edge: 0.5 },
 };
 // the tuning object a sound reads (doors share theirs between opening and shutting)
 export const tuneOf = (name) => SOUND_TUNING[SOUNDS[name].tune || name];
