@@ -768,6 +768,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v922:** Jordan's Gold pouch tuning as defaults: len 417, damp 4.85, maxSwing 107, spring 84, springPow 3.05, depth 130, coinGrip 0.1, bagFriction 8, bagGrip 0.6.
 
+**v923:** (Jordan: the fade in and out times weren't kept when gold came in) Fixed: the pouch's back shell and coins came after its front in the page and so drew over it, showing whole the moment the front began to fade (under the mouse too, where the 0.12 s fade hid it). The front and gold count are now stacked over the back and coins, so the peek's fade-out, hold and fade-back times (and the mouse-over cross-fade) show as set.
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
