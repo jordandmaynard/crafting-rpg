@@ -1475,7 +1475,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 920;
+const GAME_VERSION = 921;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -21497,17 +21497,17 @@ requestAnimationFrame(potionTick);
 // saturation 0.673. v910, Jordan: that's baked into the art now (no filter at run time), the cutaway layer is gone (the
 // front fades to the back shell), and Jordan's tuning is the default)
 // (v913: Jordan's tuning)
-const POUCH = { x: 46, y: 657.5, neckX: 199, neckY: 127, scale: 0.3, front: 1, rest: 0,
+const POUCH = { x: 46, y: 657.5, neckX: 199, neckY: 127, scale: 0.3, front: 1, rest: 1.5,
   floorY: 512, floorX: 230, floorBow: 20.9,   // (v909: the floor Jordan drew, art px: its lowest point, where, and how much higher 150 px either side)
   swing: 1, len: 563, grav: 3000, damp: 6.4, maxSwing: 18, walk: 1, fade: 0.12, spring: 272, springPow: 7.65,
   peek: 1, peekAmount: 0.85, peekIn: 0.15, peekHold: 1, peekOut: 0.6,   // (v915: the front fading as gold comes in)
   goldX: 215, goldY: 360, goldIcon: 140, goldNum: 84, goldStroke: 9, goldGap: -6, goldColor: '#f7cf4f',   // (v913: the gold count on its front, art px)
   dropFrom: 120, dropSpeed: 0, dropFade: 60, passBelow: 30,   // (v916: new coins fall in from above the neck, fading in, passing through it)
-  perGold: 1, most: 250, drop: 30, size: 27.5, thick: 0.28, depth: 154, hit: 0.54, wall: 29.5, coinGrav: 0.55, shake: 1,
-  friction: 4, spin: 0.005, spinDamp: 10.8, settle: 0,
+  perGold: 1, most: 300, drop: 30, size: 27.5, thick: 0.28, depth: 93, hit: 0.59, wall: 29.5, coinGrav: 0.25, shake: 1,
+  friction: 4.8, bagFriction: 12, bagGrip: 1, coinGrip: 0.3, spin: 0.016, spinDamp: 10.8, settle: 0,
   tilt: 14, lightX: -0.5, lightY: -0.85, lightZ: 0.6, amb: 0.13, diffuse: 0.78, spec: 3.65, gloss: 61, shine: 0.44, back: 0.2,
   tone: 0.6, toneVar: 0.08, res: 1 };
-const POUCH_W = 399, POUCH_H = 540, POUCH_CAP = 300, POUCH_STEP = 1 / 300, POUCH_SETTLE = 240, POUCH_SETTLE_FRAME = 12;
+const POUCH_W = 399, POUCH_H = 540, POUCH_SOFT = 0.3, POUCH_CAP = 300, POUCH_STEP = 1 / 300, POUCH_SETTLE = 240, POUCH_SETTLE_FRAME = 12;
 // the gold ramp the world's coin fountain uses (COIN_FX's 'gold'), for the coins' colour by POUCH.tone
 const POUCH_GOLD = ['#3a2204', '#6a420a', '#9a6612', '#c88e1e', '#e8b232', '#f6d058', '#fde69a', '#fff8dc'].map(h => new GFX.Color(h));
 const pouch = { phi: 0, w: 0, px: null, py: null, vx: 0, vy: 0, coins: [], drops: 0, dropT: 0, sdf: null, sdfBusy: false, gpu: null,
@@ -21565,8 +21565,8 @@ function pouchRandQ() {
 }
 // a coin: where (x, y across and down the bag's picture, z toward you), where it was a step ago, its turn and spin
 function pouchCoin(x, y, z) {
-  return { x, y, z, ox: x, oy: y, oz: z, q: pouchRandQ(), in: false, w: [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8],
-    nx: 0, ny: 0, nz: 0, hit: false, tone: Math.random() };
+  return { x, y, z, ox: x, oy: y, oz: z, q: pouchRandQ(), in: false, soft: 0, w: [(Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8, (Math.random() - 0.5) * 8],
+    nx: 0, ny: 0, nz: 0, hit: false, bx: 0, by: 0, bz: 0, bd: 0, cd: 0, bag: false, coin: false, tone: Math.random() };
 }
 // a place for a new coin: dropped in at the neck, or (quietly, the bag shut) anywhere low in the bag with room
 function pouchSpawn(drop) {
@@ -21602,20 +21602,23 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
   let most = 0;
   const pass = P.neckY + Math.max(0, P.passBelow);
   for (const k of C) {
-    if (k.in && k.y > pass) k.in = false;
+    // (v921: just through, it's eased apart from what it's in (the coin dropped before it, falling in the same line, is
+    // often still overlapping it) for POUCH_SOFT s, not knocked apart, which shot coins back up into the neck)
+    if (k.in && k.y > pass) { k.in = false; k.soft = POUCH_SOFT; }
+    if (k.soft > 0) k.soft -= h;
     const vx = k.x - k.ox, vy = k.y - k.oy, vz = (k.z - k.oz) * 0.98;
     if (k.in) {
       // (falling in: straight down the bag's length, so it comes through the neck however the bag's swinging)
       k.ox = k.x; k.oy = k.y; k.oz = k.z;
       k.x += vx * 0.98; k.y += vy * 0.9995 + g * h2; k.z += vz;
-      k.nx = k.ny = k.nz = 0; k.hit = false; continue;
+      k.nx = k.ny = k.nz = 0; k.hit = k.bag = k.coin = false; k.bx = k.by = k.bz = k.bd = k.cd = 0; continue;
     }
     const rx = k.x - P.neckX, ry = k.y - P.neckY, ux = vx / h, uy = vy / h;
     // the bag's turning: -al J r + om² r - 2 om J v (J r = (-ry, rx))
     const fx = gx + sk * (al * ry + om * om * rx + 2 * om * uy), fy = gy + sk * (-al * rx + om * om * ry - 2 * om * ux);
     k.ox = k.x; k.oy = k.y; k.oz = k.z;
     k.x += vx * 0.9995 + fx * h2; k.y += vy * 0.9995 + fy * h2; k.z += vz;
-    k.nx = k.ny = k.nz = 0; k.hit = false;
+    k.nx = k.ny = k.nz = 0; k.hit = k.bag = k.coin = false; k.bx = k.by = k.bz = k.bd = k.cd = 0;
   }
   const D2 = 4 * rc * rc, half = P.depth / 2, wall = P.wall;
   // (coin against coin looked up in a grid of cells a coin across, so only near ones are tried)
@@ -21639,9 +21642,9 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
           if (a.in || C[j].in) continue;
           const b = C[j], dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z, d2 = dx * dx + dy * dy + dz * dz;
           if (d2 >= D2 || d2 < 1e-8) continue;
-          const d = Math.sqrt(d2), p = (2 * rc - d) * 0.5 / d, px = dx * p, py = dy * p, pz = dz * p;
+          const d = Math.sqrt(d2), p = (2 * rc - d) * 0.5 / d * (a.soft > 0 || b.soft > 0 ? 0.08 : 1), px = dx * p, py = dy * p, pz = dz * p;
           a.x += px; a.y += py; a.z += pz; b.x -= px; b.y -= py; b.z -= pz;
-          a.nx += dx / d; a.ny += dy / d; a.nz += dz / d; b.nx -= dx / d; b.ny -= dy / d; b.nz -= dz / d; a.hit = b.hit = true;
+          a.nx += dx / d; a.ny += dy / d; a.nz += dz / d; b.nx -= dx / d; b.ny -= dy / d; b.nz -= dz / d; a.hit = b.hit = a.coin = b.coin = true; a.cd += p * d; b.cd += p * d;
         }
       }
     }
@@ -21653,23 +21656,45 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
         const l = Math.hypot(ex, ey) || 1; ex /= l; ey /= l;
         const p = rc - dd;
         k.x += ex * p; k.y += ey * p / ct;
-        k.nx += ex; k.ny += ey; k.hit = true;
+        k.nx += ex; k.ny += ey; k.bx += ex; k.by += ey; k.bd += p; k.hit = k.bag = true;
       }
       // (v909, Jordan's line) the bag's floor as painted: level front to back (sloped, the coins would all slide to the
       // back), set so a coin at the very front, seen from the tilt, comes down to the line and no lower
       const fu = (k.x - P.floorX) / 150, fl = (P.floorY - P.floorBow * fu * fu - rc - half * st) / ct;
-      if (k.y > fl) { k.y = fl; k.ny -= 1; k.hit = true; }
+      if (k.y > fl) { k.bd += k.y - fl; k.y = fl; k.ny -= 1; k.by -= 1; k.hit = k.bag = true; }
       // front to back: the full depth in the middle, closing in toward the outline
       const zl = Math.max(0, half * Math.min(1, Math.sqrt(Math.max(0, dd) / Math.max(1, half))));
-      if (k.z > zl) { k.z = zl; k.nz -= 1; k.hit = true; } else if (k.z < -zl) { k.z = -zl; k.nz += 1; k.hit = true; }
+      if (k.z > zl) { k.bd += k.z - zl; k.z = zl; k.nz -= 1; k.bz -= 1; k.hit = k.bag = true; } else if (k.z < -zl) { k.bd += -zl - k.z; k.z = -zl; k.nz += 1; k.bz += 1; k.hit = k.bag = true; }
     }
   }
-  const fr = 1 - Math.exp(-P.friction * h), sd = Math.exp(-P.spinDamp * h);
+  const fr = 1 - Math.exp(-P.friction * h), fb = Math.exp(-Math.max(0, P.bagFriction) * h), sd = Math.exp(-P.spinDamp * h);
+  const bg = Math.max(0, P.bagGrip), cg = Math.max(0, P.coinGrip), gripY = P.neckY + Math.max(0, P.passBelow);
   for (const k of C) {
     const vx = k.x - k.ox, vy = k.y - k.oy, vz = k.z - k.oz, w = k.w;
-    most = Math.max(most, Math.abs(vx) + Math.abs(vy) + Math.abs(vz));
     if (k.hit) {
-      k.ox += vx * fr; k.oy += vy * fr; k.oz += vz * fr;
+      // (v921, Jordan: the heap never settled, turning over like convection) friction apart: coin on coin
+      // (P.friction, as before) and against the bag (P.bagFriction, slowing the slide along it); and gripping (static
+      // friction, the way position-based solvers do it): a step's slide shorter than P.bagGrip x how hard it was pressed
+      // into the bag (how far it was pushed back out) is taken back and stopped, so it holds on a slope up to atan(grip)
+      // (1: 45°) and the coins at the sides can't creep up; P.coinGrip the same among coins (0 off). Nothing grips above
+      // the neck (past it by passBelow), so a coin knocked up there falls back in
+      let ux = vx, uy = vy, uz = vz;
+      if (k.coin) { ux *= 1 - fr; uy *= 1 - fr; uz *= 1 - fr; }
+      if (k.bag) {
+        const bl = Math.hypot(k.bx, k.by, k.bz);
+        if (bl > 1e-6) {
+          const nx = k.bx / bl, ny = k.by / bl, nz = k.bz / bl, vn = ux * nx + uy * ny + uz * nz;
+          let tx = ux - vn * nx, ty = uy - vn * ny, tz = uz - vn * nz;
+          if (k.y > gripY && Math.hypot(tx, ty, tz) < bg * k.bd) {
+            // (gripped: this step's slide along the bag taken back too, so gravity can't creep it on a step at a time)
+            k.x -= tx; k.y -= ty; k.z -= tz; tx = ty = tz = 0;
+          } else { tx *= fb; ty *= fb; tz *= fb; }
+          ux = tx + vn * nx; uy = ty + vn * ny; uz = tz + vn * nz;
+        }
+      }
+      if (k.coin && k.y > gripY && Math.hypot(ux, uy, uz) < cg * k.cd) { k.x -= ux; k.y -= uy; k.z -= uz; ux = uy = uz = 0; }
+      k.ox = k.x - ux; k.oy = k.y - uy; k.oz = k.z - uz;
+      most = Math.max(most, Math.abs(ux) + Math.abs(uy) + Math.abs(uz));
       const l = Math.hypot(k.nx, k.ny, k.nz);
       if (l > 1e-6) {
         const nx = k.nx / l, ny = k.ny / l, nz = k.nz / l, sp = P.spin / h;
@@ -21682,7 +21707,7 @@ function pouchCoinStep(h, ax, ay, phi, om, al) {
         const kk = P.settle * h * (ex * nx + ey * ny + ez * nz < 0 ? -1 : 1);
         w[0] += (ey * nz - ez * ny) * kk; w[1] += (ez * nx - ex * nz) * kk; w[2] += (ex * ny - ey * nx) * kk;
       }
-    }
+    } else most = Math.max(most, Math.abs(vx) + Math.abs(vy) + Math.abs(vz));
     const dmp = k.hit ? sd * sd : sd;
     w[0] *= dmp; w[1] *= dmp; w[2] *= dmp;
     // turn by its spin
@@ -34879,7 +34904,10 @@ const TUNING = [
     [POUCH, 'floorBow', 'Floor: how much higher it is 150 art px either side', -60, 120, 0.5, applyPouch],
     [POUCH, 'coinGrav', "Coins: gravity (x the swing's)", 0.1, 3, 0.05, applyPouch],
     [POUCH, 'shake', "Coins: how much the bag's moves throw them about", 0, 4, 0.05, applyPouch],
-    [POUCH, 'friction', 'Coins: friction where they touch (per s)', 0, 30, 0.1, applyPouch],
+    [POUCH, 'friction', 'Coins: friction coin on coin (per s)', 0, 30, 0.1, applyPouch],
+    [POUCH, 'coinGrip', 'Coins: grip among coins (static friction: holds on a slope up to atan of it, 0 off)', 0, 5, 0.05, applyPouch],
+    [POUCH, 'bagFriction', 'Coins: friction against the bag, along it (per s)', 0, 100, 0.5, applyPouch],
+    [POUCH, 'bagGrip', 'Coins: grip on the bag (static friction: holds on a slope up to atan of it, 1 = 45°, 0 off)', 0, 5, 0.05, applyPouch],
     [POUCH, 'spin', 'Coins: tumble from their knocks', 0, 0.1, 0.001, applyPouch],
     [POUCH, 'spinDamp', 'Coins: how soon tumbling dies down (per s)', 0, 20, 0.1, applyPouch],
     [POUCH, 'settle', 'Coins: how hard they turn to lie flat on what they rest on', 0, 60, 0.5, applyPouch],

@@ -764,6 +764,8 @@ The pixel map fills the 1224×700 opening, drawn at the screen's own pixels. The
 
 **v920:** Jordan's Gold pouch tuning as defaults: x 46, y 657.5, scale 0.3, len 563, grav 3000, damp 6.4, maxSwing 18, springPow 7.65, depth 154.
 
+**v921:** (Jordan: his Gold pouch tuning; the coins never settled, the ones on top pushing down the middle and the ones at the sides creeping up, like convection; friction with the bag should be settable apart from coin on coin) Jordan's tuning as defaults (rest 1.5, most 300, depth 93, hit 0.59, coinGrav 0.25, friction 4.8, spin 0.016). Friction is now split: T > Gold pouch's Coins: friction coin on coin (the old friction), friction against the bag (bagFriction 12, slowing a slide along the bag), and grip, a static friction done the way position-based solvers do it: a step's slide shorter than the grip times how hard the coin was pressed in is taken back, so a coin holds on a slope up to atan(grip). Grip on the bag 1 (45°), grip among coins 0.3; nothing grips above the neck, so a coin knocked up there falls back in. Headless, a shaken heap of 300 now comes to rest in a second or two where it used to keep turning over. Also: a coin just through the neck is eased apart from coins it overlaps for 0.3 s instead of knocked apart (the coin dropped before it, falling in the same line, often overlapped it and shot it back up into the neck).
+
 **v669:** (Jordan's tuning) Picture: contrast 1.15 (was 1).
 
 **v668:** (Jordan) The cathedral's marble arcade columns stand CATH.colOut (0.25) back under the gallery, so their capitals no longer stick out past its edge.
