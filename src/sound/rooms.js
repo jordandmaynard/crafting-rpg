@@ -10,13 +10,13 @@
 import { Kit, clamp } from './dsp.js';
 
 export const ROOMS = {
-  open: { label: 'Open ground', pre: 0.003, er: [2, 0.004, 0.012, 0.45], tail: 0.12, rtLo: 0.8, rtHi: 0.3, start: 0.07, dark: 2500, len: 1.1, wet: 0.22 },
-  forest: { label: 'Forest', pre: 0.004, er: [14, 0.008, 0.07, 0.32], tail: 0.45, rtLo: 1.0, rtHi: 0.45, start: 0.02, dark: 3800, len: 1.4, wet: 0.32 },
-  street: { label: 'Town street', pre: 0.006, er: [7, 0.015, 0.2, 0.55], tail: 0.4, rtLo: 1.3, rtHi: 0.7, start: 0.035, dark: 5000, len: 1.7, wet: 0.32 },
-  snow: { label: 'Snowfield (deadened)', pre: 0.004, er: [2, 0.005, 0.02, 0.18], tail: 0.1, rtLo: 0.45, rtHi: 0.18, start: 0.03, dark: 2200, len: 0.7, wet: 0.14 },
-  woodRoom: { label: 'Wooden room', pre: 0.001, er: [12, 0.002, 0.018, 0.55], tail: 0.6, rtLo: 0.5, rtHi: 0.3, start: 0.006, dark: 6000, len: 0.9, wet: 0.42, boxy: [240, 4] },
-  stoneRoom: { label: 'Stone room', pre: 0.002, er: [12, 0.003, 0.026, 0.55], tail: 0.75, rtLo: 1.1, rtHi: 0.8, start: 0.008, dark: 8000, len: 1.5, wet: 0.5, boxy: [320, 2] },
-  hall: { label: 'Stone hall (cathedral)', pre: 0.012, er: [16, 0.015, 0.09, 0.45], tail: 1, rtLo: 3.2, rtHi: 2.2, start: 0.02, dark: 7000, len: 3.8, wet: 0.65 },
+  open: { label: 'Open ground', pre: 0.003, er: [2, 0.004, 0.01, 0.3], tail: 0.03, rtLo: 0.5, rtHi: 0.2, start: 0.06, dark: 2500, len: 0.6, wet: 0.08 },
+  forest: { label: 'Forest', pre: 0.004, er: [6, 0.006, 0.04, 0.22], tail: 0.06, rtLo: 0.5, rtHi: 0.22, start: 0.02, dark: 3000, len: 0.7, wet: 0.09 },
+  street: { label: 'Town street', pre: 0.006, er: [4, 0.012, 0.08, 0.3], tail: 0.06, rtLo: 0.6, rtHi: 0.3, start: 0.03, dark: 4000, len: 0.8, wet: 0.1 },
+  snow: { label: 'Snowfield (deadened)', pre: 0.004, er: [1, 0.005, 0.015, 0.15], tail: 0.02, rtLo: 0.3, rtHi: 0.12, start: 0.03, dark: 2000, len: 0.4, wet: 0.05 },
+  woodRoom: { label: 'Wooden room', pre: 0.001, er: [8, 0.002, 0.012, 0.35], tail: 0.12, rtLo: 0.3, rtHi: 0.16, start: 0.005, dark: 4500, len: 0.5, wet: 0.12, boxy: [240, 2] },
+  stoneRoom: { label: 'Stone room', pre: 0.002, er: [8, 0.003, 0.016, 0.35], tail: 0.18, rtLo: 0.5, rtHi: 0.3, start: 0.006, dark: 5500, len: 0.7, wet: 0.14, boxy: [320, 1] },
+  hall: { label: 'Stone hall (cathedral)', pre: 0.012, er: [12, 0.015, 0.08, 0.4], tail: 0.8, rtLo: 2.4, rtHi: 1.4, start: 0.02, dark: 5000, len: 3, wet: 0.4 },
 };
 
 // the impulse response of a room: [left, right] Float32Arrays at sr

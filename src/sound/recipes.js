@@ -49,14 +49,14 @@ export const SOUNDS = {
         k.add(out, strike(k, P.bodyMs / 1000, k.modes(base, WOOD, P.trunkRing, { damp: 0.75, tilt: 0.35, scatter: 0.07 }), sec, { grit: 0.35, bounces: 1, spread: 0.0015 }), 1);
         k.add(out, thud(k, 260, 0.03, sec), P.thud);
         const cr = k.bp(k.pink(0.08), k.r(1500, 2400), 0.8);
-        k.add(out, k.norm(k.decay(k.mul(cr, k.wander(0.08, 220, 0.9)), 0.018, 0.0008)), P.crunch, 0.001);
+        k.add(out, k.norm(k.decay(k.mul(cr, k.wander(0.08, 90, 0.4)), 0.014, 0.0008)), P.crunch, 0.001);
         return out;
       } },
       // splinters: a few tiny ringing ticks and grit, thinning out over a tenth of a second
       debris: { n: 8, render(k, P) {
         const out = k.buf(0.2);
         k.grains(out, { count: Math.round(P.splinters), t0: 0.003, spread: 0.12, lo: 1600, hi: 6000, dur: [0.0015, 0.005], kind: 'ping', pow: 2, clump: 0.35 });
-        k.grains(out, { count: Math.round(P.splinters * 1.5), t0: 0.002, spread: 0.08, lo: 2000, hi: 8000, q: 1.2, dur: [0.0004, 0.0015], pow: 2.5, gain: 0.7 });
+        k.grains(out, { count: Math.round(P.splinters * 0.8), t0: 0.002, spread: 0.06, lo: 1800, hi: 5000, q: 1.2, dur: [0.0006, 0.002], pow: 2.5, gain: 0.35 });
         return k.norm(out);
       } },
       // the canopy shivering after the blow: a rustle of leaves that swells and settles
@@ -88,7 +88,7 @@ export const SOUNDS = {
         return heelToe(k, P, (k, s) => {
           const out = k.buf(0.2);
           k.add(out, thud(k, 240, 0.022, 0.15), P.thud * s);
-          k.grains(out, { count: Math.round(70 * s), t0: 0.002, spread: P.len, lo: 1800, hi: 7000, q: 0.7, dur: [0.002, 0.01], pow: 1.6, gain: P.swish * s, clump: 0.15 });
+          k.grains(out, { count: Math.round(40 * s), t0: 0.002, spread: P.len, lo: 1500, hi: 5000, q: 0.8, dur: [0.003, 0.012], pow: 1.6, gain: P.swish * s, clump: 0.15 });
           k.grains(out, { count: Math.round(6 * s), t0: 0.004, spread: 0.06, lo: 1600, hi: 4200, dur: [0.001, 0.003], kind: 'ping', pow: 2, gain: P.stems * s });
           return out;
         }, 0.32);
@@ -129,7 +129,7 @@ export const SOUNDS = {
         return heelToe(k, P, (k, s) => {
           const len = P.len, out = k.buf(len + 0.06);
           // the crust giving under the boot: a dense, clumped crackle, swelling then settling
-          k.grains(out, { count: Math.round(150 * s), t0: 0.003, spread: len, density: (u) => Math.pow(Math.sin(Math.PI * u), 0.7), lo: 500, hi: 3200, q: 2, dur: [0.0007, 0.003], pow: 2, clump: 0.5, gain: P.crunch * s });
+          k.grains(out, { count: Math.round(110 * s), t0: 0.003, spread: len, density: (u) => Math.pow(Math.sin(Math.PI * u), 0.7), lo: 500, hi: 2600, q: 2, dur: [0.0007, 0.003], pow: 2, clump: 0.5, gain: P.crunch * s });
           // cold snow's squeak: a few small tonal pings
           k.grains(out, { count: Math.round(10 * s), t0: 0.01, spread: len * 0.8, lo: 900, hi: 1900, dur: [0.002, 0.006], kind: 'ping', pow: 1.5, gain: P.squeak * s, density: (u) => Math.sin(Math.PI * u) });
           k.add(out, thud(k, 200, 0.035, len), P.thud * s);
@@ -147,7 +147,7 @@ export const SOUNDS = {
           const len = P.len, out = k.buf(len + 0.06);
           k.add(out, thud(k, 220, 0.028, len), P.thud * s);
           // dry grains shifting: a fine hiss of very small grains, quick to start and slow to settle
-          k.grains(out, { count: Math.round(240 * s), t0: 0.002, spread: len, lo: 2800, hi: 8000, q: 1, dur: [0.0005, 0.0025], pow: 1.8, gain: P.hiss * s, clump: 0.25 });
+          k.grains(out, { count: Math.round(150 * s), t0: 0.002, spread: len, lo: 2200, hi: 5500, q: 1, dur: [0.0008, 0.003], pow: 1.8, gain: P.hiss * s, clump: 0.25 });
           // the foot sliding a little as the sand gives
           const sl = k.filter(k.pink(len), 'bp', (t) => 2600 - 1500 * t / len, 0.9);
           k.env(sl, [[0, 0], [0.02, 1], [len * 0.7, 0.3], [len, 0]]);
@@ -212,12 +212,12 @@ export const SOUNDS = {
       wet: { n: 8, render(k, P) {
         const out = k.buf(0.18);
         let t = 0;
-        for (let j = 0, m = 2 + Math.floor(k.r(0, 3)); j < m; j++) {
-          const d = k.r(0.004, 0.011), b = k.decay(k.bp(k.white(d * 5), k.r(600, 1600), k.r(2, 4)), d, 0.0008);
+        for (let j = 0, m = 1 + Math.floor(k.r(0, 2)); j < m; j++) {
+          const d = k.r(0.004, 0.009), b = k.decay(k.bp(k.white(d * 5), k.r(450, 1000), k.r(1.2, 2)), d, 0.0008);
           k.add(out, k.norm(b), k.r(0.5, 1) / (1 + j * 0.4), t);
           t += k.r(0.004, 0.014);
         }
-        k.add(out, k.norm(k.decay(k.lp(k.pink(0.15), 900), 0.04, 0.001)), 0.5);
+        k.add(out, k.norm(k.decay(k.lp(k.pink(0.15), 800), 0.022, 0.001)), 0.3);
         k.grains(out, { count: 30, t0: 0, spread: 0.05, lo: 2000, hi: 6500, q: 0.8, dur: [0.001, 0.004], pow: 1.8, gain: P.fur });
         return k.norm(out);
       } },
@@ -252,15 +252,14 @@ export const SOUNDS = {
         k.add(out, k.norm(k.decay(k.bp(k.white(0.04), k.r(1100, 1800), 1.3), 0.007, 0.0004)), P.slap);
         k.add(out, k.norm(k.decay(k.lp(k.white(0.05), 700), 0.014, 0.0005)), P.slap * 0.6);
         const cloth = k.hp(k.lp(k.pink(0.14), 3800), 300);
-        k.mul(cloth, k.wander(0.14, 60, 0.7));
         k.add(out, k.norm(k.decay(cloth, 0.035, 0.002)), P.cloth, 0.002);
-        k.grains(out, { count: 40, t0: 0.002, spread: 0.08, lo: 1500, hi: 6000, q: 0.9, dur: [0.001, 0.005], pow: 1.8, gain: P.cloth * 0.6 });
+        k.grains(out, { count: 18, t0: 0.002, spread: 0.06, lo: 1200, hi: 4500, q: 0.9, dur: [0.002, 0.006], pow: 1.8, gain: P.cloth * 0.4 });
         return k.norm(out);
       } },
       // a blade through cloth: fibres snapping in a quick, clumped tear, over the slice
       blade: { n: 6, render(k, P) {
         const out = k.buf(0.09);
-        k.grains(out, { count: 55, t0: 0.001, spread: 0.05, density: (u) => 1 - u * 0.7, lo: 2000, hi: 7500, q: 1.3, dur: [0.0004, 0.0018], pow: 1.8, clump: 0.6 });
+        k.grains(out, { count: 28, t0: 0.001, spread: 0.04, density: (u) => 1 - u * 0.7, lo: 1800, hi: 5500, q: 1.3, dur: [0.0004, 0.0018], pow: 1.8, clump: 0.6 });
         const sl = k.filter(k.white(0.05), 'bp', (t) => 6000 - 50000 * t, 1.2);
         k.env(sl, [[0, 0], [0.003, 1], [0.04, 0.1], [0.05, 0]]);
         k.add(out, k.norm(sl), 0.5);
@@ -399,17 +398,17 @@ function metalGroan(k, P, sec) {
 
 // ---- tuning ----
 export const SOUND_TUNING = {
-  chop: { biteMs: 0.22, headRing: 0.12, trunkHz: 150, trunkRing: 0.09, bodyMs: 1.1, thud: 0.6, crunch: 0.45, splinters: 10, splinterGain: 0.35, leaves: 0.18, leavesLen: 0.5 },
-  'step.grass': { thud: 0.7, swish: 0.5, stems: 0.25, len: 0.12, gap: 1 },
-  'step.cobble': { stoneHz: 1400, click: 0.8, thud: 0.9, grit: 0.25, scuff: 0.3, scuffChance: 0.15, gap: 1 },
+  chop: { biteMs: 0.22, headRing: 0.12, trunkHz: 150, trunkRing: 0.09, bodyMs: 1.1, thud: 0.6, crunch: 0.25, splinters: 10, splinterGain: 0.25, leaves: 0.05, leavesLen: 0.5 },
+  'step.grass': { thud: 0.7, swish: 0.3, stems: 0.25, len: 0.12, gap: 1 },
+  'step.cobble': { stoneHz: 1400, click: 0.8, thud: 0.9, grit: 0.12, scuff: 0.2, scuffChance: 0.15, gap: 1 },
   'step.snow': { crunch: 1, squeak: 0.25, thud: 0.5, len: 0.16, gap: 1 },
-  'step.sand': { thud: 0.6, hiss: 0.5, slide: 0.2, len: 0.2, gap: 1 },
-  'step.dirt': { thud: 0.9, gravel: 0.35, grit: 0.25, gap: 1 },
+  'step.sand': { thud: 0.7, hiss: 0.3, slide: 0.2, len: 0.2, gap: 1 },
+  'step.dirt': { thud: 0.9, gravel: 0.3, grit: 0.12, gap: 1 },
   'step.wood': { plankHz: 210, ring: 0.07, knock: 0.8, thud: 0.6, creak: 0.25, creakChance: 0.12, gap: 1 },
-  'hit.flesh': { bodyHz: 85, bodyMs: 4, wet: 0.55, fur: 0.25, blade: 0.35 },
-  'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.5, blade: 0.4 },
+  'hit.flesh': { bodyHz: 85, bodyMs: 4, wet: 0.18, fur: 0.12, blade: 0.22 },
+  'hit.padded': { bodyHz: 95, bodyMs: 3, slap: 0.8, cloth: 0.25, blade: 0.22 },
   'hit.bone': { boneHz: 900, rattle: 0.35 },
-  'door.wood': { latch: 0.5, creak: 0.55, creakChance: 0.8, creakRate: 140, panelHz: 95, panelRing: 0.16, slam: 1, slamAt: 0.21, thud: 0.9, rattle: 0.3 },
+  'door.wood': { latch: 0.5, creak: 0.55, creakChance: 0.8, creakRate: 140, panelHz: 95, panelRing: 0.16, slam: 1, slamAt: 0.21, thud: 0.9, rattle: 0.2 },
   'door.metal': { clank: 0.7, groan: 0.7, groanRate: 45, squeal: 0.25, squealHz: 650, ringHz: 320, ringDecay: 0.9, clang: 1, slamAt: 0.2, slamGap: 0.035, thud: 0.8 },
 };
 // the tuning object a sound reads (doors share theirs between opening and shutting)

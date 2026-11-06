@@ -23,7 +23,7 @@ export const SOUND_MIX = {
   work: 0.85,
   doors: 0.8,
   legacy: 1,       // the old beeps still in use, through the new mix
-  legacyRoom: 0.35, // how much of the old beeps goes to the room
+  legacyRoom: 0.15, // how much of the old beeps goes to the room
   room: 1,         // × every room's own reverb level
   roomFade: 0.5,   // seconds to fade from one room into the next
   near: 3,         // tiles from the hero a sound is at full volume
@@ -34,9 +34,9 @@ export const SOUND_MIX = {
   variety: 1,      // × each recipe's random re-pitching
   voices: 40,      // sounds at once, at most
   lowCut: 35,      // Hz: the mic chain's low cut
-  drive: 0.12,     // saturation mixed in (0 none, 1 all of it)
-  presence: 1.5,   // dB at 3.5 kHz, a mic's presence lift
-  airShelf: -1,    // dB above 11 kHz (a mic's gentle top roll-off)
+  drive: 0.05,     // saturation mixed in (0 none, 1 all of it)
+  presence: 0,   // dB at 3.5 kHz, a mic's presence lift
+  airShelf: -2,    // dB above 11 kHz (a mic's gentle top roll-off)
   glue: 1,         // 1: the glue compressor on
   threshold: -18,  // glue compressor threshold (dB) and ratio
   ratio: 2.5,
@@ -223,7 +223,7 @@ export class SoundEngine {
     const lp = A.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 0.5;
     lp.frequency.value = clamp(20000 * Math.exp(-dist / Math.max(1, M.air)) * (0.45 + 0.55 * clamp(s, 0, 1)), 700, 20000);
     const pan = A.createStereoPanner(); pan.pan.value = clamp((o.pan || 0) * M.pan, -1, 1);
-    const send = A.createGain(); send.gain.value = clamp(1 + dist / 18, 1, 2);
+    const send = A.createGain(); send.gain.value = clamp(1 + dist / 40, 1, 1.4);
     vg.connect(lp); lp.connect(pan); pan.connect(this.groups[S.group] || this.groups.work); pan.connect(send); send.connect(this.wetIn);
     let end = 0, any = false;
     for (const c of S.compose(P, o, Math.random)) {
