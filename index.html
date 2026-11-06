@@ -1447,7 +1447,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 886;
+const GAME_VERSION = 888;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -6977,8 +6977,8 @@ function placeCabins() {
   }
 }
 // River mills (v677, Jordan): on rivers near a meadow, wherever the river runs straight past a bank for MILL.cut tiles.
-// A mill is two stories on a 4 x 4 footing: stone below, logs above under a thatched roof (the thatch comes of the log
-// walls: logBuilding). Along its river side the bank is cut away for MILL.cut tiles (MCUT: the ground there drops
+// A mill is two stories on a 4 x 4 footing: stone below, timber above (v886, was logs) under a thatched roof (its
+// rooms' own roof: millRoof). Along its river side the bank is cut away for MILL.cut tiles (MCUT: the ground there drops
 // straight down a stone face to the river's bed) and a water wheel turns in the river against that wall, its bottom
 // carried along by the current; its paddles drip as they come up out of the water, until they pass level. Inside, on
 // the wheel's wall, stands a grinder anyone can use (a station of the mill's, st.poi). In local terms a runs along the
@@ -7064,13 +7064,13 @@ function placeMills() {
     // the upper floor over all of it but the stairwell
     const U = UP[1];
     for (const [c, r] of m.tiles) { const i = T(c, r); if (i !== t0 && i !== t1) U.FL.set(i, 1); }
-    // stone walls below (a door at the back, a window in the end wall and one over the wheel), logs above
+    // stone walls below (a door at the back, a window in the end wall and one over the wheel), timber above (v886)
     const doorT = T(...millTile(m, 1, D - 1)), winAt = new Map([[T(...millTile(m, 0, 1)), (pa + 2) & 3], [T(...millTile(m, 2, 0)), d]]);
     for (const [c, r] of m.tiles) for (let e = 0; e < 4; e++) {
       if (set.has(T(c + DC[e], r + DR[e]))) continue;
       const i = T(c, r), [ec, er, ew] = edgeOf(c, r, e), door = i === doorT && e === bk;
       (ew ? WW : WN)[T(ec, er)] = door ? KIND_VAL.door : winAt.get(i) === e ? KIND_VAL.stonewindow : KIND_VAL.stonewall;
-      (ew ? U.WW : U.WN).set(T(ec, er), KIND_VAL.logwall);
+      (ew ? U.WW : U.WN).set(T(ec, er), KIND_VAL.wall);
       piece(ec, er);
       if (door) m.door = [ec, er, ew];
     }
@@ -8825,7 +8825,7 @@ fn odHeat(n: f32) -> vec3f {
   col = select(sdrOutput(col), postOutput(col), F.post.y >= 1.0);
   return vec4f(col, 1.0);
 }
-// (v886) the picture on a screen without HDR. The look is tuned once, for HDR; only this last step differs. What's
+// (v888) the picture on a screen without HDR. The look is tuned once, for HDR; only this last step differs. What's
 // over sdrA.x eases off into white (as postOutput eases it toward the HDR peak) instead of being cut off there, so
 // the sun, lava, fire and lit haze keep their shape and colour. Then the darks: Windows in HDR shows everything up to
 // white with the sRGB curve, which is lighter in the shadows than the gamma 2.2 most screens use without HDR, so
@@ -8904,7 +8904,7 @@ function updateEye() {
 // white), contrast round `pivot`, saturation (1 as drawn).
 const BLOOM = { strength: 1.41, threshold: 0.86, knee: 0.12, size: 2 };
 const GRADE = { black: 0.05, contrast: 1.15, pivot: 0.5, saturation: 1 };   // (v669: Jordan's contrast)
-// (v886) without HDR (sdrOutput in the outline pass): highlights over `knee` ease off into white. How light the
+// (v888) without HDR (sdrOutput in the outline pass): highlights over `knee` ease off into white. How light the
 // shadows are is the player's (OPTIONS.sdrShadows).
 const SDR_OUT = { knee: 0.8 };
 const bloom = new GFX.Bloom(renderer);
@@ -8929,13 +8929,18 @@ function updateBloom() {
 // whirlSpin (tiles a second round you), whirlClear (a second): how your whirlwind stirs it, even standing still.
 // poolAway: in swamps and the Wastes, the share of it left away from water and lava (thickest by them, thinning to
 // this poolReach tiles off). None lies over water (Jordan's ask, v109); lava keeps it.
+// (v887, Jordan: a cleared patch's rim hardened into a cut line over time) edgeSoft: tiles a rim spreads over, at the
+// least (0 off); swirlAmount (tiles), swirlSize (tiles), swirlSpeed: a slow curl of where the haze is read, so its
+// edges drift and curl even in still air (0 off). foeWake (0 off, else a scale on each foe's size), foeClear (haze
+// swept aside a tile walked, as wakeClear), foeDrag (share of its speed the air's dragged along): foes' wakes.
 const GROUND_HAZE = { on: 1, amount: 0.53, density: 2.56, height: 0.56, slices: 1, patchiness: 1, patchSize: 17.3, relax: 0,
   windSpeed: 0, settle: 1.19, swirl: 28.5, smooth: 0.15, wakeRadius: 0.35, whirlWake: 1, whirlSpin: 3, whirlClear: 3, wakeDrag: 0.03, wakeClear: 100, brightness: 1.87,
   poolAway: 0.17, poolReach: 0.5,
   arrowWake: 0.22, arrowClear: 2.5, arrowPush: 2, arrowDrag: 6, landRadius: 0.35, landClear: 3, landPush: 5,
+  edgeSoft: 0.75, swirlAmount: 0.4, swirlSize: 2.5, swirlSpeed: 0.12, foeWake: 1, foeClear: 60, foeDrag: 0.5,
   swamp: 0.74, swampColor: '#668d2a', grave: 0.44, graveColor: '#ababab', wastes: 0.54, wastesColor: '#d15400',
   lake: 0.44, lakeColor: '#ababab', lakeFade: 6};   // (v499, Jordan: mist over lakes and ponds, and v501 bays, inlets, straits and shallows; not seas, oceans or rivers; the graveyards' for now)
-const hazeStirs = [];   // arrows passing through it this frame (stirHaze)
+const hazeStirs = [];   // arrows and boats passing through it this frame (stirHaze, BOAT_WAKE; foes added in foeStirs)
 // on a phone: no probe lighting, lit haze, ground haze, eye adaptation or bloom (all can be turned back on in T),
 // and no black point, which is there to take back the lit haze's washout
 if (MOBILE) { GI.on = 0; HAZE.on = 0; GROUND_HAZE.on = 0; EYE.on = 0; BLOOM.strength = 0; GRADE.black = 0; }
@@ -9081,12 +9086,35 @@ function updateGroundHaze(dt) {
     if (ghJob) { const until = performance.now() + GH_BUDGET; while (performance.now() < until) if (ghJob.next().done) { ghJob = null; break; } }
     on = ghAny;
   }
+  if (on) foeStirs(dt);
   const a = CLOUDS.direction * Math.PI / 180;
   groundHaze.update({ on, target: [camTarget.x, camTarget.z], hero: [H.x, H.z], dt, amount: G.amount, patchiness: G.patchiness,
     patchSize: G.patchSize, relax: G.relax, wind: [Math.cos(a) * G.windSpeed, Math.sin(a) * G.windSpeed], settle: G.settle, swirl: G.swirl, smooth: G.smooth,
+    edgeSoft: G.edgeSoft, swirlAmount: G.swirlAmount, swirlSize: G.swirlSize, swirlSpeed: G.swirlSpeed,
     wakeRadius: H.whirl >= 0 ? G.whirlWake : G.wakeRadius, spin: H.whirl >= 0 ? G.whirlSpin : 0, spinClear: H.whirl >= 0 ? G.whirlClear : 0, wakeDrag: G.wakeDrag, wakeClear: G.wakeClear, height: G.height, density: G.density, slices: G.slices,
     brightness: G.brightness, stirs: hazeStirs });
   hazeStirs.length = 0;
+}
+// (v887) foes' wakes: each foe on the ground in the sim's grid (24 tiles round the camera) that moved this frame stirs
+// the haze along its step, as the hero's wake does (cleared by how far it walked, the air dragged along), in the stirs
+// left after arrows and boats, nearest the hero first. A stir costs the sim a line test per cell: 32 of them about
+// a hundredth of a millisecond on a desktop GPU.
+const GH_STIRS = GFX.GROUND_HAZE_STIRS, ghFoeNear = [];
+function foeStirs(dt) {
+  const G = GROUND_HAZE, room = GH_STIRS - hazeStirs.length;
+  ghFoeNear.length = 0;
+  for (const f of foes) {
+    const x0 = f.ghX, z0 = f.ghZ;
+    f.ghX = f.x; f.ghZ = f.z;
+    if (!(G.foeWake > 0) || room <= 0 || x0 === undefined || f.ghost || f.hp <= 0 || f.def.rooted) continue;
+    if (Math.abs(f.x - camTarget.x) > 24 || Math.abs(f.z - camTarget.z) > 24) continue;
+    const moved = Math.hypot(f.x - x0, f.z - z0);
+    if (moved < 1e-3 || moved > 3 || f.y - ghGround(f.x, f.z) > 1.3) continue;
+    ghFoeNear.push([Math.hypot(f.x - H.x, f.z - H.z), f, x0, z0, moved]);
+  }
+  if (ghFoeNear.length > room) { ghFoeNear.sort((a, b) => a[0] - b[0]); ghFoeNear.length = room; }
+  for (const [, f, x0, z0, moved] of ghFoeNear)
+    hazeStirs.push([x0, z0, f.x, f.z, Math.max(0.12, (f.def.rad || 0.3) * G.foeWake), G.foeClear * moved, 0, G.foeDrag * moved / Math.max(dt, 1e-3)]);
 }
 setInterval(() => {
   if ($('tuning').hidden) return;
@@ -9106,10 +9134,10 @@ function eyeExposure() {
 }
 
 // ---------- Options (O) ----------
-// The player's own choices, kept in this browser. hdrMode 'auto' | 'on' | 'off' (v886; auto: HDR whenever the
+// The player's own choices, kept in this browser. hdrMode 'auto' | 'on' | 'off' (v888; auto: HDR whenever the
 // display says it can show it, followed as that changes): on an HDR display, highlights brighter than white, up to
 // hdrPeak × white (src/gfx/renderer.js setHDR). sdrShadows: how light the darks are without HDR (sdrOutput; 1 as
-// they look with HDR on in Windows). (The old hdr on/off, before v886, isn't read: everyone starts on auto.)
+// they look with HDR on in Windows). (The old hdr on/off, before v888, isn't read: everyone starts on auto.)
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
   const d = { hdrMode: 'auto', hdrPeak: 3, sdrShadows: 1, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer', steadyPace: true, body: 'masc', lookSeed: null };
@@ -9121,7 +9149,7 @@ const OPTIONS = (() => {
   return d;
 })();
 let optsOpen = false;
-// (v886) whether the display says it can show HDR (on Windows: whether HDR is on in its display settings, for the
+// (v888) whether the display says it can show HDR (on Windows: whether HDR is on in its display settings, for the
 // screen the window is on); its change event fires as that's switched or the window moves to another screen
 const HDR_SCREEN = matchMedia('(dynamic-range: high)');
 // (auto stays off on phones and tablets, where the float canvas costs more than it shows)
@@ -12710,12 +12738,15 @@ const MILL_FALL_U = Object.assign({}, FALL_U, { amount: { value: MILL.drip }, sp
   glowK: { value: 0 }, glowCol: { value: new GFX.Color('#000000') } });
 const millFallMat = makeFallMat(MILL_FALL_U);
 millFallMat.keepAlpha = true;
-// once the scene exists: each mill's doors, rooms (the thatch comes of the log walls above), its grinder, wheel and bank
+// (v886, Jordan) the mill's upper story is timber but keeps its thatch: timber would roof it in slate, so its rooms
+// carry their own roof, thatch over any walls
+const millRoof = b => roofMesh(b, { thatch: true });
+// once the scene exists: each mill's doors, rooms (thatched: millRoof), its grinder, wheel and bank
 function finishMills() {
   for (const m of mills) {
     if (m.door) makeDoor(...m.door);
-    makeRoom(m.tiles, '#8a6a44');
-    makeRoom(m.tiles, '#8a6a44', null, 1);
+    makeRoom(m.tiles, '#8a6a44', millRoof);
+    makeRoom(m.tiles, '#8a6a44', millRoof, 1);
     placeStation({ c: m.grind[0], r: m.grind[1], kind: 'grinder', ry: m.grindRy });
     m.grinder = stations.get(T(...m.grind));
     m.grinder.poi = m;
@@ -17624,6 +17655,7 @@ function makeThatchTex() {
   return t;
 }
 const THATCH_U = { s: { value: { x: 1.8, y: 0.76, z: 1.52, w: 1.09 } }, slope: { value: ROOF_SLOPE }, tSlate: { value: makeThatchTex() } };
+const THATCH_LIFT = 0.11;   // (v886: 0.13 out the fringe falls 0.13 * ROOF_SLOPE; over the timber's top with 0.01 to spare)
 function updateThatchU() { const v = THATCH_U.s.value; v.x = THATCH.bump; v.y = THATCH.row * THATCH_TEX.rows; v.z = THATCH.span; v.w = THATCH.shade; }
 const thatchMat = new GFX.ShaderMaterial({ uniforms: THATCH_U, vertexColors: true, side: GFX.DoubleSide, lit: true, code: slateMat.code });
 // (v439) roofs drawn before the other opaque things, so the floors, walls and furniture under them are never shaded
@@ -17720,7 +17752,8 @@ function settleBuildings() {
   }
   regroup.clear();
 }
-// (o.snow: lying deep in snow, icicles along the eaves; o.extra(base): more drawn into the same mesh)
+// (o.snow: lying deep in snow, icicles along the eaves; o.extra(base): more drawn into the same mesh; o.thatch: thatch
+// whatever the walls, v886)
 function roofMesh(rm, o = {}) {   // rm: a building
   let top = 0;
   const outside = [];
@@ -17735,7 +17768,9 @@ function roofMesh(rm, o = {}) {   // rm: a building
     // diagonal neighbours count too, so inner corners pinch the roof down to the walls
     for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) { const n = T(c + a, r + b); if (out(n) && !oseen.has(n)) { oseen.add(n); outside.push([c + a, r + b]); } }
   }
-  const base = top * STEP + k * WALL_H + WALL_H - 0.02;
+  // (v888) thatch forced over timber walls sits THATCH_LIFT higher, so its fringe, falling outward from the wall's
+  // line, clears the timber's top beam and posts (out 0.13, up to WALL_H) where log walls are sawn on a slant instead
+  const base = top * STEP + k * WALL_H + WALL_H - 0.02 + (o.thatch && !logBuilding(rm) ? THATCH_LIFT : 0);
   if (!o.snow && desertBuilding(rm)) return flatDesertRoof(rm, open, top * STEP + k * WALL_H + WALL_H + 0.06, k);   // (v649)
   // (v663, Jordan: in an alpine town the roofs lie under snow, the flat ones too; not pushable, no one goes up there)
   const alp = alpineBuilding(rm);
@@ -17752,7 +17787,7 @@ function roofMesh(rm, o = {}) {   // rm: a building
     return m;
   };
   const save = OUT; OUT = bufTmp; bufTmp.n = 0;
-  const slate = !o.snow && timberBuilding(rm), thatch = !o.snow && !slate && logBuilding(rm);
+  const slate = !o.snow && !o.thatch && timberBuilding(rm), thatch = !o.snow && (o.thatch || !slate && logBuilding(rm));
   const tileA = o.snow ? CC('#eef3f8') : CC(thatch ? THATCH_COLOR : rm.color), tileB = o.snow ? CC('#e2eaf2') : shade(tileA, 0.87), ridge = o.snow ? CC('#4a3220') : shade(tileA, thatch ? 0.55 : 0.68);
   const eave = thatch ? 0.2 : 0.14;   // (thatch hangs thicker over the walls)
   const snowLip = CC('#f4f8fb'), ice = CC('#cfe6f6');
@@ -33996,6 +34031,13 @@ const TUNING = [
     [GROUND_HAZE, 'landRadius', 'Arrow landing: clearing radius (tiles)', 0.05, 1.5, 0.01],
     [GROUND_HAZE, 'landClear', 'Arrow landing: haze cleared', 0, 10, 0.05],
     [GROUND_HAZE, 'landPush', 'Arrow landing: air pushed out (tiles a second)', 0, 12, 0.1],
+    [GROUND_HAZE, 'edgeSoft', 'Soft edges: a cleared patch\'s rim spreads over at least this many tiles (0 off)', 0, 3, 0.05],
+    [GROUND_HAZE, 'swirlAmount', 'Edge swirl: how far the edges curl (tiles, 0 off)', 0, 2, 0.01],
+    [GROUND_HAZE, 'swirlSize', 'Edge swirl: size of the curls (tiles)', 0.5, 10, 0.1],
+    [GROUND_HAZE, 'swirlSpeed', 'Edge swirl: how fast they turn over', 0, 1, 0.01],
+    [GROUND_HAZE, 'foeWake', 'Foe wakes: size, times each foe\'s own (0 off)', 0, 3, 0.05],
+    [GROUND_HAZE, 'foeClear', 'Foe wakes: haze swept aside (a tile walked)', 0, 100, 0.5],
+    [GROUND_HAZE, 'foeDrag', 'Foe wakes: air dragged along (share of its speed)', 0, 2, 0.01],
   ]],
   ['Picture', [
     [BLOOM, 'strength', 'Bloom: how much glow (0 off)', 0, 2, 0.01],

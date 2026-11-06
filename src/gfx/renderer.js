@@ -227,7 +227,7 @@ class Renderer {
   setBloom(b) { this.bloom = b; this._frameBGs.clear(); }
   // HDR output: on an HDR display, a float canvas whose values above 1 show brighter than white; peak: the
   // brightest highlights, × white's brightness. Off: the usual canvas, everything over white clipped.
-  // (v886) If the browser doesn't take the float canvas's 'extended' tone mapping, it goes back to the usual canvas
+  // (v888) If the browser doesn't take the float canvas's 'extended' tone mapping, it goes back to the usual canvas
   // and hdrRefused is set: hdr false, hdrPeak 0, so the picture gets the no-HDR output, not HDR's clipped at white.
   setHDR(on, peak = 3) {
     on = !!on;
