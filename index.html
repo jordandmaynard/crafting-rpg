@@ -406,7 +406,8 @@ body:not(.noUI) #showUI { display: none; }
 .lookOpt canvas { width: 120px; height: 175px; flex: none; background: #0b0912; border: 2px solid #000; image-rendering: pixelated; }
 .lookSide { display: flex; flex-direction: column; gap: 6px; }
 .lookSide .maprow { margin: 0; }
-.lookSide button.on { outline: 2px solid #f2c14e; }
+.lookSide button.on, .hdrRow button.on { outline: 2px solid #f2c14e; }
+.hdrRow { justify-content: flex-start; }
 #lookDesc { color: #a69ab3; font-size: 13px; line-height: 1.35; }
 #optName { width: 220px; margin-top: 6px; font: 600 16px var(--wk, serif); padding: 5px 8px; background: #0b0912; color: #efe4c8; border: 2px solid #000; outline: none; }
 #seedInput { width: 110px; font-family: var(--display); font-size: 9px; padding: 5px 6px; background: #0b0912; color: #efe4c8; border: 2px solid #000; outline: none; }
@@ -1389,8 +1390,10 @@ body.mapOpen #miniWrap.minimap { display: none; }
       <div class="maprow"><button id="optMasc">MASCULINE</button><button id="optFem">FEMININE</button></div>
       <div class="maprow"><button id="optRoll">ROLL LOOKS</button><button id="optClassic">CLASSIC LOOK</button></div>
       <small id="lookDesc"></small></div></div>
-    <label class="opt check"><input type="checkbox" id="optHdr"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display<small id="hdrNote"></small></span></label>
+    <div class="opt"><span>HDR: the sun, lava and lit haze shine brighter than white on an HDR display. AUTO follows the system's HDR setting as it changes.<small id="hdrNote"></small></span>
+      <div class="maprow hdrRow"><button id="optHdrAuto">AUTO</button><button id="optHdrOn">ON</button><button id="optHdrOff">OFF</button></div></div>
     <label class="opt"><span>HDR highlights: up to <b id="optPeakV">3.0</b> × white</span><input type="range" id="optPeak" min="1.5" max="8" step="0.5"></label>
+    <label class="opt"><span>Shadows without HDR: <b id="optSdrShV">1.00</b> <small>1 shows the darks as they look with HDR on; lower is darker, higher lighter</small></span><input type="range" id="optSdrSh" min="0" max="2" step="0.05"></label>
     <label class="opt check"><input type="checkbox" id="optPace"><span>Steady frame pacing: when the GPU can't keep up with the screen, draw on every second (or third) refresh so movement glides evenly, instead of as fast as it can unevenly</span></label>
     <label class="opt check"><input type="checkbox" id="optFps"><span>Show frame rate: frames a second and the frame's time, in the corner (nothing else is measured)</span></label>
     <label class="opt check"><input type="checkbox" id="optMapFont"><span>Map names in the book font: the world map's place names in the game's serif type with a black outline, instead of the pixel font</span></label>
@@ -1444,7 +1447,7 @@ import { PROPS, buildProp, rollProp, WALL_IN, SEAT, BAR_SEAT, BANNER, bannerShap
 import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig, brigModel, makeSailMat, sailSlopes, hangChain } from './src/boats/brig.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 885;
+const GAME_VERSION = 886;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8676,7 +8679,7 @@ const outlineMat = new GFX.ShaderMaterial({
     gBlack: { value: 0 }, gContrast: { value: 1 }, gPivot: { value: 0.45 }, gSat: { value: 1 }, grassLine: { value: 0 }, driftLine: { value: 0 },
     tHeat: { value: heatRT.texture }, useHeat: { value: 0 }, odView: { value: 0 },
     tHover: { value: hoverRT.depthTexture }, tHoverK: { value: hoverRT.texture }, hovOn: { value: 0 }, hovCol: { value: { x: 1, y: 0.16, z: 0.1, w: 0.6 } }, hovBox: { value: { x: 0, y: 0, z: -1, w: -1 } },
-    hovB: { value: { x: 3, y: 1, z: 0.25, w: 0 } } },
+    hovB: { value: { x: 3, y: 1, z: 0.25, w: 0 } }, sdrA: { value: { x: 0.8, y: 1, z: 0, w: 0 } } },
   code: /* wgsl */ `
 struct VOut { @builtin(position) pos: vec4f }
 @vertex fn vs(v: VIn) -> VOut { return VOut(vec4f(v.position.xy, 0.0, 1.0)); }
@@ -8819,8 +8822,22 @@ fn odHeat(n: f32) -> vec3f {
   col = max(col - U.gBlack, vec3f(0.0)) / max(1.0 - U.gBlack, 0.05);
   col = max((col - U.gPivot) * U.gContrast + U.gPivot, vec3f(0.0));
   col = max(mix(vec3f(dot(col, vec3f(0.2126, 0.7152, 0.0722))), col, U.gSat), vec3f(0.0));
-  col = postOutput(col);
+  col = select(sdrOutput(col), postOutput(col), F.post.y >= 1.0);
   return vec4f(col, 1.0);
+}
+// (v886) the picture on a screen without HDR. The look is tuned once, for HDR; only this last step differs. What's
+// over sdrA.x eases off into white (as postOutput eases it toward the HDR peak) instead of being cut off there, so
+// the sun, lava, fire and lit haze keep their shape and colour. Then the darks: Windows in HDR shows everything up to
+// white with the sRGB curve, which is lighter in the shadows than the gamma 2.2 most screens use without HDR, so
+// sdrA.y (1) re-encodes for gamma 2.2 to show them as they look with HDR on (0: as they come; 2: lighter again).
+fn sdrOutput(c0: vec3f) -> vec3f {
+  let c = max(c0, vec3f(0.0));
+  let k = U.sdrA.x; let top = max(1.0 - k, 0.001);
+  var o = select(c, k + top * (1.0 - exp(-(c - k) / top)), c > vec3f(k));
+  o = min(o, vec3f(1.0));
+  let lin = select(pow((o + 0.055) / 1.055, vec3f(2.4)), o / 12.92, o <= vec3f(0.04045));
+  let m = pow(max(lin, vec3f(1e-9)), vec3f(1.0 / 2.2));
+  return clamp(mix(o, m, U.sdrA.y), vec3f(0.0), vec3f(1.0));
 }`,
   depthTest: false, depthWrite: false,
 });
@@ -8887,12 +8904,16 @@ function updateEye() {
 // white), contrast round `pivot`, saturation (1 as drawn).
 const BLOOM = { strength: 1.41, threshold: 0.86, knee: 0.12, size: 2 };
 const GRADE = { black: 0.05, contrast: 1.15, pivot: 0.5, saturation: 1 };   // (v669: Jordan's contrast)
+// (v886) without HDR (sdrOutput in the outline pass): highlights over `knee` ease off into white. How light the
+// shadows are is the player's (OPTIONS.sdrShadows).
+const SDR_OUT = { knee: 0.8 };
 const bloom = new GFX.Bloom(renderer);
 renderer.setBloom(bloom);
 const gradeOn = () => GRADE.black > 0 || GRADE.contrast !== 1 || GRADE.saturation !== 1;
 function updateBloom() {
   const res = outlineMat.uniforms.res.value, U = outlineMat.uniforms;
   U.gBlack.value = Math.min(0.9, Math.max(0, GRADE.black)); U.gContrast.value = GRADE.contrast; U.gPivot.value = GRADE.pivot; U.gSat.value = GRADE.saturation;
+  U.sdrA.value.x = Math.min(1, Math.max(0, SDR_OUT.knee)); U.sdrA.value.y = Math.min(2, Math.max(0, +OPTIONS.sdrShadows || 0));
   bloom.update({ on: BLOOM.strength > 0, scene: renderer.textureView(outlineRT.texture), haze: hazeOn() ? { view: haze.view(), id: 'h' + haze.key } : null,
     eye: EYE.on > 0.5 ? eye.buffer() : null, res: [res.x, res.y], ss: ssNow, threshold: BLOOM.threshold, knee: BLOOM.knee, size: BLOOM.size,
     strength: BLOOM.strength });
@@ -9085,20 +9106,40 @@ function eyeExposure() {
 }
 
 // ---------- Options (O) ----------
-// The player's own choices, kept in this browser. hdr: on an HDR display, highlights brighter than white, up to
-// hdrPeak × white (src/gfx/renderer.js setHDR).
+// The player's own choices, kept in this browser. hdrMode 'auto' | 'on' | 'off' (v886; auto: HDR whenever the
+// display says it can show it, followed as that changes): on an HDR display, highlights brighter than white, up to
+// hdrPeak × white (src/gfx/renderer.js setHDR). sdrShadows: how light the darks are without HDR (sdrOutput; 1 as
+// they look with HDR on in Windows). (The old hdr on/off, before v886, isn't read: everyone starts on auto.)
 const OPTIONS_KEY = 'emberwild.options';
 const OPTIONS = (() => {
-  const d = { hdr: false, hdrPeak: 3, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer', steadyPace: true, body: 'masc', lookSeed: null };
+  const d = { hdrMode: 'auto', hdrPeak: 3, sdrShadows: 1, attackOnRelease: false, showFps: false, mapFont: 1, name: 'Wanderer', steadyPace: true, body: 'masc', lookSeed: null };
   try { Object.assign(d, JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}')); } catch (err) { /* defaults */ }
   d.mapFont = +d.mapFont || 0;   // (a number, so T > Map names can switch it too)
+  if (!['auto', 'on', 'off'].includes(d.hdrMode)) d.hdrMode = 'auto';
+  delete d.hdr;
+  d.sdrShadows = Number.isFinite(+d.sdrShadows) ? +d.sdrShadows : 1;
   return d;
 })();
 let optsOpen = false;
+// (v886) whether the display says it can show HDR (on Windows: whether HDR is on in its display settings, for the
+// screen the window is on); its change event fires as that's switched or the window moves to another screen
+const HDR_SCREEN = matchMedia('(dynamic-range: high)');
+// (auto stays off on phones and tablets, where the float canvas costs more than it shows)
+const hdrWanted = () => OPTIONS.hdrMode === 'on' || (OPTIONS.hdrMode === 'auto' && HDR_SCREEN.matches && !MOBILE);
+function applyHdr() {
+  renderer.setHDR(hdrWanted(), OPTIONS.hdrPeak);
+  for (const [id, m] of [['optHdrAuto', 'auto'], ['optHdrOn', 'on'], ['optHdrOff', 'off']]) $(id).classList.toggle('on', OPTIONS.hdrMode === m);
+  $('optPeak').disabled = !renderer.hdr;
+  if (optsOpen) showHdrNote();
+}
+HDR_SCREEN.addEventListener('change', applyHdr);
+// (and a look every 2 s, in case a browser doesn't send the change)
+setInterval(() => { if (hdrWanted() !== renderer._hdrAsk) applyHdr(); }, 2000);
 function applyOptions() {
-  renderer.setHDR(OPTIONS.hdr, OPTIONS.hdrPeak);
-  $('optHdr').checked = OPTIONS.hdr; $('optPeak').value = OPTIONS.hdrPeak; $('optPeakV').textContent = OPTIONS.hdrPeak.toFixed(1);
-  $('optPeak').disabled = !OPTIONS.hdr;
+  applyHdr();
+  $('optPeak').value = OPTIONS.hdrPeak; $('optPeakV').textContent = OPTIONS.hdrPeak.toFixed(1);
+  $('optSdrSh').value = OPTIONS.sdrShadows; $('optSdrShV').textContent = OPTIONS.sdrShadows.toFixed(2);
+  $('optSdrSh').disabled = renderer.hdr;
   $('optRelease').checked = OPTIONS.attackOnRelease;
   $('optFps').checked = OPTIONS.showFps; $('fpsTag').hidden = !OPTIONS.showFps;
   $('optPace').checked = OPTIONS.steadyPace !== false;
@@ -9112,10 +9153,12 @@ function applyOptions() {
 // (whether the display says it can show HDR, and, with HDR on, whether the browser took the canvas's 'extended' tone
 // mapping: if it didn't, the picture clips at white whatever the setting)
 function showHdrNote() {
-  const hdrScreen = matchMedia('(dynamic-range: high)').matches, st = renderer.hdrState();
-  let t = hdrScreen ? 'This display says it can show HDR.' : "This display doesn't say it can show HDR, so here it will look the same.";
-  if (OPTIONS.hdr) t += st.toneMapping === 'extended' ? ` The browser is drawing in HDR (${st.format}, extended).` : ` The browser didn't take the HDR canvas (tone mapping: ${st.toneMapping}), so it clips at white: it needs Chrome or Edge 129 or later, and HDR turned on in the system's display settings.`;
-  t += ' Only the brightest things change: the sun, lava, fire and lamps, glints on water and lit haze; the rest looks the same either way.';
+  const hdrScreen = HDR_SCREEN.matches, st = renderer.hdrState();
+  let t = hdrScreen ? 'This display says it can show HDR.' : "This display doesn't say it can show HDR (on Windows: HDR is off in its display settings).";
+  if (st.refused) t += ` The browser didn't take the HDR canvas, so the game is drawing without HDR: it needs Chrome or Edge 129 or later.`;
+  else if (renderer.hdr) t += ` The game is drawing in HDR (${st.format}, ${st.toneMapping}).`;
+  else t += ' The game is drawing without HDR: highlights ease off into white, and the shadows slider sets how light the darks are.';
+  if (renderer.hdr && !hdrScreen) t += ' With HDR on here, everything over white is cut off: AUTO or OFF looks better.';
   $('hdrNote').textContent = t;
 }
 function toggleOptions(open = !optsOpen) {
@@ -9123,10 +9166,13 @@ function toggleOptions(open = !optsOpen) {
   renderModes();
   if (open) {
     showHdrNote();
-    $('optHdr').focus();
+    $('optHdrAuto').focus();
   }
 }
-$('optHdr').addEventListener('change', () => { OPTIONS.hdr = $('optHdr').checked; applyOptions(); showHdrNote(); });
+for (const [id, m] of [['optHdrAuto', 'auto'], ['optHdrOn', 'on'], ['optHdrOff', 'off']]) {
+  $(id).addEventListener('click', e => { OPTIONS.hdrMode = m; applyOptions(); showHdrNote(); e.currentTarget.blur(); });
+}
+$('optSdrSh').addEventListener('input', () => { OPTIONS.sdrShadows = parseFloat($('optSdrSh').value); applyOptions(); });
 $('optFps').addEventListener('change', () => { OPTIONS.showFps = $('optFps').checked; applyOptions(); });
 $('optPace').addEventListener('change', () => { OPTIONS.steadyPace = $('optPace').checked; applyOptions(); });
 $('optName').addEventListener('keydown', e => { e.stopPropagation(); if (e.code === 'Enter' || e.code === 'Escape') $('optName').blur(); });
@@ -9361,7 +9407,7 @@ function renderWorld() {
   encMark('posing foes, folk and people');
   const od = OVERDRAW.on;
   const depthOn = OUTLINE.on > 0.5 && OUTLINE.thickness > 0;
-  const on = od || depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || OPTIONS.hdr || BLOOM.strength > 0 || gradeOn();
+  const on = od || depthOn || ssNow > 1 || hazeOn() || EYE.on > 0.5 || renderer.hdr || BLOOM.strength > 0 || gradeOn() || SDR_OUT.knee < 1 || OPTIONS.sdrShadows !== 0;
   renderer.setRenderTarget(on ? outlineRT : null);
   if (od) renderer.setClearColor(0x000000, 0);
   renderer.clear();
@@ -33970,6 +34016,7 @@ const TUNING = [
     [GRADE, 'contrast', 'Contrast', 0.5, 2, 0.01],
     [GRADE, 'pivot', 'Contrast pivots round this brightness', 0, 1, 0.01],
     [GRADE, 'saturation', 'Saturation', 0, 2, 0.01],
+    [SDR_OUT, 'knee', 'Without HDR: highlights ease into white from this brightness (1: cut off at white)', 0.5, 1, 0.01],
   ]],
   ['Walk', [
     [WALK, 'plant', 'Planted foot sweeps back evenly (0 = plain sine swing)', 0, 1, 0.01],
@@ -36153,7 +36200,7 @@ window.GAME = {
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
   mapHeightMs: () => mapHeightMs, mapHeights: () => mapHeights, buildMapHeights: () => { const t0 = performance.now(); buildMapHeights(); return performance.now() - t0; }, blurMapHeights: () => { const t0 = performance.now(); blurMapHeights(); return performance.now() - t0; },
-  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, MAP_LIGHT, ROAD_LABEL },
+  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, SDR_OUT, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, MAP_LIGHT, ROAD_LABEL },
   rescaleObelisks: () => rescaleObelisks(),
   // (triangles a wall type draws, and how many of each type are built in the world: [type, tris, count ground, count upper])
   wallCost: () => { const out = {}; for (let t = 1; t <= 14; t++) { const b = new BuildBuf(), save = OUT; OUT = b; try { wallPiece(500, 500, 0, t); } finally { OUT = save; } out[t] = [b.n / 9, 0, 0]; }

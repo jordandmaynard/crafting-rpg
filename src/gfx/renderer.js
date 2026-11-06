@@ -175,7 +175,7 @@ class Renderer {
     this.haze = null; this._lastFrameOff = 0;
     this.noEye = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.noEye, 0, new Float32Array([1, 0, 0, 1]));
-    this.eye = null; this.hdr = false; this.hdrPeak = 0; this.bloom = null;
+    this.eye = null; this.hdr = false; this._hdrAsk = false; this.hdrRefused = false; this.hdrPeak = 0; this.bloom = null;
     this.clipBelow = null;
     // the inside fill (see insideFill): null, or { r, g, b (its light; 0 = off), x0, z0 (the window's first tile), y0, y1,
     // bits: a Uint32Array(32), the window's 32 x 32 tiles a bit each, row by row; key [x, y, z] toward its key light,
@@ -227,14 +227,23 @@ class Renderer {
   setBloom(b) { this.bloom = b; this._frameBGs.clear(); }
   // HDR output: on an HDR display, a float canvas whose values above 1 show brighter than white; peak: the
   // brightest highlights, × white's brightness. Off: the usual canvas, everything over white clipped.
+  // (v886) If the browser doesn't take the float canvas's 'extended' tone mapping, it goes back to the usual canvas
+  // and hdrRefused is set: hdr false, hdrPeak 0, so the picture gets the no-HDR output, not HDR's clipped at white.
   setHDR(on, peak = 3) {
     on = !!on;
-    this.hdrPeak = on ? Math.max(1, peak) : 0;
-    if (on === this.hdr) return;
-    this.hdr = on;
-    this.format = on ? 'rgba16float' : navigator.gpu.getPreferredCanvasFormat();
+    if (on !== !!this._hdrAsk) {
+      this._hdrAsk = on; this.hdrRefused = false;
+      this._configureCanvas(on);
+      const c = on && this.context.getConfiguration ? this.context.getConfiguration() : null;
+      if (c && !(c.toneMapping && c.toneMapping.mode === 'extended')) { this.hdrRefused = true; this._configureCanvas(false); }
+      this.hdr = on && !this.hdrRefused;
+    }
+    this.hdrPeak = this.hdr ? Math.max(1, peak) : 0;
+  }
+  _configureCanvas(hdr) {
+    this.format = hdr ? 'rgba16float' : navigator.gpu.getPreferredCanvasFormat();
     const cfg = { device: this.device, format: this.format, alphaMode: 'opaque', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC };
-    if (on) cfg.toneMapping = { mode: 'extended' };
+    if (hdr) cfg.toneMapping = { mode: 'extended' };
     this.context.configure(cfg);
     this._canvasTex = null;
   }
@@ -242,7 +251,7 @@ class Renderer {
   // display; 'standard' or none = the browser ignored the HDR request and clips at white)
   hdrState() {
     const c = this.context.getConfiguration ? this.context.getConfiguration() : null;
-    return { format: c ? c.format : this.format, toneMapping: c && c.toneMapping ? c.toneMapping.mode || 'standard' : (c ? 'none reported' : 'unknown') };
+    return { format: c ? c.format : this.format, toneMapping: c && c.toneMapping ? c.toneMapping.mode || 'standard' : (c ? 'none reported' : 'unknown'), refused: !!this.hdrRefused };
   }
   // the WGSL every pipeline starts with, for compute passes that read the frame
   preludeCode() { return PRELUDE; }
