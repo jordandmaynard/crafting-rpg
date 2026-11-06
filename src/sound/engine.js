@@ -17,7 +17,7 @@ import { hashStr, clamp } from './dsp.js';
 
 export const SOUND_MIX = {
   engine: 1,       // 1: the new sounds where there are any; 0: the old beeps everywhere (to compare)
-  master: 0.9,     // everything
+  master: 1.6,     // everything
   steps: 0.45,     // each group's level
   combat: 0.9,
   work: 0.85,
