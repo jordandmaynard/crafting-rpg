@@ -6,7 +6,7 @@
 // after that frame, see SPIKE_TUNING.hot, so the times stay true.)
 
 export const SPIKE_TUNING = {
-  ms: 30,    // a frame's CPU (JavaScript) ms that counts as a spike
+  ms: 16.67, // a frame's CPU (JavaScript) ms that counts as a spike (v937, Jordan: one 60 fps frame; was 30)
   keep: 8,   // spikes kept
   pause: 1,  // stop the game on a spike (1) or carry on (0)
   minMs: 0.05, // calls shorter than this (in all) left out of a kept tree

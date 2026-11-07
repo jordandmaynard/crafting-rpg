@@ -1392,3 +1392,5 @@ On a phone or tablet (or with `?touch=1` in the address; `?touch=0` turns it off
 **v935:** (Jordan) The backpack tab icons have a black stroke round them instead of the soft drop shadow (four hard one-sided shadows, PACK_TABS.stroke 1.5 kit px, a new row in T > Backpack tabs), and Jordan's tab values are the defaults: closedOut 48 -> 54 (top 116.5, step 76, numX 32, icon 40 unchanged).
 
 **v936:** (Jordan: a ring where the potion will land while holding R with Attack on release, like the rain of arrows') Aiming a throw (R held, or a held click with a potion square in hand) now shows the rune ring for every potion, not only those with a reach: a potion with an effect shows its reach (green and red 2 tiles, amber 1.6), the rest (blue, purple, clear) a small ring where it breaks (POTION_THROW.landRadius 0.8, T > Thrown potions).
+
+**v937:** (Jordan) Spike capture keeps frames over 16.67 ms of CPU (one 60 fps frame; was 30). T > Spike capture's slider now moves in steps of 0.01.
