@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 945;
+const GAME_VERSION = 946;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -20338,7 +20338,7 @@ applyHudBars();
 // (v938) style: 0 the kinds' paintings with a black stroke, 1 their silhouettes pressed into the tab as the empty doll
 // squares are (EMPTY_SLOT's look; Provisions shows a potion bottle there, as bread reads poorly as a silhouette)
 // (v943) tabH: each tab's height (kit px); openOut: how far the open tab sticks out past the backpack's edge (as closedOut)
-const PACK_TABS = { top: 116.5, step: 101.5, numX: 32, closedOut: 70.5, openOut: 117, tabH: 89, icon: 40, stroke: 1, style: 0 };   // (v944: Jordan's tuning)
+const PACK_TABS = { top: 116.5, step: 101.5, numX: 32, closedOut: 70.5, openOut: 117, tabH: 89, icon: 40, stroke: 1, inner: 1, style: 0 };   // (v944: Jordan's tuning)
 // (v941, Jordan) each tab painting's place (X, Y: kit px of its middle from the tab icon's middle) and size (kit px across),
 // one set per painting: T > Backpack tab icons
 const PACK_PAIRS = {
@@ -22366,10 +22366,25 @@ async function bakePair(box, parts) {
   const half = Math.ceil(ext * k) + r + 1, W = half * 2;
   const art = document.createElement('canvas'); art.width = art.height = W;
   const ca = art.getContext('2d'); ca.imageSmoothingQuality = 'high';
-  for (const [u, rc, x, y, sz] of src) {
+  // (v945, Jordan) PACK_TABS.inner: a stroke of its own (whole screen px; 0 none) round each painting laid over another,
+  // drawn only over the one beneath: its shape stamped at every offset within it, filled black, kept where there's
+  // already paint (source-atop), then the painting over it
+  const r2 = Math.max(0, Math.round(PACK_TABS.inner * (devicePixelRatio || 1)));
+  const one = document.createElement('canvas'), sil = document.createElement('canvas'); one.width = one.height = sil.width = sil.height = W;
+  const co = one.getContext('2d'), cs = sil.getContext('2d'); co.imageSmoothingQuality = 'high';
+  src.forEach(([u, rc, x, y, sz], n) => {
     const im = tabImg(u), d = [half + (x - sz / 2) * k, half + (y - sz / 2) * k, sz * k, sz * k];
-    if (im.naturalWidth) rc ? ca.drawImage(im, ...rc, ...d) : ca.drawImage(im, ...d);
-  }
+    if (!im.naturalWidth) return;
+    co.clearRect(0, 0, W, W);
+    rc ? co.drawImage(im, ...rc, ...d) : co.drawImage(im, ...d);
+    if (n > 0 && r2 > 0) {
+      cs.clearRect(0, 0, W, W);
+      for (let dy = -r2; dy <= r2; dy++) for (let dx = -r2; dx <= r2; dx++) if (dx * dx + dy * dy <= r2 * r2) cs.drawImage(one, dx, dy);
+      cs.globalCompositeOperation = 'source-in'; cs.fillStyle = '#000'; cs.fillRect(0, 0, W, W); cs.globalCompositeOperation = 'source-over';
+      ca.globalCompositeOperation = 'source-atop'; ca.drawImage(sil, 0, 0); ca.globalCompositeOperation = 'source-over';
+    }
+    ca.drawImage(one, 0, 0);
+  });
   const cv = document.createElement('canvas'); cv.width = cv.height = W;
   const c = cv.getContext('2d');
   if (r > 0) {
@@ -35376,6 +35391,7 @@ const TUNING = [
     [PACK_TABS, 'numX', 'Icon: across (kit px from the point)', 10, 80, 0.5, applyPackTabs],
     [PACK_TABS, 'icon', 'Icon box: size (kit px; the silhouettes\' size)', 16, 68, 0.5, applyPackTabs],
     [PACK_TABS, 'stroke', 'Icon: black stroke (screen px; whole pixels draw evenly)', 0, 4, 0.5, applyPackTabs],
+    [PACK_TABS, 'inner', 'Icon: inner stroke where the front painting lies over the back one (screen px; 0 none)', 0, 4, 0.5, applyPackTabs],
     [PACK_TABS, 'style', 'Icon style: 0 paintings, 1 pressed-in silhouettes (as empty gear squares)', 0, 1, 1, applyPackTabs],
     [PACK_TABS, 'closedOut', 'Closed tabs: stick out past the edge (kit px)', 0, 74, 0.5, applyPackTabs],
     [PACK_TABS, 'openOut', 'Open tab: sticks out past the edge (kit px)', 14, 134, 0.5, applyPackTabs],
