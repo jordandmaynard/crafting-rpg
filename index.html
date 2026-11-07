@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 956;
+const GAME_VERSION = 957;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -20616,7 +20616,7 @@ const crowdOrder = [];
 // is handed out in order (poseSeq), not at random, so the same number wait each frame; and one off screen whose bones
 // aren't written yet (a town just woken, someone come out of a shut room or out of bed) waits for its turn too
 // instead of all of them posing in the one frame
-const POSE_LESS = { on: 1, every: 8, margin: 3 };
+const POSE_LESS = { on: 1, every: 8, margin: 3, calm: 2 };
 const poseFr = new GFX.Frustum(), poseM = new GFX.Matrix4();
 let poseFrame = 0, poseSkipped = 0, poseSeq = 0;
 function poseView() {
@@ -20632,6 +20632,23 @@ function poseWait(o, x, y, z) {
   poseSkipped++;
   return true;
 }
+// (v957, Jordan: foes cheaper on the CPU until they're after you) a foe's pose (poseHuman, poseCanine, the crowds'
+// bob and lean, then its joints' matrices or bones) is worked out only every POSE_LESS.calm-th frame while it's in
+// view but calm (not after you, striking or just hit), and every POSE_LESS.every-th frame out of view (by more than
+// POSE_LESS.margin). The frames held (f.poseHeld, true: drawCrowds and drawHumans leave its matrices as they were)
+// add up in f._pdt, handed to the pose when it's made, so its walk and idle keep time. Its place in the world (f.x,
+// f.z) still moves every frame; what's drawn follows it on the frames it's posed. Each foe's count starts at its own
+// point (poseSeq), so they don't all pose on the same frame. Off (POSE_LESS.on 0): every foe every frame, as before
+function poseHold(f, dt) {
+  f._pdt = (f._pdt || 0) + dt;
+  if (f._pn === undefined) f._pn = poseSeq++ % 8;
+  if (!POSE_LESS.on || f.aggro || f.atk >= 0 || f.hitT < 0.5 || f.down) { f._pn = 0; return false; }
+  const out = poseFr.sphereClass(f.x, f.y + 0.8, f.z, 1.2, POSE_LESS.margin) === 0;
+  const n = Math.max(1, (out ? POSE_LESS.every : POSE_LESS.calm) | 0);
+  if (++f._pn < n) { f.poseHeld = true; poseSkipped++; return true; }
+  f._pn = 0;
+  return false;
+}
 function drawCrowds() {
   const e = camera.matrixWorld.elements, cx = e[12], cy = e[13], cz = e[14], fx = -e[8], fy = -e[9], fz = -e[10];
   crowdOrder.length = 0;
@@ -20645,7 +20662,7 @@ function drawCrowds() {
     sm.fill(0, o, o + 16); sm[o] = sm[o + 5] = sm[o + 10] = sm[o + 15] = 1; sm[o + 12] = p.x; sm[o + 13] = p.y; sm[o + 14] = p.z;
     if (!f.g.visible || !f.crowd) return;   // (people are drawn with the townsfolk's shader: drawHumans)
     const C = f.crowd, k = C.n++;
-    if (!poseWait(f, f.x, f.y, f.z)) f.g.updateMatrixWorld();
+    if (!f.poseHeld) f.g.updateMatrixWorld();
     for (const pc of C.pieces) { pc.mesh.reserve(k + 1); pc.mesh.instanceMatrix.set(f.joints[pc.joint].matrixWorld.elements, k * 16); }
   });
   foeShadows.count = foes.length; foeShadows.needsUpdate = true;
@@ -31792,7 +31809,7 @@ function drawHumans() {
   for (const b of humanBatches) for (const f of b.members) {
     // (v823) off screen, every few frames (POSE_LESS), if its bones are still in the same place in the same batch
     const M = f.hb.mat.uniforms.bones.value;
-    if (!f.down && f._pM === M && f._pb === f.hbase && poseWait(f, f.x, f.y, f.z)) continue;
+    if (!f.down && f._pM === M && f._pb === f.hbase && f.poseHeld) continue;
     f._pM = M; f._pb = f.hbase;
     if (!f.down) f.rig.g.updateMatrixWorld();
     humanBones(f, f.down || f.g.visible);
@@ -33167,7 +33184,7 @@ function updateFoe(f, dt, night) {
   const d = f.def;
   const dx = H.x - f.x, dz = H.z - f.z, dist = Math.hypot(dx, dz);
   if (dist > 60) { removeFoe(f); return; }
-  f.cd -= dt; f.hitT += dt;
+  f.cd -= dt; f.hitT += dt; f.poseHeld = false;
   if (f.bleed) { bleedFoe(f, dt); if (f.hp <= 0) return; }
   // stunned by the hammer's smash: it stands where it is (but for being knocked back)
   if (f.stunT > 0 && !f.carried && !f.grabbed) {
@@ -33192,8 +33209,9 @@ function updateFoe(f, dt, night) {
   f.calm -= dt;
   if (H.alive && !safe && !f.aggro && f.calm <= 0 && dist < aggroR && Math.abs(H.y - f.y) < 2.2) { f.aggro = true; f.homing = false; f.path = null; }
   if (f.aggro && (dist > aggroR * 2.4 || !H.alive || safe)) { f.aggro = false; f.path = null; }
-  // it can only strike you with nothing in between: no wall, closed door or cliff
-  const see = dist < 40 && walkLine(f.x, f.z, H.x, H.z);
+  // it can only strike you with nothing in between: no wall, closed door or cliff (v957: looked for only when it's
+  // after you or striking, the only times it's asked; it was a line walked out every frame for every foe)
+  const see = (f.atk >= 0 || f.aggro) && dist < 40 && walkLine(f.x, f.z, H.x, H.z);
   let vx = 0, vz = 0, want = 0;
   if (f.atk >= 0) {
     // wind up, lunge, recover
@@ -33267,9 +33285,11 @@ function updateFoe(f, dt, night) {
   if (want > 0 && got < want * 0.3 && f.sideT <= 0) { f.sideT = 0.8; f.side = Math.random() < 0.5 ? 1 : -1; if (!f.aggro) f.wander = null; }
   f.y = surfaceY(f.x, f.z);
 
-  // pose
-  if (f.rig) { poseHuman(f, dt, want > 0 ? want / dt : 0); return; }
-  f.squish = Math.max(0, f.squish - dt * 4);
+  // pose (v957: held some frames while it's calm or out of view, see poseHold; the time held is made up when it's posed)
+  if (poseHold(f, dt)) return;
+  const pdt = f._pdt; f._pdt = 0;
+  if (f.rig) { poseHuman(f, pdt, want > 0 ? want / dt : 0); return; }
+  f.squish = Math.max(0, f.squish - pdt * 4);
   const sq = Math.sin(f.squish * Math.PI) * 0.3, sc = f.base, moving = want > 0;
   let lift = 0, lean = 0, fwd = 0;
   if (f.slime) { const b = Math.sin(time * (moving ? 9 : 3) + f.phase) * (moving ? 0.12 : 0.06); f.g.scale.set(sc * (1 + b + sq), sc * (1 - b - sq), sc * (1 + b + sq)); lift = moving ? Math.max(0, Math.sin(time * 9 + f.phase)) * 0.12 : 0; }
@@ -33281,7 +33301,7 @@ function updateFoe(f, dt, night) {
   if (f.legs) f.legs.forEach((p, k) => { p.rotation.y = p.userData.ry + (moving ? Math.sin(time * 22 + f.phase + k * 1.9) * 0.3 : 0); p.rotation.z = moving ? Math.max(0, Math.sin(time * 22 + f.phase + k * 1.9)) * 0.15 * (k < 4 ? -1 : 1) : 0; });
   if (f.atk >= 0) { if (f.atk < 0.45) lean = -0.25 * (f.atk / 0.45); else if (f.atk < 0.6) { lean = 0.35; fwd = 0.25; } else lean = 0.35 * (1 - (f.atk - 0.6) / 0.25); }
   let roll = moving && !f.slime ? Math.sin(time * 11 + f.phase) * 0.06 : 0;
-  if (f.spine) { const c = poseCanine(f, dt, moving ? want / dt : 0, lean); lift = c.lift; lean += c.pitch; roll = c.roll; }
+  if (f.spine) { const c = poseCanine(f, pdt, moving ? want / dt : 0, lean); lift = c.lift; lean += c.pitch; roll = c.roll; }
   f.g.position.set(f.x + Math.sin(f.face) * fwd, f.y + lift, f.z + Math.cos(f.face) * fwd);
   f.g.rotation.set(lean, f.face, roll);
   if (f.jaw) f.jaw.position.y = 0.625 - Math.max(0, Math.sin(time * 9 + f.phase)) * 0.02;
@@ -36794,7 +36814,7 @@ const PROF_FOLD_KEY = 'emberwild.profFold';
 try { const f = JSON.parse(localStorage.getItem(PROF_FOLD_KEY) || '[]'); if (Array.isArray(f)) prof.folded = new Set(f); } catch (e) {}
 prof.onFold = F => { try { localStorage.setItem(PROF_FOLD_KEY, JSON.stringify([...F])); } catch (e) {} };
 const showSpikes = () => { const F = prof.folded, fh = n => `<div class="spike-head"><b class="pfold" data-fold="${n}">${F.has(n) ? '▸' : '▾'} ${n}</b></div>`;
-  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Ground pre-pass</b> <button data-gpre="1" class="${BUILD_PRE.ground ? 'on' : ''}">${BUILD_PRE.ground ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the ground's depth too (the "ground pre-pass" row), then the snow, sand and ground lit before the world, so a chasm's walls are lit only where they show; trees and plants then cover ground already lit. Off: as before v784.</div><div class="spike-head"><b>Grass pre-pass</b> <button data-grpre="1" class="${BUILD_PRE.grass ? 'on' : ''}">${BUILD_PRE.grass ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the grass tufts' depth is drawn before anything is lit (the "grass pre-pass" row), so each tuft is lit once where it shows and the ground behind it not at all; their shapes are worked out twice. Off: as before v785.</div><div class="spike-head"><b>Early sends</b> ${['Off', '3 sends', '+ after shadow map'].map((t, k) => `<button data-early="${k}" class="${EARLY_SEND.mode === k ? 'on' : ''}">${t}</button>`).join(' ')}</div><div class="gnote">3 sends (v789): the frame's passes go to the GPU after the world, after the water and at the end, so the GPU starts while the rest is still being encoded. + after shadow map (v795): a 4th, as soon as the shadow map is encoded, so the GPU draws it while the pre-passes and world are encoded. Off: all in one send at the end. Compare in the same spot: fps, "GPU: gaps between passes" and "before fx particles".</div><div class="spike-head"><b>Pose less off screen</b> <button data-poseless="1" class="${POSE_LESS.on ? 'on' : ''}">${POSE_LESS.on ? 'On' : 'Off'}</button></div><div class="gnote">On (v823): foes, folk and people out of view have their joints' matrices made every ${POSE_LESS.every}th frame, not every frame ("rigs off screen, left this frame" in Each frame). Off: every frame. Compare "posing foes, folk and people".</div><div class="spike-head"><b>One walk</b> <button data-onewalk="1" class="${renderer.shareWalk ? 'on' : ''}">${renderer.shareWalk ? 'On' : 'Off'}</button></div><div class="gnote">On (v795): the camera's walk of the scene and the shadow map's search for casters are one pass over it ("finding casters" then holds both, "walking the scene" drops). Off: two passes, as before. Compare "render (encode)" in the same spot.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
+  spikePanel.innerHTML = fh('Tests') + (F.has('Tests') ? '' : `<div class="spike-head"><b>Split world</b> <button data-split="1" class="${PROF_SPLIT.world ? 'on' : ''}">${PROF_SPLIT.world ? 'On' : 'Off'}</button></div><div class="gnote">On: the world row is drawn in parts by what they're made of (built pieces, glass, roofs, trees and props, plants, foes), a row each.</div><div class="spike-head"><b>Built pieces test</b> ${['Full', 'No lighting', 'Flat colour'].map((t, k) => `<button data-btest="${k}" class="${BUILD_TEST.shade === k ? 'on' : ''}">${t}</button>`).join(' ')} <button data-bcull="1" class="${BUILD_TEST.cull ? 'on' : ''}">Cull backs ${BUILD_TEST.cull ? 'On' : 'Off'}</button></div><div class="gnote">Compare the built pieces row: no lighting skips shadows, GI and lamps; flat colour skips all shading; cull backs drops back faces.</div><div class="spike-head"><b>Recorded draws</b> <button data-bundles="1" class="${renderer.bundles ? 'on' : ''}">${renderer.bundles ? 'On' : 'Off'}</button></div><div class="gnote">On: each pass's solid draws are recorded once and replayed while the same things are in view, so render (encode) skips encoding them every frame. Off: every draw encoded each frame, as before v769.</div><div class="spike-head"><b>Depth pre-pass</b> <button data-bpre="1" class="${BUILD_PRE.on ? 'on' : ''}">${BUILD_PRE.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the depth of built pieces, roofs and props is drawn first on its own (the "depth pre-pass" row), so they're lit only where they show. Off: as before v776.</div><div class="spike-head"><b>Ground pre-pass</b> <button data-gpre="1" class="${BUILD_PRE.ground ? 'on' : ''}">${BUILD_PRE.ground ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the ground's depth too (the "ground pre-pass" row), then the snow, sand and ground lit before the world, so a chasm's walls are lit only where they show; trees and plants then cover ground already lit. Off: as before v784.</div><div class="spike-head"><b>Grass pre-pass</b> <button data-grpre="1" class="${BUILD_PRE.grass ? 'on' : ''}">${BUILD_PRE.grass ? 'On' : 'Off'}</button></div><div class="gnote">On (with the depth pre-pass): the grass tufts' depth is drawn before anything is lit (the "grass pre-pass" row), so each tuft is lit once where it shows and the ground behind it not at all; their shapes are worked out twice. Off: as before v785.</div><div class="spike-head"><b>Early sends</b> ${['Off', '3 sends', '+ after shadow map'].map((t, k) => `<button data-early="${k}" class="${EARLY_SEND.mode === k ? 'on' : ''}">${t}</button>`).join(' ')}</div><div class="gnote">3 sends (v789): the frame's passes go to the GPU after the world, after the water and at the end, so the GPU starts while the rest is still being encoded. + after shadow map (v795): a 4th, as soon as the shadow map is encoded, so the GPU draws it while the pre-passes and world are encoded. Off: all in one send at the end. Compare in the same spot: fps, "GPU: gaps between passes" and "before fx particles".</div><div class="spike-head"><b>Pose less off screen</b> <button data-poseless="1" class="${POSE_LESS.on ? 'on' : ''}">${POSE_LESS.on ? 'On' : 'Off'}</button></div><div class="gnote">On (v823): foes, folk and people out of view have their joints' matrices made every ${POSE_LESS.every}th frame, not every frame ("rigs off screen, left this frame" in Each frame). (v957) Foes are posed only every ${POSE_LESS.every}th frame out of view and every ${POSE_LESS.calm}nd in view while calm (not after you, striking or just hit). Off: every frame. Compare "update: foes" and "posing foes, folk and people".</div><div class="spike-head"><b>One walk</b> <button data-onewalk="1" class="${renderer.shareWalk ? 'on' : ''}">${renderer.shareWalk ? 'On' : 'Off'}</button></div><div class="gnote">On (v795): the camera's walk of the scene and the shadow map's search for casters are one pass over it ("finding casters" then holds both, "walking the scene" drops). Off: two passes, as before. Compare "render (encode)" in the same spot.</div><div class="spike-head"><b>Overdraw view</b> <button data-overdraw="1" class="${OVERDRAW.on ? 'on' : ''}">${OVERDRAW.on ? 'On' : 'Off'}</button></div><div class="gnote">On: the screen shows how many times each pixel was lit by the solid world, snow and sand, ground and grass (the passes a depth pre-pass would help): <span style="color:#4a7dff">1</span> <span style="color:#3ec45a">2</span> <span style="color:#e8d43a">3</span> <span style="color:#ff9a2a">4</span> <span style="color:#ff3a3a">5</span> <span style="color:#ffffff">6+</span>. Each frame then shows the average and what a pre-pass would save. Water, the hero, see-through things and effects aren't drawn meanwhile.</div>`) + (F.has('Spike capture') ? fh('Spike capture') : spikes.html(clockText)); };
 // (pointerdown, not click: the tables are drawn anew 4 times a second, and a click's press and release can land on
 // two different copies of a heading)
 profLive.addEventListener('pointerdown', e => { const f = e.target.closest('[data-fold]'); if (f) { prof.fold(f.dataset.fold); e.preventDefault(); } });
@@ -37589,7 +37609,7 @@ window.GAME = {
   cam: () => ({ yaw, zoom }),
   camYaw: () => yaw,
   mapHeightMs: () => mapHeightMs, mapHeights: () => mapHeights, buildMapHeights: () => { const t0 = performance.now(); buildMapHeights(); return performance.now() - t0; }, blurMapHeights: () => { const t0 = performance.now(); blurMapHeights(); return performance.now() - t0; },
-  tune: { GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, SDR_OUT, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, MAP_LIGHT, ROAD_LABEL },
+  tune: { POSE_LESS, GLASS_FX, SPEAR_POSE, SPEAR, DOLL_VIEW, HAMMER_POSE, HAMMER, AXE_POSE, AXE, PIXEL, OUTLINE, SKY, CLOUDS, GI, HAZE, EYE, BLOOM, GRADE, SDR_OUT, GROUND_HAZE, CROWD, LOOT_FX, REFINE, WHEAT, GROTTO, AMBIENT, OBELISK, WILLOW, MAP_SMOOTH, MAP_LIGHT, ROAD_LABEL },
   rescaleObelisks: () => rescaleObelisks(),
   // (triangles a wall type draws, and how many of each type are built in the world: [type, tris, count ground, count upper])
   wallCost: () => { const out = {}; for (let t = 1; t <= 14; t++) { const b = new BuildBuf(), save = OUT; OUT = b; try { wallPiece(500, 500, 0, t); } finally { OUT = save; } out[t] = [b.n / 9, 0, 0]; }
