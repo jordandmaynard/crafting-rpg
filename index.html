@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 948;
+const GAME_VERSION = 949;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -32005,6 +32005,17 @@ function legSwing(ph) {
 // knee, foot, elbow, twist and tuck (v288) are the joints' share of the walk: set them all to 0 for the old stiff-limbed walk
 const WALK = { plant: 1, cadence: 2.5, stride: 0.75, backStride: 0.55, arms: 0.65, sideOpen: 0.57, bob: 0.03, lean: 0.1, knee: 1.77, foot: 0.1, elbow: 0.62, twist: 0.12, tuck: 1.9 };
 let time = 0, regionName = '', regionT = 0;
+// (v949, Jordan: a 32 ms first frame after Start, a little of everything in update) update() run a few frames with next to no
+// time passing while the start screen is up, so its code is compiled and its first-time work done (roofs and rooms,
+// townsfolk, foes, the HUD) before the first frame you play. No discoveries or "Entering" toasts meanwhile, and the
+// hero keeps facing as it was. Those frames aren't kept by Spike capture
+let warmLeft = 3, warmNow = false;
+function warmUpdate() {
+  warmLeft--; warmNow = true;
+  const rt = regionT, face = H.face;
+  regionT = 1e9;
+  try { update(1e-4); } finally { regionT = rt; H.face = face; }
+}
 function heroSpeed() { const i = T(Math.floor(H.x), Math.floor(H.z)); return (mode === 'build' ? 4.4 : 4.6) * (WT[i] === 1 ? 0.62 : 1) * driftSlow(H.x, H.z); }
 function update(dt) {
   time += dt;
@@ -36863,7 +36874,10 @@ function frameBody(now) {
   const running = started && !mapOpen && !optsOpen && !spikes.holding && !veilBusy();
   if (running && !held) update(dt);
   else if (running) {}
-  else if (!started) { time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face; }
+  else if (!started) {
+    if (warmLeft > 0) warmUpdate();
+    time += dt; animateHero(dt); heroRoot.position.set(H.x, H.y, H.z); heroRoot.rotation.y = H.face;
+  }
   prof.lap('game update (hero, foes, effects)');
   updateCamera(dt);
   updateHeldPotion();
@@ -36963,7 +36977,8 @@ function frameBody(now) {
       for (const k in WN) prof.count('recorded again: ' + WN[k], W[k] || 0); I.why = {}; }
     I.submits = 0; I.canvases = 0; I.upKB = 0; I.tWalk = 0; I.tShadow = 0; I.tRender = 0; I.replayed = 0; I.recorded = 0; }
   prof.frame(frameStart, now, profLive, `World built in ${(genMs / 1000).toFixed(1)} s. GPU rows are each pass's time; "scene" rows by what's drawn.`);
-  const kept = spikes.end(veilBusy() ? 0 : performance.now() - frameStart, now, [dayNum, clock]);
+  const kept = spikes.end(veilBusy() || warmNow ? 0 : performance.now() - frameStart, now, [dayNum, clock]);
+  warmNow = false;
   if (kept && (profPanel.hidden || document.body.classList.contains('noUI'))) showSpikeOpen();
   else if (spikes.changed && !profPanel.hidden) showSpikes();
 }
@@ -37131,7 +37146,8 @@ generate((f, label, HFin) => { $('loadFill').style.width = (f * 100).toFixed(1) 
   // (v930, Jordan's next spike on the first frame: townsfolk 7.7 ms, outline/post/seals 8.7 ms) the woken towns' people
   // baked now too (their batches are still made in play, a town a frame), and the quest seals' atlas drawn (its images
   // decoded and stroked) at the size the first frame will want
-  for (const t of folkTowns) while (t.building < t.folk.length) bakeFolk(t.folk[t.building++]);
+  // (v949, Jordan: a 32 ms first frame, townsfolk 3.8 of it) and their batches made now too, not a town a frame in play
+  for (const t of folkTowns) { while (t.building < t.folk.length) bakeFolk(t.folk[t.building++]); if (!t.batches) batchTown(t); }
   { const dpr = Math.min(2, devicePixelRatio || 1), cell = Math.max(8, Math.round(QUEST_MARK.size * uiScale() * dpr)); if (cell !== sealCell) buildSealAtlas(cell); }
   genMs = performance.now() - genStart;
   $('loadFill').style.width = '100%'; $('loadText').textContent = 'THE WORLD AWAITS'; drawGenMapAt(true);

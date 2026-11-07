@@ -486,19 +486,7 @@ class Renderer {
       // (v795) only the object blocks that changed since they were last sent: a matrix when the mesh moved (its _mwV,
       // as in _bundledShadow), the material's numbers when one of them differs; sent in runs (a gap of a few unchanged
       // ones is sent along)
-      const d = ch.objData, q = this.device.queue, W = OBJ_BYTES / 4;
-      let lo = -1, hi = -1, sent = 0;
-      for (const r of ch.items) {
-        const m = r.mesh, v = m._mwV, o = r.k * W;
-        let up = this._objRest(d, o, m, r.mat);
-        if (v !== r.mv || v === 0) { r.mv = v; this._setMat(d, o, m.matrixWorld); up = true; }
-        if (!up) continue;
-        sent++;
-        if (lo < 0) lo = hi = r.k;
-        else if (r.k - hi > 8) { q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W); lo = hi = r.k; }
-        else hi = r.k;
-      }
-      if (lo >= 0) q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W);
+      const sent = this._bundleObjs(ch);
       this.info.objSent = (this.info.objSent || 0) + sent; this.info.objKept = (this.info.objKept || 0) + ch.items.length - sent;
       this.info.draws += ch.items.length;
       // (the frame's bind group takes turns between a few (the probe light's two sets): the same list is kept recorded
@@ -560,6 +548,24 @@ class Renderer {
     return { pre, bundle: ch.bundle, rest };
   }
   // (v770) a recorded list's items (already checked as they stand) encoded again into a bundle with frame bind group bg
+  // (v949: its own method so Spike capture shows it as a row of its own, apart from the checks in _bundled) a replayed
+  // list's object blocks that changed, sent; returns how many
+  _bundleObjs(ch) {
+    const d = ch.objData, q = this.device.queue, W = OBJ_BYTES / 4;
+    let lo = -1, hi = -1, sent = 0;
+    for (const r of ch.items) {
+      const m = r.mesh, v = m._mwV, o = r.k * W;
+      let up = this._objRest(d, o, m, r.mat);
+      if (v !== r.mv || v === 0) { r.mv = v; this._setMat(d, o, m.matrixWorld); up = true; }
+      if (!up) continue;
+      sent++;
+      if (lo < 0) lo = hi = r.k;
+      else if (r.k - hi > 8) { q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W); lo = hi = r.k; }
+      else hi = r.k;
+    }
+    if (lo >= 0) q.writeBuffer(ch.objBuf, lo * OBJ_BYTES, d, lo * W, (hi - lo + 1) * W);
+    return sent;
+  }
   _encodeItems(ch, bg, fo, format) {
     const be = this.device.createRenderBundleEncoder({ colorFormats: [format], depthStencilFormat: DEPTH, sampleCount: 1 });
     be.setBindGroup(0, bg, [fo]);
