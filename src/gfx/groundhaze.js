@@ -21,6 +21,7 @@ import { ShaderMaterial, Texture, NormalBlending, DoubleSide } from './materials
 
 const CPT = 4;            // sim cells a tile
 const GRID = 192;         // sim cells across (48 tiles), round the camera's target
+export const GROUND_HAZE_GRID_TILES = GRID / CPT;   // (v956) tiles the sim (and the drawn haze) spans
 const JACOBI = 20;        // pressure solver iterations (pairs of passes)
 export const MAX_STIRS = 64;   // arrows, boats and foes passing through the haze in one frame (v887: was 32)
 const MAX_DT = 1 / 30;    // the sim never steps further than this in one frame
@@ -537,7 +538,8 @@ export class GroundHaze {
   update(f) {
     this.on = !!f.on && !!this.siteOrigin;
     this.mesh.visible = this.on;
-    if (!this.on) { this.heroWas = null; return; }
+    // (v956: off, the grid's forgotten: on again, it starts filled with resting haze, not last time's grid shifted)
+    if (!this.on) { this.heroWas = null; this.origin = null; return; }
     const slices = Math.max(1, Math.min(16, Math.round(f.slices)));
     if (slices !== this.slices) this._build(slices);
     const dt = Math.min(Math.max(f.dt, 0), MAX_DT);

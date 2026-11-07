@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 955;
+const GAME_VERSION = 956;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9030,6 +9030,20 @@ const GH_N = GFX.GROUND_HAZE_SITE, GH_TPT = GFX.GROUND_HAZE_SITE_TPT, GH_TILES =
 const GH_DRAPE = 2, GH_DRAPE_R = 5;
 const ghSite = new Float32Array(GH_N * GH_N * 4), ghTint = new Uint8Array(GH_N * GH_N * 4);
 let ghCentre = null, ghKey = '', ghAt = 0, ghAny = false;
+// (v956, Jordan's G: 'ground haze sim' 0.45 ms in a town with no haze in sight) the site map reaches 52 tiles out but
+// the sim and the drawn haze only 24, so haze far off kept the sim running. ghCells: which GH_CELL-tile squares of the
+// site map hold any haze (ghCellAt: the map's first tile); the sim runs only while one is within the grid's reach of the
+// camera, GH_NEAR tiles to spare
+const GH_CELL = 4, GH_CELLS = Math.ceil(GH_TILES / GH_CELL), GH_NEAR = 4;
+let ghCells = null, ghCellAt = [0, 0];
+function ghNear() {
+  if (!ghCells) return false;
+  const R = GFX.GROUND_HAZE_GRID_TILES / 2 + GH_NEAR;
+  const i0 = Math.max(0, Math.floor((camTarget.x - R - ghCellAt[0]) / GH_CELL)), i1 = Math.min(GH_CELLS - 1, Math.floor((camTarget.x + R - ghCellAt[0]) / GH_CELL));
+  const j0 = Math.max(0, Math.floor((camTarget.z - R - ghCellAt[1]) / GH_CELL)), j1 = Math.min(GH_CELLS - 1, Math.floor((camTarget.z + R - ghCellAt[1]) / GH_CELL));
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (ghCells[j * GH_CELLS + i]) return true;
+  return false;
+}
 // the site map round tile (cx, cz): the ground's height (the top of water and lava), what's solid, and how much
 // haze rests there and its colour, by biome, blurred over a couple of tiles so it fades in at the edges
 // 1 on a pool (water in a swamp, lava in the Wastes), easing to GROUND_HAZE.poolAway poolReach tiles from one
@@ -9097,6 +9111,7 @@ function* groundHazeSiteJob(cx, cz) {
     if ((j & 1) === 1) yield;
   }
   let any = false;
+  const cells = new Uint8Array(GH_CELLS * GH_CELLS);
   for (let j = 0; j < GH_N; j++) for (let i = 0; i < GH_N; i++) {
     if (i === 0 && j && (j & 1) === 0) yield;
     const x = c0 + (i + 0.5) / GH_TPT, z = r0 + (j + 0.5) / GH_TPT, k = (j * GH_N + i) * 4;
@@ -9122,7 +9137,7 @@ function* groundHazeSiteJob(cx, cz) {
     if (w) { ghTint[k] = clamp(s[1] * w, 0, 255); ghTint[k + 1] = clamp(s[2] * w, 0, 255); ghTint[k + 2] = clamp(s[3] * w, 0, 255); }
     else { ghTint[k] = col.lake[0] * 255; ghTint[k + 1] = col.lake[1] * 255; ghTint[k + 2] = col.lake[2] * 255; }
     ghTint[k + 3] = 255;
-    if (s[0] > 0.003) any = true;
+    if (s[0] > 0.003) { any = true; cells[Math.floor(j / GH_TPT / GH_CELL) * GH_CELLS + Math.floor(i / GH_TPT / GH_CELL)] = 1; }
   }
   // the drape: each texel at least as high as any within GH_DRAPE_R texels, less GH_DRAPE a tile beyond the first
   // quarter tile (across, then down)
@@ -9140,7 +9155,7 @@ function* groundHazeSiteJob(cx, cz) {
     }
   }
   for (let k = 0; k < GH_N * GH_N; k++) ghSite[k * 4] = y0[k];
-  ghAny = any;
+  ghAny = any; ghCells = any ? cells : null; ghCellAt = [c0, r0];
   groundHaze.setSite([c0 * GH_TPT, r0 * GH_TPT], ghSite, ghTint);
 }
 let ghJob = null;
@@ -9158,7 +9173,7 @@ function updateGroundHaze(dt) {
       else ghJob = groundHazeSiteJob(cx, cz);
     }
     if (ghJob) { const until = performance.now() + GH_BUDGET; while (performance.now() < until) if (ghJob.next().done) { ghJob = null; break; } }
-    on = ghAny;
+    on = ghAny && ghNear();
   }
   if (on) foeStirs(dt);
   const a = CLOUDS.direction * Math.PI / 180;
@@ -37290,7 +37305,7 @@ window.GAME = {
     return { nodes, matrices: t(() => scene.updateMatrixWorld()), walk: t(() => scene.traverse(o => o.visible)), lights: t(() => renderer._gatherLights(scene)),
       collect: t(() => renderer._walk(scene, camera, false)), renderWorld: t(() => { renderWorld(); renderer.flush(); }) };
   },
-  groundHaze: () => ({ on: groundHaze.on, any: ghAny, centre: ghCentre, slices: groundHaze.slices }),
+  groundHaze: () => ({ on: groundHaze.on, any: ghAny, near: ghNear(), cells: ghCells ? ghCells.reduce((a, v) => a + v, 0) : 0, centre: ghCentre, slices: groundHaze.slices }),
   wake: () => ({ on: ripples.on, view: [...ripples.view], cur: ripples.cur, bodies: ripples.bodies.size }),
   roseImage: async st => { const d = await roseLoad(st); return d ? Array.from(d) : null; },
   buildTest: (shade, cull) => { setBuildTest(shade, !!cull); return BUILD_TEST; },

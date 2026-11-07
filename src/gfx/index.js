@@ -9,7 +9,7 @@ export { HeightProbes, rasterGround, rasterGroundStart, rasterGroundPart, raster
 export { LitHaze } from './haze.js';
 export { EyeAdaptation } from './exposure.js';
 export { Bloom } from './bloom.js';
-export { GroundHaze, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT, MAX_STIRS as GROUND_HAZE_STIRS } from './groundhaze.js';
+export { GroundHaze, GROUND_HAZE_SITE, GROUND_HAZE_SITE_TPT, MAX_STIRS as GROUND_HAZE_STIRS, GROUND_HAZE_GRID_TILES } from './groundhaze.js';
 export { Caustics } from './caustics.js';
 export { Ripples } from './ripples.js';
 export { Trample } from './trample.js';
