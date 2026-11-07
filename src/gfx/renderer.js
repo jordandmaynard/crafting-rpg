@@ -216,15 +216,15 @@ class Renderer {
   setClouds(u) { this.clouds = u; }
   // probe lighting (probes.js): something with views() -> { vis, light, hf, key } and uniforms() -> 12 numbers
   // (the frame's giA, giB, giC), or null
-  setGI(gi) { this.gi = gi; this._frameBGs.clear(); }
+  setGI(gi) { this.gi = gi; this._fbClear(); }
   // lit haze (haze.js): something with view() -> its texture (a texel a mosaic pixel) or null, uniforms() -> 8
   // numbers (the frame's hazeA, hazeB) and key, or null
-  setHaze(h) { this.haze = h; this._frameBGs.clear(); }
+  setHaze(h) { this.haze = h; this._fbClear(); }
   // eye adaptation (exposure.js): something with buffer() -> its state (the exposure first) and on, or null
-  setEye(e) { this.eye = e; this._frameBGs.clear(); }
+  setEye(e) { this.eye = e; this._fbClear(); }
   // bloom (bloom.js): something with view() -> its glow (or null) and uniforms() -> 4 numbers (the frame's bloom)
   // and key, or null
-  setBloom(b) { this.bloom = b; this._frameBGs.clear(); }
+  setBloom(b) { this.bloom = b; this._fbClear(); }
   // HDR output: on an HDR display, a float canvas whose values above 1 show brighter than white; peak: the
   // brightest highlights, × white's brightness. Off: the usual canvas, everything over white clipped.
   // (v888) If the browser doesn't take the float canvas's 'extended' tone mapping, it goes back to the usual canvas
@@ -803,13 +803,17 @@ class Renderer {
     this.shadowSize = size;
     this.shadowTex = this.device.createTexture({ size: [size, size], format: SHADOW_FORMAT, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
     this.shadowView = this.shadowTex.createView();
-    this._frameBGs.clear();
+    this._fbClear();
   }
   _frameBindGroup(noHaze = false) {
     const ct = this.clouds && this.clouds.tCloud && this.clouds.tCloud.value, cloud = ct ? this._texture(ct) : null;
     const gv = this.gi ? this.gi.views() : null;
     const hv = this.haze && !noHaze ? this.haze.view() : null, eb = this.eye && !noHaze ? this.eye.buffer() : null;
     const bv = this.bloom && !noHaze ? this.bloom.view() : null;
+    // (v961) the last set for each mode kept with what it bound, so a frame like the last builds no key string
+    const gk = gv ? gv.key : '-', hk = hv ? this.haze.key : '-', bk = bv ? this.bloom.key : '-';
+    const L = noHaze ? this._fbN : this._fbH;
+    if (L && L.s === this.shadowSize && L.c === cloud && L.g === gk && L.h === hk && L.e === eb && L.b === bk) return L.bg;
     const key = this.shadowSize + ':' + (cloud ? cloud.id : 'w') + ':' + (gv ? gv.key : '-') + ':' + (hv ? this.haze.key : '-') + ':' + (eb ? 'e' : '-') +
       ':' + (bv ? this.bloom.key : '-');
     // (v771) kept by key, not only the last one: the probes swap between two texture sets frame to frame, and a new
@@ -833,8 +837,11 @@ class Renderer {
       ] });
       this._frameBGs.set(k, bg);
     }
+    const S = { s: this.shadowSize, c: cloud, g: gk, h: hk, e: eb, b: bk, bg };
+    if (noHaze) this._fbN = S; else this._fbH = S;
     return bg;
   }
+  _fbClear() { this._frameBGs.clear(); this._fbN = this._fbH = null; }
   _frameSlotAlloc() {
     if (this.frameSlot >= FRAME_SLOTS) this.flush();
     if (!this._enc) this._newEnc();
@@ -1225,12 +1232,21 @@ class Renderer {
   }
   // a texture's GPU copy and its sampler
   _texture(t) {
-    if (t.isViewTexture) return { view: t.view, sampler: this._sampler(t), id: 'v' + t.id };
+    // (v961) view and target textures: one record kept per texture (rebuilt when its view or sampler changes), not a new
+    // object and id string every bind
+    if (t.isViewTexture) {
+      const sm = this._sampler(t), W = this._viewRecs || (this._viewRecs = new WeakMap());
+      let r = W.get(t);
+      if (!r || r.view !== t.view || r.sampler !== sm) { r = { view: t.view, sampler: sm, id: 'v' + t.id }; W.set(t, r); }
+      return r;
+    }
     if (t.isRenderTargetTexture || t.isDepthTexture) {
       const rt = t.target;
       this._targetViews(rt);
-      const g = this._rts.get(rt);
-      return { view: t.isDepthTexture ? g.depthView : g.colorView, sampler: this._sampler(t), id: g.id + (t.isDepthTexture ? 'd' : 'c') };
+      const g = this._rts.get(rt), d = !!t.isDepthTexture, sm = this._sampler(t), view = d ? g.depthView : g.colorView;
+      let r = d ? g.recD : g.recC;
+      if (!r || r.view !== view || r.sampler !== sm) { r = { view, sampler: sm, id: g.id + (d ? 'd' : 'c') }; if (d) g.recD = r; else g.recC = r; }
+      return r;
     }
     let g = this._texs.get(t);
     if (!g || g.version !== t.version) {
@@ -1251,6 +1267,9 @@ class Renderer {
     return g;
   }
   _sampler(t) {
+    // (v961) the texture's last sampler kept while its four settings stay, so most calls build no key string
+    const SL = this._sampLast || (this._sampLast = new WeakMap()), l = SL.get(t);
+    if (l && l.ws === t.wrapS && l.wt === t.wrapT && l.mg === t.magFilter && l.mn === t.minFilter) return l.s;
     const key = t.wrapS + ':' + t.wrapT + ':' + t.magFilter + ':' + t.minFilter;
     this._samplers = this._samplers || new Map();
     let s = this._samplers.get(key);
@@ -1259,6 +1278,7 @@ class Renderer {
       s = this.device.createSampler({ addressModeU: wrap(t.wrapS), addressModeV: wrap(t.wrapT), magFilter: filt(t.magFilter), minFilter: filt(t.minFilter) });
       this._samplers.set(key, s);
     }
+    SL.set(t, { ws: t.wrapS, wt: t.wrapT, mg: t.magFilter, mn: t.minFilter, s });
     return s;
   }
   _module(code) {

@@ -290,7 +290,13 @@ export class HeightProbes {
   }
 
   // for the renderer: the newest probes and the height field, and the frame's numbers for them
-  views() { const s = this.sets[this.cur]; return { vis: s.visV, light: s.lightV, hf: this.hfView, key: this.N + ':' + this.gen + ':' + this.cur }; }   // (v771: gen, as the renderer keeps bind groups by key)
+  views() {
+    // (v961) the same object while nothing changed, not a new one and a new key string every call
+    const s = this.sets[this.cur]; let w = this._vw;
+    if (!w || w.vis !== s.visV || w.light !== s.lightV || w.hf !== this.hfView || w.n !== this.N || w.g !== this.gen || w.c !== this.cur)
+      w = this._vw = { vis: s.visV, light: s.lightV, hf: this.hfView, key: this.N + ':' + this.gen + ':' + this.cur, n: this.N, g: this.gen, c: this.cur };
+    return w;
+  }   // (v771: gen, as the renderer keeps bind groups by key)
   uniforms() {
     return [this.mode, this.strength, this.minimum, this.bias, this.grid[0], this.grid[1], this.N, GI_LAYERS.length,
       this.hfOrigin[0], this.hfOrigin[1], HF, 0];
@@ -387,12 +393,13 @@ export function rasterGroundPart(gs, part, t0 = 0, t1 = Infinity, until = Infini
   const B = GI_BLOCK, { h, c, x0, z0 } = gs;
   const put = (i, y, r, g, b, e) => { if (y > h[i]) { h[i] = y; c[i * 4] = r; c[i * 4 + 1] = g; c[i * 4 + 2] = b; c[i * 4 + 3] = e; } };
   const e = Math.round((part.emit || 0) * 255);
+  const corner = (x, y, z, r, g, b) => {
+    const i = Math.floor((x - x0) * GI_TPT), j = Math.floor((z - z0) * GI_TPT);
+    if (i >= 0 && j >= 0 && i < B && j < B) put(j * B + i, y, r, g, b, e);
+  };
   return eachTri(part, (ax, ay, az, bx, by, bz, qx, qy, qz, r, g, b) => {
-    // corners first, so thin triangles still count
-    for (const [x, y, z] of [[ax, ay, az], [bx, by, bz], [qx, qy, qz]]) {
-      const i = Math.floor((x - x0) * GI_TPT), j = Math.floor((z - z0) * GI_TPT);
-      if (i >= 0 && j >= 0 && i < B && j < B) put(j * B + i, y, r, g, b, e);
-    }
+    // corners first, so thin triangles still count (v961: one call each, not a loop over new arrays per triangle)
+    corner(ax, ay, az, r, g, b); corner(bx, by, bz, r, g, b); corner(qx, qy, qz, r, g, b);
     const den = (bz - qz) * (ax - qx) + (qx - bx) * (az - qz);
     if (Math.abs(den) < 1e-9) return;
     const i0 = Math.max(0, Math.floor((Math.min(ax, bx, qx) - x0) * GI_TPT)), i1 = Math.min(B - 1, Math.floor((Math.max(ax, bx, qx) - x0) * GI_TPT));
@@ -502,7 +509,7 @@ function eachTri(part, fn, t0 = 0, t1 = Infinity, until = Infinity) {
     if (until !== Infinity && t > t0 * 3 && (t / 3) % 16 === 0 && performance.now() > until) return t / 3;
     const a = idx ? idx[t] : t, b = idx ? idx[t + 1] : t + 1, q = idx ? idx[t + 2] : t + 2;
     let r, g, bl;
-    if (fixed) [r, g, bl] = fixed;
+    if (fixed) { r = fixed[0]; g = fixed[1]; bl = fixed[2]; }
     else if (col) {
       r = Math.round((col[a * 3] + col[b * 3] + col[q * 3]) / 3 * 255);
       g = Math.round((col[a * 3 + 1] + col[b * 3 + 1] + col[q * 3 + 1]) / 3 * 255);

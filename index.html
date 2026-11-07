@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 960;
+const GAME_VERSION = 961;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -9073,13 +9073,18 @@ function ghGround(x, z) {
 // The site is worked out a few rows at a time over frames (a generator stepped for GH_BUDGET ms a frame, see
 // updateGroundHaze), the haze keeping the last one until it's done; groundHazeSite does it all at once.
 const GH_BUDGET = 2;
+let ghBufs = null;
+const ghS = new Float64Array(4);
 function groundHazeSite(cx, cz) { const job = groundHazeSiteJob(cx, cz); while (!job.next().done); }
 function* groundHazeSiteJob(cx, cz) {
   const G = GROUND_HAZE, c0 = cx - GH_TILES / 2, r0 = cz - GH_TILES / 2, W = GH_TILES + 2 * GH_BLUR + 2;
   const col = {}, share = b => b === SWAMP ? G.swamp : b === GRAVE ? G.grave : b === WASTES ? G.wastes : 0;
   for (const [b, k] of [[SWAMP, 'swampColor'], [GRAVE, 'graveColor'], [WASTES, 'wastesColor'], ['lake', 'lakeColor']]) { tmpC2.set(G[k]); col[b] = [tmpC2.r, tmpC2.g, tmpC2.b]; }
   // each tile's share and colour (times its share), from one tile before the window to one after, then blurred
-  const m = new Float32Array(W * W * 4), t = new Float32Array(W * W * 4), at = (c, r) => (r * W + c) * 4, land = new Float32Array(W * W);
+  // (v961: its working arrays made once and kept, cleared here, not made anew each time)
+  const B = ghBufs || (ghBufs = { m: new Float32Array(W * W * 4), t: new Float32Array(W * W * 4), land: new Float32Array(W * W),
+    corner: new Float32Array((GH_N + 1) * (GH_N + 1)), y0: new Float32Array(GH_N * GH_N), y1: new Float32Array(GH_N * GH_N) });
+  const m = B.m.fill(0), t = B.t, at = (c, r) => (r * W + c) * 4, land = B.land.fill(0);
   for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
     const tc = c0 - GH_BLUR - 1 + c, tr = r0 - GH_BLUR - 1 + r;
     if (tc < 0 || tr < 0 || tc >= N || tr >= N) continue;
@@ -9095,7 +9100,8 @@ function* groundHazeSiteJob(cx, cz) {
     if (s > 0) { m[k] = s; m[k + 1] = col[cb][0] * s; m[k + 2] = col[cb][1] * s; m[k + 3] = col[cb][2] * s; }
     if (c === W - 1 && (r & 1) === 1) yield;
   }
-  for (const [dc, dr] of [[1, 0], [0, 1]]) {
+  for (let pass = 0; pass < 2; pass++) {
+    const dc = pass ? 0 : 1, dr = pass;
     for (let r = 0; r < W; r++) for (let c = 0; c < W; c++) {
       const k = at(c, r);
       for (let q = 0; q < 4; q++) {
@@ -9108,7 +9114,7 @@ function* groundHazeSiteJob(cx, cz) {
     m.set(t);
   }
   // the ground at the corners of every texel (each a quarter tile off its middle), shared between neighbours
-  const corner = new Float32Array((GH_N + 1) * (GH_N + 1));
+  const corner = B.corner;
   for (let j = 0; j <= GH_N; j++) {
     for (let i = 0; i <= GH_N; i++) corner[j * (GH_N + 1) + i] = ghGround(c0 + i / GH_TPT, r0 + j / GH_TPT);
     if ((j & 1) === 1) yield;
@@ -9121,7 +9127,7 @@ function* groundHazeSiteJob(cx, cz) {
     const tc = clamp(Math.floor(x), 0, N - 1), tr = clamp(Math.floor(z), 0, N - 1), ti = T(tc, tr);
     // the share and colour: bilinear between the tile middles
     const u = x - (c0 - GH_BLUR - 1) - 0.5, v = z - (r0 - GH_BLUR - 1) - 0.5, a = Math.floor(u), b = Math.floor(v), fu = u - a, fv = v - b;
-    const s = [0, 0, 0, 0];
+    const s = ghS;
     for (let q = 0; q < 4; q++) s[q] = (m[at(a, b) + q] * (1 - fu) + m[at(a + 1, b) + q] * fu) * (1 - fv) + (m[at(a, b + 1) + q] * (1 - fu) + m[at(a + 1, b + 1) + q] * fu) * fv;
     // and nothing past the shore: the land share between the tile middles is a half at the water's edge
     const L = (land[a + b * W] * (1 - fu) + land[a + 1 + b * W] * fu) * (1 - fv) + (land[a + (b + 1) * W] * (1 - fu) + land[a + 1 + (b + 1) * W] * fu) * fv;
@@ -9144,12 +9150,13 @@ function* groundHazeSiteJob(cx, cz) {
   }
   // the drape: each texel at least as high as any within GH_DRAPE_R texels, less GH_DRAPE a tile beyond the first
   // quarter tile (across, then down)
-  const y0 = new Float32Array(GH_N * GH_N), y1 = new Float32Array(GH_N * GH_N), fall = GH_DRAPE * STEP / GH_TPT;
+  const y0 = B.y0, y1 = B.y1, fall = GH_DRAPE * STEP / GH_TPT;
   for (let k = 0; k < GH_N * GH_N; k++) y0[k] = ghSite[k * 4];
-  for (const [di, dj, from, to] of [[1, 0, y0, y1], [0, 1, y1, y0]]) {
+  for (let pass = 0; pass < 2; pass++) {
+    const di = pass ? 0 : 1, dj = pass, from = pass ? y1 : y0, to = pass ? y0 : y1;
     for (let j = 0; j < GH_N; j++) for (let i = 0; i < GH_N; i++) {
       let y = from[j * GH_N + i];
-      for (let o = 1; o <= GH_DRAPE_R; o++) for (const sgn of [-1, 1]) {
+      for (let o = 1; o <= GH_DRAPE_R; o++) for (let sgn = -1; sgn <= 1; sgn += 2) {
         const ii = i + di * o * sgn, jj = j + dj * o * sgn;
         if (ii >= 0 && jj >= 0 && ii < GH_N && jj < GH_N) y = Math.max(y, from[jj * GH_N + ii] - fall * Math.max(0, o - 0.5));
       }
@@ -9162,16 +9169,20 @@ function* groundHazeSiteJob(cx, cz) {
   groundHaze.setSite([c0 * GH_TPT, r0 * GH_TPT], ghSite, ghTint);
 }
 let ghJob = null;
+// (v961, Jordan: a garbage audit) the site was worked out again every 2 s even with nothing changed (standing in town:
+// ~130 KB of garbage a frame and up to GH_BUDGET ms a frame of work); now after 2 s only if the world changed meanwhile
+// (ghWorldV: bumped wherever a chunk's mesh is swapped or the GI's told tiles changed)
+let ghWorldV = 0, ghSeenV = -1;
 function updateGroundHaze(dt) {
   const G = GROUND_HAZE;
   let on = G.on > 0.5 && G.amount > 0 && G.density > 0;
   if (on) {
-    // anew when the camera's moved three tiles on, every couple of seconds (trees felled, things built), or retuned
+    // anew when the camera's moved three tiles on, every couple of seconds if the world changed (trees felled, things built), or retuned
     const cx = Math.round(camTarget.x), cz = Math.round(camTarget.z), now = performance.now();
     const key = [G.swamp, G.swampColor, G.grave, G.graveColor, G.wastes, G.wastesColor, G.lake, G.lakeColor, G.lakeFade, G.poolAway, G.poolReach].join();
-    if (!ghJob && (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || now - ghAt > 2000 || key !== ghKey)) {
+    if (!ghJob && (!ghCentre || Math.max(Math.abs(cx - ghCentre[0]), Math.abs(cz - ghCentre[1])) >= 3 || (now - ghAt > 2000 && ghWorldV !== ghSeenV) || key !== ghKey)) {
       const first = !ghCentre;
-      ghCentre = [cx, cz]; ghAt = now; ghKey = key;
+      ghCentre = [cx, cz]; ghAt = now; ghKey = key; ghSeenV = ghWorldV;
       if (first) groundHazeSite(cx, cz);
       else ghJob = groundHazeSiteJob(cx, cz);
     }
@@ -9411,6 +9422,7 @@ function chunkGI(cx, cz) {
 }
 // a building's roof went up or came down: the chunks under it work their blocks out again
 function giTouch(tiles) {
+  ghWorldV++;
   const seen = new Set();
   for (const [c, r] of tiles) for (const [dc, dr] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
     const key = Math.floor((r + dr) / CH) * NC + Math.floor((c + dc) / CH);
@@ -11545,7 +11557,7 @@ function refreshSquare(c, r) {
       for (let v = 0; v < 9; v += 3) { K[n + v] = k.r; K[n + v + 1] = k.g; K[n + v + 2] = k.b; }
     }
     g.attributes.color.needsUpdate = true;
-    ch.giStale = Math.max(ch.giStale || 0, 2); ch.giJob = null;
+    ch.giStale = Math.max(ch.giStale || 0, 2); ch.giJob = null; ghWorldV++;
   }
   markObj(c, r); markObj(c - 1, r); markObj(c + 1, r); markObj(c, r - 1); markObj(c, r + 1);
   flushDirty();
@@ -18440,6 +18452,7 @@ function uploadSome(list) {
   return !list.length;
 }
 function swapMesh(ch, key, m) {
+  ghWorldV++;
   ch.giStale = Math.max(ch.giStale || 0, key === 'ground' || key === 'water' || key === 'lava' || key === 'bog' ? 2 : 1); ch.giJob = null;
   if (ch[key]) { scene.remove(ch[key]); ch[key].geometry.dispose(); }
   ch[key] = m;
@@ -19295,8 +19308,10 @@ function collide(p, rad, foe) {
     const c = Math.floor(p.x), r = Math.floor(p.z), u = p.x - c, v = p.z - r;
     const rim = up ? 0 : RIM[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))];
     // and a little short of a cliff top, where rocks line the edge
-    const lip = rad + (BR[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))] ? 0.03 : 0.1), side = b => rim & 1 << b ? sr : rim & 256 << b ? lip : rad;
-    const r0 = side(0), r1 = side(1), r2 = side(2), r3 = side(3);
+    // (v961: no closure made for this each step: collide runs for every mover every frame)
+    const lip = rad + (BR[T(clamp(c, 0, N - 1), clamp(r, 0, N - 1))] ? 0.03 : 0.1);
+    const r0 = rim & 1 ? sr : rim & 256 ? lip : rad, r1 = rim & 2 ? sr : rim & 512 ? lip : rad;
+    const r2 = rim & 4 ? sr : rim & 1024 ? lip : rad, r3 = rim & 8 ? sr : rim & 2048 ? lip : rad;
     if (v < r0 && !stepOpen(c, r, 0, foe)) p.z = r + r0;
     if (1 - v < r2 && !stepOpen(c, r, 2, foe)) p.z = r + 1 - r2;
     if (u < r3 && !stepOpen(c, r, 3, foe)) p.x = c + r3;
@@ -19308,7 +19323,8 @@ function collide(p, rad, foe) {
       const l = Math.sqrt(dd) || 1e-4;
       p.x = px + ex / l * m; p.z = pz + ez / l * m;
     }
-    for (const [cu, cvv, dH, dV, dx, dz] of CORNER) {
+    for (let q = 0; q < CORNER.length; q++) {
+      const K = CORNER[q], cu = K[0], cvv = K[1], dH = K[2], dV = K[3], dx = K[4], dz = K[5];
       const px = c + cu, pz = r + cvv, ex = p.x - px, ez = p.z - pz, dd = ex * ex + ez * ez;
       if (dd >= rad * rad) continue;
       if (!stepOpen(c, r, dH, foe) || !stepOpen(c, r, dV, foe)) continue;
@@ -25486,6 +25502,7 @@ function detach(i, c, r) {
 // block is worked out again without it
 function giLetGo(d) {
   if (!d.giParts) return;
+  ghWorldV++;
   d.giParts = null;
   const ch = chunks.get(Math.floor(d.r / CH) * NC + Math.floor(d.c / CH));
   if (ch) { ch.giStale = Math.max(ch.giStale || 0, 1); ch.giJob = null; }
@@ -31333,6 +31350,11 @@ function folkUpMove(p, dx, dz) {
   const got = Math.hypot(x - p.x, z - p.z); p.x = x; p.z = z; return got;
 }
 const folkCells = new Map();
+// (v961) kept between frames, so the per-person step makes no closures or arrays: the cell lists are reused, not new
+const folkAll = [], folkCellPool = [];
+const folkPlain = q => q < SNN && !stairAt.has(q);
+const folkMv = (P, x, z) => P.k ? folkUpMove(P, x, z) : moveEntity(P, x, z, FOLK.rad, true);
+function folkInDoor(t, p, mx, mz) { for (const o of t.folk) if (o !== p && Math.hypot(o.x - mx, o.z - mz) < 0.55) return true; return false; }
 let heroLastX = 0, heroLastZ = 0;
 function updateFolk(dt) {
   spikes.enter('townsfolk: towns woken + people built');
@@ -31355,7 +31377,7 @@ function updateFolk(dt) {
         for (let j = Math.min(R.length, p.ri + 4) - 1; j >= p.ri; j--) if (R[j] % SNN === here && (j === p.ri || Math.floor(R[j] / SNN) === p.k)) { p.ri = j + 1; p.k = Math.floor(R[j] / SNN); break; }
         // (on a stair or upstairs, or about to be: tile to tile, straight, nothing to collide with but what the
         // route already keeps them from)
-        const plain = q => q < SNN && !stairAt.has(q);
+        const plain = folkPlain;
         p.up = p.k > 0 || stairAt.has(p.k * SNN + here) || (p.ri < R.length && !plain(R[p.ri]));
         let tx = p.gx, tz = p.gz;
         if (p.ri < R.length) {
@@ -31421,9 +31443,9 @@ function updateFolk(dt) {
       if (p.heard > 0) { p.heard -= dt; p.face += angDiff(Math.atan2(H.x - p.x, H.z - p.z), p.face) * (1 - Math.exp(-dt * 5)); }
       // the door they opened, shut behind them once they're clear of it and no one's in the doorway
       if (p.opened) {
-        const [mx, mz] = doorMid(p.opened);
+        const dq = p.opened, mx = dq.w ? dq.c : dq.c + 0.5, mz = dq.w ? dq.r + 0.5 : dq.r;   // (doorMid, unboxed)
         if (Math.hypot(p.x - mx, p.z - mz) > 1.0) {
-          const inWay = Math.hypot(H.x - mx, H.z - mz) < 0.6 || t.folk.some(o => o !== p && Math.hypot(o.x - mx, o.z - mz) < 0.55);
+          const inWay = Math.hypot(H.x - mx, H.z - mz) < 0.6 || folkInDoor(t, p, mx, mz);
           if (!inWay) { if (p.opened.open) { setDoor(p.opened, false); doorSnd(p.opened, false); } p.opened = null; }
         }
       }
@@ -31478,8 +31500,13 @@ function updateFolk(dt) {
   }
   // keeping apart from one another (by tile, as the foes do)
   folkCells.clear();
-  const all = [];
-  for (const t of folkTowns) if (t.batches) for (const p of t.folk) { p.sepI = all.length; all.push(p); const k = Math.floor(p.x) * 8192 + Math.floor(p.z); let l = folkCells.get(k); if (!l) folkCells.set(k, l = []); l.push(p); }
+  const all = folkAll; all.length = 0;
+  let pool = 0;
+  for (const t of folkTowns) if (t.batches) for (const p of t.folk) {
+    p.sepI = all.length; all.push(p); const k = Math.floor(p.x) * 8192 + Math.floor(p.z); let l = folkCells.get(k);
+    if (!l) { l = folkCellPool[pool] || (folkCellPool[pool] = []); pool++; l.length = 0; folkCells.set(k, l); }
+    l.push(p);
+  }
   for (const A of all) {
     const c0 = Math.floor(A.x), r0 = Math.floor(A.z);
     for (let dc = -1; dc <= 1; dc++) for (let dr = -1; dr <= 1; dr++) {
@@ -31490,7 +31517,7 @@ function updateFolk(dt) {
         // (v468: someone walking isn't shoved back by someone standing, who gives way instead; anyone getting
         // themselves unstuck passes through)
         if (d < m && d > 1e-4 && !(A.ghostT > 0) && !(B.ghostT > 0)) {
-          const mv = (P, x, z) => P.k ? folkUpMove(P, x, z) : moveEntity(P, x, z, FOLK.rad, true);
+          const mv = folkMv;
           const aw = A.state === 'walk', bw = B.state === 'walk', fa = aw && !bw ? 0 : !aw && bw ? 1 : 0.5;
           mv(A, -dx / d * (m - d) * fa, -dz / d * (m - d) * fa); mv(B, dx / d * (m - d) * (1 - fa), dz / d * (m - d) * (1 - fa));
         }
