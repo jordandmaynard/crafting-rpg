@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 949;
+const GAME_VERSION = 950;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -15591,10 +15591,9 @@ function shrine(x, z, k) {
 // objects pulled out of their chunk while they shake, fall or crumble
 const detached = new Map();   // tile -> { g, hp, o, c, r }
 // (the buffers objects are drawn into: one set for building a chunk's at once, and one for a chunk streaming in
-// a band of rows at a time, which keeps its part-drawn objects over frames)
+// a slice of tiles at a time (v950; was a band of rows), which keeps its part-drawn objects over frames)
 const OBJ_BUFS = { obj: bufObj, glow: bufGlow, metal: new Buf(), prism: new Buf(), trunk: bufTrunk, canopy: bufCanopy, plant: bufPlant, web: bufWeb, spider: bufSpider, inObj: new Buf(), inGlow: new GlowBuf() };
 const BAND_BUFS = { obj: new Buf(), glow: new GlowBuf(), metal: new Buf(), prism: new Buf(), trunk: new TreeBuf(), canopy: new Buf(), plant: new PlantBuf(), web: new Buf(), spider: new SpiderBuf(), inObj: new Buf(), inGlow: new GlowBuf() };
-const OBJ_BAND = 4;      // rows of tiles in a band (v926: was 8)
 let bandOwner = null;    // the chunk whose objects are part drawn into BAND_BUFS
 // (v592) INOBJ, INGLOW: where the furniture inside a roofed room goes (town props, beds, workshop props), a mesh of
 // its own a chunk (ch.inObj, ch.inGlow) that's only drawn while that room can be seen into (interiorShown)
@@ -15610,7 +15609,22 @@ function objBufs(B, clear) {
 }
 function objRows(cx, cz, ra, rb) {
   const c0 = cx * CH, r0 = cz * CH;
-  for (let r = r0 + ra; r < r0 + rb; r++) for (let c = c0; c < c0 + CH; c++) {
+  for (let r = r0 + ra; r < r0 + rb; r++) for (let c = c0; c < c0 + CH; c++) objTile(c, r);
+}
+// (v950, Jordan: a 9.6 ms band of rows walking out of town) a chunk's objects streamed in a slice of tiles at a time:
+// from tile `at` (row by row across the chunk) until `until` (performance.now()) has passed, at least one; returns
+// where it got to (CH * CH when done)
+function objTiles(cx, cz, at, until) {
+  const c0 = cx * CH, r0 = cz * CH, n = CH * CH;
+  while (at < n) {
+    objTile(c0 + at % CH, r0 + Math.floor(at / CH)); at++;
+    if (performance.now() > until) break;
+  }
+  return at;
+}
+// what stands on one tile, drawn into the buffers objBufs set
+function objTile(c, r) {
+  {
     const i = T(c, r), o = OB[i];
     // (v592) in a room (so under a roof or a floor): the furniture into the chunk's inside meshes
     const shut = roomOf.has(i), inner = shut && (o === O.BED || o === O.WORKPROP || o === O.PROP);
@@ -18331,16 +18345,16 @@ function finishChunk(ch) {
   const t0 = performance.now();
   // (ch.redo: a streamed-in chunk's objects drawn again the same way, after a prop was cut out of them)
   if (ch.stage === 0 || ch.redo) {
-    // what stands on it, a band of rows a step (drawn into BAND_BUFS, which another chunk can take over, and then
+    // what stands on it, a slice of tiles a step (drawn into BAND_BUFS, which another chunk can take over, and then
     // this one starts again), then its meshes made, one a step, sent to the GPU a slice a step (v926), and swapped in together
-    if (bandOwner !== ch) { bandOwner = ch; ch.band = 0; ch.made = {}; ch.upq = null; objBufs(BAND_BUFS, true); }
-    const bands = CH / OBJ_BAND;
-    spikes.enter(ch.band < bands ? 'stream: objects, a band of rows' : ch.band < bands + OBJ_MESHES.length ? 'stream: objects, a mesh made' : ch.upq?.length !== 0 ? 'stream: objects, sent to the GPU' : 'stream: objects swapped in');
-    if (ch.band < bands) {
+    // (v950: a slice of tiles a step, STREAM.slice ms, not a band of 4 rows: ch.objAt the next tile, ch.band the next mesh)
+    if (bandOwner !== ch) { bandOwner = ch; ch.objAt = 0; ch.band = 0; ch.made = {}; ch.upq = null; objBufs(BAND_BUFS, true); }
+    const tiles = CH * CH;
+    spikes.enter(ch.objAt < tiles ? 'stream: objects, a slice of tiles' : ch.band < OBJ_MESHES.length ? 'stream: objects, a mesh made' : ch.upq?.length !== 0 ? 'stream: objects, sent to the GPU' : 'stream: objects swapped in');
+    if (ch.objAt < tiles) {
       objBufs(BAND_BUFS);
-      objRows(ch.cx, ch.cz, ch.band * OBJ_BAND, ++ch.band * OBJ_BAND);
-      objBufs(OBJ_BUFS);
-    } else if (ch.band < bands + OBJ_MESHES.length) objMesh(BAND_BUFS, ch.made, OBJ_MESHES[ch.band++ - bands]);
+      try { ch.objAt = objTiles(ch.cx, ch.cz, ch.objAt, performance.now() + STREAM.slice); } finally { objBufs(OBJ_BUFS); }
+    } else if (ch.band < OBJ_MESHES.length) objMesh(BAND_BUFS, ch.made, OBJ_MESHES[ch.band++]);
     else if (!ch.upq) { ch.upq = OBJ_MESHES.map(k => ch.made[k]).filter(Boolean); uploadSome(ch.upq); }
     else if (ch.upq.length) uploadSome(ch.upq);
     else {
@@ -18349,7 +18363,7 @@ function finishChunk(ch) {
       if (ch.redo) { ch.redo = false; showDetached(ch); } else ch.stage = 1;
     }
     spikes.exit();
-    const k = ch.stage || ch.band > bands ? 2 : 1;
+    const k = ch.stage || ch.band > 0 ? 2 : 1;
     chunkTime.parts[k] = Math.max(chunkTime.parts[k], performance.now() - t0);
   } else if (!ch.piecesDone) {
     // (v926, Jordan's 39 ms spike: a town chunk's pieces, every story, were built in one step and all its meshes sent
