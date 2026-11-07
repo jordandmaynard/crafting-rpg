@@ -1424,3 +1424,5 @@ On a phone or tablet (or with `?touch=1` in the address; `?touch=0` turns it off
 **v951:** (Jordan) 21 ms in "minimap" on the first frame. The smooth map's shader is now compiled, and the whole map with its colours and heights sent to the GPU, while the world loads. That used to happen on the minimap's first paint.
 
 **v952:** (Jordan's Backpack tabs paste baked) PACK_TABS.openOut 116.5 -> 103 (the open tab sticks out less).
+
+**v953:** (Jordan) 17.6 ms in "clouds, water, hearths, smoke" a few tiles out of the starting town. Spike capture now gives each part of that lap its own row: clouds, water, falls spray, smoke, butterflies and fireflies, spell effects, sea life, heat shimmer, trampled grass, grass, deep snow and sand, cut grass, wheat, ground, ore rocks remade, hearths, stations, mills, build queue, chimney smoke. Headless walks showed no single part standing out (each under about 9 ms, most under 3), so the next capture will name it.
