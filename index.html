@@ -1503,7 +1503,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 938;
+const GAME_VERSION = 939;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -8460,6 +8460,13 @@ renderer.mergePasses = MOBILE ? 1 : 0;
 renderer.shadowTaps = MOBILE ? 5 : 17;
 stage.appendChild(renderer.domElement);
 const cv = renderer.domElement;
+// (v938) the canvas's box on the page, kept between frames: it only moves when the canvas is resized. Each
+// getBoundingClientRect() asked mid-frame made the browser lay the page out there and then (a forced layout), after the
+// frame's own changes to the HUD; with the prompt up that was every frame, and once a big one (the "action prompt" spike)
+let cvBox = null;
+const cvRect = () => cvBox || (cvBox = cv.getBoundingClientRect());
+new ResizeObserver(() => { cvBox = null; }).observe(cv);
+addEventListener('resize', () => { cvBox = null; });
 const scene = new GFX.Scene();
 // (renderWorld brings every world matrix up to date once a frame, rather than the renderer in each of its renders)
 scene.matrixAutoUpdate = false;
@@ -22326,7 +22333,7 @@ const weapon = () => GEAR.weapon ? ITEMS[GEAR.weapon] : FISTS;
 // with none; while F would do something (the prompt's up) a speech bubble for someone to talk to, else the reaching hand.
 // The crosshair at the helm, seated or in build mode. The body class only changes when the cursor does.
 const CURSOR_KINDS = new Set(['sword', 'bow', 'spear', 'axe', 'hammer']);
-let cursorKind = '', cursorAct = '';
+let cursorKind = '', cursorAct = '', promptHtml = '';
 // (v797, Jordan) an item being dragged out of the pack or the hotbar (a potion held out over the world): no attacks,
 // and the open 'use' hand for the cursor
 const itemDragging = () => !$('dragIcon').hidden;
@@ -23511,7 +23518,7 @@ function xpBurst(o) {
   const n = Math.max(1, Math.min(Math.round(XP_FLY.sparks), o.xp)), end = xpBarEnd();
   floatGain('xp', o.xp, H.x, H.y + 1.3, H.z, '#7cc4ff', 'hero'); sfx.xp();
   if (!(XP_FLY.on > 0.5) || !end || document.body.classList.contains('noUI')) { gainXp(o.xp, true); return; }
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   v3.copy(o.m.position).project(camera);
   const sx = rect.left + (v3.x + 1) / 2 * rect.width, sy = rect.top + (1 - v3.y) / 2 * rect.height;
   const base = Math.floor(o.xp / n);
@@ -23627,7 +23634,7 @@ function floatText(text, x, y, z, color) {
   const el = document.createElement('div');
   el.className = 'float'; el.textContent = text;
   if (color) el.style.color = color;
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
   el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
   $('fx').appendChild(el);
@@ -23676,7 +23683,7 @@ function floatGain(id, n, x, y, z, color = '#e8c08a', at = T(Math.floor(x), Math
   $('fx').appendChild(el);
   const g = { id, n, at, x, y0: y, y: y + slot * GAIN_FLY.stack, z, slot, color, el, txt, num, t: 0, pulse: 1, follow: at === 'hero' ? y - H.y : null };
   gains.push(g);
-  placeGain(g, cv.getBoundingClientRect());
+  placeGain(g, cvRect());
 }
 function placeGain(g, rect) {
   const G = GAIN_FLY, rising = Math.max(0, g.t - G.hold) / Math.max(0.01, G.rise);
@@ -23713,7 +23720,7 @@ function gainShadow(sc, glow) {
 }
 function updateGains(dt) {
   if (!gains.length) return;
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   for (let k = gains.length - 1; k >= 0; k--) {
     const g = gains[k];
     g.t += dt;
@@ -25903,7 +25910,7 @@ function pollPad(dt) {
   PAD.cur.x += wx * dt * 9; PAD.cur.z += wz * dt * 9;
   const l = Math.hypot(PAD.cur.x, PAD.cur.z), lim = BUILD_RANGE - 1;
   if (l > lim) { PAD.cur.x *= lim / l; PAD.cur.z *= lim / l; }
-  const cx = H.x + PAD.cur.x, cz = H.z + PAD.cur.z, rect = cv.getBoundingClientRect();
+  const cx = H.x + PAD.cur.x, cz = H.z + PAD.cur.z, rect = cvRect();
   v3.set(cx, surfH(cx, cz), cz).project(camera);
   mouse.x = rect.left + (v3.x + 1) / 2 * rect.width; mouse.y = rect.top + (1 - v3.y) / 2 * rect.height;
   const pc = $('padCursor');
@@ -25939,7 +25946,7 @@ function viewRay(nx, ny) {
 }
 function pickGround(withWalls) {
   if (forcedPick) return forcedPick;
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   const nx = (mouse.x - rect.left) / rect.width * 2 - 1, ny = -(mouse.y - rect.top) / rect.height * 2 + 1;
   viewRay(nx, ny);
   const top = (MAXL + 3) * STEP;
@@ -25997,7 +26004,7 @@ function updateAim() {
     else { aim.x = Math.sin(H.face); aim.z = Math.cos(H.face); }
     return;
   }
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   const nx = (mouse.x - rect.left) / rect.width * 2 - 1, ny = -(mouse.y - rect.top) / rect.height * 2 + 1;
   viewRay(nx, ny);
   // aim along the plane through the hero's chest
@@ -27166,7 +27173,7 @@ function pickFoe() {
     }
     return best;
   }
-  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  const rect = cvRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
   pickRay.t = null;
   for (const f of foes) {
     if (Math.abs(f.x - H.x) > 40 || Math.abs(f.z - H.z) > 40) continue;
@@ -27186,7 +27193,7 @@ function pickFoe() {
 function pickFolk() {
   if (!started || mapOpen || !H.alive || mode !== 'play' || !folkTowns.size) return null;
   let best = null, bd = 1e9;
-  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  const rect = cvRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
   pickRay.t = null;
   for (const t of folkTowns) {
     if (!t.batches) continue;
@@ -27280,7 +27287,7 @@ function updateFoeBars(dt) {
     if (frac > 0.01) sets.push(one(G.barStrength * frac));
     glowCss = sets.join(', ');
   }
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   for (const f of barFoes) {
     if (f !== hov) f.barT -= dt;
     const alive = f.hp > 0 && foes.includes(f);
@@ -27335,7 +27342,7 @@ function showJumpHint() {
   const el = $('jumpHint');
   if (!H.canJump || !started) { el.hidden = true; return; }
   v3.set(H.x, H.y + 1.75, H.z).project(camera);
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   el.textContent = PAD.on ? 'A TO JUMP' : TOUCH.on ? 'TAP TO JUMP' : 'SHIFT TO JUMP';
   el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
   el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
@@ -27436,7 +27443,7 @@ function actBoxes(a) {
 }
 function mouseOverAct(a) {
   if (PAD.on || TOUCH.on || mapOpen) return false;
-  const rect = cv.getBoundingClientRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
+  const rect = cvRect(), sx = x => rect.left + (x + 1) / 2 * rect.width, sy = y => rect.top + (1 - y) / 2 * rect.height;
   for (const [x, z, y0, y1, hw] of actBoxes(a)) {
     v3.set(x, y0, z).project(camera); if (v3.z > 1 || v3.z < -1) continue;
     const bx = sx(v3.x), by = sy(v3.y);
@@ -28255,7 +28262,7 @@ function setStory(k) {
 }
 function pickBuild() {
   if (!buildStory || forcedPick) return pickGround(false);
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   viewRay((mouse.x - rect.left) / rect.width * 2 - 1, -(mouse.y - rect.top) / rect.height * 2 + 1);
   const y = LV[T(clamp(Math.floor(H.x), 0, N - 1), clamp(Math.floor(H.z), 0, N - 1))] * STEP + buildStory * WALL_H;
   if (Math.abs(rayDir.y) < 1e-4) return null;
@@ -28908,7 +28915,7 @@ function roofDrawnAt(i, s = 0) {
 }
 function updateFlights(dt) {
   if (!flights.length) return;
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   for (let k = flights.length - 1; k >= 0; k--) {
     const f = flights[k];
     f.t += dt / FLY.time;
@@ -29370,7 +29377,7 @@ function freshWaterAt(x, z) {
 // where a bottle at screen point (sx, sy) hangs: the point along the eye's ray there that's lift over the ground (or
 // water) straight under it; gy that ground
 function bottleHangAt(sx, sy, L = BOTTLE_FILL.lift) {
-  const rect = cv.getBoundingClientRect();
+  const rect = cvRect();
   viewRay((sx - rect.left) / rect.width * 2 - 1, -(sy - rect.top) / rect.height * 2 + 1);
   if (rayDir.y > -1e-4) return null;
   const top = (MAXL + 3) * STEP + L, at = q => [ray.x + rayDir.x * q, ray.y + rayDir.y * q, ray.z + rayDir.z * q];
@@ -29458,14 +29465,14 @@ function updateHeldPotion() {
   pcardN = 0;
   const now = performance.now(), dt = pcardT ? clamp((now - pcardT) / 1000, 0.001, 0.05) : 1 / 60;
   pcardT = now;
-  const want = [], cards = [], sw = cv.clientWidth || 1, sh = cv.clientHeight || 1;
+  const want = [], cards = [], sw = cvRect().width || 1, sh = cvRect().height || 1;
   const D = POTION_DRAW, P = POTION_THROW, playing = started && mode === 'play';
   const hp = Math.round(POTION_THROW.inHand) === 2 && playing && H.alive && !H.still ? handPotion() : null;
   if (hp && potionDrawAt().held) {
     // the hand's line on the screen (from the fist on down along it): the bottle hangs that way from its neck
     hero.potion2d.getWorldPosition(h2a);
     // (v756, Jordan: upright, held by the neck, while the arm's out; along the hand only as it reaches to the pack)
-    const turn = (pt) => { h2c.copy(h2a).project(camera); pt.project(camera); const sx = (pt.x - h2c.x) * (cv.clientWidth || 1), sy = (pt.y - h2c.y) * (cv.clientHeight || 1); return Math.hypot(sx, sy) > 1e-3 ? Math.atan2(sx, -sy) : 0; };
+    const turn = (pt) => { h2c.copy(h2a).project(camera); pt.project(camera); const sx = (pt.x - h2c.x) * (cvRect().width || 1), sy = (pt.y - h2c.y) * (cvRect().height || 1); return Math.hypot(sx, sy) > 1e-3 ? Math.atan2(sx, -sy) : 0; };
     const up = turn(h2b.set(h2a.x, h2a.y - 0.2, h2a.z)), w = potionReachW();
     const rot = w > 0 ? up + angDiff(turn(h2b.set(0, -0.2, 0).applyMatrix4(hero.potion2d.matrixWorld)), up) * w : up;
     const kind = ITEMS[hp].potion;
@@ -31391,7 +31398,7 @@ function drawFolk() {
   // what the one you're talking to says, over their head
   const el = $('folkSay');
   if (folkTalk && folkTalk.t > 0 && folkTowns.has(folkTalk.p.t) && folkTalk.p.rig && Math.hypot(folkTalk.p.x - H.x, folkTalk.p.z - H.z) < 6) {
-    const p = folkTalk.p, rect = cv.getBoundingClientRect();
+    const p = folkTalk.p, rect = cvRect();
     v3.set(p.x, p.y + 1.05 * p.rig.g.scale.y + 0.15, p.z).project(camera);
     el.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
     el.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
@@ -32187,54 +32194,62 @@ function update(dt) {
   spikes.exit(); spikes.enter('action prompt');
 
   // action prompt: over the loot, the table, or the middle of the door (or gate)
+  spikes.enter('what F reaches');
   const act = actionHere(), nd = act && act.kind === 'door' ? act.door : null;
+  spikes.exit();
   const pr = $('prompt');
   // (v521, Jordan) at the wheel, DROP ANCHOR shows only once the boat has stopped (F drops it any time)
   const underway = act && act.kind === 'helm' && H.helm && H.boat && Math.abs(H.boat.speed || 0) > 0.05;
+  spikes.enter('mouse over it');
   cursorAct = act && !underway && mouseOverAct(act) ? act.kind : '';
+  spikes.exit();
+  // (v938) the prompt's text is written only when it changes (each write had the page lay it out again)
+  const setPr = h => { if (h !== promptHtml) { pr.innerHTML = promptHtml = h; } };
   if (act && !underway) {
     const key = PAD.on ? padGlyph('A') : TOUCH.on ? '<b>TAP</b>' : '<b>F</b>';
     if (act.kind === 'loot') {
       const h = act.drops[0];
-      pr.innerHTML = key + lootLabel(act.drops);
+      setPr(key + lootLabel(act.drops));
       v3.set(h.x, surfaceY(h.x, h.z) + 0.45, h.z);
     } else if (act.kind === 'bones') {
-      pr.innerHTML = key + 'PICK UP ' + ITEMS.bone.name.toUpperCase() + ' × ' + BONE_PILE.give;
+      setPr(key + 'PICK UP ' + ITEMS.bone.name.toUpperCase() + ' × ' + BONE_PILE.give);
       v3.set(act.pile.x, LV[act.pile.i] * STEP + 0.45, act.pile.z);
     } else if (act.kind === 'table') {
-      pr.innerHTML = key + (craftAt ? 'PUT AWAY' : 'USE ' + TABLE_NAME[act.table.kind]);
+      setPr(key + (craftAt ? 'PUT AWAY' : 'USE ' + TABLE_NAME[act.table.kind]));
       v3.set(act.table.x, (act.table.y ?? LV[T(act.table.c, act.table.r)] * STEP) + (act.table.kind === 'cook' ? 1.3 : 1.0), act.table.z);
     } else if (act.kind === 'station') {
-      pr.innerHTML = key + (openSt === act.st && invOpen ? 'PUT AWAY' : 'USE ' + STATION_KIND[act.st.kind].name);
+      setPr(key + (openSt === act.st && invOpen ? 'PUT AWAY' : 'USE ' + STATION_KIND[act.st.kind].name));
       v3.set(act.st.c + 0.5, stBase(act.st) + 1.2, act.st.r + 0.5);
     } else if (act.kind === 'folk') {
-      pr.innerHTML = key + 'TALK TO ' + act.p.d.name.full.toUpperCase();
+      setPr(key + 'TALK TO ' + act.p.d.name.full.toUpperCase());
       v3.set(act.p.x, act.p.y + 1.05 * act.p.rig.g.scale.y + 0.25, act.p.z);
     } else if (act.kind === 'vault') {
-      pr.innerHTML = key + (openSt === VAULT && invOpen ? 'CLOSE THE VAULT' : 'OPEN THE BANK VAULT');
+      setPr(key + (openSt === VAULT && invOpen ? 'CLOSE THE VAULT' : 'OPEN THE BANK VAULT'));
       v3.set(act.q.x, act.q.y + 2.1, act.q.z);
     } else if (act.kind === 'lootcrate') {
       const open = invOpen && openSt && openSt.loot && LOOT_CRATES.get(act.lc.key) === openSt;
       const what = act.lc.barrel ? 'BARREL' : act.lc.locker ? 'FOOT LOCKER' : act.lc.chest ? 'CHEST' : 'CRATE';
-      pr.innerHTML = key + (open ? 'PUT AWAY' : (act.lc.searched ? 'OPEN THE ' : 'SEARCH THE ') + what);
+      setPr(key + (open ? 'PUT AWAY' : (act.lc.searched ? 'OPEN THE ' : 'SEARCH THE ') + what));
       v3.set(act.lc.x, act.lc.y + 1.0, act.lc.z);
     } else if (act.kind === 'quest') {
-      pr.innerHTML = key + 'READ THE QUEST BOARD';
+      setPr(key + 'READ THE QUEST BOARD');
       v3.set(act.board.q.x, act.board.q.y + 1.75, act.board.q.z);
     } else if (act.kind === 'sit' || act.kind === 'stand') {
-      pr.innerHTML = key + (act.kind === 'sit' ? 'SIT' : 'STAND UP');
+      setPr(key + (act.kind === 'sit' ? 'SIT' : 'STAND UP'));
       v3.set(H.x, H.y + 1.6, H.z);
     } else if (act.kind === 'helm') {
-      pr.innerHTML = key + (H.helm ? 'DROP ANCHOR' : 'TAKE THE WHEEL') + (H.boat && H.boat.livery ? ' <span class="boatName">· ' + H.boat.livery.name.toUpperCase() + '</span>' : '');   // (v515: the boat's name)
+      setPr(key + (H.helm ? 'DROP ANCHOR' : 'TAKE THE WHEEL') + (H.boat && H.boat.livery ? ' <span class="boatName">· ' + H.boat.livery.name.toUpperCase() + '</span>' : ''));   // (v515: the boat's name)
       v3.set(H.x, H.y + 2.2, H.z);
     } else {
-      pr.innerHTML = key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR');
+      setPr(key + (nd.open ? 'CLOSE ' : 'OPEN ') + (nd.gate ? 'GATE' : 'DOOR'));
       const mx = nd.w ? nd.c : nd.c + 0.5, mz = nd.w ? nd.r + 0.5 : nd.r;
       const L = Math.max(LV[T(nd.c, nd.r)], LV[nd.w ? T(nd.c - 1, nd.r) : T(nd.c, nd.r - 1)]);
       v3.set(mx, L * STEP + nd.k * WALL_H + (nd.gate ? FENCE_H : WALL_H) / 2, mz);
     }
     v3.project(camera);
-    const rect = cv.getBoundingClientRect();
+    spikes.enter('prompt placed');
+    const rect = cvRect();
+    spikes.exit();
     pr.style.left = (rect.left + (v3.x + 1) / 2 * rect.width) + 'px';
     pr.style.top = (rect.top + (1 - v3.y) / 2 * rect.height) + 'px';
     pr.hidden = false;
@@ -33182,7 +33197,7 @@ function resize() {
   ssNow = ssFor(px);
   renderer.setSize(rw, rh, false);
   outlineRT.setSize(rw * ssNow, rh * ssNow); heatRT.setSize(rw * ssNow, rh * ssNow); proxyRT.setSize(rw * ssNow, rh * ssNow); maskRT.setSize(rw * ssNow, rh * ssNow); hoverRT.setSize(rw * ssNow, rh * ssNow); outlineMat.uniforms.res.value.set(rw, rh);
-  { const sw = rw * px + 'px', sh = rh * px + 'px'; if (cv.style.width !== sw) cv.style.width = sw; if (cv.style.height !== sh) cv.style.height = sh; }
+  { const sw = rw * px + 'px', sh = rh * px + 'px'; if (cv.style.width !== sw) cv.style.width = sw; if (cv.style.height !== sh) cv.style.height = sh; cvBox = null; }
   const viewH = (w < h ? 15 : 11.5) / zoom;
   // one tile spans an even number of big pixels, so every tile edge's 2:1 staircase lines up
   const tilePx = Math.max(6, Math.round(Math.SQRT1_2 / (viewH / (rh - 2)) / 2) * 2);
@@ -37356,8 +37371,8 @@ window.GAME = {
   humans: () => foes.filter(f => f.rig).map(f => ({ kind: f.kind, who: f.who, prop: f.rig.d.prop, level: f.level, hp: f.hp, x: +f.x.toFixed(2), z: +f.z.toFixed(2), aggro: f.aggro, atk: +f.atk.toFixed(2), combo: f.combo })),
   fallen: () => humanFallen.length,
   face: a => { H.face = a; },
-  aimAt: (x, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, surfaceY(x, z) + 0.5, z).project(camera); mouse.x = rect.left + (v3.x + 1) / 2 * rect.width; mouse.y = rect.top + (1 - v3.y) / 2 * rect.height; },
-  screenOf: (x, y, z) => { const rect = cv.getBoundingClientRect(); v3.set(x, y, z).project(camera); return [rect.left + (v3.x + 1) / 2 * rect.width, rect.top + (1 - v3.y) / 2 * rect.height]; },
+  aimAt: (x, z) => { const rect = cvRect(); v3.set(x, surfaceY(x, z) + 0.5, z).project(camera); mouse.x = rect.left + (v3.x + 1) / 2 * rect.width; mouse.y = rect.top + (1 - v3.y) / 2 * rect.height; },
+  screenOf: (x, y, z) => { const rect = cvRect(); v3.set(x, y, z).project(camera); return [rect.left + (v3.x + 1) / 2 * rect.width, rect.top + (1 - v3.y) / 2 * rect.height]; },
   zoom: z => setZoom(z),
   yaw: d => turnCam(d),
   cam: () => ({ yaw, zoom }),
