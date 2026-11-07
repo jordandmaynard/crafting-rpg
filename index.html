@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 953;
+const GAME_VERSION = 954;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -7207,8 +7207,9 @@ function makeCobbleTex() {
 const COBBLE_FROST = { amount: 0.9, col: '#dde8f4', lo: 0.12, hi: 0.62 };
 const COBBLE_U = { roses: ROSE_U.roses, tRose: ROSE_U.tRose, bump: { value: COBBLE.bump }, frost: { value: 0 }, frostC: { value: new GFX.Color(COBBLE_FROST.col) }, frostLo: { value: COBBLE_FROST.lo }, frostHi: { value: COBBLE_FROST.hi } };
 const COBBLE_FU = Object.assign({}, COBBLE_U, { frost: { value: COBBLE_FROST.amount } });
+// (v954: @invariant, its depth drawn in the depth pre-pass, BUILD_PRE: see BUILD_PRE.mats)
 const cobbleCode = ROSE_WGSL + /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
+struct VOut { @builtin(position) @invariant pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let w = (O.model * vec4f(v.position, 1.0)).xyz;
   return VOut(F.viewProj * vec4f(w, 1.0), w, v.color, w - F.camPos.xyz);
@@ -36753,7 +36754,9 @@ const WORLD_SPLIT_F = {};
 // cull: drop back faces (pieces wound the wrong way vanish too, so it's only a test)
 function setBuildTest(shade, cull) { BUILD_TEST.shade = shade; BUILD_TEST.cull = cull; buildMat.side = cull ? GFX.FrontSide : GFX.DoubleSide; buildMat.shadowSide = GFX.DoubleSide; }
 const WORLD_PARTS = ['roofs', 'built pieces', 'glass', 'trees + rocks + props', 'trunks', 'plants', 'foes + hero', 'other'];
-BUILD_PRE.mats = new Set([buildMat, roofMat, slateMat, slateSteep, thatchMat, groundMat, metalMat]);
+// (v954, Jordan's overdraw view: a town's street tiles lit twice, the ground and then the cobbles laid a hair over it)
+// the cobbles' depth too, so the ground under them fails the depth test before it's shaded
+BUILD_PRE.mats = new Set([buildMat, roofMat, slateMat, slateSteep, thatchMat, groundMat, metalMat, cobbleMat, cobbleFrostMat]);
 function worldPart(m) {
   const t = m.material;
   if (t === buildMat) return 'built pieces';
