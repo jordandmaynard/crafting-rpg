@@ -1422,3 +1422,5 @@ On a phone or tablet (or with `?touch=1` in the address; `?touch=0` turns it off
 **v950:** (Jordan) A 9.6 ms "stream: objects, a band of rows" walking out of the starting town. A streaming chunk's objects (trees, rocks, props, cliff rocks, bridges, furrows) are now drawn a slice of tiles at a time, stopping once STREAM.slice (1 ms) has passed, instead of four whole rows a step. Each tile was already quick on its own; it was the whole band in one step that added up. The Spike capture row is now "stream: objects, a slice of tiles".
 
 **v951:** (Jordan) 21 ms in "minimap" on the first frame. The smooth map's shader is now compiled, and the whole map with its colours and heights sent to the GPU, while the world loads. That used to happen on the minimap's first paint.
+
+**v952:** (Jordan's Backpack tabs paste baked) PACK_TABS.openOut 116.5 -> 103 (the open tab sticks out less).
