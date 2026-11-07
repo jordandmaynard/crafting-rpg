@@ -1512,7 +1512,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 944;
+const GAME_VERSION = 945;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -20580,9 +20580,13 @@ const crowdOrder = [];
 // POSE_LESS.margin) has its joints' matrices made and its bones sent only every POSE_LESS.every-th frame, each on a
 // frame of its own; what's in view or near it every frame. Its pose is still worked out each frame (update), so it's
 // right the moment it comes into view; only an off-screen shadow can lag a few frames. G > Tests > Pose less off screen
-const POSE_LESS = { on: 1, every: 4, margin: 3 };
+// (v945, Jordan: a 19 ms posing spike in a big city with few people in view) every 8th frame, was 4; each rig's turn
+// is handed out in order (poseSeq), not at random, so the same number wait each frame; and one off screen whose bones
+// aren't written yet (a town just woken, someone come out of a shut room or out of bed) waits for its turn too
+// instead of all of them posing in the one frame
+const POSE_LESS = { on: 1, every: 8, margin: 3 };
 const poseFr = new GFX.Frustum(), poseM = new GFX.Matrix4();
-let poseFrame = 0, poseSkipped = 0;
+let poseFrame = 0, poseSkipped = 0, poseSeq = 0;
 function poseView() {
   camera.updateMatrixWorld();
   poseFr.setFromProjectionMatrix(poseM.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
@@ -20591,7 +20595,7 @@ function poseView() {
 // can a rig (o, standing at x, y, z) wait this frame?
 function poseWait(o, x, y, z) {
   if (!POSE_LESS.on || poseFr.sphereClass(x, y + 0.8, z, 1.2, POSE_LESS.margin) !== 0) return false;
-  const n = Math.max(1, POSE_LESS.every | 0), k = o._poseK ?? (o._poseK = (Math.random() * 64) | 0);
+  const n = Math.max(1, POSE_LESS.every | 0), k = o._poseK ?? (o._poseK = poseSeq++ & 1023);
   if ((poseFrame + k) % n === 0) return false;
   poseSkipped++;
   return true;
@@ -31457,10 +31461,21 @@ function drawFolk() {
       const f = p.rig, far = Math.max(Math.abs(p.x - cx), Math.abs(p.z - cz)) > FOLK.show;
       // (v592) and anyone in a room that can't be seen into (under its roof or a floor): not posed or drawn
       const pc = Math.floor(p.x), pr = Math.floor(p.z), shut = !far && roomOf.has(p.k * SNN + T(pc, pr)) && !interiorShown(Math.floor(pr / CH) * NC + Math.floor(pc / CH), p.k);
-      if (far || shut || (p.asleep && !p.bedPh) || p.k > view) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); p._pM = null; continue; }
-      // (v823) off screen, posed every few frames (POSE_LESS), so long as its bones are still where it last wrote them
-      if (p.bedPh || p._pM !== M || p._pb !== p.base || !poseWait(p, p.x, p.y, p.z)) {
-      p._pM = M; p._pb = p.base;
+      // (v945: hidden ones' bones are zeroed once, not every frame)
+      if (far || shut || (p.asleep && !p.bedPh) || p.k > view) {
+        if (p._zM !== M || p._zb !== p.base) { for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16); p._zM = M; p._zb = p.base; }
+        p._pM = null; continue;
+      }
+      // (v823) off screen, posed every few frames (POSE_LESS); (v945) one whose bones aren't written yet waits its
+      // turn too, hidden (zeroed) meanwhile, rather than posing at once
+      const fresh = p._pM !== M || p._pb !== p.base;
+      if (!p.bedPh && poseWait(p, p.x, p.y, p.z)) {
+        if (fresh) {
+          if (p._zM !== M || p._zb !== p.base) for (let j = 0; j < p.bones.length; j++) M.set(ZERO16, (p.base + j) * 16);
+          p._zM = M; p._zb = p.base; p._pM = M; p._pb = p.base;
+        }
+      } else {
+      p._pM = M; p._pb = p.base; p._zM = null;
       if (p.bedPh) folkBedPose(p);
       else {
         f.g.position.set(p.x, p.y, p.z); f.g.rotation.set(0, p.face, 0);
