@@ -1519,7 +1519,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 962;
+const GAME_VERSION = 963;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -20539,11 +20539,13 @@ const MAX_HP = 100;
 // no and takes nothing when there isn't enough
 const MANA = { max: 100, regen: 5, delay: 1.5 };
 // (v962, Jordan: an in-combat state, so health doesn't come back mid-fight; T > Combat) you're in combat while any foe
-// is after you (its aggro on), or for after seconds since you last struck a foe or were struck. H.combat is worked out
-// once a frame (updateCombat); health doesn't come back on its own, nor from a hearth, while it's on
+// is after you (its aggro on), or for after seconds since you last struck a foe, were struck, or (v963) pressed an attack
+// (H.lastAttack: the attack button, held or not, Q, E, or a potion thrown). H.combat is worked out once a frame
+// (updateCombat); health doesn't come back on its own, nor from a hearth, while it's on. (v963, Jordan) out of combat you
+// face the way you walk; in combat you face the cursor as you walk, and coming into combat turns you to it at once
 const COMBAT = { after: 5 };
 const H = {
-  mana: MANA.max, lastSpend: -99, combat: false, lastStrike: -99,
+  mana: MANA.max, lastSpend: -99, combat: false, lastStrike: -99, lastAttack: -99,
   x: 0, z: 0, y: 0, face: 0, hp: MAX_HP, lagHp: MAX_HP, alive: true, story: 0, stair: null,
   kills: 0, level: 1, xp: 0, gold: 0,
   swing: -1, combo: 0, comboT: 0, swingDir: 0, hitDone: false,
@@ -22544,7 +22546,7 @@ function updateCursor() {
 function useAbility(key) {
   if (H.still) { sfx.nope(); return; }
   const a = weapon()[key];
-  if (a) ABILITY[a].cast();
+  if (a) { combatAct(); ABILITY[a].cast(); }
   else if (mode === 'play' && H.alive) sfx.nope();
 }
 // which hero pieces show for what's worn, and what they're coloured
@@ -23718,10 +23720,24 @@ function setStatus(id, on) {
 function updateCombat() {
   let on = false;
   if (H.alive) {
-    on = time - H.lastHurt < COMBAT.after || time - H.lastStrike < COMBAT.after;
+    on = time - H.lastHurt < COMBAT.after || time - H.lastStrike < COMBAT.after || time - H.lastAttack < COMBAT.after;
     if (!on) for (let k = 0; k < foes.length; k++) { const f = foes[k]; if (f.aggro && f.hp > 0) { on = true; break; } }
   }
-  if (on !== H.combat) { H.combat = on; setStatus('combat', on); }
+  if (on !== H.combat) {
+    H.combat = on; setStatus('combat', on);
+    // (v963) coming into combat turns you to the cursor at once, unless a move already has you facing its own way
+    if (on && heroFreeToTurn()) H.face = Math.atan2(aim.x, aim.z);
+  }
+}
+// (v963) an attack pressed (the attack button, Q, E, a potion thrown) puts you in combat, foe or no foe
+function combatAct() {
+  if (!H.alive || mode !== 'play') return;
+  H.lastAttack = time; updateCombat();
+}
+// nothing under way that sets the hero's facing itself: a swing, spin, lunge, tumble, flip, drawn bow, spear move,
+// hoeing, an axe being wound up, a seat or a boat's wheel
+function heroFreeToTurn() {
+  return H.swing < 0 && H.whirl < 0 && H.lunge < 0 && H.dash < 0 && !H.flip && !H.bow && !H.spear && !H.hoe && !(H.axeWind >= 0) && !H.seat && !H.helm && !H.still;
 }
 // ---------- Levels (T > Levels) ----------
 // Every foe killed drops a blue experience orb (perKill, and levelBonus more of that for each level the foe is
@@ -25789,7 +25805,7 @@ function respawn() {
   [H.x, H.z] = at || [spawn.x, spawn.z];
   H.story = 0; H.stair = null; H.boat = null; if (H.helm) setHelm(false); if (H.seat) standUp(true);
   H.hp = MAX_HP; H.lagHp = MAX_HP; H.barHeat = 0; H.alive = true; H.invuln = 2; H.mana = MANA.max; renderMana();
-  H.lastHurt = H.lastStrike = -99; updateCombat();
+  H.lastHurt = H.lastStrike = H.lastAttack = -99; updateCombat();
   H.swing = H.whirl = H.lunge = H.dash = -1; H.bow = H.spear = H.hoe = null; dropHarpoon(); endCharge(false); axeThrow = null;
   renderHp();
   camTarget.set(H.x, surfaceY(H.x, H.z), H.z);
@@ -27058,7 +27074,7 @@ const abilHeld = { q: false, e: false };
 // (the bow's Q and E, the spear's, and the sword's lunge: the whirl and the swing are point blank)
 const AIMED = new Set(['volley', 'rain', 'lunge', 'flurry', 'harpoon', 'boomerang', 'stunsmash', 'charge']);
 const onRelease = key => OPTIONS.attackOnRelease && AIMED.has(weapon()[key]);
-function pressAbility(key) { if (H.rHeld || quickOn()) return; if (onRelease(key)) abilHeld[key] = true; else useAbility(key); }
+function pressAbility(key) { if (H.rHeld || quickOn()) return; if (onRelease(key)) { abilHeld[key] = true; if (!H.still && weapon()[key]) combatAct(); } else useAbility(key); }
 function releaseAbility(key) {
   if (!abilHeld[key]) return;
   abilHeld[key] = false;
@@ -29790,6 +29806,7 @@ function throwPotion() {
   const id = handPotion(), P = POTION_THROW;
   if (!id || mode !== 'play' || !H.alive || H.still || H.dash >= 0 || H.flip || H.lunge >= 0 || H.whirl >= 0) return false;
   if (H.cdPotion > 0 || H.toss) { sfx.nope(); return false; }
+  combatAct();   // (v963: a potion thrown is an attack, so combat)
   const [tx, tz] = potionTarget(), dx = tx - H.x, dz = tz - H.z, d = Math.hypot(dx, dz);
   if (d > 0.3) H.face = Math.atan2(dx, dz);
   // (v781) the toss begins (potionTossPose); the bottle leaves the hand POTION_TOSS.windup seconds on (tossTick)
@@ -32227,8 +32244,9 @@ function update(dt) {
     } else if (m) {
       const slow = (H.swing >= 0 ? (H.strike === 'smash' && H.combo === 3 ? 0 : 0.45) : H.hoe ? 0.3 : H.axeWind >= 0 ? 0.45 : H.bow ? 0.6 : H.spear ? (H.spear.kind === 'flurry' ? SPEAR.flurryMove : 0.6) : 1) * (1 + (TUMBLE.boostTime > 0 ? TUMBLE.boost * Math.max(0, H.boost) / TUMBLE.boostTime : 0));
       vx = m[0] * heroSpeed() * slow; vz = m[1] * heroSpeed() * slow;
-      // walking, you face where you aim: the cursor, or the right stick (the way you walk when it's let go)
-      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !H.hoe && !(H.axeWind >= 0)) H.face += angDiff(Math.atan2(aim.x, aim.z), H.face) * (1 - Math.exp(-dt * 16));
+      // walking in combat, you face where you aim: the cursor, or the right stick (the way you walk when it's let go);
+      // (v963, Jordan) out of combat, the way you walk
+      if (H.swing < 0 && H.whirl < 0 && !H.bow && !H.spear && !H.hoe && !(H.axeWind >= 0)) H.face += angDiff(H.combat ? Math.atan2(aim.x, aim.z) : Math.atan2(m[0], m[1]), H.face) * (1 - Math.exp(-dt * 16));
     }
     vx += H.kx; vz += H.kz;
     H.kx *= Math.exp(-dt * 9); H.kz *= Math.exp(-dt * 9);
@@ -32254,6 +32272,8 @@ function update(dt) {
 
     // attacks
     const atkHeld = mode === 'play' && (mouse.down || PAD.attack || TOUCH.attack);
+    // (v963) the attack button down (held for the auto attack too) is an attack, so combat, but not with the hoe
+    if (atkHeld && !H.still && weapon().kind !== 'hoe') combatAct();
     // (v751: each press throws one; v752, Jordan: with Options > Attack on release, and on touch, a press aims, with
     // the ring once it's held POTION_THROW.ringAfter, and letting go throws)
     // (v932) R held or a quick throw under way: no attacks; the throw's aim grows while R's held
@@ -37817,7 +37837,7 @@ window.GAME = {
   smite: n => { foes.slice(0, n).forEach(f => hurtFoe(f, 999, H.x, H.z)); },
   xp: () => ({ level: H.level, xp: H.xp, need: xpNeed(H.level), orbs: orbs.filter(o => o.xp).map(o => o.xp), lvlText: $('heroLvl').textContent, fill: $('xpFill').style.width }), giveXp: n => gainXp(n),
   mana: () => ({ mana: +H.mana.toFixed(2), max: MANA.max, fill: $('bcMpFill').style.width }), spendMana: n => spendMana(n),
-  combat: () => ({ on: H.combat, sinceHurt: +(time - H.lastHurt).toFixed(2), sinceStrike: +(time - H.lastStrike).toFixed(2), after: foes.filter(f => f.aggro && f.hp > 0).length, icons: [...$('bcStatus').children].map(e => e.dataset.st) }),
+  combat: () => ({ on: H.combat, sinceHurt: +(time - H.lastHurt).toFixed(2), sinceStrike: +(time - H.lastStrike).toFixed(2), sinceAttack: +(time - H.lastAttack).toFixed(2), face: +H.face.toFixed(3), after: foes.filter(f => f.aggro && f.hp > 0).length, icons: [...$('bcStatus').children].map(e => e.dataset.st) }),
   poke: (n, dmg = 3) => { foes.slice(0, n).forEach(f => hurtFoe(f, dmg, H.x, H.z)); },
   bars: () => ({ over: foes.filter(f => f.barEl && !f.barEl.hidden).length, top: !$('target').hidden }),
   // the scene's meshes, by the name of the top-level object they hang under (to find what climbs)
