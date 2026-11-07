@@ -688,13 +688,11 @@ body:not(.touch):not(.building) #bar .slot .cdn { left: 8px; top: 8px; width: 76
 #invGroup .pack-tab span { --ptS: calc(var(--ptStroke, 1) * 1px / var(--ui, 1)); --ptOutline: drop-shadow(var(--ptS) 0 0 #000) drop-shadow(calc(-1 * var(--ptS)) 0 0 #000) drop-shadow(0 var(--ptS) 0 #000) drop-shadow(0 calc(-1 * var(--ptS)) 0 #000); }
 #invGroup .pack-tab span > img, #invGroup .pack-tab span > svg { width: var(--ptIcon, 40px); height: var(--ptIcon, 40px); flex: none; filter: brightness(0.78) var(--ptOutline); }
 #invGroup .pack-tab.on span > img, #invGroup .pack-tab.on span > svg, #invGroup .pack-tab:hover span > img, #invGroup .pack-tab:hover span > svg { filter: var(--ptOutline); }
-/* (v940, Jordan) two paintings overlapping (pairIcon): the stroke is on their box, so it runs round the pair's outline
-   only, never where one lies over the other. (v941) Each sits --x, --y kit px from the box's middle, --s kit px across
-   (PACK_PAIRS). The stroke (v941) is whole screen pixels (stroke / --ui in the scaled window): a fraction of a pixel
-   snapped unevenly and drew heavier on the top and left */
-#invGroup .pack-tab span > .duo { position: relative; display: block; width: var(--ptIcon, 40px); height: var(--ptIcon, 40px); flex: none; filter: brightness(0.78) var(--ptOutline); }
-#invGroup .pack-tab.on span > .duo, #invGroup .pack-tab:hover span > .duo { filter: var(--ptOutline); }
-#invGroup .pack-tab .duo > img { position: absolute; width: calc(var(--s) * 1px); height: calc(var(--s) * 1px); left: calc(50% + (var(--x) - var(--s) / 2) * 1px); top: calc(50% + (var(--y) - var(--s) / 2) * 1px); }
+/* (v940, Jordan) two paintings overlapping, (v942) baked with their stroke into one canvas by bakePair (CSS drop
+   shadows inside the scaled window snapped unevenly: the stroke drew heavier on the top and left), centred on the icon */
+#invGroup .pack-tab span > .duo { position: relative; display: block; width: var(--ptIcon, 40px); height: var(--ptIcon, 40px); flex: none; filter: brightness(0.78); }
+#invGroup .pack-tab.on span > .duo, #invGroup .pack-tab:hover span > .duo { filter: none; }
+#invGroup .pack-tab .duo > canvas { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; }
 #invGroup .pack-tab:hover, #invGroup .pack-tab.drop { border: 0; --bmTint: #ffe5ac; --bmTintA: 0.16; }
 #invGroup .pack-tab:active { transform: none; box-shadow: none; --bmTint: #211811; --bmTintA: 0.2; }
 #invGroup .pack-tab:focus-visible { outline: 2px solid #ffe2a0; outline-offset: -4px; }
@@ -1510,7 +1508,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 941;
+const GAME_VERSION = 942;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -21298,6 +21296,7 @@ function potionIcons() {
     const u = by[el.dataset.potion];
     if (u) { el.srcset = `${u[0]} 128w, ${u[1]} 256w`; el.src = u[0]; }
   }
+  if (fillPackTabs) fillPackTabs();   // (v942: the Provisions tab bakes a potion in)
   const old = potionUrls; potionUrls = urls;
   setTimeout(() => old.forEach(u => URL.revokeObjectURL(u)), 10000);
   return true;
@@ -22302,18 +22301,53 @@ let packPage = 0;
 // a number (stand-ins from the item paintings, and the quest seal for the fifth, kept for magic and quest items).
 // A new item: add it to one of the sets below, or give its ITEMS entry a tab of its own (0-4).
 const PACK_KINDS = [
-  { k: 'gear', name: 'Gear', icon: () => pairIcon(['plateArmor', 'armor'], ['sword_iron', 'sword']), ghost: () => ICON.plateArmor, about: 'What you wear and wield: armor, weapons and tools.' },
-  { k: 'gathered', name: 'Gathered', icon: () => pairIcon(['wood', 'logs'], ['stone', 'stone']), ghost: () => ICON.wood, about: 'What you cut, break and take: logs, stone, ore, hides and bones.' },
-  { k: 'refined', name: 'Refined', icon: () => pairIcon(['planks', 'planks'], ['ironIngot', 'ingot']), ghost: () => ICON.ironIngot, about: 'What the stations make: planks, blocks, sand, glass, ingots, leather and bone dust.' },
-  { k: 'provisions', name: 'Provisions', icon: () => pairIcon(['bread', 'bread'], ['potion_red', 'potion']), ghost: () => atlasImg('emptyBottle'), about: 'Crops, meat, food, bottles and potions.' },
-  { k: 'magic', name: 'Magic & Quest', icon: () => pairIcon(['<img class="paint" src="ui/quest/seal-laurel-256.webp" alt="" draggable="false">', 'seal']), ghost: () => '<img class="paint" src="ui/quest/seal-laurel-256.webp" alt="" draggable="false">', about: 'Kept for magic and quest items. There are none yet.' },
+  { k: 'gear', name: 'Gear', pair: [['plateArmor', 'armor'], ['sword_iron', 'sword']], ghost: () => ICON.plateArmor, about: 'What you wear and wield: armor, weapons and tools.' },
+  { k: 'gathered', name: 'Gathered', pair: [['wood', 'logs'], ['stone', 'stone']], ghost: () => ICON.wood, about: 'What you cut, break and take: logs, stone, ore, hides and bones.' },
+  { k: 'refined', name: 'Refined', pair: [['planks', 'planks'], ['ironIngot', 'ingot']], ghost: () => ICON.ironIngot, about: 'What the stations make: planks, blocks, sand, glass, ingots, leather and bone dust.' },
+  { k: 'provisions', name: 'Provisions', pair: [['bread', 'bread'], ['potion_red', 'potion']], ghost: () => atlasImg('emptyBottle'), about: 'Crops, meat, food, bottles and potions.' },
+  { k: 'magic', name: 'Magic & Quest', pair: [['<img class="paint" src="ui/quest/seal-laurel-256.webp" alt="" draggable="false">', 'seal']], ghost: () => '<img class="paint" src="ui/quest/seal-laurel-256.webp" alt="" draggable="false">', about: 'Kept for magic and quest items. There are none yet.' },
 ];
-// (v940, Jordan) a tab's two paintings, the second over the first: each [icon key or html, its PACK_PAIRS name], stroked
-// as one shape (CSS .duo)
-const pairIcon = (...ps) => `<span class="duo">${ps.map(([k, n]) => {
-  const h = ICON[k] || k, P = PACK_PAIRS, v = `--x: ${P[n + 'X']}; --y: ${P[n + 'Y']}; --s: ${P[n + 'Size']}; `;
-  return / style="/.test(h) ? h.replace(' style="', ` style="${v}`) : h.replace(/^<img /, `<img style="${v}" `);
-}).join('')}</span>`;
+// (v940, Jordan) a tab's two paintings, the second over the first: each [icon key or html, its PACK_PAIRS name].
+// (v942) Baked into one canvas at the screen's own pixels (the window's scale × the device's): the paintings drawn
+// where PACK_PAIRS puts them, then a black stroke of PACK_TABS.stroke whole screen pixels round them all (the paintings'
+// shape stamped at every offset within the stroke, filled black, under them), so it's even on every side and runs
+// round the pair's outline only. Redone when the tab tuning, the window's scale or the potion paintings change.
+const tabImgs = new Map();
+const tabImg = u => { let im = tabImgs.get(u); if (!im) { im = new Image(); im.src = u; tabImgs.set(u, im); } return im; };
+// a painting's image and its square in it (an atlas cell), or the whole image
+function tabSrc(k) {
+  const h = ICON[k] || k, at = (h.match(/data-paint="([^"]+)"/) || [])[1];
+  if (at && ATLAS_AT[at]) { const a = atlasCell(at); return [atlasUrl(a.n, 256), a.rect(256)]; }
+  const m = h.match(/([^\s",]+) 256w/) || h.match(/src="([^"]+)"/);
+  return [m ? m[1] : CLEAR_PX, null];
+}
+let tabBakeN = 0;
+async function bakePair(box, parts) {
+  const tok = String(++tabBakeN); box.dataset.tok = tok;
+  const ui = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui')) || 1, k = ui * (devicePixelRatio || 1);
+  const P = PACK_PAIRS, r = Math.max(0, Math.round(PACK_TABS.stroke * (devicePixelRatio || 1)));
+  const src = parts.map(([key, nm]) => [...tabSrc(key), P[nm + 'X'], P[nm + 'Y'], P[nm + 'Size']]);
+  await Promise.all(src.map(([u]) => { const im = tabImg(u); return im.complete && im.naturalWidth ? null : im.decode().catch(() => {}); }));
+  if (box.dataset.tok !== tok) return;
+  let ext = 0;
+  for (const [, , x, y, sz] of src) ext = Math.max(ext, Math.abs(x) + sz / 2, Math.abs(y) + sz / 2);
+  const half = Math.ceil(ext * k) + r + 1, W = half * 2;
+  const art = document.createElement('canvas'); art.width = art.height = W;
+  const ca = art.getContext('2d'); ca.imageSmoothingQuality = 'high';
+  for (const [u, rc, x, y, sz] of src) {
+    const im = tabImg(u), d = [half + (x - sz / 2) * k, half + (y - sz / 2) * k, sz * k, sz * k];
+    if (im.naturalWidth) rc ? ca.drawImage(im, ...rc, ...d) : ca.drawImage(im, ...d);
+  }
+  const cv = document.createElement('canvas'); cv.width = cv.height = W;
+  const c = cv.getContext('2d');
+  if (r > 0) {
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dy * dy <= r * r) c.drawImage(art, dx, dy);
+    c.globalCompositeOperation = 'source-in'; c.fillStyle = '#000'; c.fillRect(0, 0, W, W); c.globalCompositeOperation = 'source-over';
+  }
+  c.drawImage(art, 0, 0);
+  cv.style.width = cv.style.height = W / k + 'px';
+  box.replaceChildren(cv);
+}
 const TAB_GATHERED = new Set(['wood', 'stone', 'roughSandstone', 'copperOre', 'ironOre', ...FANTASY.map(m => m.k + 'Ore'), 'hide', 'bone']);
 const TAB_REFINED = new Set(['planks', 'stoneBlock', 'sandstoneBlock', 'sand', 'glassPane', 'copperIngot', 'ironIngot', ...FANTASY.map(m => m.k + 'Ingot'), 'leather', 'boneDust']);
 const TAB_PROVISIONS = new Set(['wheat', 'carrot', 'potato', 'lettuce', 'tomato', 'rawMeat', 'flour', 'bread', 'cookedMeat', 'meatPotatoes', 'meatStew', 'salad', 'emptyBottle']);
@@ -23012,7 +23046,10 @@ $('foldTab').addEventListener('click', () => { audioOn(); setFolioFold(!folioFol
 // (v933) the kind's icon on each tab (v938: or its silhouette pressed in, PACK_TABS.style 1)
 fillPackTabs = () => { for (const t of document.querySelectorAll('#invGroup .pack-tab')) {
   const K = PACK_KINDS[+t.dataset.page];
-  t.querySelector('span').innerHTML = PACK_TABS.style >= 1 ? ghostOf((K.ghost || K.icon)()) : K.icon();
+  const sp = t.querySelector('span');
+  if (PACK_TABS.style >= 1) { sp.innerHTML = ghostOf(K.ghost()); continue; }
+  if (!sp.firstElementChild?.classList.contains('duo')) sp.innerHTML = '<span class="duo"></span>';
+  bakePair(sp.firstElementChild, K.pair);
 } };
 fillPackTabs();
 for (const t of document.querySelectorAll('#invGroup .pack-tab')) {
@@ -33214,6 +33251,7 @@ function uiScale() {
 function resize() {
   const w = innerWidth, h = innerHeight;
   document.documentElement.style.setProperty('--ui', uiScale().toFixed(4));
+  if (fillPackTabs) fillPackTabs();   // (v942: the tab icons are baked at the screen's pixels)
   const px = pxScale = pixelSize();
   const rw = Math.ceil(w / px) + 2, rh = Math.ceil(h / px) + 2;
   ssNow = ssFor(px);
