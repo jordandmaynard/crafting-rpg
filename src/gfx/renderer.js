@@ -779,13 +779,22 @@ class Renderer {
     if (this._lights && this._lights.frame === this._frameNo && this._lights.scene === scene) return this._lights.L;
     const L = { hemi: null, sun: null, points: [] };
     this._lights = { frame: this._frameNo, scene, L };
-    scene.traverse(o => {
-      if (!o.isLight || !o.visible) return;
+    // (v960: the scene was walked whole for its lights every frame, ~3,500 objects; now every light in it, in the walk's
+    // order, is kept until something is added to or taken from anything in it (scene._graphV), and each frame only those are looked at,
+    // as the walk did)
+    const lists = this._lightLists || (this._lightLists = new WeakMap());
+    let all = lists.get(scene);
+    if (!all || all.v !== scene._graphV) {
+      lists.set(scene, all = { v: scene._graphV, list: [] });
+      scene.traverse(o => { if (o.isLight) all.list.push(o); });
+    }
+    for (const o of all.list) {
+      if (!o.visible) continue;
       if (o._mwH) o.updateMatrixWorld();   // (v780: shown since the scene's matrix pass left it hidden)
       if (o.isHemisphereLight) { if (!L.hemi) L.hemi = o; }
       else if (o.isDirectionalLight) { if (!L.sun) L.sun = o; }
       else if (o.isPointLight && L.points.length < MAX_POINTS) L.points.push(o);
-    });
+    }
     return L;
   }
   _ensureShadow(size) {

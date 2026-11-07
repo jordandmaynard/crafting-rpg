@@ -45,6 +45,7 @@ export class Object3D {
     // world's chunk meshes): the scene's pass then leaves it and all under it once made, while its parent stays put.
     // Adding to or taking from it (or anything under it) has it looked at again; moving it means clearing matrixStill
     this.matrixStill = false; this._stillOK = false;
+    this._graphV = 0;
   }
   add(...objs) {
     for (const o of objs) {
@@ -53,17 +54,21 @@ export class Object3D {
       o.parent = this;
       this.children.push(o);
       this.unstill();
+      this._graphUp();
     }
     return this;
   }
   remove(...objs) {
     for (const o of objs) {
       const i = this.children.indexOf(o);
-      if (i !== -1) { o.parent = null; this.children.splice(i, 1); this.unstill(); }
+      if (i !== -1) { o.parent = null; this.children.splice(i, 1); this.unstill(); this._graphUp(); }
     }
     return this;
   }
   traverse(fn) { fn(this); for (const c of this.children) c.traverse(fn); }
+  // (v960) the top of this tree counts every change to the children of anything in it (add, remove: the only two),
+  // so a list found by walking a scene (the renderer's lights) is kept until that scene's shape changes
+  _graphUp() { let r = this; while (r.parent) r = r.parent; r._graphV++; }
   updateMatrix() { this.matrix.compose(this.position, this.quaternion, this.scale); }
   // (v776, Jordan: most of the world never moves, and the whole scene's matrices were made anew every frame, 0.8 ms)
   // Only what changed is worked out again: the matrix when the position, turn or size differ from when it was last
@@ -86,7 +91,9 @@ export class Object3D {
       const p = this.position, q = this.quaternion, s = this.scale, c = this._mc;
       if (c === undefined || c[0] !== p.x || c[1] !== p.y || c[2] !== p.z || c[3] !== q._x || c[4] !== q._y || c[5] !== q._z || c[6] !== q._w
         || c[7] !== s.x || c[8] !== s.y || c[9] !== s.z) {
-        this._mc = [p.x, p.y, p.z, q._x, q._y, q._z, q._w, s.x, s.y, s.z];
+        // (v960: the record kept in place, not a new array each time it moves: a rig's joints move every frame)
+        if (c === undefined) this._mc = [p.x, p.y, p.z, q._x, q._y, q._z, q._w, s.x, s.y, s.z];
+        else { c[0] = p.x; c[1] = p.y; c[2] = p.z; c[3] = q._x; c[4] = q._y; c[5] = q._z; c[6] = q._w; c[7] = s.x; c[8] = s.y; c[9] = s.z; }
         this.updateMatrix(); moved = true;
       }
     } else {
