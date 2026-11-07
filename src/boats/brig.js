@@ -293,13 +293,14 @@ export function sailSlopes(geo, zf) {
   }
   geo.setAttribute('sg', new GFX.BufferAttribute(sg, 2));
 }
+// (v955: @invariant, its depth drawn in the game's depth pre-pass, BUILD_PRE: the wind is the frame's, so both draws match)
 // (v506) the sails' material: shaded smooth (each corner's normal from the sail's curve) and fluttering in the wind
 // like the wheat. windV: the wind's uniform ({ value: { x, y, z, w } }: its way, lean, phase); U.fl: flutter, speed.
 export function makeSailMat(windV) {
   const U = { windV, fl: { value: { x: 0.06, y: 4, z: 0, w: 0 } } };
   const mat = new GFX.ShaderMaterial({ uniforms: U, vertexColors: true, side: GFX.DoubleSide, attributes: { sg: 'vec2f' }, lit: true,
     code: /* wgsl */ `
-struct VOut { @builtin(position) pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) n: vec3f }
+struct VOut { @builtin(position) @invariant pos: vec4f, @location(0) world: vec3f, @location(1) color: vec3f, @location(2) eye: vec3f, @location(3) n: vec3f }
 @vertex fn vs(v: VIn) -> VOut {
   let M = O.model;
   let c0 = M[0].xyz; let c1 = M[1].xyz; let c2 = M[2].xyz;
@@ -440,6 +441,19 @@ export function buildBrig(L, B = BRIG_SHAPE) {
     vs.push(B.gangV - 0.35, B.gangV + 0.35);
     vs.sort((a, b) => a - b);
     const gap = (a, b) => a >= B.gangV - 0.350001 && b <= B.gangV + 0.350001;
+    // (v955, Jordan's overdraw view: nothing under the helm deck or its ramps is ever seen) the main deck isn't laid
+    // under them (only the strip between the ramps), nor the inner bulwark below their boards. under(v): the height
+    // of what's over the main deck there (the helm deck, then each ramp down to the deck); ub(v), the bulwark's foot
+    // just under those boards' bed. (Over a stretch where ub stays above 0 it only falls, its chord under the ramp's line)
+    const HP = B.helmP, HF = B.helmFront, HRV = B.rampV, HRU = B.rampU;
+    const under = v => v <= HF ? HP : v < HRV ? HP * (HRV - v) / (HRV - HF) : 0;
+    const ub = v => Math.max(0, under(v) - 0.02);
+    const mainDeck = (a, b) => {
+      const hbAt = v => HB(a) + (HB(b) - HB(a)) * (v - a) / (b - a);
+      const c0 = Math.max(a, HF), c1 = Math.min(b, HRV), d0 = Math.max(a, HRV);
+      if (c1 - c0 > 1e-6) boards(c0, c1, 0, 0, () => -HRU, () => HRU);
+      if (b - d0 > 1e-6) boards(d0, b, 0, 0, v => -hbAt(v), v => hbAt(v));
+    };
     const ys = v => [GH(v), 0, ...[0.18, 0.36, 0.54, 0.78, 1].map(f => KEEL(v) * f)];
     for (let k = 0; k < vs.length - 1; k++) {
       const a = vs[k], b = vs[k + 1], ya = ys(a), yb = ys(b), open = gap(a, b);
@@ -457,8 +471,8 @@ export function buildBrig(L, B = BRIG_SHAPE) {
         }
         if (!open) {
           // Inner bulwark and cap close the shell's thickness.
-          const ha = HB(a), hb = HB(b), ga = GH(a), gb = GH(b);
-          quad([s * ha, 0, a], [s * hb, 0, b], [s * hb, gb, b], [s * ha, ga, a], C.wood);
+          const ha = HB(a), hb = HB(b), ga = GH(a), gb = GH(b), fb = ub(b) > 0 ? ub(b) : 0, fa = fb > 0 ? ub(a) : 0;
+          quad([s * ha, fa, a], [s * hb, fb, b], [s * hb, gb, b], [s * ha, ga, a], C.wood);
           quad([s * ha, ga, a], [s * hb, gb, b], [s * (hb + 0.055), gb, b], [s * (ha + 0.055), ga, a], C.cap);
           seg(G.box, C.cap, [s * (ha + 0.04), ga, a], [s * (hb + 0.04), gb, b], 0.035);
           // One continuous pinstripe below the cap.
@@ -467,7 +481,7 @@ export function buildBrig(L, B = BRIG_SHAPE) {
         }
       }
       // the deck's boards, as the wood floor's (v499)
-      boards(a, b, 0, 0, v => -HB(v), v => HB(v));
+      mainDeck(a, b);
     }
     // Close rail ends without putting a threshold across either gangway.
     for (const v of [B.gangV - 0.35, B.gangV + 0.35]) for (const s of [-1, 1]) {
@@ -533,13 +547,14 @@ export function buildBrig(L, B = BRIG_SHAPE) {
     const P = B.helmP, F = B.helmFront, RV = B.rampV, RU = B.rampU;
     const hvs = [B.stern, (B.stern + F) / 2, F];
     for (let k = 0; k + 1 < hvs.length; k++) boards(hvs[k], hvs[k + 1], P, P, v => -HB(v), v => HB(v));
-    quad([-RU, 0, F], [RU, 0, F], [RU, P, F], [-RU, P, F], post);
+    quad([-RU, -0.02, F], [RU, -0.02, F], [RU, P, F], [-RU, P, F], post);
     part(G.box, rail, 0, P - 0.015, F + 0.02, { sx: RU * 2, sy: 0.04, sz: 0.05 });
     for (const sg of [-1, 1]) {
       // the ramp's top, boarded as the deck (v499) and cleated, and its inner side down to the deck
       boards(F, RV, P, 0, sg > 0 ? () => RU : v => -HB(v), sg > 0 ? v => HB(v) : () => -RU);
       for (let c = 1; c < 5; c++) { const t = c / 5, v = F + (RV - F) * t, y = P * (1 - t) + 0.02, hb = HB(v); seg(G.box, cleat, [sg * (RU + 0.04), y, v], [sg * (hb - 0.04), y, v], 0.025); }
       tri([sg * RU, 0, RV], [sg * RU, P, F], [sg * RU, 0, F], rampSide);
+      quad([sg * RU, -0.02, F], [sg * RU, -0.02, RV], [sg * RU, 0, RV], [sg * RU, 0, F], rampSide);
       part(G.box, rail, sg * RU, P / 2, F + 0.03, { sx: 0.06, sy: P, sz: 0.06 });
     }
     // its rail: posts round the stern and down each side to the platform's front
