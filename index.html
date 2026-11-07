@@ -1519,7 +1519,7 @@ import { BRIG_SHAPE, hullHB, hullGH, hullKeel, brigYards, rollLivery, buildBrig,
 import { SoundEngine, SOUND_MIX } from './src/sound/engine.js';
 import { gullModel, poseGull, gullWings, dolphinModel, poseDolphinModel, dropDolphinModel, dropSeaModel, makeDolphinMat } from './src/sea/sealife.js';
 // The game's version (bumped each release): shown in the error box and, since v779, on the G and T panels' title lines
-const GAME_VERSION = 964;
+const GAME_VERSION = 965;
 await (async () => {
 const $ = id => document.getElementById(id);
 // v577: setPointerCapture throws NotFoundError when the pointer is already gone (a fast tap, or a
@@ -13214,7 +13214,7 @@ function buildSmoke() {
   for (const st of stations.values()) {
     if (st.kind !== 'smelter' || !st.busy || Math.abs(st.c - H.x) > SMOKE_R || Math.abs(st.r - H.z) > SMOKE_R) continue;
     const [mx, mz] = stMid(st), S = st.town ? 1 : STATION_LOOK.size, [sx, sz] = stationAt(mx, mz, st.ry)(0, 0.14 * S);
-    add(sx, stFloor(st) + 2.0 * S, sz, 0, 0.05);
+    add(sx, st.flueTop ?? stFloor(st) + 2.0 * S, sz, 0, 0.05);   // (v965: out of the top of its chimney, however high it goes)
   }
   if (!pos.length) return;
   const g = new GFX.BufferGeometry();
@@ -13226,7 +13226,7 @@ function buildSmoke() {
   scene.add(smokeMesh);
 }
 function updateSmoke() {
-  const key = [...stations.values()].filter(st => st.kind === 'smelter' && st.busy).map(st => stKey(st)).join(';');
+  const key = [...stations.values()].filter(st => st.kind === 'smelter' && st.busy).map(st => stKey(st) + ':' + (st.flueTop || 0)).join(';');
   if (key !== smokeKey || Math.hypot(H.x - smokeAt.x, H.z - smokeAt.z) > 8) { smokeKey = key; buildSmoke(); }
   const S = SMOKE, U = SMOKE_U;
   for (const k of ['amount', 'size', 'rate', 'life', 'rise', 'wind', 'glow']) U[k].value = S[k];
@@ -14944,6 +14944,84 @@ function smelter(x, z, c, r) {
   part(G.box, dark, ox, y + 0.03, oz, { sx: 0.26, sy: 0.06, sz: 0.1, ry });
   part(G.box, '#c87840', ox, y + 0.063, oz, { sx: 0.18, sy: 0.02, sz: 0.05, ry });
 }
+// (v965, Jordan: a story built over a smelter cut its chimney off at the floor) a built smelter's chimney carries on
+// up as the cooking hearth's does (propStack): through every floor over it, out through the roof of the story it comes
+// out on, PROP_STACK.over above that roof (1.2 over an open floor it comes up through), in its own round, iron-banded
+// stone; one outdoors keeps its own height. flueSpot: where its pipe stands (x, z, R, at the back of the furnace, across
+// two of its tiles), the tiles it stands across, and s, the story it comes out on (its own unless floors cover it)
+const FLUE = { at: 0.14, r: 0.13, top: 1.95, band: 0.55 };
+function flueSpot(st) {
+  const S = STATION_LOOK.size, R = FLUE.r * S, [mx, mz] = stMid(st), [x, z] = stationAt(mx, mz, st.ry)(0, FLUE.at * S), k = stK(st);
+  const tiles = [];
+  for (const dz of [-R, R]) for (const dx of [-R, R]) { const t = T(Math.floor(x + dx), Math.floor(z + dz)); if (!tiles.includes(t)) tiles.push(t); }
+  let s = k;
+  while (s < STORY_MAX && tiles.some(t => covered(s, t))) s++;
+  return { x, z, R, tiles, k, s };
+}
+// the smelter whose chimney comes up through tile t on story k (from a story under it), if any
+function flueAt(k, t) {
+  for (let j = 0; j < k; j++) {
+    const st = stationTile.get(j * SNN + t);
+    if (!st || st.kind !== 'smelter' || st.town) continue;
+    const f = flueSpot(st);
+    if (f.s >= k && f.tiles.includes(t)) return st;
+  }
+  return null;
+}
+// what's in the way of a smelter's chimney going up from where it would stand (s: its spot, turned ry): on any story
+// its floors carry it up through, a station, stairs, a bed or a prop over its tiles, or a wall between them
+function flueWhy(s, self) {
+  if (s.kind !== 'smelter') return '';
+  const f = flueSpot({ c: s.c, r: s.r, k: s.k || 0, ry: s.ry, kind: 'smelter' });
+  for (let j = f.k + 1; j <= f.s; j++) {
+    const K = j * SNN;
+    if (f.tiles.some(t => (stationTile.has(K + t) && stationTile.get(K + t) !== self) || stairAt.has(K + t) || BEDS.has(K + t) || PROP_AT.has(K + t))) return 'Its chimney would come up through something on the floor above.';
+    if (f.tiles.length > 1) for (const a of f.tiles) for (const b of f.tiles) {
+      const w = b === a - 1 ? 1 : b === a - N ? 0 : -1;
+      if (w >= 0 && (w ? UP[j].WW : UP[j].WN).get(a)) return 'Its chimney would come up through a wall on the floor above.';
+    }
+  }
+  return '';
+}
+// its chimney carried on up (drawn after the rest of it, full size; where its smoke comes out: st.flueTop, buildSmoke)
+function smelterFlue(st) {
+  const f = flueSpot(st), S = STATION_LOOK.size, i = T(Math.floor(f.x), Math.floor(f.z)), own = stFloor(st) + FLUE.top * S;
+  let top = 0;
+  const b = f.tiles.map(t => bldOf(f.s * SNN + t)).find(Boolean);
+  if (b) {
+    if (b.roofY) for (const [dx, dz] of [[-f.R, -f.R], [f.R, -f.R], [-f.R, f.R], [f.R, f.R]]) top = Math.max(top, b.roofY(f.x + dx, f.z + dz));
+    top = Math.max(top + PROP_STACK.over, storyY(f.s, i) + 2.4);
+  } else if (f.s > f.k) top = storyY(f.s, i) + 1.2;
+  if (top <= own + 0.05) { st.flueTop = own + 0.05 * S; return; }
+  const stone = shade(CC('#7a7480'), 0.85), iron = '#34303a', y0 = own - 0.02;
+  seg(G.cyl8, stone, [f.x, y0, f.z], [f.x, top, f.z], f.R);
+  const n = Math.floor((top - y0) / FLUE.band);
+  for (let m = 1; m < n; m++) part(G.cyl8, iron, f.x, y0 + m * (top - y0) / n, f.z, { sx: 0.29 * S, sy: 0.04 * S, sz: 0.29 * S });
+  part(G.cyl8, iron, f.x, top + 0.01 * S, f.z, { sx: 0.32 * S, sy: 0.06 * S, sz: 0.32 * S });
+  st.flueTop = top + 0.05 * S;
+}
+// (where an upper story's smelter's chimney goes: with that story's pieces, as an upper hearth's stack, so it shows
+// out of the roof while the room under it is shut: upStationBody)
+let FLUE_OUT = null;
+// (the hero up a story walks round a smelter's chimney coming up through the floor: collide)
+function flueCollide(p, rad, k, c, r) {
+  let last = null;
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+    const cc = c + dc, rr = r + dr;
+    if (cc < 0 || rr < 0 || cc >= N || rr >= N) continue;
+    for (let j = 0; j < k; j++) {
+      const st = stationTile.get(j * SNN + T(cc, rr));
+      if (!st || st === last || st.kind !== 'smelter' || st.town) continue;
+      last = st;
+      const f = flueSpot(st);
+      if (f.s < k) continue;
+      const ex = p.x - f.x, ez = p.z - f.z, dd = ex * ex + ez * ez, m = f.R + rad;
+      if (dd >= m * m) continue;
+      const l = Math.sqrt(dd) || 1e-4;
+      p.x = f.x + ex / l * m; p.z = f.z + ez / l * m;
+    }
+  }
+}
 // a tanning rack: two posts and their rails, a hide laced out flat inside it, a scraper leant at its foot and a
 // bucket of tannin beside it
 function tanRack(x, z, c, r) {
@@ -15504,7 +15582,12 @@ function drawObject(o, c, r) {
     case O.ALCHEMY: return stationParts(alchemyTable, x + 0.5, z + 0.5, c, r);
     case O.SAWTABLE: return stationParts(sawTable, x + 0.5, z + 0.5, c, r);
     case O.GRINDER: return stationParts(grinder, x + 0.5, z + 0.5, c, r);
-    case O.SMELTER: return stationParts(smelter, x + 0.5, z + 0.5, c, r);
+    case O.SMELTER: {
+      stationParts(smelter, x + 0.5, z + 0.5, c, r);
+      const st = stAt(c, r);   // (v965: its chimney on up through any floors over it, not on a move ghost)
+      if (st && !partAll) { const sv = OUT; if (FLUE_OUT) OUT = FLUE_OUT; try { smelterFlue(st); } finally { OUT = sv; } }
+      return;
+    }
     case O.TANRACK: return stationParts(tanRack, x + 0.5, z + 0.5, c, r);
     case O.STATIONX: return;
     case O.WORKPROP: {
@@ -18337,6 +18420,12 @@ function roomsSettled(c, r) {
   settleBuildings();
   // a roof going up or coming down round a hearth: its chimney grows or shrinks to suit
   for (const h of hearths.values()) if (Math.abs(h.c - c) < 24 && Math.abs(h.r - r) < 24) rebuildObjects(h.c, h.r);
+  // (v965) and a smelter's (on the ground drawn with its chunk's objects, up a story with its pieces)
+  const redo = new Set();
+  for (const st of stations.values()) if (st.kind === 'smelter' && !st.town && Math.abs(st.c - c) < 24 && Math.abs(st.r - r) < 24) {
+    const ch = Math.floor(st.r / CH) * NC + Math.floor(st.c / CH);
+    if (stK(st)) markPieces(st.c, st.r); else if (!redo.has(ch)) { redo.add(ch); rebuildObjects(st.c, st.r); }
+  }
   // and the ground haze's site map is made again at once: none rests in a closed-in room
   ghAt = -1e9;
 }
@@ -19341,7 +19430,7 @@ function collide(p, rad, foe) {
       const l = Math.sqrt(dd) || 1e-4;
       p.x = px + ex / l * rad; p.z = pz + ez / l * rad;
     }
-    if (up) continue;
+    if (up) { if (!H.stair) flueCollide(p, rad, H.story, c, r); continue; }   // (v965)
     for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
       const cc = c + dc, rr = r + dr;
       if (cc < 0 || rr < 0 || cc >= N || rr >= N) continue;
@@ -28575,6 +28664,8 @@ function upEdgeSpot(ec, er, w, kind, k) {
   if (ok && sa && (sa === stairAt.get(k * SNN + b) || sa === stairAt.get((k - 1) * SNN + b))) { ok = false; why = 'That would cut across the stairs.'; }
   const sn = stationTile.get(k * SNN + a);   // (v883: never through the middle of a station up here)
   if (ok && sn && sn === stationTile.get(k * SNN + b)) { ok = false; why = `That would cut through the ${KIND_SLOT[sn.kind].name.toLowerCase()}.`; }
+  const fl = ok && flueAt(k, a);   // (v965: nor through a smelter's chimney coming up from below)
+  if (fl && fl === flueAt(k, b)) { ok = false; why = "That would cut through the smelter's chimney."; }
   const mx = w ? ec : ec + 0.5, mz = w ? er + 0.5 : er;
   if (ok && !upgrade && !H.stair && H.story === k) {
     const ex = w ? Math.abs(H.x - ec) : Math.max(0, Math.abs(H.x - mx) - 0.5), ez = w ? Math.max(0, Math.abs(H.z - mz) - 0.5) : Math.abs(H.z - er);
@@ -28601,6 +28692,7 @@ function stairSpot(c, r, d, kind, k) {
   if (ok && both.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
   if (ok && both.some(t => stairAt.has(k * SNN + t) || (k && stairAt.has((k - 1) * SNN + t)))) { ok = false; why = 'There are stairs here already.'; }
   if (ok && k && both.some(t => stationTile.has(k * SNN + t) || BEDS.has(k * SNN + t) || PROP_AT.has(k * SNN + t))) { ok = false; why = 'Something is built here already.'; }   // (v883)
+  if (ok && k && both.some(t => flueAt(k, t))) { ok = false; why = "The smelter's chimney comes up through here."; }   // (v965)
   if (ok && both.some(t => UP[k + 1].FL.has(t))) { ok = false; why = 'There is a floor overhead: take it up first, or start the stairs elsewhere.'; }
   if (ok && !wallOpenAny(c, r, d, k)) { ok = false; why = 'A wall stands across where the stairs would go.'; }
   if (ok) { const t = both.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
@@ -30030,8 +30122,8 @@ function upStationBody(st) {
   dropUpBody(st);
   const B = upStBufs, sv = [OUT, GLOW, METAL, partPre];
   B.obj.n = 0; B.glow.n = 0; B.glow.tags = []; B.metal.n = 0;
-  OUT = B.obj; GLOW = B.glow; METAL = B.metal; partPre = null; SK = st.k;
-  try { drawObject(STATION_KIND[st.kind].o, st.c, st.r); } finally { [OUT, GLOW, METAL, partPre] = sv; SK = 0; }
+  OUT = B.obj; GLOW = B.glow; METAL = B.metal; partPre = null; SK = st.k; FLUE_OUT = sv[0];   // (v965: a smelter's chimney with the story's pieces)
+  try { drawObject(STATION_KIND[st.kind].o, st.c, st.r); } finally { [OUT, GLOW, METAL, partPre] = sv; SK = 0; FLUE_OUT = null; }
   st.up = [B.obj.mesh(groundMat), B.glow.mesh(glowMat), B.metal.mesh(metalMat)].filter(Boolean);
   for (const m of st.up) { m.matrixAutoUpdate = false; m.updateMatrix(); m.matrixStill = true; m.castHidden = true; m.visible = stShown(st); scene.add(m); }
   if (st.body) { st.body.castHidden = true; st.body.visible = stShown(st); }
@@ -30055,6 +30147,8 @@ function stationSpot(c, r, kind, self = null, k = 0) {
   if (ok && all.some(t => TILL[t])) { ok = false; why = TILL_WHY; }
   if (ok && standingIn(c + h, r + h, f === 1 ? 0.7 : 1.25)) { ok = false; why = 'Something is standing in the way.'; }
   const a = Math.atan2(-(H.x - c - h), -(H.z - r - h)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
+  const fw = ok && flueWhy({ kind, c, r, k: 0, ry }, self);   // (v965)
+  if (fw) { ok = false; why = fw; }
   return { kind, c, r, ok, why, x: c + h, z: r + h, y: LV[i] * STEP + 0.45, ry };
 }
 // (v883, Jordan: anything can be built upstairs) a station on story k: on floor laid on that story over every one of its
@@ -30066,11 +30160,14 @@ function upStationSpot(c, r, kind, self, k) {
   if (ok && !all.every(t => U.FL.has(t) && LV[t] === LV[i])) ok = false;
   if (ok && all.some(t => stairAt.has(K + t))) { ok = false; why = 'The stairs are in the way.'; }
   if (ok && all.some(t => (stationTile.has(K + t) && stationTile.get(K + t) !== self) || BEDS.has(K + t) || PROP_AT.has(K + t))) { ok = false; why = 'Something is built here already.'; }
+  if (ok && all.some(t => { const fs = flueAt(k, t); return fs && fs !== self; })) { ok = false; why = "The smelter's chimney comes up through here."; }   // (v965)
   if (ok && f > 1 && (U.WW.get(T(c + 1, r)) || U.WW.get(T(c + 1, r + 1)) || U.WN.get(T(c, r + 1)) || U.WN.get(T(c + 1, r + 1)))) { ok = false; why = 'A wall stands across where it would go.'; }
   if (ok && all.some(t => BI[t] === TOWN)) { ok = false; why = 'The townsfolk would rather you built outside town.'; }
   if (ok) { const t = all.find(t => !claimedAt(t)); if (t !== undefined) { ok = false; why = plotWhy(t); } }
   if (ok && H.story === k && !H.stair && Math.hypot(H.x - c - h, H.z - r - h) < (f === 1 ? 0.7 : 1.25)) { ok = false; why = 'Something is standing in the way.'; }
   const a = Math.atan2(-(H.x - c - h), -(H.z - r - h)), ry = Math.round(a / (Math.PI / 2)) * Math.PI / 2;
+  const fw = ok && flueWhy({ kind, c, r, k, ry }, self);   // (v965: a smelter's chimney up through the floors over it)
+  if (fw) { ok = false; why = fw; }
   return { kind, c, r, k, ok, why, x: c + h, z: r + h, y: storyY(k, i) + 0.45, ry };
 }
 // a station's spot under the cursor point p: a crate on the tile, a 2 x 2 station round the nearest grid corner (on story k)
